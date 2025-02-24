@@ -63,7 +63,7 @@ struct NoSmemWarpSpecialized1Sm {};
 struct NoSmemWarpSpecialized2Sm {};
 struct PtrArrayNoSmemWarpSpecialized1Sm : NoSmemWarpSpecialized1Sm {};
 struct PtrArrayNoSmemWarpSpecialized2Sm : NoSmemWarpSpecialized2Sm {};
-// Blackwell TMA schedules 
+// Blackwell TMA schedules
 struct TmaWarpSpecialized1Sm {};
 struct TmaWarpSpecialized2Sm {};
 struct PtrArrayTmaWarpSpecialized1Sm : TmaWarpSpecialized1Sm {};
@@ -272,7 +272,19 @@ struct Sm120PtrArrayTmaWarpSpecialized {
   constexpr static int NumEpilogueWarpGroups = NumEpilogueWarpGroups_;
 };
 
-#if defined (SYCL_INTEL_TARGET)
+#if defined (SYCL_INTEL_XE4_TARGET)
+template<
+  int FragmentSize_,
+  uint32_t EpiSgNum_,
+  uint32_t SgSize_
+>
+struct Xe4DmaWarpSpecialized {
+  constexpr static int FragmentSize = FragmentSize_;
+  constexpr static uint32_t EpiSgNum = EpiSgNum_;
+  constexpr static uint32_t SgSize = SgSize_;
+};
+
+#elif defined (SYCL_INTEL_TARGET)
 // Specialization of the GEMM Epilogue for Intel Xe architectures.
 // This version is tuned for operations with a subgroup size of 16.
 // Suitable for use with Intel Battlemage (Xe2) and PVC (Xe) architectures.

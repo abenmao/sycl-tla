@@ -97,7 +97,7 @@ struct XE4_ASYNC_GMMA_SCALE_OP {};
 template <class TupleC, class TA, class TB, class Shape_MNK_, xe4::GMMA::Major tnspA_, xe4::GMMA::Major tnspB_, class MatDesc, class Abarrier>
 struct MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_, MatDesc, Abarrier>>
 {
-  using ValTypeD = dst_type_selector_t<TupleC, 1>;
+  using ValTypeD = tuple_element_t<1, TupleC>;
   using ValTypeA = bf16;
   using ValTypeB = bf16;
   using ValTypeC = float;
@@ -163,10 +163,10 @@ struct MMA_Traits<XE4_ASYNC_GMMA_OP, OpArgs, MMA_Op>: public MMA_Traits<MMA_Op> 
 template <class TupleC, class TA, class TB, class Shape_MNK_, xe4::GMMA::Major tnspA_, xe4::GMMA::Major tnspB_, class MatDesc, class Abarrier>
 struct MMA_Traits<XE4_ASYNC_GMMA_MULTICAST<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_, MatDesc, Abarrier>>
 {
-  using ValTypeD = dst_type_selector_t<TupleC, 1>;
+  using ValTypeD = tuple_element_t<1, TupleC>;
   using ValTypeA = bf16;
   using ValTypeB = bf16;
-  using ValTypeC = dst_type_selector_t<TupleC, 0>;
+  using ValTypeC = tuple_element_t<0, TupleC>;
   using AbarrierType = Abarrier;
 
   using FrgTypeA = xe4::slm_desc<tnspA_, MatDesc>;

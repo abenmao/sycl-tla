@@ -5,14 +5,6 @@
 
 namespace cute {
 
-template <class Tuple, int Idx>
-struct dst_type_selector {
-  using type = remove_cvref_t<decltype(get<Idx>(Tuple{}))>;
-};
-
-template <class Tuple, int Idx>
-using dst_type_selector_t = typename dst_type_selector<Tuple, Idx>::type;
-
 template <class TupleC, class TA, class TB, class Shape_MNK_, xe4::GMMA::Major tnspA, xe4::GMMA::Major tnspB, class MatDesc, class Abarrier_=uint64_t*>
 struct XE4_ASYNC_GMMA
 {
@@ -40,8 +32,8 @@ struct XE4_ASYNC_GMMA
     constexpr mem_layout layout_a = (tnspA == xe4::GMMA::Major::K) ? mem_layout::row_major: mem_layout::col_major;
     constexpr mem_layout layout_b = (tnspB == xe4::GMMA::Major::MN) ? mem_layout::row_major: mem_layout::col_major;
 
-    using TC = dst_type_selector_t<TupleC, 0>;
-    using TD = dst_type_selector_t<TupleC, static_cast<int>(ConstDstType::value)>;
+    using TC = tuple_element_t<0, TupleC>;
+    using TD = tuple_element_t<static_cast<int>(ConstDstType::value), TupleC>;
     async_gmma<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, static_cast<Args&&>(args)...);
   }
 };
@@ -74,8 +66,8 @@ struct XE4_ASYNC_GMMA_MULTICAST
     constexpr mem_layout layout_a = (tnspA == xe4::GMMA::Major::K) ? mem_layout::row_major: mem_layout::col_major;
     constexpr mem_layout layout_b = (tnspB == xe4::GMMA::Major::MN) ? mem_layout::row_major: mem_layout::col_major;
 
-    using TC = dst_type_selector_t<TupleC, 0>;
-    using TD = dst_type_selector_t<TupleC, static_cast<int>(ConstDstType::value)>;
+    using TC = tuple_element_t<0, TupleC>;
+    using TD = tuple_element_t<static_cast<int>(ConstDstType::value), TupleC>;
     async_gmma<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, static_cast<Args&&>(args)...);
   }
 };
@@ -109,8 +101,8 @@ struct XE4_ASYNC_GMMA_SCALE
     constexpr mem_layout layout_a = (tnspA == xe4::GMMA::Major::K) ? mem_layout::row_major: mem_layout::col_major;
     constexpr mem_layout layout_b = (tnspB == xe4::GMMA::Major::MN) ? mem_layout::row_major: mem_layout::col_major;
 
-    using TC = dst_type_selector_t<TupleC, 0>;
-    using TD = dst_type_selector_t<TupleC, static_cast<int>(ConstDstType::value)>;
+    using TC = tuple_element_t<0, TupleC>;
+    using TD = tuple_element_t<static_cast<int>(ConstDstType::value), TupleC>;
     async_gmma<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b, ScaleA, ScaleB>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, mat_desc_meta_a, mat_desc_meta_b, static_cast<Args&&>(args)...);
   }
 };

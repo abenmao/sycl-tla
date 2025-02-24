@@ -69,7 +69,9 @@
 #include "cutlass/gemm/collective/sm120_blockscaled_sparse_mma_tma.hpp"
 #endif // !defined(__CUDACC_RTC__)
 
-#if defined(SYCL_INTEL_TARGET)
+#if defined(SYCL_INTEL_XE4_TARGET)
+#include "cutlass/gemm/collective/xe4_mma_warpspecialized.hpp"
+#elif defined (SYCL_INTEL_TARGET)
 #include "cutlass/gemm/collective/xe_mma.hpp"
 #include "cutlass/gemm/collective/xe_array_mma.hpp"
 #include "cutlass/gemm/collective/xe_array_mma_fp8.hpp"
