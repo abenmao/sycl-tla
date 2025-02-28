@@ -34,7 +34,7 @@ include(FindPackageHandleStandardArgs)
 set(DPCPP_USER_FLAGS "" CACHE STRING "Additional user-specified compiler flags for DPC++")
 
 get_filename_component(DPCPP_BIN_DIR ${CMAKE_CXX_COMPILER} DIRECTORY)
-find_library(DPCPP_LIB_DIR NAMES sycl sycl6 PATHS "${DPCPP_BIN_DIR}/../lib")
+find_library(DPCPP_LIB_DIR NAMES sycl sycl6 PATHS "${DPCPP_BIN_DIR}/../lib" NO_DEFAULT_PATH)
 
 add_library(DPCPP::DPCPP INTERFACE IMPORTED)
 
@@ -42,7 +42,9 @@ set(DPCPP_FLAGS "-fsycl;")
 set(DPCPP_COMPILE_ONLY_FLAGS "")
 
 if(NOT "${DPCPP_SYCL_TARGET}" STREQUAL "")
-  list(APPEND DPCPP_FLAGS "-fsycl-targets=${DPCPP_SYCL_TARGET};")
+  if (NOT "${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_xe4")
+    list(APPEND DPCPP_FLAGS "-fsycl-targets=${DPCPP_SYCL_TARGET};")
+  endif()
 endif()
 
 option(DPCPP_DISABLE_ITT_FOR_CUTLASS "Disables linking of the Instrumentation and Tracing Technology (ITT) device libraries for VTune" ON)

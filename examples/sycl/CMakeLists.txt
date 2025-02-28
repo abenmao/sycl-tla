@@ -27,7 +27,9 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-if(SYCL_INTEL_TARGET)
+if(DPCPP_SYCL_TARGET STREQUAL "intel_gpu_xe4")
+  add_subdirectory(xe4)
+else()
   add_subdirectory(00_bmg_gemm)
   add_subdirectory(01_bmg_gemm_with_collective_builder)
   add_subdirectory(02_bmg_gemm_mixed_dtype)

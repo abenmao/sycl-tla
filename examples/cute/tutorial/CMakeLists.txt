@@ -52,7 +52,7 @@ if (NOT CUTLASS_ENABLE_SYCL)
     cute_tutorial_tiled_copy
     tiled_copy.cu
   )
-else()
+elseif(NOT DPCPP_SYCL_TARGET STREQUAL "intel_gpu_xe4")
   cutlass_example_add_executable(
     cute_tutorial_sgemm_1
     sgemm_1_sycl.cpp
