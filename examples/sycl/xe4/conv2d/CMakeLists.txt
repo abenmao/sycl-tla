@@ -26,18 +26,14 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-set(INCLUDE_DIRS
-  ${CMAKE_CURRENT_SOURCE_DIR}/utils
-  ${CMAKE_SOURCE_DIR}/include/cute/arch/xe4
-  ${CMAKE_SOURCE_DIR}/include/cute/arch/xe4/auto_generated
-)
+find_package(DNNL REQUIRED)
 
-function(add_xe4_test TARGET_NAME SRCS)
-  cutlass_example_add_executable(${TARGET_NAME} ${SRCS} ${ARGN})
-  target_include_directories(${TARGET_NAME} PRIVATE ${INCLUDE_DIRS})
-  target_compile_definitions(${TARGET_NAME} PRIVATE SYCL_INTEL_TARGET)
-  target_link_libraries(${TARGET_NAME} PRIVATE -lur_loader)
-endfunction()
+add_xe4_test(xe4_conv2d conv2d.cpp)
+target_link_libraries(xe4_conv2d PRIVATE DNNL::dnnl)
+target_compile_definitions(xe4_conv2d PRIVATE -DTEST_SMALL_WITH_PAD_WITH_STRIDE)
+target_link_options(xe4_conv2d PUBLIC "-Xs;\"-xe-set-abarrier-arrive-lmc -disable-branch-fold\"")
 
-add_subdirectory(bgemm)
-add_subdirectory(conv2d)
+add_xe4_test(xe4_conv2d_dgrad conv2d_dgrad.cpp)
+target_link_libraries(xe4_conv2d_dgrad PRIVATE DNNL::dnnl)
+target_compile_definitions(xe4_conv2d_dgrad PRIVATE -DTEST_WITH_PAD_WITH_DILATION)
+target_link_options(xe4_conv2d_dgrad PUBLIC "-Xs;\"-xe-set-abarrier-arrive-lmc -disable-branch-fold\"")
