@@ -2,13 +2,13 @@
 
 #include "cute/config.hpp"
 #include "cute/numeric/math.hpp"
-
+#include "cute/layout.hpp"
 #include "inline_pisa.hpp"
 #include "mma_xe4_amma.hpp"
 #include "mma_xe4_desc.hpp"
 
 namespace cute::xe4::GMMA {
-
+  using namespace cute;
 enum class OpType {
   Cluster,
   NoneCluster

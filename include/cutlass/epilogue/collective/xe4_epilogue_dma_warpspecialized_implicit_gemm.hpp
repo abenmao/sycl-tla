@@ -35,6 +35,8 @@ public:
   using ElementD = ElementD_;
   using TileShape = TileShape_;
   using SmemLayoutD = SmemLayoutD_;
+  static_assert(is_static<TileShape>::value, "TileShape must be static.");
+  static_assert(is_static<SmemLayoutD>::value, "SmemLayoutD must be static.");
 
   using EpilogueStorePipeline = cutlass::xe4::PipelineTmaAsync<1>;
   using StorePipelineState = typename cutlass::xe4::PipelineState<1>;
