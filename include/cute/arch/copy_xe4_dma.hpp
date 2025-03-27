@@ -191,9 +191,9 @@ struct ASYNC_ROW_LOAD_IM2COL_4D : public DMA_LOAD
     TS const* slm_inst_ptr = slm_ptr - get_lane_id() * slm_stride;
     int32_t crd1 = crd_w + crd_s;
     int32_t crd2 = crd_h + crd_r;
-    bool is_coord_valid = (crd1 >= 0) && (crd1 < tma_desc->bytes[2]);
-    is_coord_valid = is_coord_valid && (crd2 >= 0) && (crd2 < tma_desc->bytes[3]);
-    is_coord_valid = is_coord_valid && (crd_n >= 0) && (crd_n < tma_desc->bytes[4]);
+    bool is_coord_valid = (crd1 >= 0) & (crd1 < tma_desc->bytes[2]);
+    is_coord_valid = is_coord_valid & (crd2 >= 0) & (crd2 < tma_desc->bytes[3]);
+    is_coord_valid = is_coord_valid & (crd_n >= 0) & (crd_n < tma_desc->bytes[4]);
 
     uint32_t offset = crd_c * sizeof(TG) + crd1 * tma_desc->bytes[6] + crd2 * tma_desc->bytes[7] + crd_n * tma_desc->bytes[8];
     offset = is_coord_valid ? offset : 0;
@@ -234,9 +234,9 @@ struct XE4_ASYNC_ROW_STORE_IM2COL_4D : public DMA_STORE
     constexpr uint32_t slm_stride = NumBytesPerCopy / sizeof(TG);
     TG* gmem_address = reinterpret_cast<TG*>(tma_desc->bytes[0]);
     TS const* slm_inst_ptr = slm_ptr - get_lane_id() * slm_stride;
-    bool is_coord_valid = (crd_w >= 0) && (crd_w < tma_desc->bytes[2]);
-    is_coord_valid = is_coord_valid && (crd_h >= 0) && (crd_h < tma_desc->bytes[3]);
-    is_coord_valid = is_coord_valid && (crd_n >= 0) && (crd_n < tma_desc->bytes[4]);
+    bool is_coord_valid = (crd_w >= 0) & (crd_w < tma_desc->bytes[2]);
+    is_coord_valid = is_coord_valid & (crd_h >= 0) & (crd_h < tma_desc->bytes[3]);
+    is_coord_valid = is_coord_valid & (crd_n >= 0) & (crd_n < tma_desc->bytes[4]);
 
     uint32_t offset = crd_c * sizeof(TG) + crd_w * tma_desc->bytes[6] + crd_h * tma_desc->bytes[7] + crd_n * tma_desc->bytes[8];
     offset = is_coord_valid ? offset : 0;
