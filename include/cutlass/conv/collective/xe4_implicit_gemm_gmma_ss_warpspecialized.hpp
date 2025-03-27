@@ -325,7 +325,7 @@ public:
     Tensor tBsB = block_load_b.partition_D(sB);                                              // (TMA,TMA_N,TMA_K,PIPE)
 
     // Mainloop
-    CUTLASS_PRAGMA_NO_UNROLL
+    CUTLASS_PRAGMA_UNROLL
     for ( ; k_tile_count > 0; --k_tile_count) {
       uint32_t write_stage = smem_pipe_producer_state.index();
       auto abar_prod = pipeline.producer_get_barrier(smem_pipe_producer_state);

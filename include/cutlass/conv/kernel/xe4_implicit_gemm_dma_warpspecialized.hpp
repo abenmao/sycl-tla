@@ -152,6 +152,7 @@ public:
     uint32_t epilogue  = false;
   };
 
+  CUTLASS_DEVICE
   static Params
   to_underlying_arguments(Arguments const& args, void* workspace) {
     auto tdesc_b = allocate_tdesc<0>();

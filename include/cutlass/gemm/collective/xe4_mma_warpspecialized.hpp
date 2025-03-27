@@ -356,7 +356,7 @@ struct CollectiveMma<
     Tensor tBgB = tBgB_nkl(_, get<1>(cta_coord_mnkl), _, get<2>(cta_coord_mnkl));
 
     // Issue the Mainloop loads
-    CUTLASS_PRAGMA_NO_UNROLL
+    CUTLASS_PRAGMA_UNROLL
     while (k_tile_count > 0) {
       // LOCK mainloop_pipe_producer_state for _writing_
       mainloop_pipeline.producer_try_wait(slm_pipe_write);

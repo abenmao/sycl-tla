@@ -728,7 +728,7 @@ struct Xe4FmhaFwdMainloopTmaWarpspecialized {
 
     pipeline_c.producer_acquire(pipeline_c_producer_state);
 
-    CUTLASS_PRAGMA_NO_UNROLL
+    CUTLASS_PRAGMA_UNROLL
     for (; mask_tile_count > 0; mask_tile_count -= 1) {
       softmax_step<false /* need_apply_mask */>(
           row_max, row_sum, stage,
@@ -746,7 +746,7 @@ struct Xe4FmhaFwdMainloopTmaWarpspecialized {
     // Masked iterations
     mask_tile_count = Mask{}.get_masked_trip_count(blk_coord, TileShape{}, problem_shape);
 
-    CUTLASS_PRAGMA_NO_UNROLL
+    CUTLASS_PRAGMA_UNROLL
     for (; mask_tile_count > 0; mask_tile_count -= 1) {
       softmax_step<true /* need_apply_mask */>(
           row_max, row_sum, stage, mask_tile_count == 1,
@@ -987,7 +987,7 @@ struct Xe4FmhaFwdMainloopTmaWarpspecialized {
     // handle the last iteration differently (i.e. tmem_load/stsm for epi)
     mask_tile_count -= 1;
 
-    CUTLASS_PRAGMA_NO_UNROLL
+    CUTLASS_PRAGMA_UNROLL
     for (; mask_tile_count > 0; mask_tile_count -= 1) {
 
       pipeline_s0_c.consumer_wait(pipeline_s0_c_consumer_state);
