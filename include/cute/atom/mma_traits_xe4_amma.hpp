@@ -98,9 +98,9 @@ template <class TupleC, class TA, class TB, class Shape_MNK_, xe4::GMMA::Major t
 struct MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_, MatDesc, Abarrier>>
 {
   using ValTypeD = tuple_element_t<1, TupleC>;
-  using ValTypeA = bf16;
-  using ValTypeB = bf16;
-  using ValTypeC = float;
+  using ValTypeA = TA;
+  using ValTypeB = TB;
+  using ValTypeC = tuple_element_t<0, TupleC>;
   using AbarrierType = Abarrier;
 
   using FrgTypeA = xe4::slm_desc<tnspA_, MatDesc>;
@@ -164,8 +164,8 @@ template <class TupleC, class TA, class TB, class Shape_MNK_, xe4::GMMA::Major t
 struct MMA_Traits<XE4_ASYNC_GMMA_MULTICAST<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_, MatDesc, Abarrier>>
 {
   using ValTypeD = tuple_element_t<1, TupleC>;
-  using ValTypeA = bf16;
-  using ValTypeB = bf16;
+  using ValTypeA = TA;
+  using ValTypeB = TB;
   using ValTypeC = tuple_element_t<0, TupleC>;
   using AbarrierType = Abarrier;
 

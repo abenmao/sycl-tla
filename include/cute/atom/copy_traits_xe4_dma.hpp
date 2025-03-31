@@ -327,10 +327,10 @@ initialize_tensor_desc(TensorDesc tensor_desc, Tensor<GEngine, GLayout> const& g
   }
 
   uint32_t block_height = (block_height_ / coop_size);
-  tensordesc_fill_dim_size<2>(tensor_desc, {width, height});
-  tensordesc_fill_dim_stride<2>(tensor_desc, width * sizeof(TmaInternalType));
+  tensordesc_fill_dim_size<2>(tensor_desc, sycl::vec<uint32_t, 2>{width, height});
+  tensordesc_fill_dim_stride<2>(tensor_desc, sycl::vec<uint64_t, 1>{width * sizeof(TmaInternalType)});
   tensordesc_fill_element_stride<2>(tensor_desc, sycl::vec<uint32_t, 2>{1, 1});
-  tensordesc_fill_roitensor_dim_size<2>(tensor_desc, {block_width, block_height});
+  tensordesc_fill_roitensor_dim_size<2>(tensor_desc, sycl::vec<uint32_t, 2>{block_width, block_height});
 }
 
 template <class TensorDesc, class GTensor, class SLayout>
