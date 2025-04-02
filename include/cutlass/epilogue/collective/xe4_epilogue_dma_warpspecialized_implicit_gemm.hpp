@@ -5,7 +5,7 @@
 #include "cute/container/array.hpp"
 #include "cute/tensor.hpp"
 #include "cutlass/cutlass.h"
-#include "cutlass/pipeline/xe4_pipeline.hpp"
+#include "cutlass/pipeline/pipeline.hpp"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -38,8 +38,8 @@ public:
   static_assert(is_static<TileShape>::value, "TileShape must be static.");
   static_assert(is_static<SmemLayoutD>::value, "SmemLayoutD must be static.");
 
-  using EpilogueStorePipeline = cutlass::xe4::PipelineTmaAsync<1>;
-  using StorePipelineState = typename cutlass::xe4::PipelineState<1>;
+  using EpilogueStorePipeline = cutlass::PipelineTmaAsync<1>;
+  using StorePipelineState = typename EpilogueStorePipeline::PipelineState;
 
   using StrideC = decltype(cute::Stride<cute::Stride<int64_t, int64_t, int64_t>,cute::Int<1>>{});
   static constexpr int NumTensorDimensions = NumSpatialDims + 2;
@@ -143,14 +143,14 @@ public:
     Tensor tDsD = thr_store_d.partition_S(sD);
     Tensor tDgD = thr_store_d.partition_D(gD);
 
-    epilogue_store_pipeline.consumer_try_wait(pipe_store_state);
+    epilogue_store_pipeline.consumer_wait(pipe_store_state);
     if(elect_one_sync()) {
         epilogue_store_pipeline.consumer_commit(pipe_store_state, epilogue_params.tma_transaction_bytes);
     }
 
     auto abar_store = epilogue_store_pipeline.consumer_get_barrier(pipe_store_state);
     copy(epilogue_params.tma_store_d.with(abar_store), tDsD, tDgD);
-    epilogue_store_pipeline.producer_try_wait(pipe_store_state);
+    epilogue_store_pipeline.producer_try_acquire(pipe_store_state);
   }
 };
 

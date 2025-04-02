@@ -1,6 +1,5 @@
 #pragma once
 
-#include "cute/arch/cluster_xe4.hpp"
 #include "cute/arch/copy_xe4_dma.hpp"
 #include "cutlass/pipeline/pipeline.hpp"
 #include "cutlass/gemm/kernel/tile_scheduler_params.h"
@@ -35,7 +34,7 @@ public:
   static constexpr uint32_t Stages = Stages_;
   static constexpr bool IsDynamicPersistent = true;
 
-  using Pipeline = xe4::PipelineTmaAsync<Stages>;
+  using Pipeline = cutlass::PipelineTmaAsync<Stages>;
   using PipelineState = typename Pipeline::PipelineState;
 
   struct Arguments {

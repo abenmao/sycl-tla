@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cutlass/pipeline/xe4_pipeline.hpp"
+#include "cutlass/pipeline/pipeline.hpp"
 #include "cutlass/util/packed_stride.hpp"
 #include "cute/atom/copy_traits_xe4_im2col.hpp"
 #include "cute/arch/mma_xe4_amma.hpp"
@@ -118,8 +118,8 @@ struct CollectiveConv
     append(select<1,2>(TileShape{}), Int<Stages>{}),
     cute::conditional_t<TiledMma::tnspB == cute::xe4::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
 
-  using MainloopPipeline = cutlass::xe4::PipelineTmaAsync<DispatchPolicy::Stages>;
-  using PipelineState  = typename cutlass::xe4::PipelineState<DispatchPolicy::Stages>;
+  using MainloopPipeline = cutlass::PipelineTmaAsync<DispatchPolicy::Stages>;
+  using PipelineState  = typename MainloopPipeline::PipelineState;
 
   static constexpr auto ConvOp = ConvOp_::value;
   using ProblemShape = ConvProblemShape<ConvOp, NumSpatialDimensions>;
@@ -330,11 +330,10 @@ public:
       uint32_t write_stage = smem_pipe_producer_state.index();
       auto abar_prod = pipeline.producer_get_barrier(smem_pipe_producer_state);
 
-      pipeline.producer_try_wait(smem_pipe_producer_state);
+      pipeline.producer_acquire(smem_pipe_producer_state);
       copy(mainloop_params.tma_load_a.with(abar_prod), tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,write_stage));
 
       if (elect_one_sync()) {
-        pipeline.producer_commit(smem_pipe_producer_state, mainloop_params.tma_transaction_bytes);
         copy(mainloop_params.tma_load_b.with(abar_prod), tBgB(_,_,_,*k_tile_iter), tBsB(_,_,_,write_stage));
       }
 
@@ -368,9 +367,9 @@ public:
     for (uint32_t i = 0; i < k_tile_count - 1; i++) {
       uint32_t abar_index = slm_pipe_read.index();
       auto abar_cons = pipeline.consumer_get_barrier(slm_pipe_read);
-      pipeline.consumer_try_wait(slm_pipe_read);
+      pipeline.consumer_wait(slm_pipe_read);
       cute::gemm(tiled_mma.with(dstIsAccum, mma_ctrl, abar_cons), tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
-      pipeline.consumer_commit(slm_pipe_read);
+      pipeline.consumer_commit(slm_pipe_read, 1);
       ++slm_pipe_read;
       mma_ctrl = 0;
     }
@@ -378,11 +377,10 @@ public:
       auto abar_store = finalPipeline.producer_get_barrier(finalPipelineState);
       auto abar_cons = pipeline.consumer_get_barrier(slm_pipe_read);
       uint32_t abar_index = slm_pipe_read.index();
-      pipeline.consumer_try_wait(slm_pipe_read);
-      finalPipeline.producer_try_wait(finalPipelineState);
+      pipeline.consumer_wait(slm_pipe_read);
+      finalPipeline.producer_acquire(finalPipelineState);
       cute::gemm(tiled_mma.with(dstIsMatC, mma_ctrl, abar_cons, abar_store), tCrC, tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
-      pipeline.consumer_commit(slm_pipe_read);
-      finalPipeline.producer_commit(finalPipelineState, 1);
+      pipeline.consumer_commit(slm_pipe_read, 1);
       ++slm_pipe_read;
     }
     return slm_pipe_read;

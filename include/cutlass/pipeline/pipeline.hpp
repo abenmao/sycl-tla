@@ -35,8 +35,4 @@
 #include "cutlass/pipeline/sm90_pipeline.hpp"
 #include "cutlass/pipeline/sm100_pipeline.hpp"
 
-#if defined(SYCL_INTEL_XE4_TARGET)
-#include "cutlass/pipeline/xe4_pipeline.hpp"
-#endif
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////

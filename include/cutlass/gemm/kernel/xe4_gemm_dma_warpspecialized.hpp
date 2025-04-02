@@ -3,7 +3,6 @@
 #include <sycl/sycl.hpp>
 #include <cute/tensor.hpp>
 
-#include "cute/arch/cluster_xe4.hpp"
 #include "cute/arch/copy_xe4_dma.hpp"
 #include "cutlass/gemm/collective/collective_mma.hpp"
 #include "cutlass/epilogue/collective/collective_epilogue.hpp"
@@ -84,10 +83,10 @@ public:
   using AccumulatorPipeline = typename CollectiveEpilogue::AccumulatorPipeline;
   using AccumulatorPipelineState = typename CollectiveEpilogue::AccumulatorPipelineState;
 
-  using CLCPipeline = cutlass::xe4::PipelineTmaAsync<SchedulerPipelineStageCount>;
+  using CLCPipeline = cutlass::PipelineTmaAsync<SchedulerPipelineStageCount>;
   using CLCPipelineState = typename CLCPipeline::PipelineState;
 
-  using CLCThrottlePipeline = cutlass::xe4::PipelineTmaAsync<SchedulerPipelineStageCount>;
+  using CLCThrottlePipeline = cutlass::PipelineTmaAsync<SchedulerPipelineStageCount>;
   using CLCThrottlePipelineState = typename CLCThrottlePipeline::PipelineState;
 
   // Kernel level shared memory storage
@@ -211,7 +210,8 @@ public:
     WarpCategory warp_category = warp_idx < static_cast<int>(WarpCategory::Epilogue) ? WarpCategory(warp_idx)
                                                                                      : WarpCategory::Epilogue;
 
-    bool lane_predicate = cute::xe4::elect_one_sync();
+    bool lane_predicate = cute::elect_one_sync();
+    auto cluster_shape = ClusterShape{};
 
     auto ptr = alloc_slm_buffer<uint8_t, TensorStorageSize>(item.get_group());
     auto& shared_tensors = *reinterpret_cast<typename SharedStorage::TensorStorage*>(ptr);
@@ -220,7 +220,7 @@ public:
     auto& shared_pipelines = *reinterpret_cast<typename SharedStorage::PipelineStorage*>(abar_base);
 
     uint32_t cta_rank_in_cluster = params.scheduler.wg_linear_id_in_cluster;
-    CollectiveMainloop collective_mainloop(params.mainloop, ClusterShape{}, cta_rank_in_cluster);
+    CollectiveMainloop collective_mainloop(params.mainloop, cluster_shape, cta_rank_in_cluster);
     CollectiveEpilogue collective_epilogue(params.epilogue);
 
     // Do we load source tensor C or other aux inputs
@@ -236,47 +236,83 @@ public:
 
     // Mainloop Load pipeline
     typename MainloopPipeline::Params mainloop_pipeline_params;
+    if (WarpCategory::MainloopLoad == warp_category) {
+      mainloop_pipeline_params.role = MainloopPipeline::ThreadCategory::Producer;
+    }
+    if (WarpCategory::MMA == warp_category) {
+      mainloop_pipeline_params.role = MainloopPipeline::ThreadCategory::Consumer;
+    }
+    mainloop_pipeline_params.is_leader = lane_predicate && is_participant.main_load;
+    mainloop_pipeline_params.transaction_bytes = CollectiveMainloop::TmaTransactionBytes;
+    mainloop_pipeline_params.num_consumers = 1;
     mainloop_pipeline_params.initializing_warp = 0;
-    MainloopPipeline mainloop_pipeline(shared_pipelines.mainloop, mainloop_pipeline_params);
+    MainloopPipeline mainloop_pipeline(shared_pipelines.mainloop, mainloop_pipeline_params, cluster_shape, true_type{}, false_type{});
 
     // Mainloop-Epilogue pipeline
     typename AccumulatorPipeline::Params accumulator_pipeline_params;
-    accumulator_pipeline_params.initializing_warp = 2;
-    AccumulatorPipeline accumulator_pipeline(shared_pipelines.accumulator, accumulator_pipeline_params);
+    if (WarpCategory::MMA == warp_category) {
+      accumulator_pipeline_params.role = AccumulatorPipeline::ThreadCategory::Producer;
+    }
+    if (WarpCategory::Epilogue == warp_category) {
+      accumulator_pipeline_params.role = AccumulatorPipeline::ThreadCategory::Consumer;
+    }
+    accumulator_pipeline_params.is_leader = lane_predicate && is_participant.mma;
+    accumulator_pipeline_params.num_consumers = NumEpilogueThreads;
+    accumulator_pipeline_params.transaction_bytes = 1;
+    accumulator_pipeline_params.initializing_warp = 1;
+    AccumulatorPipeline accumulator_pipeline(shared_pipelines.accumulator, accumulator_pipeline_params, cluster_shape, true_type{}, false_type{});
 
     // Epilogue Store pipeline
     typename EpiStorePipeline::Params epi_store_pipeline_params;
-    epi_store_pipeline_params.initializing_warp = 3;
+    if (WarpCategory::Epilogue == warp_category) {
+      epi_store_pipeline_params.role = EpiStorePipeline::ThreadCategory::Producer;
+    }
+    if (WarpCategory::EpilogueStore == warp_category) {
+      epi_store_pipeline_params.role = EpiStorePipeline::ThreadCategory::Consumer;
+    }
+    epi_store_pipeline_params.initializing_warp = 2;
     epi_store_pipeline_params.num_producers = NumEpilogueThreads;
-    EpiStorePipeline epi_store_pipeline(shared_pipelines.epi_store, epi_store_pipeline_params);
+    epi_store_pipeline_params.num_consumers = 1;
+    EpiStorePipeline epi_store_pipeline(shared_pipelines.epi_store, epi_store_pipeline_params, cluster_shape, true_type{}, false_type{});
 
     // CLC pipeline
     typename CLCPipeline::Params clc_pipeline_params;
-    clc_pipeline_params.initializing_warp = 1;
+    if (WarpCategory::Sched == warp_category) {
+      clc_pipeline_params.role = CLCPipeline::ThreadCategory::ProducerConsumer;
+    } else {
+      clc_pipeline_params.role = CLCPipeline::ThreadCategory::Consumer;
+    }
+    clc_pipeline_params.initializing_warp = 3;
     clc_pipeline_params.num_producers = NumSchedThreads;
     clc_pipeline_params.num_consumers = NumSchedThreads + NumMMAThreads + NumMainloopLoadThreads + NumEpilogueStoreThreads + NumEpilogueThreads;
-    CLCPipeline clc_pipeline(shared_pipelines.clc, clc_pipeline_params);
+    CLCPipeline clc_pipeline(shared_pipelines.clc, clc_pipeline_params, cluster_shape, true_type{}, false_type{});
 
     // CLC throttle pipeline
     typename CLCThrottlePipeline::Params clc_throttle_pipeline_params;
+    if (WarpCategory::MainloopLoad == warp_category) {
+      clc_throttle_pipeline_params.role = CLCThrottlePipeline::ThreadCategory::Producer;
+    }
+    if (WarpCategory::Sched == warp_category)  {
+      clc_throttle_pipeline_params.role = CLCThrottlePipeline::ThreadCategory::Consumer;
+    }
     clc_throttle_pipeline_params.initializing_warp = 4;
     clc_throttle_pipeline_params.num_producers = group_info.subgroup_size;
     clc_throttle_pipeline_params.num_consumers = group_info.subgroup_size;
-    CLCThrottlePipeline clc_throttle_pipeline(shared_pipelines.clc_throttle, clc_throttle_pipeline_params);
+    CLCThrottlePipeline clc_throttle_pipeline(shared_pipelines.clc_throttle, clc_throttle_pipeline_params, cluster_shape, true_type{}, false_type{});
 
-    auto mainloop_pipe_producer_state = cutlass::xe4::make_producer_start_state<MainloopPipeline>();
+    auto mainloop_pipe_producer_state = cutlass::make_producer_start_state<MainloopPipeline>();
     auto mainloop_pipe_consumer_state = MainloopPipelineState{};
 
-    auto accumulator_pipe_producer_state = cutlass::xe4::make_producer_start_state<AccumulatorPipeline>();
+    auto accumulator_pipe_producer_state = cutlass::make_producer_start_state<AccumulatorPipeline>();
     auto accumulator_pipe_consumer_state = AccumulatorPipelineState{};
 
-    auto store_pipe_producer_state = cutlass::xe4::make_producer_start_state<EpiStorePipeline>();
+    auto store_pipe_producer_state = cutlass::make_producer_start_state<EpiStorePipeline>();
     auto store_pipe_consumer_state = EpiStorePipelineState{};
 
-    auto clc_pipe_throttle_producer_state = cutlass::xe4::make_producer_start_state<CLCThrottlePipeline>();
+    auto clc_pipe_throttle_producer_state = cutlass::make_producer_start_state<CLCThrottlePipeline>();
     auto clc_pipe_throttle_consumer_state = CLCThrottlePipelineState{};
 
-    auto clc_pipe_producer_state = cutlass::xe4::make_producer_start_state<CLCPipeline>();
+    auto clc_pipe_producer_state = cutlass::make_producer_start_state<CLCPipeline>();
     auto clc_pipe_consumer_state = CLCPipelineState{};
 
     auto wg_k = get<2>(TileShape{});
@@ -319,8 +355,8 @@ public:
 
         if constexpr (IsSchedDynamicPersistent) {
           if (is_first_cta_in_cluster && requires_clc_query) {
-            clc_throttle_pipeline.producer_try_wait(clc_pipe_throttle_producer_state);
-            clc_throttle_pipeline.producer_arrive(clc_pipe_throttle_producer_state, 1);
+            clc_throttle_pipeline.producer_acquire(clc_pipe_throttle_producer_state);
+            clc_throttle_pipeline.producer_commit(clc_pipe_throttle_producer_state, 1);
             ++clc_pipe_throttle_producer_state;
           }
         }
@@ -352,8 +388,8 @@ public:
         do {
           if (requires_clc_query) {
             // Throttle CLC query to mitigate workload imbalance caused by skews among persistent workers.
-            clc_throttle_pipeline.consumer_try_wait(clc_pipe_throttle_consumer_state);
-            clc_throttle_pipeline.consumer_arrive(clc_pipe_throttle_consumer_state, 1);
+            clc_throttle_pipeline.consumer_wait(clc_pipe_throttle_consumer_state);
+            clc_throttle_pipeline.consumer_release(clc_pipe_throttle_consumer_state);
             ++clc_pipe_throttle_consumer_state;
             // Query next clcID and update producer state
             clc_pipe_producer_state = scheduler.advance_to_next_work(clc_pipeline, clc_pipe_producer_state);

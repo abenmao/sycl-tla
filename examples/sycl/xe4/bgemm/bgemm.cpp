@@ -102,9 +102,10 @@ void run_test(bool is_persistent_mode = false)
   constexpr uint32_t NumControlSubGroup = 4;
   constexpr uint32_t NumPostOpSubGroup = 16;
   range<3> local_range(1, NumControlSubGroup + NumPostOpSubGroup, SubGroupSize);
-  range<3> group_range(1, test::num_xecore_y, test::num_xecore_x);
-  if (!is_persistent_mode) {
-    group_range = range<3>(1, ceil_div(mat_m, wg_m), ceil_div(mat_n, wg_n));
+  range<3> group_range(1, ceil_div(mat_m, wg_m), ceil_div(mat_n, wg_n));
+  if (is_persistent_mode) {
+    group_range[1] = min(group_range[1], test::num_xecore_y);
+    group_range[2] = min(group_range[2], test::num_xecore_x);
   }
   nd_range<3> Range(group_range * local_range, local_range);
 

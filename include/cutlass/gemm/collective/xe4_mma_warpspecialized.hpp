@@ -90,7 +90,7 @@ struct CollectiveMma<
   using TransformB = TransformB_;
   using ArchTag = typename DispatchPolicy::ArchTag;
 
-  using MainloopPipeline = cutlass::xe4::PipelineTmaAsync<Stages>;
+  using MainloopPipeline = cutlass::PipelineTmaAsync<Stages>;
   using MainloopPipelineState = typename MainloopPipeline::PipelineState;
 
   static_assert(DispatchPolicy::Stages >= 2, "Specialization requires Stages set to value 2 or more.");
@@ -359,14 +359,13 @@ struct CollectiveMma<
     CUTLASS_PRAGMA_UNROLL
     while (k_tile_count > 0) {
       // LOCK mainloop_pipe_producer_state for _writing_
-      mainloop_pipeline.producer_try_wait(slm_pipe_write);
+      mainloop_pipeline.producer_acquire(slm_pipe_write);
 
       uint32_t write_stage = slm_pipe_write.index();
       auto abar_prod = mainloop_pipeline.producer_get_barrier(slm_pipe_write);
 
       copy(observed_tma_load_a_->with(abar_prod, mcast_mask_a), tAgA(_,*k_tile_iter), tAsA(_,write_stage));
       copy(observed_tma_load_b_->with(abar_prod, mcast_mask_b), tBgB(_,*k_tile_iter), tBsB(_,write_stage));
-      mainloop_pipeline.producer_commit(slm_pipe_write, SlmBytesA + SlmBytesB);
 
       --k_tile_count;
       ++k_tile_iter;
@@ -396,7 +395,7 @@ struct CollectiveMma<
     constexpr auto dstType = C<cute::xe4::GMMA::DstType::Accum>{};
     for (uint32_t i = 0; i < k_tile_count-1; ++i, ++mainloop_pipe_consumer_state) {
       uint32_t read_stage = mainloop_pipe_consumer_state.index();
-      mainloop_pipeline.consumer_try_wait(mainloop_pipe_consumer_state);
+      mainloop_pipeline.consumer_wait(mainloop_pipe_consumer_state);
       auto abar_cons = mainloop_pipeline.consumer_get_barrier(mainloop_pipe_consumer_state);
       cute::gemm(tiled_mma.with(dstType, mma_ctrl, abar_cons, mcast_mask_a, abar_cons, mcast_mask_b), tCsA(_,_,_,read_stage), tCsB(_,_,_,read_stage), tCsAcc);
       mainloop_pipeline.consumer_commit(mainloop_pipe_consumer_state, cluster_expect_tx);
@@ -406,13 +405,13 @@ struct CollectiveMma<
     {
       uint32_t read_stage = mainloop_pipe_consumer_state.index();
       constexpr auto dstTypeMatC = C<cute::xe4::GMMA::DstType::MatC>{};
-      mainloop_pipeline.consumer_try_wait(mainloop_pipe_consumer_state);
-      store_pipeline.producer_try_wait(store_pipe_producer_state);
+      mainloop_pipeline.consumer_wait(mainloop_pipe_consumer_state);
+      store_pipeline.producer_try_acquire(store_pipe_producer_state);
+      accumulator_pipeline.producer_acquire(accumulator_pipe_producer_state);
       auto abar_cons = mainloop_pipeline.consumer_get_barrier(mainloop_pipe_consumer_state);
       auto abar_cons_d = accumulator_pipeline.producer_get_barrier(accumulator_pipe_producer_state);
       cute::gemm(tiled_mma.with(dstTypeMatC, mma_ctrl, abar_cons_d, abar_cons, mcast_mask_a, abar_cons, mcast_mask_b), tCsC, tCsA(_,_,_,read_stage), tCsB(_,_,_,read_stage), tCsAcc);
       mainloop_pipeline.consumer_commit(mainloop_pipe_consumer_state, cluster_expect_tx);
-      accumulator_pipeline.producer_commit(accumulator_pipe_producer_state, wg_expect_tx);  // Notify epilogue threads to start working on the accumulator
       ++mainloop_pipe_consumer_state;
 
       return mainloop_pipe_consumer_state;

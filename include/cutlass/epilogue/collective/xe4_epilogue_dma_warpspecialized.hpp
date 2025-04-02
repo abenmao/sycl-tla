@@ -6,7 +6,7 @@
 #include "cute/tensor.hpp"
 #include "cutlass/cutlass.h"
 #include "cutlass/epilogue/thread/xe4_detail.hpp"
-#include "cutlass/pipeline/xe4_pipeline.hpp"
+#include "cutlass/pipeline/pipeline.hpp"
 #include "cutlass/epilogue/fusion/sm90_callbacks_tma_warpspecialized.hpp"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -52,10 +52,10 @@ public:
 
   using TiledCopyD = cute::xe4::ASYNC_TENSOR_STORE<slm_matrix_type::type1>;
 
-  using AccumulatorPipeline = cutlass::xe4::PipelineTmaAsync<1>;
+  using AccumulatorPipeline = cutlass::PipelineTmaAsync<1>;
   using AccumulatorPipelineState = typename AccumulatorPipeline::PipelineState;
 
-  using StorePipeline = cutlass::xe4::PipelineTmaAsync<1>;
+  using StorePipeline = cutlass::PipelineTmaAsync<1>;
   using StorePipelineState = typename StorePipeline::PipelineState;
 
   using SmemLayoutD = decltype(tile_to_shape(
@@ -76,6 +76,8 @@ public:
   };
 
   using TensorStorage = typename SharedStorage::TensorStorage;
+
+  static constexpr uint32_t TransactionBytesStore = sizeof(ElementD) * size(SmemLayoutD {});
 
   // Host side epilogue arguments
   struct Arguments {
@@ -132,6 +134,7 @@ public:
     auto [store_pipe_producer_state, accumulator_pipe_consumer_state] = pipeline_states;
 
     accumulator_pipeline.consumer_try_wait(accumulator_pipe_consumer_state);
+    accumulator_pipeline.consumer_release(accumulator_pipe_consumer_state);
 
     constexpr auto tile_mn = take<0,2>(TileShape{});
     auto tensor_d = make_tensor(shared_tensors.smem_D.data(), CoreMatrix::retile<ElementD>(tile_mn));
@@ -157,7 +160,7 @@ public:
     auto cst_callbacks = fusion_callbacks.template get_consumer_store_callbacks<true>(cst_args);
     pattern2<FragmentSize, EpiSgNum, SgSize>(cst_callbacks, tensor_d, tensor_d, worker_id);
 
-    store_pipeline.producer_arrive(store_pipe_producer_state, 1);
+    store_pipeline.producer_commit(store_pipe_producer_state, 1);
   }
 
   template<
@@ -186,10 +189,9 @@ public:
     auto tDsD = block_store_d.partition_D(sD);    // (TMA,TMA_M,TMA_N)
 
     auto abar_store = store_pipeline.consumer_get_barrier(store_pipe_state);
-    constexpr uint32_t slm_bytes_store = sizeof(ElementD) * size(SmemLayoutD {});
     copy(_params.store_d.with(abar_store), tDsD, tDgD);
-    store_pipeline.consumer_commit(store_pipe_state, slm_bytes_store);
-    store_pipeline.producer_try_wait(store_pipe_state);
+    store_pipeline.consumer_commit(store_pipe_state, TransactionBytesStore);
+    store_pipeline.producer_try_acquire(store_pipe_state);
     ++store_pipe_state;
   }
 
