@@ -65,7 +65,9 @@ CUTLASS_DEVICE
 void pipeline_check_is_producer(ThreadCategory role) {
   #ifndef NDEBUG
   if (!pipeline_is_producer(role)) {
+    #if defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
+    #endif
   }
   #endif
 }
@@ -81,7 +83,9 @@ CUTLASS_DEVICE
 void pipeline_check_is_consumer(ThreadCategory role) {
   #ifndef NDEBUG
   if (!pipeline_is_consumer(role)) {
+    #if defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
+    #endif
   }
   #endif
 }
@@ -368,7 +372,9 @@ public:
         else {
           is_signaling_thread_ = 0;
           #ifndef NDEBUG
+          #if defined(__CUDA_ARCH__)
             asm volatile ("brkpt;\n" ::);
+          #endif
           #endif
         }
 
@@ -556,12 +562,16 @@ private:
     }
     #ifndef NDEBUG
     if (params_.role == ThreadCategory::Consumer || params_.role == ThreadCategory::NonParticipant) {
+      #if defined(__CUDA_ARCH__)
       asm volatile ("brkpt;\n" ::);
+      #endif
     }
 
     // Most likely you have elected more than one leader
     if (params_.is_leader && (ThreadIdxX() % 32 != 0)) {
+      #if defined(__CUDA_ARCH__)
       asm volatile ("brkpt;\n" ::);
+      #endif
     }
     #endif
   }
@@ -658,7 +668,9 @@ private:
     empty_barrier_ptr_[stage].arrive(dst_blockid_, is_signaling_thread_ & (!skip));
     #ifndef NDEBUG
     if (params_.role == ThreadCategory::Producer || params_.role == ThreadCategory::NonParticipant) {
+      #if defined(__CUDA_ARCH__)
       asm volatile ("brkpt;\n" ::);
+      #endif
     }
     #endif
   }
