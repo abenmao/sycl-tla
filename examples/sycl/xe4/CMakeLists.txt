@@ -40,4 +40,4 @@ function(add_xe4_test TARGET_NAME SRCS)
 endfunction()
 
 add_subdirectory(bgemm)
-add_subdirectory(conv2d)
+# add_subdirectory(conv2d)

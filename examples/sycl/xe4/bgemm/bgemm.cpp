@@ -22,10 +22,10 @@ using namespace cutlass::epilogue::collective::detail;
 using namespace cutlass::epilogue::thread;
 
 struct BGEMM_TEST_CONFIG {
-  using dtypeA = bf16;
-  using dtypeB = bf16;
+  using dtypeA = fp16;
+  using dtypeB = fp16;
   using dtypeAcc = float;
-  using dtypeC = bf16;
+  using dtypeC = fp16;
   static constexpr uint32_t wg_m = 256;
   static constexpr uint32_t wg_n = 512;
   static constexpr uint32_t wg_k = 128;
@@ -128,7 +128,7 @@ void run_test(bool is_persistent_mode = false)
     dtypeB, LayoutB, 16,
     tuple<dtypeAcc, dtypeC>,
     TileShape, ClusterShape, cutlass::gemm::collective::StageCount<stage>,
-    cutlass::gemm::KernelTmaWarpSpecializedXe4<stage, 1>>::CollectiveOp;
+    cutlass::gemm::KernelTmaWarpSpecializedXe4<NumControlSubGroup, NumPostOpSubGroup, stage, 1>>::CollectiveOp;
 
 #ifdef ENABLE_EPILOGUE_RELU
   static constexpr int FragmentSize = 2;
@@ -162,14 +162,12 @@ void run_test(bool is_persistent_mode = false)
 
   q.parallel_for<test>(Range, [=](nd_item<3> item) {
     auto args = typename GemmKernel::Arguments {
-      {SubGroupSize, NumControlSubGroup, NumPostOpSubGroup},
       make_shape(mat_m, mat_n, mat_k, mat_l),
       {
         A_s, cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(mat_m, mat_k, mat_l)),
         B_s, cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(mat_n, mat_k, mat_l)),
       },
       {
-        typename FusionCallbacks::Arguments{},
         C_s, cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(mat_m, mat_n, mat_l)),
       }
     };

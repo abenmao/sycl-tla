@@ -60,6 +60,8 @@ public:
   // determines how many waves (stages-1) a warp can race ahead
   static constexpr uint32_t SchedulerPipelineStageCount = DispatchPolicy::Schedule::SchedulerPipelineStageCount;
   static constexpr uint32_t AccumulatorPipelineStageCount = DispatchPolicy::Schedule::AccumulatorPipelineStageCount;
+  static constexpr uint32_t NumControlWarps = DispatchPolicy::Schedule::NumControlWarps;
+  static constexpr uint32_t NumEpilogueWarps = DispatchPolicy::Schedule::NumEpilogueWarps;
   static constexpr bool IsOverlappingAccum = DispatchPolicy::IsOverlappingAccum;
 
   // TileID scheduler
@@ -68,8 +70,6 @@ public:
   using TileSchedulerTag = TileScheduler_;
   using TileScheduler = typename detail::TileSchedulerSelector<
     TileSchedulerTag, ArchTag, TileShape, ClusterShape, SchedulerPipelineStageCount>::Scheduler;
-  using TileSchedulerArguments = typename TileScheduler::Arguments;
-  using TileSchedulerParams = typename TileScheduler::Params;
 
   static constexpr bool IsSchedDynamicPersistent = TileScheduler::IsDynamicPersistent;
 
@@ -120,15 +120,8 @@ public:
   static constexpr int TensorStorageSize = sizeof(typename SharedStorage::TensorStorage);
   static constexpr int PipelineStorageSize = sizeof(typename SharedStorage::PipelineStorage);
 
-  struct GroupInfo {
-    uint32_t subgroup_size = 0;
-    uint32_t mainloop_subgroup_num = 0;
-    uint32_t epilogue_subgroup_num = 0;
-  };
-
   // Host facing host arguments
   struct Arguments {
-    GroupInfo group_info;
     ProblemShape problem_shape;
     MainloopArguments mainloop;
     EpilogueArguments epilogue;
@@ -136,11 +129,9 @@ public:
 
   // Kernel device entry point API
   struct Params {
-    GroupInfo group_info;
     ProblemShape problem_shape;
     MainloopParams mainloop;
     EpilogueParams epilogue;
-    TileSchedulerParams scheduler;
   };
 
   enum class WarpCategory : int32_t {
@@ -167,37 +158,24 @@ public:
   static
   Params
   to_underlying_arguments(Arguments const& args, void* workspace) {
-    auto tdesc_a = allocate_tdesc<0>();
-    auto tdesc_b = allocate_tdesc<1>();
-    auto tdesc_c = allocate_tdesc<2>();
-
-    auto scheduler_args = typename TileScheduler::Arguments {
-      {CollectiveMainloop::SlmBytesA, CollectiveMainloop::SlmBytesB}
-    };
-
     return {
-      args.group_info,
       args.problem_shape,
-      CollectiveMainloop::to_underlying_arguments(
-        args.problem_shape, make_tuple(tdesc_a, tdesc_b), args.mainloop, workspace),
-      CollectiveEpilogue::to_underlying_arguments(args.problem_shape, tdesc_c, args.epilogue, workspace),
-      TileScheduler::to_underlying_arguments(args.problem_shape, TileShape{}, ClusterShape{}, scheduler_args)
+      CollectiveMainloop::to_underlying_arguments(args.problem_shape, args.mainloop, workspace),
+      CollectiveEpilogue::to_underlying_arguments(args.problem_shape, args.epilogue, workspace)
     };
   }
 
   CUTLASS_DEVICE
   void
   operator()(Params const& params, sycl::nd_item<3> item) {
-    auto& group_info = params.group_info;
     auto& problem_shape = params.problem_shape;
 
     // Warp specialization thread count per threadblock
-    uint32_t SubGroupSize            = group_info.subgroup_size;
-    uint32_t NumSchedThreads         = SubGroupSize; // 1 subgroup
-    uint32_t NumMMAThreads           = SubGroupSize; // 1 subgroup
-    uint32_t NumMainloopLoadThreads  = SubGroupSize; // 1 subgroup
-    uint32_t NumEpilogueStoreThreads = SubGroupSize; // 1 subgroup
-    uint32_t NumEpilogueThreads      = group_info.epilogue_subgroup_num * SubGroupSize;
+    uint32_t NumSchedThreads         = NumThreadsPerWarp; // 1 subgroup
+    uint32_t NumMMAThreads           = NumThreadsPerWarp; // 1 subgroup
+    uint32_t NumMainloopLoadThreads  = NumThreadsPerWarp; // 1 subgroup
+    uint32_t NumEpilogueStoreThreads = NumThreadsPerWarp; // 1 subgroup
+    uint32_t NumEpilogueThreads      = NumEpilogueWarps * NumThreadsPerWarp;
 
     // Separate out problem shape for convenience
     // Optionally append 1s until problem shape is rank-4 in case its is only rank-3 (MNK)
@@ -216,12 +194,15 @@ public:
     auto ptr = alloc_slm_buffer<uint8_t, TensorStorageSize>(item.get_group());
     auto& shared_tensors = *reinterpret_cast<typename SharedStorage::TensorStorage*>(ptr);
 
+    auto tdesc_a = allocate_tdesc<0>();
+    auto tdesc_b = allocate_tdesc<1>();
+    auto tdesc_c = allocate_tdesc<2>();
+
     auto abar_base = allocate_abar_bytes<0, PipelineStorageSize>();
     auto& shared_pipelines = *reinterpret_cast<typename SharedStorage::PipelineStorage*>(abar_base);
 
-    uint32_t cta_rank_in_cluster = params.scheduler.wg_linear_id_in_cluster;
-    CollectiveMainloop collective_mainloop(params.mainloop, cluster_shape, cta_rank_in_cluster);
-    CollectiveEpilogue collective_epilogue(params.epilogue);
+    CollectiveMainloop collective_mainloop(params.mainloop, cluster_shape);
+    CollectiveEpilogue collective_epilogue(params.epilogue, tdesc_c);
 
     // Do we load source tensor C or other aux inputs
     bool is_epi_load_needed = false;
@@ -296,8 +277,8 @@ public:
       clc_throttle_pipeline_params.role = CLCThrottlePipeline::ThreadCategory::Consumer;
     }
     clc_throttle_pipeline_params.initializing_warp = 4;
-    clc_throttle_pipeline_params.num_producers = group_info.subgroup_size;
-    clc_throttle_pipeline_params.num_consumers = group_info.subgroup_size;
+    clc_throttle_pipeline_params.num_producers = NumThreadsPerWarp;
+    clc_throttle_pipeline_params.num_consumers = NumThreadsPerWarp;
     CLCThrottlePipeline clc_throttle_pipeline(shared_pipelines.clc_throttle, clc_throttle_pipeline_params, cluster_shape, true_type{}, false_type{});
 
     auto mainloop_pipe_producer_state = cutlass::make_producer_start_state<MainloopPipeline>();
@@ -337,13 +318,12 @@ public:
     // Wait for all thread blocks in the Cluster
     cluster_wait_fn();
 
-    auto cluster_masks = params.scheduler.cluster_masks;
-    auto load_inputs = collective_mainloop.load_init(problem_shape, shared_tensors.mainloop, cluster_masks);
+    auto load_inputs = collective_mainloop.load_init(problem_shape, shared_tensors.mainloop, make_tuple(tdesc_a, tdesc_b));
 
-    auto scheduler = TileScheduler(&shared_tensors.clc_response[0], params.scheduler);
+    auto coop_set_ids = collective_mainloop.coop_set_ids_;
+    auto problem_blocks_shape = TileScheduler::calculate_problem_blocks_shape(problem_shape_MNKL, CtaShape_MNK{});
+    auto scheduler = TileScheduler(&shared_tensors.clc_response[0], problem_blocks_shape, coop_set_ids);
     auto work_tile_info = scheduler.initial_work_tile_info();
-
-    auto coop_ids = params.scheduler.coop_ids;
 
     if (is_participant.main_load) {
       bool requires_clc_query = true;
@@ -366,12 +346,12 @@ public:
         // Start mainloop prologue loads, arrive on the epilogue residual load barrier, resume mainloop loads
         auto [mainloop_producer_state_next, k_tile_iter_next] = collective_mainloop.load(
           params.mainloop, mainloop_pipeline, mainloop_pipe_producer_state, load_inputs, cta_coord_mnkl,
-          k_tile_iter, k_tile_prologue, coop_ids);
+          k_tile_iter, k_tile_prologue);
         mainloop_pipe_producer_state = mainloop_producer_state_next;
 
         auto [mainloop_producer_state_next_, unused_] = collective_mainloop.load(
           params.mainloop, mainloop_pipeline, mainloop_pipe_producer_state, load_inputs, cta_coord_mnkl,
-          k_tile_iter_next, k_tile_count - k_tile_prologue, coop_ids);
+          k_tile_iter_next, k_tile_count - k_tile_prologue);
         mainloop_pipe_producer_state = mainloop_producer_state_next_;
 
         auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
@@ -405,7 +385,7 @@ public:
         } while (work_tile_info.is_valid());
       }
     } else if (is_participant.mma) {
-      auto mma_inputs = collective_mainloop.mma_init(shared_tensors.mainloop, cluster_masks);
+      auto mma_inputs = collective_mainloop.mma_init(shared_tensors.mainloop);
 
       do {
         auto cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);
@@ -425,9 +405,9 @@ public:
         work_tile_info = next_work_tile_info;
       } while (work_tile_info.is_valid());
     } else if (is_participant.epilogue)  {
-      uint32_t work_id = local_id - group_info.mainloop_subgroup_num * SubGroupSize;
+      uint32_t work_id = local_id - NumControlWarps * NumThreadsPerWarp;
       do {
-        collective_epilogue(cute::make_tuple(epi_store_pipeline, accumulator_pipeline),
+        collective_epilogue(problem_shape, cute::make_tuple(epi_store_pipeline, accumulator_pipeline),
           cute::make_tuple(store_pipe_producer_state, accumulator_pipe_consumer_state), shared_tensors.epilogue, work_id);
 
         auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);

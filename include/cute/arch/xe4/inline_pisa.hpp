@@ -1,6 +1,7 @@
 #pragma once
 
 #include "./util.hpp"
+
 #include "async_gmma.hpp"
 
 #ifdef VC_WA
@@ -69,7 +70,8 @@ inline void abarrier_workgroup_expect_tx(abar_ptr_t abar_ptr, int32_t tx_cnt) {
 template <typename abar_ptr_t = uint64_t *>
 inline void abarrier_workgroup_arrive(abar_ptr_t abar_ptr, uint32_t arrive_cnt) {
   uint64_t temp;
-  sycl::atomic_fence(sycl::memory_order::acq_rel, sycl::memory_scope::work_group);
+  // sycl::atomic_fence(sycl::memory_order::acq_rel, sycl::memory_scope::work_group);
+  INLINE_PISA("fence.shared.workgroup;");
   INLINE_PISA("abarrier.arrive.abarrier_workgroup.release.64b %0, [%1], %2;"
               : "=r"(temp)
               : "r"(abar_ptr), "r"(arrive_cnt));
@@ -127,16 +129,19 @@ inline tdesc_ptr_t allocate_tdesc() {
     ALLOCATE_TDESC(tdesc5, TDESC5, ret);
   } else if constexpr (IDX == 6) {
     ALLOCATE_TDESC(tdesc6, TDESC6, ret);
+  } else if constexpr (IDX == 7) {
+    ALLOCATE_TDESC(tdesc7, TDESC7, ret);
   } else {
-    static_assert(IDX >= 0 && IDX <= 6, "Unsupported IDX for allocate_tdesc");
+    static_assert(IDX >= 0 && IDX <= 7, "Unsupported IDX for allocate_tdesc");
   }
 
   return ret;
 }
 
-template <uint32_t dim_num, typename tdesc_ptr_t = uint64_t *>
-inline void tensordesc_fill_dim_size(tdesc_ptr_t tdesc_ptr, const sycl::vec<uint32_t, dim_num> &dim_sizes) {
+template <uint32_t dim_num, typename dims_t, typename tdesc_ptr_t = uint64_t *>
+inline void tensordesc_fill_dim_size(tdesc_ptr_t tdesc_ptr, const dims_t &dim_sizes) {
   static_assert(dim_num > 0 && dim_num <= 5, "Unsupported dimention size for tensor descriptor dim_size");
+  static_assert(sizeof(dims_t {}[0]) == sizeof(uint32_t), "Invalid dim size type");
 
   INLINE_PISA("tensordesc.fill.dim_size.32b [%0], 0, %1;" ::"r"(tdesc_ptr), "r"(dim_sizes[0] - 1));
   if constexpr (dim_num > 1) {
@@ -170,9 +175,10 @@ inline void tensordesc_set_dim_size(tdesc_ptr_t tdesc_ptr, uint32_t dim_size) {
   }
 }
 
-template <uint32_t dim_num, typename tdesc_ptr_t = uint64_t *>
-inline void tensordesc_fill_dim_stride(tdesc_ptr_t tdesc_ptr, const sycl::vec<uint64_t, dim_num - 1> &dim_strides) {
+template <uint32_t dim_num, typename strides_t, typename tdesc_ptr_t = uint64_t *>
+inline void tensordesc_fill_dim_stride(tdesc_ptr_t tdesc_ptr, const strides_t &dim_strides) {
   static_assert(dim_num >= 2 && dim_num <= 5, "Unsupported dimention size fortensor descriptor dim_stride");
+  static_assert(sizeof(strides_t {}[0]) == sizeof(uint64_t), "Invalid stride type");
 
   INLINE_PISA("tensordesc.fill.dim_stride.64b [%0], 1, %1;" ::"r"(tdesc_ptr), "r"(dim_strides[0]));
   if constexpr (dim_num > 2) {
@@ -186,10 +192,10 @@ inline void tensordesc_fill_dim_stride(tdesc_ptr_t tdesc_ptr, const sycl::vec<ui
   }
 }
 
-template <uint32_t dim_num, typename tdesc_ptr_t = uint64_t *>
-inline void tensordesc_fill_roitensor_dim_size(tdesc_ptr_t tdesc_ptr,
-                                               const sycl::vec<uint32_t, dim_num> &roitensor_sizes) {
+template <uint32_t dim_num, typename dims_t, typename tdesc_ptr_t = uint64_t *>
+inline void tensordesc_fill_roitensor_dim_size(tdesc_ptr_t tdesc_ptr, const dims_t &roitensor_sizes) {
   static_assert(dim_num > 0 && dim_num <= 5, "Unsupported dimention size for tensor descriptor roitensor_size");
+  static_assert(sizeof(dims_t {}[0]) == sizeof(uint32_t), "Invalid roitensor size type");
 
   INLINE_PISA("tensordesc.fill.roitensor_dim_size.32b [%0], 0, %1;" ::"r"(tdesc_ptr), "r"(roitensor_sizes[0] - 1));
   if constexpr (dim_num > 1) {
@@ -206,9 +212,10 @@ inline void tensordesc_fill_roitensor_dim_size(tdesc_ptr_t tdesc_ptr,
   }
 }
 
-template <uint32_t dim_num, typename tdesc_ptr_t = uint64_t *>
-inline void tensordesc_fill_element_stride(tdesc_ptr_t tdesc_ptr, const sycl::vec<uint32_t, dim_num> &element_stride) {
+template <uint32_t dim_num, typename strides_t, typename tdesc_ptr_t = uint64_t *>
+inline void tensordesc_fill_element_stride(tdesc_ptr_t tdesc_ptr, const strides_t &element_stride) {
   static_assert(dim_num > 0 && dim_num <= 5, "Unsupported dimention size for tensor descriptor element_stride");
+  static_assert(sizeof(strides_t {}[0]) == sizeof(uint32_t), "Invalid element stride type");
 
   INLINE_PISA("tensordesc.fill.element_stride.32b [%0], 0, %1;" ::"r"(tdesc_ptr), "r"(element_stride[0] - 1));
   if constexpr (dim_num > 1) {
@@ -225,32 +232,32 @@ inline void tensordesc_fill_element_stride(tdesc_ptr_t tdesc_ptr, const sycl::ve
   }
 }
 
-template <slm_matrix_type cm_type, int dim, typename dtype, typename slm_dtype, typename tdesc_ptr_t = uint64_t *,
-          typename abar_ptr_t = uint64_t *>
-inline void async_tensor_load(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *gmem_ptr,
-                              const sycl::vec<int32_t, dim> &toff, abar_ptr_t abar_ptr) {
+template <int dim, slm_matrix_type cm_type, typename slm_dtype, typename dtype, typename tdesc_t, typename abar_t,
+          typename coord_t>
+inline void async_tensor_load(slm_dtype *slm_ptr, dtype *gmem_ptr, tdesc_t tdesc, abar_t abar, const coord_t &coord) {
+  using newVecT = vector_t<int32_t, dim>;
   if constexpr (dim == 2) {
     if constexpr (cm_type == slm_matrix_type::type1) {
       if constexpr (sizeof(dtype) == 1) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.2d.type1.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 2) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.2d.type1.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 4) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.2d.type1.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 8) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.2d.type1.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -259,22 +266,22 @@ inline void async_tensor_load(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.2d.type2.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 2) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.2d.type2.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 4) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.2d.type2.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 8) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.2d.type2.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -283,7 +290,7 @@ inline void async_tensor_load(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.2d.type3.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -296,22 +303,22 @@ inline void async_tensor_load(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.3d.type1.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 2) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.3d.type1.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 4) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.3d.type1.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 8) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.3d.type1.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -320,22 +327,22 @@ inline void async_tensor_load(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.3d.type2.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 2) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.3d.type2.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 4) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.3d.type2.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 8) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.3d.type2.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -344,7 +351,7 @@ inline void async_tensor_load(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.3d.type3.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -357,22 +364,22 @@ inline void async_tensor_load(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.4d.type1.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 2) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.4d.type1.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 4) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.4d.type1.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 8) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.4d.type1.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -381,22 +388,22 @@ inline void async_tensor_load(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.4d.type2.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 2) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.4d.type2.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 4) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.4d.type2.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 8) {
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.4d.type2.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -405,7 +412,139 @@ inline void async_tensor_load(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *
         INLINE_PISA(
             "async_tensor_copy.shared_workgroup.global.4d.type3.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
             "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else {
+        static_assert(false, "Unsupported data size");
+      }
+    } else {
+      static_assert(false, "Unsupported matrix type");
+    }
+  } else {
+    static_assert(false, "Unsupported dim");
+  }
+}
+
+template <int dim, slm_matrix_type cm_type, typename slm_dtype, typename dtype, typename tdesc_t, typename abar_t,
+          typename coord_t>
+inline void async_tensor_load(slm_dtype *slm_ptr, dtype *gmem_ptr, tdesc_t tdesc, abar_t abar, uint32_t wg_mask,
+                              const coord_t &coord) {
+  using newVecT = vector_t<int32_t, dim>;
+  if constexpr (dim == 2) {
+    if constexpr (cm_type == slm_matrix_type::type1) {
+      if constexpr (sizeof(dtype) == 1) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.2d.type1.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else if constexpr (sizeof(dtype) == 2) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.2d.type1.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else if constexpr (sizeof(dtype) == 4) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.2d.type1.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else if constexpr (sizeof(dtype) == 8) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.2d.type1.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else {
+        static_assert(false, "Unsupported data size");
+      }
+    } else if constexpr (cm_type == slm_matrix_type::type2) {
+      if constexpr (sizeof(dtype) == 1) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.2d.type2.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else if constexpr (sizeof(dtype) == 2) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.2d.type2.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else if constexpr (sizeof(dtype) == 4) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.2d.type2.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else if constexpr (sizeof(dtype) == 8) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.2d.type2.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else {
+        static_assert(false, "Unsupported data size");
+      }
+    } else if constexpr (cm_type == slm_matrix_type::type3) {
+      if constexpr (sizeof(dtype) == 1) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.2d.type3.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else {
+        static_assert(false, "Unsupported data size");
+      }
+    } else {
+      static_assert(false, "Unsupported matrix type");
+    }
+  } else if constexpr (dim == 4) {
+    if constexpr (cm_type == slm_matrix_type::type1) {
+      if constexpr (sizeof(dtype) == 1) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.4d.type1.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else if constexpr (sizeof(dtype) == 2) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.4d.type1.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else if constexpr (sizeof(dtype) == 4) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.4d.type1.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else if constexpr (sizeof(dtype) == 8) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.4d.type1.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else {
+        static_assert(false, "Unsupported data size");
+      }
+    } else if constexpr (cm_type == slm_matrix_type::type2) {
+      if constexpr (sizeof(dtype) == 1) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.4d.type2.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else if constexpr (sizeof(dtype) == 2) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.4d.type2.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else if constexpr (sizeof(dtype) == 4) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.4d.type2.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else if constexpr (sizeof(dtype) == 8) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.4d.type2.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
+      } else {
+        static_assert(false, "Unsupported data size");
+      }
+    } else if constexpr (cm_type == slm_matrix_type::type3) {
+      if constexpr (sizeof(dtype) == 1) {
+        INLINE_PISA(
+            "async_tensor_copy.shared_cluster.global.4d.type3.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
+            "%4, %5;" ::"r"(slm_ptr),
+            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)), "r"(wg_mask));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -420,132 +559,15 @@ inline void async_tensor_load(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *
 template <slm_matrix_type cm_type, int dim, typename dtype, typename slm_dtype, typename tdesc_ptr_t = uint64_t *,
           typename abar_ptr_t = uint64_t *>
 inline void async_tensor_load(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *gmem_ptr,
+                              const sycl::vec<int32_t, dim> &toff, abar_ptr_t abar_ptr) {
+  async_tensor_load<dim, cm_type>(slm_ptr, gmem_ptr, tdesc_ptr, abar_ptr, toff);
+}
+
+template <slm_matrix_type cm_type, int dim, typename dtype, typename slm_dtype, typename tdesc_ptr_t = uint64_t *,
+          typename abar_ptr_t = uint64_t *>
+inline void async_tensor_load(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *gmem_ptr,
                               const sycl::vec<int32_t, dim> &toff, abar_ptr_t abar_ptr, uint32_t wg_mask) {
-  if constexpr (dim == 2) {
-    if constexpr (cm_type == slm_matrix_type::type1) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type1.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type1.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type1.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type1.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type2) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type2.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type2.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type2.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type2.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type3) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type3.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else {
-      static_assert(false, "Unsupported matrix type");
-    }
-  } else if constexpr (dim == 4) {
-    if constexpr (cm_type == slm_matrix_type::type1) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type1.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type1.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type1.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type1.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type2) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type2.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type2.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type2.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type2.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type3) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type3.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)), "r"(wg_mask));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else {
-      static_assert(false, "Unsupported matrix type");
-    }
-  } else {
-    static_assert(false, "Unsupported dim");
-  }
+  async_tensor_load<dim, cm_type>(slm_ptr, gmem_ptr, tdesc_ptr, abar_ptr, wg_mask, toff);
 }
 
 template <uint32_t dim, typename dtype, typename tdesc_ptr_t = uint64_t *>
@@ -587,32 +609,32 @@ inline void async_tensor_prefetch(tdesc_ptr_t tdesc_ptr, dtype *gmem_ptr, const 
   }
 }
 
-template <slm_matrix_type cm_type, int dim, typename dtype, typename slm_dtype, typename tdesc_ptr_t = uint64_t *,
-          typename abar_ptr_t = uint64_t *>
-inline void async_tensor_store(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *gmem_ptr,
-                               const sycl::vec<int32_t, dim> &toff, abar_ptr_t abar_ptr) {
+template <int dim, slm_matrix_type cm_type, typename slm_dtype, typename dtype, typename tdesc_t, typename abar_t,
+          typename coord_t>
+inline void async_tensor_store(dtype *gmem_ptr, slm_dtype *slm_ptr, tdesc_t tdesc, abar_t abar, const coord_t &coord) {
+  using newVecT = vector_t<int32_t, dim>;
   if constexpr (dim == 2) {
     if constexpr (cm_type == slm_matrix_type::type1) {
       if constexpr (sizeof(dtype) == 1) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.2d.type1.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 2) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.2d.type1.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 4) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.2d.type1.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 8) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.2d.type1.64b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -621,22 +643,22 @@ inline void async_tensor_store(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype 
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.2d.type2.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 2) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.2d.type2.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 4) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.2d.type2.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 8) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.2d.type2.64b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -645,7 +667,7 @@ inline void async_tensor_store(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype 
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.2d.type3.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -658,22 +680,22 @@ inline void async_tensor_store(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype 
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.3d.type1.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 2) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.3d.type1.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 4) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.3d.type1.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 8) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.3d.type1.64b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -682,22 +704,22 @@ inline void async_tensor_store(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype 
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.3d.type2.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 2) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.3d.type2.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 4) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.3d.type2.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 8) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.3d.type2.64b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -706,7 +728,7 @@ inline void async_tensor_store(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype 
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.3d.type3.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -719,22 +741,22 @@ inline void async_tensor_store(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype 
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.4d.type1.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 2) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.4d.type1.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 4) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.4d.type1.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 8) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.4d.type1.64b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -743,22 +765,22 @@ inline void async_tensor_store(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype 
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.4d.type2.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 2) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.4d.type2.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 4) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.4d.type2.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else if constexpr (sizeof(dtype) == 8) {
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.4d.type2.64b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -767,7 +789,7 @@ inline void async_tensor_store(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype 
         INLINE_PISA(
             "async_tensor_copy.global.shared_workgroup.4d.type3.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
                 "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(tdesc_ptr), "r"(vec_as<vector_t<int32_t, dim>>(toff)));
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
       } else {
         static_assert(false, "Unsupported data size");
       }
@@ -777,6 +799,13 @@ inline void async_tensor_store(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype 
   } else {
     static_assert(false, "Unsupported dim");
   }
+}
+
+template <slm_matrix_type cm_type, int dim, typename dtype, typename slm_dtype, typename tdesc_ptr_t = uint64_t *,
+          typename abar_ptr_t = uint64_t *>
+inline void async_tensor_store(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *gmem_ptr,
+                               const sycl::vec<int32_t, dim> &toff, abar_ptr_t abar_ptr) {
+  async_tensor_store<dim, cm_type>(gmem_ptr, slm_ptr, tdesc_ptr, abar_ptr, toff);
 }
 
 inline void cbar_arrive() {
@@ -923,6 +952,11 @@ inline void row_copy_linear_a64_load(slm_dtype *slm_ptr, uint64_t offset, uint32
     } else if constexpr (row_size == 1024) {
       INLINE_PISA(
           "async_row_copy.shared_workgroup.global.1024.linear.type1.a64.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
+          "[%2], %3;" ::"r"(slm_ptr),
+          "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(
+          "async_row_copy.shared_workgroup.global.2048.linear.type1.a64.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
           "[%2], %3;" ::"r"(slm_ptr),
           "r"(offset), "r"(abar_ptr), "r"(size));
     } else {
@@ -1436,7 +1470,11 @@ inline void cvt(dtype_dst &dst, const dtyep_src &src) {
     INLINE_PISA("ftrunc.bf.f %0, %1;" : "=r"(dst) : "r"(src));
   } else if constexpr (std::is_same_v<dtype_dst, float> && std::is_same_v<dtyep_src, bf16>) {
     INLINE_PISA("fext.f.bf %0, %1;" : "=r"(dst) : "r"(src));
-  } else {
+  }
+  // else if constexpr (std::is_same_v<dtype_dst, int8_t> && std::is_same_v<dtyep_src, float>) {
+  //   INLINE_PISA("f2i.s8.f %0, %1;" : "=r"(dst) : "r"(src));
+  // }
+  else {
     dst = src;
   }
 }
@@ -1460,12 +1498,12 @@ inline void copy_cvt(dtype_dst *dst_ptr, dtyep_src *src_ptr) {
   }
 }
 
-template <uint32_t n_elem, typename dtype_dst, typename dtype_packed, typename dtyep_src>
+template <typename dtype_dst, uint32_t n_elem, typename dtype_packed, typename dtyep_src>
 inline void copy_cvt_pack(dtype_packed *dst_packed_ptr, dtyep_src *src_ptr) {
   constexpr uint32_t packed_num = sizeof(dtype_packed) / sizeof(dtype_dst);
   static_assert(packed_num == 2);
 #pragma unroll
-  for (int i = 0; i < n_elem; i++) {
+  for (int i = 0; i < n_elem / packed_num; i++) {
     cvt_pack<dtype_dst>(dst_packed_ptr[i], src_ptr[packed_num * i], src_ptr[packed_num * i + 1]);
   }
 }
@@ -1576,18 +1614,18 @@ struct v_ld_st<16> {
 
 template <>
 struct v_ld_st<32> {
-  using vtype = vector_t<uint64_t, 4>;
+  using vtype = vector_t<uint32_t, 8>;
 
   template <typename dtype, uint32_t vs, typename slm_dtype>
   static inline void load(sycl::marray<dtype, vs> &vdata, slm_dtype *slm_ptr) {
     vtype temp;
-    INLINE_PISA("ld.shared.v4.64b %0, [%1];" : "=r"(temp) : "r"(slm_ptr));
+    INLINE_PISA("ld.shared.v8.32b %0, [%1];" : "=r"(temp) : "r"(slm_ptr));
     vdata = sycl::bit_cast<sycl::marray<dtype, vs>>(temp);
   }
 
   template <typename dtype, uint32_t vs, typename slm_dtype>
   static inline void store(const sycl::marray<dtype, vs> &vdata, slm_dtype *slm_ptr) {
-    INLINE_PISA("st.shared.v4.64b [%0], %1;" ::"r"(slm_ptr), "r"(sycl::bit_cast<vtype>(vdata)));
+    INLINE_PISA("st.shared.v8.32b [%0], %1;" ::"r"(slm_ptr), "r"(sycl::bit_cast<vtype>(vdata)));
   }
 };
 
@@ -1715,7 +1753,7 @@ inline void cm_vstore(slm_dtype *slm_ptr, dtype *data_ptr, uint32_t idx_x, uint3
       INLINE_PISA(#func ".bfx2 %0, %1;" : "=r"(ret) : "r"(src0)); \
     } \
   } else if constexpr (std::is_same_v<dtype_math, float>) { \
-    INLINE_PISA(#func " %0, %1;" : "=r"(ret) : "r"(src0)); \
+    INLINE_PISA(#func ".f %0, %1;" : "=r"(ret) : "r"(src0)); \
   } else { \
     static_assert(sizeof(dtype_math) == 0, "unsupported case"); \
   }
@@ -1734,7 +1772,7 @@ inline void cm_vstore(slm_dtype *slm_ptr, dtype *data_ptr, uint32_t idx_x, uint3
       INLINE_PISA(#func ".bfx2 %0, %1, %2;" : "=r"(ret) : "r"(src0), "r"(src1)); \
     } \
   } else if constexpr (std::is_same_v<dtype_math, float>) { \
-    INLINE_PISA(#func " %0, %1, %2;" : "=r"(ret) : "r"(src0), "r"(src1)); \
+    INLINE_PISA(#func ".f %0, %1, %2;" : "=r"(ret) : "r"(src0), "r"(src1)); \
   } else { \
     static_assert(sizeof(dtype_math) == 0, "unsupported case"); \
   }
@@ -1753,7 +1791,7 @@ inline void cm_vstore(slm_dtype *slm_ptr, dtype *data_ptr, uint32_t idx_x, uint3
       INLINE_PISA(#func ".bfx2 %0, %1, %2, %3;" : "=r"(ret) : "r"(src0), "r"(src1), "r"(src2)); \
     } \
   } else if constexpr (std::is_same_v<dtype_math, float>) { \
-    INLINE_PISA(#func " %0, %1, %2, %3;" : "=r"(ret) : "r"(src0), "r"(src1), "r"(src2)); \
+    INLINE_PISA(#func ".f %0, %1, %2, %3;" : "=r"(ret) : "r"(src0), "r"(src1), "r"(src2)); \
   } else { \
     static_assert(sizeof(dtype_math) == 0, "unsupported case"); \
   }
@@ -1804,28 +1842,33 @@ inline dtype_reg packed_fexp2(const dtype_reg &src0) {
   unary_packed_op(fexp2, dtype_math, ret, src0, packed_num) return ret;
 }
 
-template <typename dtype_math, uint32_t mask = 0xffffffff, typename dtype_reg>
-inline dtype_reg packed_fred_max(const dtype_reg &src0) {
+template <typename dtype_math, typename dtype_reg>
+inline dtype_reg packed_fabs(const dtype_reg &src0) {
   constexpr uint32_t packed_num = sizeof(dtype_reg) / sizeof(dtype_math);
   dtype_reg ret;
+  unary_packed_op(fabs, dtype_math, ret, src0, packed_num) return ret;
+}
+
+template <typename dtype_math, uint32_t mask = 0xffffffff, typename dtype_reg>
+inline void packed_fred_max(dtype_reg &src0) {
+  constexpr uint32_t packed_num = sizeof(dtype_reg) / sizeof(dtype_math);
   if constexpr (std::is_same_v<dtype_math, fp16>) {
     if constexpr (packed_num == 1) {
-      INLINE_PISA("fred.max.hf %0, %1, %2;" : "=r"(ret) : "r"(src0), "i"(mask));
+      INLINE_PISA("fred.max.hf %0, %0, %1;" : "+r"(src0) : "i"(mask));
     } else if constexpr (packed_num == 2) {
-      INLINE_PISA("fred.max.hfx2 %0, %1, %2;" : "=r"(ret) : "r"(src0), "i"(mask));
+      INLINE_PISA("fred.max.hfx2 %0, %0, %1;" : "+r"(src0) : "i"(mask));
     }
   } else if constexpr (std::is_same_v<dtype_math, bf16>) {
     if constexpr (packed_num == 1) {
-      INLINE_PISA("fred.max.bf %0, %1, %2;" : "=r"(ret) : "r"(src0), "i"(mask));
+      INLINE_PISA("fred.max.bf %0, %0, %1;" : "+r"(src0) : "i"(mask));
     } else if constexpr (packed_num == 2) {
-      INLINE_PISA("fred.max.bfx2 %0, %1, %2;" : "=r"(ret) : "r"(src0), "i"(mask));
+      INLINE_PISA("fred.max.bfx2 %0, %0, %1;" : "+r"(src0) : "i"(mask));
     }
   } else if constexpr (std::is_same_v<dtype_math, float>) {
-    INLINE_PISA("fred.max %0, %1, %2;" : "=r"(ret) : "r"(src0), "i"(mask));
+    INLINE_PISA("fred.max.f %0, %0, %1;" : "+r"(src0) : "i"(mask));
   } else {
     static_assert(sizeof(dtype_math) == 0, "unsupported case");
   }
-  return ret;
 }
 
 template <typename dtype_dst, typename dtype_src>
@@ -1958,6 +2001,92 @@ inline dtype_math gtp_tred_max(const dtype_reg *src_ptr, dtype_math acc) {
   return ret;
 }
 
+template <typename dtype_math, uint32_t N_math, typename dtype_reg>
+inline float gtp_texp_red_sum(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
+  float ret;
+  constexpr uint32_t N_reg = N_math * sizeof(dtype_math) / sizeof(dtype_reg);
+  constexpr uint32_t N_u32 = N_math * sizeof(dtype_math) / sizeof(uint32_t);
+  sycl::marray<dtype_reg, N_reg> src0;
+  using vtype = vector_t<uint32_t, N_u32>;
+#pragma unroll
+  for (int i = 0; i < N_reg; i++) {
+    src0[i] = src_ptr[i];
+  }
+  vtype vdst;
+  if constexpr (std::is_same_v<dtype_math, fp16>) {
+    if constexpr (N_math == 32) {
+      INLINE_PISA("texp.f16.m32n32.rednd %0, %1, %2;" : "=r"(vdst), "=r"(ret) : "r"(sycl::bit_cast<vtype>(src0)));
+    } else if constexpr (N_math == 16) {
+      INLINE_PISA("texp.f16.m32n16.rednd %0, %1, %2;" : "=r"(vdst), "=r"(ret) : "r"(sycl::bit_cast<vtype>(src0)));
+    } else {
+      static_assert(sizeof(dtype_math) == 0, "unsupported N");
+    }
+  } else if constexpr (std::is_same_v<dtype_math, bf16>) {
+    if constexpr (N_math == 32) {
+      INLINE_PISA("texp.bf16.m32n32.rednd %0, %1, %2;" : "=r"(vdst), "=r"(ret) : "r"(sycl::bit_cast<vtype>(src0)));
+    } else if constexpr (N_math == 16) {
+      INLINE_PISA("texp.bf16.m32n16.rednd %0, %1, %2;" : "=r"(vdst), "=r"(ret) : "r"(sycl::bit_cast<vtype>(src0)));
+    } else {
+      static_assert(sizeof(dtype_math) == 0, "unsupported N");
+    }
+  } else {
+    static_assert(sizeof(dtype_math) == 0, "unsupported dtype");
+  }
+  sycl::marray<dtype_reg, N_reg> dst = sycl::bit_cast<sycl::marray<dtype_reg, N_reg>>(vdst);
+#pragma unroll
+  for (int i = 0; i < N_reg; i++) {
+    dst_ptr[i] = dst[i];
+  }
+  return ret;
+}
+
+template <typename dtype_math, uint32_t N_math, typename dtype_reg>
+inline float gtp_texp_red_sum(dtype_reg *dst_ptr, const dtype_reg *src_ptr, float sum_src) {
+  float ret;
+  constexpr uint32_t N_reg = N_math * sizeof(dtype_math) / sizeof(dtype_reg);
+  constexpr uint32_t N_u32 = N_math * sizeof(dtype_math) / sizeof(uint32_t);
+  sycl::marray<dtype_reg, N_reg> src0;
+  using vtype = vector_t<uint32_t, N_u32>;
+#pragma unroll
+  for (int i = 0; i < N_reg; i++) {
+    src0[i] = src_ptr[i];
+  }
+  vtype vdst;
+  if constexpr (std::is_same_v<dtype_math, fp16>) {
+    if constexpr (N_math == 32) {
+      INLINE_PISA("texp.f16.m32n32.rednd.acc %0, %1, %2, %3;"
+                  : "=r"(vdst), "=r"(ret)
+                  : "r"(sycl::bit_cast<vtype>(src0)), "r"(sum_src));
+    } else if constexpr (N_math == 16) {
+      INLINE_PISA("texp.f16.m32n16.rednd.acc %0, %1, %2, %3;"
+                  : "=r"(vdst), "=r"(ret)
+                  : "r"(sycl::bit_cast<vtype>(src0)), "r"(sum_src));
+    } else {
+      static_assert(sizeof(dtype_math) == 0, "unsupported N");
+    }
+  } else if constexpr (std::is_same_v<dtype_math, bf16>) {
+    if constexpr (N_math == 32) {
+      INLINE_PISA("texp.bf16.m32n32.rednd.acc %0, %1, %2, %3;"
+                  : "=r"(vdst), "=r"(ret)
+                  : "r"(sycl::bit_cast<vtype>(src0)), "r"(sum_src));
+    } else if constexpr (N_math == 16) {
+      INLINE_PISA("texp.bf16.m32n16.rednd.acc %0, %1, %2, %3;"
+                  : "=r"(vdst), "=r"(ret)
+                  : "r"(sycl::bit_cast<vtype>(src0)), "r"(sum_src));
+    } else {
+      static_assert(sizeof(dtype_math) == 0, "unsupported N");
+    }
+  } else {
+    static_assert(sizeof(dtype_math) == 0, "unsupported dtype");
+  }
+  sycl::marray<dtype_reg, N_reg> dst = sycl::bit_cast<sycl::marray<dtype_reg, N_reg>>(vdst);
+#pragma unroll
+  for (int i = 0; i < N_reg; i++) {
+    dst_ptr[i] = dst[i];
+  }
+  return ret;
+}
+
 template <typename dtype_dst, typename dtype_src, uint32_t N, typename dtype_reg>
 inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
   constexpr uint32_t N_dst = N * ::sizeof_bits<dtype_dst>() / BITS_PER_BYTE / sizeof(dtype_reg);
@@ -1978,6 +2107,8 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
         INLINE_PISA("tcvd.e5m2.f16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvd.e5m2.f16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvd.e5m2.f16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -2006,6 +2137,8 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
         INLINE_PISA("tcvd.e5m2.bf16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvd.e5m2.bf16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvd.e5m2.bf16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -2022,6 +2155,87 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
         INLINE_PISA("tcvd.e3m0.bf16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvd.e3m0.bf16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else {
+    static_assert(sizeof(dtype_src) == 0, "unsupported dtype_src");
+  }
+  sycl::marray<dtype_reg, N_dst> dst = sycl::bit_cast<sycl::marray<dtype_reg, N_dst>>(vdst);
+#pragma unroll
+  for (int i = 0; i < N_dst; i++) {
+    dst_ptr[i] = dst[i];
+  }
+}
+
+template <typename dtype_dst, typename dtype_src, uint32_t N, typename dtype_reg>
+inline void gtp_tcvdmx(dtype_reg *dst_ptr, const dtype_reg *src_ptr, const uint8_t &meta) {
+  constexpr uint32_t N_dst = N * ::sizeof_bits<dtype_dst>() / BITS_PER_BYTE / sizeof(dtype_reg);
+  constexpr uint32_t N_src = N * sizeof(dtype_src) / sizeof(dtype_reg);
+  constexpr uint32_t N_u32_dst = N * ::sizeof_bits<dtype_dst>() / BITS_PER_BYTE / sizeof(uint32_t);
+  constexpr uint32_t N_u32_src = N * sizeof(dtype_src) / sizeof(uint32_t);
+  sycl::marray<dtype_reg, N_src> src;
+  using vtype_src = vector_t<uint32_t, N_u32_src>;
+  using vtype_dst = vector_t<uint32_t, N_u32_dst>;
+#pragma unroll
+  for (int i = 0; i < N_src; i++) {
+    src[i] = src_ptr[i];
+  }
+  vtype_dst vdst;
+  uint32_t meta_u32 = meta;
+  if constexpr (std::is_same_v<dtype_src, fp16>) {
+    if constexpr (std::is_same_v<dtype_dst, bf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n32.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, fp4_e3m0>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e3m0.f16.m32n32.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e3m0.f16.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, bf16>) {
+    if constexpr (std::is_same_v<dtype_dst, bf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n32.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, fp4_e3m0>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e3m0.bf16.m32n32.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e3m0.bf16.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }

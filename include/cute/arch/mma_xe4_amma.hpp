@@ -5,16 +5,22 @@
 
 namespace cute {
 
-template <class TupleC, class TA, class TB, class Shape_MNK_, xe4::GMMA::Major tnspA, xe4::GMMA::Major tnspB, class MatDesc, class Abarrier_=uint64_t*>
+namespace xe4 {
+  using MatDesc = uint32_t;
+  using Abarrier = uint64_t*;
+}
+
+template <class TupleC, class TA, class TB, class Shape_MNK_, xe4::GMMA::Major tnspA, xe4::GMMA::Major tnspB>
 struct XE4_ASYNC_GMMA
 {
+  using MatDesc = xe4::MatDesc;
+  using Abarrier = xe4::Abarrier;
+  using Shape_MNK = Shape_MNK_;
+
   using DRegisters = MatDesc[1];
   using ARegisters = MatDesc[1];
   using BRegisters = MatDesc[1];
   using CRegisters = MatDesc[1];
-
-  using Shape_MNK = Shape_MNK_;
-  using Abarrier = Abarrier_;
 
   template<typename ConstDstType, typename... Args>
   CUTE_HOST_DEVICE static void
@@ -38,16 +44,17 @@ struct XE4_ASYNC_GMMA
   }
 };
 
-template <class TupleC, class TA, class TB, class Shape_MNK_, xe4::GMMA::Major tnspA, xe4::GMMA::Major tnspB, class MatDesc, class Abarrier_=uint64_t*>
+template <class TupleC, class TA, class TB, class Shape_MNK_, xe4::GMMA::Major tnspA, xe4::GMMA::Major tnspB>
 struct XE4_ASYNC_GMMA_MULTICAST
 {
+  using MatDesc = xe4::MatDesc;
+  using Abarrier = xe4::Abarrier;
+  using Shape_MNK = Shape_MNK_;
+
   using DRegisters = MatDesc[1];
   using ARegisters = MatDesc[1];
   using BRegisters = MatDesc[1];
   using CRegisters = MatDesc[1];
-
-  using Shape_MNK = Shape_MNK_;
-  using Abarrier = Abarrier_;
 
   template<typename ConstDstType, typename... Args>
   CUTE_HOST_DEVICE static void
@@ -72,16 +79,18 @@ struct XE4_ASYNC_GMMA_MULTICAST
   }
 };
 
-template <class TupleC, class TA, class TB, class TMeta, class Shape_MNK_, xe4::GMMA::Major tnspA, xe4::GMMA::Major tnspB, bool ScaleA, bool ScaleB, class MatDesc, class MetaDesc, class Abarrier_=uint64_t*>
+template <class TupleC, class TA, class TB, class TMeta, class Shape_MNK_, xe4::GMMA::Major tnspA, xe4::GMMA::Major tnspB, bool ScaleA, bool ScaleB>
 struct XE4_ASYNC_GMMA_SCALE
 {
+  using MetaDesc = uint64_t;
+  using MatDesc = xe4::MatDesc;
+  using Abarrier = xe4::Abarrier;
+  using Shape_MNK = Shape_MNK_;
+
   using DRegisters = MatDesc[1];
   using ARegisters = MatDesc[1];
   using BRegisters = MatDesc[1];
   using CRegisters = MatDesc[1];
-
-  using Shape_MNK = Shape_MNK_;
-  using Abarrier = Abarrier_;
 
   template<typename ConstDstType, typename... Args>
   CUTE_HOST_DEVICE static void

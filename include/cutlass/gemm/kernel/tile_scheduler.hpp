@@ -194,7 +194,7 @@ struct TileSchedulerSelector<
     ClusterShape,
     SchedulerPipelineStageCount
   > {
-  using Scheduler = PersistentTileSchedulerXe4<SchedulerPipelineStageCount>;
+  using Scheduler = PersistentTileSchedulerXe4<SchedulerPipelineStageCount,ClusterShape>;
 };
 #elif defined (SYCL_INTEL_TARGET)
 template <

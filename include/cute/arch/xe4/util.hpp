@@ -14,12 +14,27 @@ static constexpr uint32_t BITS_PER_BYTE = 8;
 #define INLINE_PISA(...)
 #endif
 
+#ifdef __SYCL_DEVICE_ONLY__
 template <class T, int N>
 using vector_t = typename std::conditional_t<N == 1, T, T __attribute__((ext_vector_type(N)))>;
+#else
+template <class T, int N>
+using vector_t = sycl::marray<T, N>;
+#endif
 
 template <class T, class F>
 T vec_as(const F &x) {
   return sycl::bit_cast<T>(x);
+}
+
+template <class T, class F>
+T vec_as(F *x) {
+  return *reinterpret_cast<T *>(x);
+}
+
+template <class T, class F>
+T vec_as(const F *x) {
+  return *reinterpret_cast<const T *>(x);
 }
 
 #define XETLA_MARKER(message) [[deprecated(message)]]
@@ -107,7 +122,9 @@ enum class cm_size_t : uint8_t {
   /// matrix B n-major for 32-bit data types
   cm_8x64B = 6,
   /// matrix B n-major for 64-bit data types
-  cm_4x128B = 7
+  cm_4x128B = 7,
+  /// meta data
+  cm_8x32B = 8
 };
 
 enum class slm_layout_t : uint8_t { linear = 0, tiled = 1 };
@@ -118,18 +135,19 @@ constexpr uint32_t get_height() {
     return 32;
   } else if constexpr (cmSize == cm_size_t::cm_16x64B || cmSize == cm_size_t::cm_16x32B) {
     return 16;
-  } else if constexpr (cmSize == cm_size_t::cm_8x128B || cmSize == cm_size_t::cm_8x64B) {
+  } else if constexpr (cmSize == cm_size_t::cm_8x128B || cmSize == cm_size_t::cm_8x64B ||
+                       cmSize == cm_size_t::cm_8x32B) {
     return 8;
   } else if constexpr (cmSize == cm_size_t::cm_4x256B || cmSize == cm_size_t::cm_4x128B) {
     return 4;
   } else {
-    return 0;
+    static_assert(false, "Unsupported cm size");
   }
 }
 
 template <cm_size_t cmSize>
 constexpr uint32_t get_width_in_bytes() {
-  if constexpr (cmSize == cm_size_t::cm_32x32B || cmSize == cm_size_t::cm_16x32B) {
+  if constexpr (cmSize == cm_size_t::cm_32x32B || cmSize == cm_size_t::cm_16x32B || cmSize == cm_size_t::cm_8x32B) {
     return 32;
   } else if constexpr (cmSize == cm_size_t::cm_16x64B || cmSize == cm_size_t::cm_8x64B) {
     return 64;
@@ -140,7 +158,7 @@ constexpr uint32_t get_width_in_bytes() {
   } else if constexpr (cmSize == cm_size_t::cm_32x16B) {
     return 16;
   } else {
-    return 0;
+    static_assert(false, "Unsupported cm size");
   }
 }
 
@@ -166,11 +184,12 @@ template <typename dtype>
 constexpr uint32_t sizeof_bits() {
   if constexpr (std::is_same_v<dtype, fp4_e3m0>) {
     return 4;
-  } else if constexpr (std::is_same_v<dtype, e8m0> || std::is_same_v<dtype, hf8> || std::is_same_v<dtype, bf8>) {
+  } else if constexpr (std::is_same_v<dtype, e8m0> || std::is_same_v<dtype, hf8> || std::is_same_v<dtype, bf8> ||
+                       std::is_same_v<dtype, int8_t>) {
     return 8;
   } else if constexpr (std::is_same_v<dtype, fp16> || std::is_same_v<dtype, bf16>) {
     return 16;
-  } else if constexpr (std::is_same_v<dtype, float>) {
+  } else if constexpr (std::is_same_v<dtype, float> || std::is_same_v<dtype, int32_t>) {
     return 32;
   } else {
     static_assert(false, "Unsupported data type");
@@ -193,6 +212,12 @@ constexpr cm_size_t get_core_matrix_size() {
     } else {
       static_assert(false, "Supports up to 64-bit.");
     }
+  } else if constexpr (cm_type == slm_matrix_type::type3) {
+    if constexpr (size_of<dtype>() == 1) {
+      return cm_size_t::cm_8x32B;
+    } else {
+      static_assert(false, "Only support 8-bit.");
+    }
   } else {
     static_assert(false, "Unsupported core matrix type.");
   }
@@ -200,37 +225,38 @@ constexpr cm_size_t get_core_matrix_size() {
 
 template <typename T>
 constexpr data_type get_dtype() {
-  if constexpr (std::is_same<std::remove_cv_t<T>, float>::value) {
-    return data_type::fp32;
-  } else if constexpr (std::is_same<std::remove_cv_t<T>, tf32>::value) {
-    return data_type::tf32;
-  } else if constexpr (std::is_same<std::remove_cv_t<T>, fp16>::value) {
-    return data_type::fp16;
-  } else if constexpr (std::is_same<std::remove_cv_t<T>, bf16>::value) {
-    return data_type::bf16;
-  } else if constexpr (std::is_same<std::remove_cv_t<T>, hf8>::value) {
-    return data_type::hf8;
-  } else if constexpr (std::is_same<std::remove_cv_t<T>, bf8>::value) {
-    return data_type::bf8;
-  } else if constexpr (std::is_same<std::remove_cv_t<T>, uint32_t>::value) {
-    return data_type::u32;
-  } else if constexpr (std::is_same<std::remove_cv_t<T>, int32_t>::value) {
-    return data_type::i32;
+  if constexpr (std::is_same<std::remove_cv_t<T>, uint8_t>::value) {
+    return data_type::u8;
+  } else if constexpr (std::is_same<std::remove_cv_t<T>, int8_t>::value) {
+    return data_type::i8;
   } else if constexpr (std::is_same<std::remove_cv_t<T>, uint16_t>::value) {
     return data_type::u16;
   } else if constexpr (std::is_same<std::remove_cv_t<T>, int16_t>::value) {
     return data_type::i16;
-  } else if constexpr (std::is_same<std::remove_cv_t<T>, uint8_t>::value) {
-    return data_type::u8;
-  } else if constexpr (std::is_same<std::remove_cv_t<T>, int8_t>::value) {
-    return data_type::i8;
-  } else if constexpr (std::is_same<std::remove_cv_t<T>, fp4_e3m0>::value) {
-    return data_type::e3m0;
-  } else if constexpr (std::is_same<std::remove_cv_t<T>, e8m0>::value) {
-    // treat it as u8, now only used for fill misc in tensor desc
-    return data_type::u8;
+  } else if constexpr (std::is_same<std::remove_cv_t<T>, uint32_t>::value) {
+    return data_type::u32;
+  } else if constexpr (std::is_same<std::remove_cv_t<T>, int32_t>::value) {
+    return data_type::i32;
+  } else if constexpr (std::is_same<std::remove_cv_t<T>, uint64_t>::value) {
+    return data_type::u64;
+  } else if constexpr (std::is_same<std::remove_cv_t<T>, int64_t>::value) {
+    return data_type::i64;
+  } else if constexpr (std::is_same<std::remove_cv_t<T>, bf8>::value) {
+    return data_type::bf8;
+  } else if constexpr (std::is_same<std::remove_cv_t<T>, hf8>::value) {
+    return data_type::hf8;
+  } else if constexpr (std::is_same<std::remove_cv_t<T>, bf16>::value) {
+    return data_type::bf16;
+  } else if constexpr (std::is_same<std::remove_cv_t<T>, fp16>::value) {
+    return data_type::fp16;
+  } else if constexpr (std::is_same<std::remove_cv_t<T>, tf32>::value) {
+    return data_type::tf32;
+  } else if constexpr (std::is_same<std::remove_cv_t<T>, float>::value) {
+    return data_type::fp32;
+  } else if constexpr (std::is_same<std::remove_cv_t<T>, double>::value) {
+    return data_type::fp64;
   } else {
-    static_assert(sizeof(T) < 0, "Unknown Data Format!");
+    return data_type::invld;
   }
 }
 
@@ -334,6 +360,13 @@ inline auto alloc_slm_buffer(const SyclGroup &group) {
 #endif
 }
 
+template <uint32_t x_ = 1, uint32_t y_ = 1, uint32_t z_ = 1>
+struct ternary_vec {
+  static constexpr uint32_t x = x_;
+  static constexpr uint32_t y = y_;
+  static constexpr uint32_t z = z_;
+};
+
 // combine sizeof...(I) sycl::vec to one big sycl::vec
 template <typename T, int N, size_t... I>
 inline auto array_to_vec(sycl::vec<T, N> src[sizeof...(I)], std::index_sequence<I...>) {
@@ -403,7 +436,7 @@ inline bool is_within_boundary(const sycl::vec<int32_t, Dim> &coord, const sycl:
 };
 
 namespace row_copy {
-uint32_t generate_predicate_mask(uint32_t num) {
+inline uint32_t generate_predicate_mask(uint32_t num) {
   assert(num <= 32 && "predicate_mask length is 32 bits");
   if (num == 32) { return UINT32_MAX; }
   return (1u << num) - 1;

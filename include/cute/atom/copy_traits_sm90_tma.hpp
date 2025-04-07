@@ -44,6 +44,10 @@
 
 #include <cutlass/cuda_host_adapter.hpp>
 
+#if defined(SYCL_INTEL_XE4_TARGET)
+#include <cute/arch/copy_xe4_dma.hpp>
+#endif
+
 namespace cute
 {
 
@@ -913,6 +917,7 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
 
   fill_tma_gmem_shape_stride(gtensor_T, stride(tma_gbasis), gmem_prob_shape, gmem_prob_stride);
 
+  #if defined(__CUDA_ARCH__)
   assert((reinterpret_cast<uint64_t>(gmem_address) & 0b1111) == 0);  // Address must be 16B-aligned
 
   assert(gmem_prob_shape[0] >= (uint64_t(1)));               // Size must be min 1
@@ -928,12 +933,14 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
 
   // TMA descriptor does not store the zeroth stride and assumes it is 1 (TmaInternalType element).
   assert(gmem_prob_stride[0] == 1 && "Majorness of smem doesn't match majorness of gmem");
+  #endif
 
   // convert strides to byte strides
   for(uint64_t& stride : gmem_prob_stride) {
     stride = (stride * sizeof_bits_v<TmaInternalType>) / 8;
   }
 
+  #if defined(__CUDA_ARCH__)
   // Assert the byte strides. Tma Descriptor uses byte strides
   assert((gmem_prob_stride[1]) < (uint64_t(1) << 40));       // Stride must be max 2^40
   assert((gmem_prob_stride[1] & 0b1111) == 0);               // Stride must be multiple of 16B (128b)
@@ -943,6 +950,7 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
   assert((gmem_prob_stride[3] & 0b1111) == 0);               // Stride must be multiple of 16B (128b)
   assert((gmem_prob_stride[4]) < (uint64_t(1) << 40));       // Stride must be max 2^40
   assert((gmem_prob_stride[4] & 0b1111) == 0);               // Stride must be multiple of 16B (128b)
+  #endif
 
   //
   // TMA smem desc info
@@ -956,12 +964,15 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
   });
   // Finally, truncate the tma box by the num_multicast
   for (uint32_t i = tma_dim-1, multicast = num_multicast; multicast > 1; --i) {
+    #if defined(__CUDA_ARCH__)
     assert(smem_box_shape[i] % multicast == 0 || multicast % smem_box_shape[i] == 0);
+    #endif
     uint32_t new_mult = ceil_div(multicast, smem_box_shape[i]);
     smem_box_shape[i] = ceil_div(smem_box_shape[i], multicast);
     multicast = new_mult;
   }
 
+  #if defined(__CUDA_ARCH__)
   assert(smem_box_shape[0] >= (uint32_t(1)));                // Size must be min 1
   assert(smem_box_shape[0] <= (uint32_t(1) << 8));           // Size must be max 2^8 = 256
   assert(smem_box_shape[1] >= (uint32_t(1)));                // Size must be min 1
@@ -983,6 +994,7 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
   assert(smem_box_stride[3] <= (uint32_t(8)));               // Stride must be max 2^3 = 8
   assert(smem_box_stride[4] >= (uint32_t(1)));               // Stride must be min 1
   assert(smem_box_stride[4] <= (uint32_t(8)));               // Stride must be max 2^3 = 8
+  #endif
 
     //
     // Construct the descriptor
@@ -1037,6 +1049,7 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
     }
 
   #endif // (__CUDACC_VER_MAJOR__ >= 12) && !defined(__CUDACC_RTC__)
+
   auto recast_ratio = cute::trait_ratio(sizeof_bits<typename GEngine::value_type>{},
                                         sizeof_bits<             TmaInternalType>{});
 
@@ -1076,8 +1089,67 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
   using AuxParams = AuxTmaParams<decltype(gmem_tma_basis_stride),
                                  decltype(tma_gbasis),
                                  decltype(swizzle)>;
-  return cute::make_tuple(tma_desc, AuxParams{gmem_tma_basis_stride});
+
+  #if defined(SYCL_INTEL_XE4_TARGET)
+    sycl::marray<uint32_t, tma_dim> gmem_shape;
+    for_each(make_seq<tma_dim>{}, [&](auto i) {gmem_shape[i] = gmem_prob_shape[i];});
+    sycl::marray<uint64_t, tma_dim-1> gmem_stride;
+    for_each(make_seq<tma_dim-1>{}, [&](auto i) {gmem_stride[i] = gmem_prob_stride[i+1];});
+    sycl::marray<uint32_t, tma_dim> roi_shape;
+    for_each(make_seq<tma_dim>{}, [&](auto i) {roi_shape[i] = smem_box_shape[i];});
+    sycl::marray<uint32_t, tma_dim> element_stride;
+    for_each(make_seq<tma_dim>{}, [&](auto i) {element_stride[i] = smem_box_stride[i];});
+    auto tma_desc_details = make_tuple(gmem_shape, gmem_stride, roi_shape, element_stride);
+    return cute::make_tuple(tma_desc_details, AuxParams{gmem_tma_basis_stride});
+  #else
+    return cute::make_tuple(tma_desc, AuxParams{gmem_tma_basis_stride});
+  #endif
 }
+
+template <class GmemDetails, class AuxParams, class GmemPtr>
+struct Xe4DmaCache2 {
+  template <typename CopyOp>
+  using OpUnpack = XE4_COPY_Unpack<CopyOp>;
+
+  Xe4DmaCache2(GmemDetails const& gmem_details, AuxParams const& aux_params, GmemPtr gmem_ptr)
+    : gmem_details_(gmem_details), aux_params_(aux_params), gmem_ptr_(gmem_ptr) {}
+
+  CUTE_DEVICE void
+  set_tensor_desc(TmaDescriptor tensor_desc) const {
+    constexpr int tma_dim = rank_v<typename AuxParams::TmaGmemBasis>;
+    auto [gmem_shape, gmem_stride, roi_shape, element_stride] = gmem_details_;
+
+    tensordesc_fill_dim_size<tma_dim>(tensor_desc, gmem_shape);
+    tensordesc_fill_dim_stride<tma_dim>(tensor_desc, gmem_stride);
+    tensordesc_fill_roitensor_dim_size<tma_dim>(tensor_desc, roi_shape);
+    tensordesc_fill_element_stride<tma_dim>(tensor_desc, element_stride);
+
+    tdesc_ptr_ = tensor_desc;
+  }
+
+  CUTE_HOST_DEVICE constexpr
+  auto get_tensor_desc() const {
+    return tdesc_ptr_;
+  }
+
+  template <class GShape>
+  CUTE_HOST_DEVICE constexpr
+  auto get_tma_tensor(GShape const& g_shape) const {
+    static_assert(is_congruent<decltype(g_shape), decltype(aux_params_.g_stride_)>::value);
+    return make_counting_tensor(make_layout(g_shape, aux_params_.g_stride_));
+  }
+
+  template <typename... Args>
+  CUTE_HOST_DEVICE constexpr
+  auto make_args_tuple(Args&&... args) const {
+    return make_tuple(tdesc_ptr_, gmem_ptr_, static_cast<Args&&>(args)...);
+  }
+
+  GmemDetails gmem_details_;
+  AuxParams aux_params_;
+  GmemPtr gmem_ptr_ {nullptr};
+  mutable TmaDescriptor tdesc_ptr_ { nullptr };
+};
 
 template <class TmaInternalType,
           class CopyOp,
@@ -1114,11 +1186,23 @@ make_tma_copy_atom(CopyOp,
   // Construct the Copy_Traits
   //
 
+#if defined(SYCL_INTEL_XE4_TARGET)
+  auto gmem_ptr = recast<TmaInternalType>(gtensor).data();
+  constexpr int num_bits_per_tma = size(tma_gbasis) * sizeof_bits_v<TmaInternalType>;
+  using DmaCache = Xe4DmaCache2<decltype(tma_desc), decltype(aux_params), decltype(gmem_ptr)>;
+  using Traits = Copy_Traits<Xe4CopyOp<CopyOp>, cute::C<num_bits_per_tma>, DmaCache>;
+  using Atom   = Copy_Atom<Traits, typename GEngine::value_type>;
+
+  Traits tma_traits{{tma_desc, aux_params, gmem_ptr}};
+
+#else
   constexpr int num_bits_per_tma = size(tma_gbasis) * sizeof_bits_v<TmaInternalType>;
   using Traits = Copy_Traits<CopyOp, cute::C<num_bits_per_tma>, decltype(aux_params)>;
   using Atom   = Copy_Atom<Traits, typename GEngine::value_type>;
 
   Traits tma_traits{tma_desc, aux_params};
+
+#endif
 
 #if 0
   print("num_bits_per_tma :  "); print(num_bits_per_tma); print("\n");
@@ -1271,8 +1355,12 @@ make_tma_copy(CopyOp                  const& copy_op,
               CTA_Tiler               const& cta_tiler,
               Cluster_Size            const& cluster_size)
 {
+#if defined(SYCL_INTEL_XE4_TARGET)
+  if constexpr (is_base_of_v<xe4::ASYNC_ROW_IM2COL, CopyOp>) {
+#else
   if constexpr (cute::is_same_v<CopyOp, SM90_TMA_LOAD_IM2COL> ||
                 cute::is_same_v<CopyOp, SM90_TMA_STORE_IM2COL>) {
+#endif
     return make_im2col_tma_copy(copy_op,
                                 gtensor,
                                 slayout,

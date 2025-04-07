@@ -6,22 +6,15 @@
 
 namespace cute::xe4 {
 
-template <xe4::GMMA::Major MajorMode, class Shape, class Stride>
-CUTE_HOST_DEVICE constexpr uint32_t get_leading_stride(Layout<Shape, Stride> const&)
-{
-  constexpr auto ldm = static_cast<int>(MajorMode);
-  if constexpr (rank<ldm>(Stride{}) > 1) {
-    return get<ldm, 1>(Stride{});
-  } else {
-    return size(Shape{});
-  }
-}
-
-template <xe4::GMMA::Major MajorMode, class MatDesc, class SEngine, class SLayout>
+template <bool cm_major_x, class SEngine, class SLayout>
 CUTE_HOST_DEVICE constexpr
-MatDesc make_matrix_desc(Tensor<SEngine, SLayout> const& sTensor) {
-  constexpr uint32_t leading_stride = get_leading_stride<MajorMode>(SLayout{});
-  constexpr uint32_t cm_stride = (leading_stride * sizeof_bits_v<typename SEngine::value_type> / 8) >> 10;
+auto make_matrix_desc(Tensor<SEngine, SLayout> const& sTensor) {
+  using Stride = decltype(stride(SLayout{}));
+  using Element = typename SEngine::element_type;
+
+  constexpr int leading_dim = cutlass::gemm::detail::is_mn_major<Stride>() ? 0 : 1;
+  constexpr uint32_t cm_size = cm_major_x ? 32 / sizeof(Element) : 32;
+  constexpr uint32_t cm_stride = size<leading_dim>(shape(SLayout{})) / cm_size;
 
   MatDesc mat_desc = reinterpret_cast<uint64_t>(slm_space_cast(raw_pointer_cast(sTensor.data()))) >> 9;
   mat_desc |= (cm_stride << 16);
@@ -29,7 +22,6 @@ MatDesc make_matrix_desc(Tensor<SEngine, SLayout> const& sTensor) {
   return mat_desc;
 }
 
-template <class MatDesc>
 struct MatDescIterator
 {
   using reference    = MatDesc;
@@ -38,7 +30,7 @@ struct MatDescIterator
 
   MatDesc desc_;
 
-  MatDescIterator(MatDesc desc): desc_(desc) {}
+  constexpr MatDescIterator(MatDesc desc): desc_(desc) {}
 
   // Dereference returns the MatDesc
   CUTE_HOST_DEVICE constexpr
@@ -61,15 +53,15 @@ struct MatDescIterator
   print(MatDescIterator const& iter) { printf("xe4::MatDescIterator(%p)", iter.desc_); }
 };
 
-template <class T, class MatDesc>
+template <class T>
 CUTE_HOST_DEVICE constexpr
 MatDesc
-raw_pointer_cast(MatDescIterator<MatDesc> const& ptr) {
+raw_pointer_cast(MatDescIterator const& ptr) {
   return ptr.desc_;
 }
 
-template <xe4::GMMA::Major MajorMode, class MatDesc>
-struct slm_desc : MatDescIterator<MatDesc> { };
+template <bool cm_major_x>
+struct slm_desc : MatDescIterator { };
 
 template <int M, int K>
 using ABLayout = Layout<Shape<_1,Shape<Int<M>,Int<K>>>, Stride<_0,Stride<_1,Int<M>>>>;
@@ -78,14 +70,14 @@ using ABLayout = Layout<Shape<_1,Shape<Int<M>,Int<K>>>, Stride<_0,Stride<_1,Int<
 
 namespace cute {
 
-template <xe4::GMMA::Major MajorMode, class MatDesc>
-struct MakeTensor<xe4::slm_desc<MajorMode, MatDesc>>
+template <bool cm_major_x>
+struct MakeTensor<xe4::slm_desc<cm_major_x>>
 {
   template <class TEngine, class TLayout>
   CUTE_HOST_DEVICE constexpr auto
   operator()(Tensor<TEngine,TLayout> const& smem_tensor)
   {
-    auto mat_desc = xe4::make_matrix_desc<MajorMode, MatDesc>(tensor<0>(smem_tensor));
+    auto mat_desc = xe4::make_matrix_desc<cm_major_x>(tensor<0>(smem_tensor));
     auto new_layout = replace<0>(recast<uint8_t const>(smem_tensor).layout(), Layout<_1,_0>{});
     return make_tensor(xe4::MatDescIterator{mat_desc}, new_layout);
   }
@@ -94,18 +86,20 @@ struct MakeTensor<xe4::slm_desc<MajorMode, MatDesc>>
 struct XE4_ASYNC_GMMA_OP {};
 struct XE4_ASYNC_GMMA_SCALE_OP {};
 
-template <class TupleC, class TA, class TB, class Shape_MNK_, xe4::GMMA::Major tnspA_, xe4::GMMA::Major tnspB_, class MatDesc, class Abarrier>
-struct MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_, MatDesc, Abarrier>>
+template<bool B, auto TrueVal, auto FalseVal>
+constexpr auto condition_v = B ? TrueVal : FalseVal;
+
+template <class TupleC, class TA, class TB, class Shape_MNK_, xe4::GMMA::Major tnspA_, xe4::GMMA::Major tnspB_>
+struct MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>>
 {
   using ValTypeD = tuple_element_t<1, TupleC>;
   using ValTypeA = TA;
   using ValTypeB = TB;
   using ValTypeC = tuple_element_t<0, TupleC>;
-  using AbarrierType = Abarrier;
 
-  using FrgTypeA = xe4::slm_desc<tnspA_, MatDesc>;
-  using FrgTypeB = xe4::slm_desc<tnspB_, MatDesc>;
-  using FrgTypeC = xe4::slm_desc<xe4::GMMA::Major::K, MatDesc>;
+  using FrgTypeA = xe4::slm_desc<tnspA_==xe4::GMMA::Major::K>;
+  using FrgTypeB = xe4::slm_desc<true>;
+  using FrgTypeC = xe4::slm_desc<true>;
 
   using Shape_MNK = Shape_MNK_;
   using ThrID   = Layout<_1>;
@@ -116,10 +110,12 @@ struct MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_, Mat
   static constexpr xe4::GMMA::Major tnspA = tnspA_;
   static constexpr xe4::GMMA::Major tnspB = tnspB_;
 
+  GMMA::ScaleOut accumulate_ = GMMA::ScaleOut::One;
+
   template<typename... TraitsArgs, __CUTE_REQUIRES(sizeof...(TraitsArgs) <= 4)>
   CUTE_HOST_DEVICE static auto
   with(TraitsArgs&&... args) {
-    using MMA_Op = XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_, MatDesc, Abarrier>;
+    using MMA_Op = XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>;
     auto opargs = make_tuple(static_cast<TraitsArgs&&>(args)...);
     return MMA_Traits<XE4_ASYNC_GMMA_OP, decltype(opargs), MMA_Op>{{}, opargs};
   }
@@ -127,7 +123,7 @@ struct MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_, Mat
   template<typename... TraitsArgs, __CUTE_REQUIRES(sizeof...(TraitsArgs) >= 5)>
   CUTE_HOST_DEVICE static auto
   with(TraitsArgs&&... args) {
-    using MMA_Op = XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_, MatDesc, Abarrier>;
+    using MMA_Op = XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>;
     auto opargs = make_tuple(static_cast<TraitsArgs&&>(args)...);
     auto tmp_opargs = remove<sizeof...(args)-1>(opargs);
     auto opargs_reduced = remove<sizeof...(args)-3>(tmp_opargs);
@@ -137,8 +133,6 @@ struct MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_, Mat
 
 template<typename OpArgs, typename MMA_Op>
 struct MMA_Traits<XE4_ASYNC_GMMA_OP, OpArgs, MMA_Op>: public MMA_Traits<MMA_Op> {
-  using Abarrier = typename MMA_Op::Abarrier;
-
   OpArgs const opargs_;
 
   template <class TD, class DLayout,
@@ -160,18 +154,17 @@ struct MMA_Traits<XE4_ASYNC_GMMA_OP, OpArgs, MMA_Op>: public MMA_Traits<MMA_Op> 
   }
 };
 
-template <class TupleC, class TA, class TB, class Shape_MNK_, xe4::GMMA::Major tnspA_, xe4::GMMA::Major tnspB_, class MatDesc, class Abarrier>
-struct MMA_Traits<XE4_ASYNC_GMMA_MULTICAST<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_, MatDesc, Abarrier>>
+template <class TupleC, class TA, class TB, class Shape_MNK_, xe4::GMMA::Major tnspA_, xe4::GMMA::Major tnspB_>
+struct MMA_Traits<XE4_ASYNC_GMMA_MULTICAST<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>>
 {
   using ValTypeD = tuple_element_t<1, TupleC>;
   using ValTypeA = TA;
   using ValTypeB = TB;
   using ValTypeC = tuple_element_t<0, TupleC>;
-  using AbarrierType = Abarrier;
 
-  using FrgTypeA = xe4::slm_desc<tnspA_, MatDesc>;
-  using FrgTypeB = xe4::slm_desc<tnspB_, MatDesc>;
-  using FrgTypeC = xe4::slm_desc<xe4::GMMA::Major::K, MatDesc>;
+  using FrgTypeA = xe4::slm_desc<tnspA_==xe4::GMMA::Major::K>;
+  using FrgTypeB = xe4::slm_desc<true>;
+  using FrgTypeC = xe4::slm_desc<true>;
 
   using Shape_MNK = Shape_MNK_;
   using ThrID   = Layout<_1>;
@@ -186,14 +179,14 @@ struct MMA_Traits<XE4_ASYNC_GMMA_MULTICAST<TupleC, TA, TB, Shape_MNK_, tnspA_, t
   CUTE_HOST_DEVICE static auto
   with(TraitsArgs&&... args) {
     if constexpr (sizeof...(args) <= 4) {
-      return MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_, MatDesc, Abarrier>>::with(static_cast<TraitsArgs&&>(args)...);
+      return MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>>::with(static_cast<TraitsArgs&&>(args)...);
     }
   }
 
   template<typename... TraitsArgs, __CUTE_REQUIRES(sizeof...(TraitsArgs) > 4)>
   CUTE_HOST_DEVICE static auto
   with(TraitsArgs&&... args) {
-    using MMA_Op = XE4_ASYNC_GMMA_MULTICAST<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_, MatDesc, Abarrier>;
+    using MMA_Op = XE4_ASYNC_GMMA_MULTICAST<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>;
     auto opargs = make_tuple(static_cast<TraitsArgs&&>(args)...);
     return MMA_Traits<XE4_ASYNC_GMMA_OP, decltype(opargs), MMA_Op>{{}, opargs};
   }

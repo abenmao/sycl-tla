@@ -11,10 +11,11 @@ using namespace cute;
 
 ///////////////////////////////////////////////////////////////////////////////
 
-static auto make_coord_tensor(cute::tuple<int, int, int> problem_blocks_shape, cute::tuple<uint32_t, uint32_t> cluster_shape) {
+template<class ClusterShape>
+static auto make_coord_tensor(cute::tuple<int, int, int> problem_blocks_shape, ClusterShape const& cluster_shape) {
   auto group_range = cute::make_shape(get_wgcount<1>(), get_wgcount<0>());
   auto wg_gride_layout = make_layout(group_range, make_stride(cute::E<0>{}, cute::E<1>{}));
-  auto tiled_wg_gride_layout = zipped_divide(wg_gride_layout, cluster_shape);
+  auto tiled_wg_gride_layout = zipped_divide(wg_gride_layout, select<0,1>(cluster_shape));
 
   auto problem_blocks_layout = cute::make_layout(problem_blocks_shape, cute::make_stride(cute::E<0>{}, cute::E<1>{}, cute::E<2>{}));
   auto tiled_problem_blocks_layout = zipped_divide(problem_blocks_layout, group_range);
@@ -25,9 +26,11 @@ static auto make_coord_tensor(cute::tuple<int, int, int> problem_blocks_shape, c
   return coord_tensor;
 }
 
-template<uint32_t Stages_>
+template<uint32_t Stages_, class ClusterShape>
 class PersistentTileSchedulerXe4 {
 public:
+  static_assert(cute::is_static_v<ClusterShape>);
+
   static constexpr uint32_t CLC_VS = 4;
   struct alignas(16) CLCResponse { uint32_t data[CLC_VS]; };
 
@@ -37,91 +40,21 @@ public:
   using Pipeline = cutlass::PipelineTmaAsync<Stages>;
   using PipelineState = typename Pipeline::PipelineState;
 
-  struct Arguments {
-    cute::tuple<uint32_t, uint32_t> slm_bytes;
-  };
-
-  struct Params {
-    cute::tuple<int, int, int> problem_blocks_range;
-    cute::tuple<int, int, int> problem_blocks_shape;
-    cute::tuple<uint32_t, uint32_t> cluster_shape;
-    cute::tuple<uint32_t, uint32_t> cluster_masks;
-    cute::tuple<uint32_t, uint32_t> coop_set_ids;
-    cute::tuple<uint32_t, uint32_t> coop_ids;
-    uint32_t wg_linear_id_in_cluster;
-  };
-
-  template <class ProblemShapeMNKL, class TileShape, class ClusterShape>
-  static Params
-  to_underlying_arguments(
-      ProblemShapeMNKL problem_shape_mnkl,
-      TileShape tile_shape,
-      ClusterShape cluster_shape,
-      Arguments const& arguments,
-      [[maybe_unused]] void* workspace=nullptr) {
-
+  template <class ProblemShapeMNKL, class TileShape>
+  static auto
+  calculate_problem_blocks_shape( ProblemShapeMNKL problem_shape_mnkl, TileShape tile_shape) {
     // We only need the tile and cluster shape during scheduler setup, so let FTAD do the magic
     static_assert(cute::is_static<TileShape>::value);
-    static_assert(cute::is_static<ClusterShape>::value);
 
     auto problem_shape_mnl = cute::select<0, 1, 3>(problem_shape_mnkl);
     auto problem_blocks_range = cute::ceil_div(flatten(problem_shape_mnl), flatten(tile_shape));
 
-    auto [cluster_size_m, cluster_size_n, _] = cluster_shape;
+    auto [cluster_size_m, cluster_size_n, _] = ClusterShape{};
     auto problem_blocks_m = cute::round_up(cute::get<0>(problem_blocks_range), cluster_size_m);
     auto problem_blocks_n = cute::round_up(cute::get<1>(problem_blocks_range), cluster_size_n);
     auto problem_blocks_shape = cute::make_shape(problem_blocks_m, problem_blocks_n, cute::get<2>(problem_blocks_range));
 
-    uint32_t cluster_wgid_x = get_cluster_wgid<0>();
-    uint32_t cluster_wgid_y = get_cluster_wgid<1>();
-
-    uint32_t cluster_mask_a_ = 0;
-    uint32_t cluster_mask_b_ = 0;
-    uint32_t coop_id_a_ = cluster_wgid_x;
-    uint32_t coop_id_b_ = cluster_wgid_y;
-    uint32_t coop_set_id_a_ = cluster_wgid_y;
-    uint32_t coop_set_id_b_ = cluster_wgid_x;
-    uint32_t wg_linear_id_in_cluster = 0;
-
-    uint32_t coop_num_a = cluster_size_n;
-    uint32_t coop_num_b = cluster_size_m;
-    uint32_t multicast_size_a = get<0>(arguments.slm_bytes) / coop_num_a;
-    uint32_t multicast_size_b = get<1>(arguments.slm_bytes) / coop_num_b;
-
-    if (multicast_size_a >= multicast_size_b) {
-      wg_linear_id_in_cluster = cluster_wgid_x * cluster_size_m + cluster_wgid_y;
-      cluster_mask_a_ = ((1u << coop_num_a) - 1) << (coop_set_id_a_ * coop_num_a); //0011
-      uint32_t cluster_mask_b_base = 1u << coop_set_id_b_;
-      #pragma unroll
-      for (uint32_t i = 0; i < coop_num_b; i++) {
-        cluster_mask_b_ |= cluster_mask_b_base << (i * coop_num_a);
-      }
-    } else {
-      wg_linear_id_in_cluster = cluster_wgid_y * cluster_size_n + cluster_wgid_x;
-      cluster_wgid_x = wg_linear_id_in_cluster % coop_num_b;
-      cluster_wgid_y = wg_linear_id_in_cluster / coop_num_b;
-      coop_set_id_a_ = cluster_wgid_x;
-      coop_set_id_b_ = cluster_wgid_y;
-      coop_id_a_ = cluster_wgid_y;
-      coop_id_b_ = cluster_wgid_x;
-
-      cluster_mask_b_ = ((1u << coop_num_b) - 1) << (coop_set_id_b_ * coop_num_b); //0011
-      uint32_t cluster_mask_a_base = 1u << coop_set_id_a_;
-      #pragma unroll
-      for (uint32_t i = 0; i < coop_num_a; i++) {
-        cluster_mask_a_ |= cluster_mask_a_base << (i * coop_num_b);
-      } //0101
-    }
-
-    return {
-      problem_blocks_range,
-      problem_blocks_shape,
-      {cluster_size_m, cluster_size_n},
-      {cluster_mask_a_, cluster_mask_b_},
-      {coop_set_id_a_, coop_set_id_b_},
-      {coop_id_a_, coop_id_b_},
-      wg_linear_id_in_cluster
-    };
+    return problem_blocks_shape;
   }
 
   struct WorkTileInfo {
@@ -155,11 +88,12 @@ public:
     }
   };
 
-  PersistentTileSchedulerXe4(CLCResponse* clc_response_ptr, Params const& params)
+  template<class ProblemBlocksShape>
+  PersistentTileSchedulerXe4(CLCResponse* clc_response_ptr, ProblemBlocksShape const& problem_blocks_shape, cute::tuple<uint32_t, uint32_t> coop_set_ids)
     : clc_response_ptr_(clc_response_ptr)
-    , params_(params)
-    , coord_tensor_(make_coord_tensor(params.problem_blocks_shape, params.cluster_shape))
-    , wgid_(get_wgid<1>(), get_wgid<0>()) {}
+    , coord_tensor_(make_coord_tensor(problem_blocks_shape, ClusterShape{}))
+    , wgid_(get_wgid<1>(), get_wgid<0>())
+    , coop_set_ids_(coop_set_ids) {}
 
   CUTLASS_DEVICE
   WorkTileInfo initial_work_tile_info() {
@@ -219,8 +153,8 @@ public:
       return WorkTileInfo::invalid_work_tile();
     }
 
-    const auto& cluster_local_id = params_.coop_set_ids;
-    const auto cluster_id = cute::transform(wgid_, params_.cluster_shape, [](auto x, auto y) { return x / y; });
+    const auto& cluster_local_id = coop_set_ids_;
+    const auto cluster_id = cute::transform(wgid_, select<0,1>(ClusterShape{}), [](auto x, auto y) { return x / y; });
     auto [coord_m, coord_n, coord_l] = coord_tensor_(cute::make_coord(cluster_local_id, cluster_id), iter_id_);
 
     return {
@@ -265,13 +199,13 @@ public:
   }
 
 private:
-  using CoordTensor = decltype(make_coord_tensor(cute::make_tuple(0,0,0), cute::make_tuple((uint32_t)0,(uint32_t)0)));
+  using CoordTensor = decltype(make_coord_tensor(cute::make_tuple(0,0,0), ClusterShape{}));
 
   CLCResponse *clc_response_ptr_ = nullptr;
-  Params params_;
   uint32_t iter_id_ {0};
   CoordTensor coord_tensor_;
   cute::tuple<uint32_t, uint32_t> wgid_;
+  cute::tuple<uint32_t, uint32_t> coop_set_ids_;
 };
 
 }

@@ -10,35 +10,6 @@ namespace cute
 {
 
 template <class CopyOp>
-struct XE4_COPY_Unpack
-{
-  template <class... Args,
-            class TS, class SLayout,
-            class TD, class DLayout>
-  CUTE_HOST_DEVICE friend constexpr void
-  copy_unpack(Copy_Traits<CopyOp, Args...> const& traits,
-              Tensor<TS,SLayout>           const& src,
-              Tensor<TD,DLayout>                & dst)
-  {
-    constexpr auto isLoadOperation = !cute::is_base_of<xe4::DMA_STORE, CopyOp>::value;
-
-    if constexpr (isLoadOperation) {
-      auto dst_ptr = cute::raw_pointer_cast(dst.data());
-      auto src_coord = src.data().coord_;
-      return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
-                                  traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
-                                  make_tuple(dst_ptr), seq<0>{}, src_coord, tuple_seq<decltype(src_coord)>{});
-    } else {
-      auto src_ptr = cute::raw_pointer_cast(src.data());
-      auto dst_coord = dst.data().coord_;
-      return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
-                                  traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
-                                  make_tuple(src_ptr), seq<0>{}, dst_coord, tuple_seq<decltype(dst_coord)>{});
-    }
-  }
-};
-
-template <class CopyOp>
 struct SLM_VCOPY_Unpack
 {
   template <class... Args,
@@ -57,9 +28,6 @@ struct SLM_VCOPY_Unpack
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////// ASYNC_TENSOR_LOAD / ASYNC_TENSOR_STORE ///////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-template <typename CopyOperation>
-struct Xe4CopyOp {};
 
 template <typename CopyOperation>
 struct Xe4CopyOpWrapper : CopyOperation {};

@@ -91,11 +91,13 @@ struct CollectiveBuilder<
   using DispatchPolicy =
     cutlass::gemm::MainloopXe4DmaGmmaWarpSpecialized<
         PipelineStages,
+        KernelScheduleType::NumControlWarps,
+        KernelScheduleType::NumEpilogueWarps,
         SchedulerPipelineStageCount,
         AccumulatorPipelineStageCount,
         ClusterShape_MNK
     >;
-  
+
   static constexpr slm_matrix_type cmTypeA =
     cutlass::gemm::detail::is_mn_major_A<GmemLayoutATag>() ? slm_matrix_type::type2 : slm_matrix_type::type1;
 
@@ -116,15 +118,15 @@ struct CollectiveBuilder<
   using SmemLayoutAtomA =
     cute::conditional_t<
       majorA == cute::xe4::GMMA::Major::K,
-      decltype(make_layout(Shape<_32,Int<32/sizeof(ElementA)>>{}, GenRowMajor{})),
-      decltype(make_layout(Shape<_32,Int<32/sizeof(ElementA)>>{}, GenColMajor{}))
+      decltype(make_layout(cute::select<0, 2>(TileShape_MNK{}), GenRowMajor{})),
+      decltype(make_layout(cute::select<0, 2>(TileShape_MNK{}), GenColMajor{}))
     >;
 
   using SmemLayoutAtomB =
     cute::conditional_t<
       majorB == cute::xe4::GMMA::Major::K,
-      decltype(upcast<sizeof(ElementB)>(make_layout(Shape<_32,_32>{}, GenRowMajor{}))),
-      decltype(upcast<sizeof(ElementB)>(make_layout(Shape<_32,_32>{}, GenColMajor{})))
+      decltype(make_layout(cute::select<1, 2>(TileShape_MNK{}), GenRowMajor{})),
+      decltype(make_layout(cute::select<1, 2>(TileShape_MNK{}), GenColMajor{}))
     >;
 
   using CollectiveOp = cutlass::gemm::collective::CollectiveMma<

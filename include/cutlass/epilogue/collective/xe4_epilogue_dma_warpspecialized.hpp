@@ -58,9 +58,8 @@ public:
   using StorePipeline = cutlass::PipelineTmaAsync<1>;
   using StorePipelineState = typename StorePipeline::PipelineState;
 
-  using SmemLayoutD = decltype(tile_to_shape(
-    upcast<sizeof(ElementD)>(make_layout(Shape<_32,_32>{}, GenRowMajor{})),
-    take<0,2>(TileShape{}), Step<_2,_1>{}));
+  using SmemLayoutAtomD = decltype(make_ordered_layout(select<0,1>(TileShape{}), Step<_1, _0>{}));
+  using SmemLayoutD = decltype(tile_to_shape(SmemLayoutAtomD{}, take<0,2>(TileShape{}), Step<_2,_1>{}));
 
   static_assert(cute::rank(StrideD{}) == 3, "StrideD must be rank-3: [M, N, L]");
 
@@ -81,7 +80,6 @@ public:
 
   // Host side epilogue arguments
   struct Arguments {
-    typename FusionCallbacks::Arguments thread{};
     ElementD const* ptr_D = nullptr;
     StrideD dD{};
   };
@@ -89,12 +87,11 @@ public:
   // Device side epilogue params
   struct Params
   {
-    using TiledStoreD = decltype(make_xe4_copy<TiledCopyD, ElementD>(
-      static_cast<uint64_t*>(nullptr),
+    using TiledStoreD = decltype(make_tma_copy(
+      TiledCopyD{},
       make_tensor(static_cast<ElementD const*>(nullptr), repeat_like(StrideD{}, int32_t(0)), StrideD{}),
       SmemLayoutD{}, take<0,2>(TileShape{})));
 
-    typename FusionCallbacks::Params thread{};
     TiledStoreD store_d;
   };
 
@@ -102,31 +99,34 @@ public:
   // Methods
   //
 
-  template <class ProblemShape, class TensorDesc>
+  template <class ProblemShape>
+  CUTLASS_HOST
   static constexpr Params
   to_underlying_arguments(
       ProblemShape const& problem_shape,
-      TensorDesc tensor_desc,
       Arguments const& args,
       [[maybe_unused]] void* workspace) {
 
     auto [M, N, K, L] = problem_shape;
     auto D = make_tensor(args.ptr_D, make_layout(make_shape(M, N, L), args.dD));
-    auto store_d = make_xe4_copy<TiledCopyD, ElementD>(tensor_desc, D, SmemLayoutD {}, take<0, 2>(TileShape {}));
+    auto store_d = make_tma_copy(TiledCopyD{}, D, SmemLayoutD{});
 
     return {
-      FusionCallbacks::to_underlying_arguments(problem_shape, args.thread, workspace),
       store_d
     };
   }
 
   // Note: SharedStorage is unused for CollectiveEpilogue
-  CUTLASS_HOST_DEVICE
-  CollectiveEpilogue(Params const& params)
-      : _params(params) { }
+  template <class TensorDesc>
+  CUTLASS_DEVICE
+  CollectiveEpilogue(Params const& params, TensorDesc tensor_desc) : _params(params) {
+    params.store_d.cache_.set_tensor_desc(tensor_desc);
+  }
 
+  template <class ProblemShape>
   CUTLASS_DEVICE void
-  operator()(cute::tuple<StorePipeline, AccumulatorPipeline> pipelines,
+  operator()(ProblemShape const& problem_shape,
+    cute::tuple<StorePipeline, AccumulatorPipeline> pipelines,
     cute::tuple<StorePipelineState, AccumulatorPipelineState> pipeline_states,
     TensorStorage& shared_tensors, uint32_t worker_id)
   {
@@ -156,7 +156,11 @@ public:
       worker_id          // thread_idx
     );
 
-    FusionCallbacks fusion_callbacks(_params.thread, shared_tensors.thread);
+
+    auto callback_args = typename FusionCallbacks::Arguments{};
+    auto callback_params = FusionCallbacks::to_underlying_arguments(problem_shape, callback_args, nullptr);
+
+    FusionCallbacks fusion_callbacks(callback_params, shared_tensors.thread);
     auto cst_callbacks = fusion_callbacks.template get_consumer_store_callbacks<true>(cst_args);
     pattern2<FragmentSize, EpiSgNum, SgSize>(cst_callbacks, tensor_d, tensor_d, worker_id);
 

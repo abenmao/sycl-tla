@@ -16,6 +16,8 @@ using namespace cutlass::gemm;
 
 template <
   int Stages,
+  int NumControlWarps,
+  int NumEpilogueWarps,
   int SchedulerPipelineStageCount,
   int AccumulatorPipelineStageCount,
   class ClusterShape,
@@ -34,7 +36,7 @@ template <
   class SmemCopyAtomB_,
   class TransformB_>
 struct CollectiveMma<
-  MainloopXe4DmaGmmaWarpSpecialized<Stages, SchedulerPipelineStageCount, AccumulatorPipelineStageCount, ClusterShape>,
+  MainloopXe4DmaGmmaWarpSpecialized<Stages, NumControlWarps, NumEpilogueWarps, SchedulerPipelineStageCount, AccumulatorPipelineStageCount, ClusterShape>,
   TileShape_,
   ElementA_,
   StrideA_,
@@ -55,6 +57,8 @@ struct CollectiveMma<
 
   using DispatchPolicy = MainloopXe4DmaGmmaWarpSpecialized<
                           Stages,
+                          NumControlWarps,
+                          NumEpilogueWarps,
                           SchedulerPipelineStageCount,
                           AccumulatorPipelineStageCount,
                           ClusterShape>;
@@ -84,6 +88,7 @@ struct CollectiveMma<
   using GmemTiledCopyB = GmemTiledCopyB_;
   using SmemLayoutAtomA = SmemLayoutAtomA_;
   using SmemLayoutAtomB = SmemLayoutAtomB_;
+  using SmemLayoutAtomC = decltype(make_layout(make_shape(get<0>(shape(SmemLayoutAtomA{})), get<0>(shape(SmemLayoutAtomB{}))), GenRowMajor{}));
   using SmemCopyAtomA = SmemCopyAtomA_;
   using SmemCopyAtomB = SmemCopyAtomB_;
   using TransformA = TransformA_;
@@ -109,9 +114,11 @@ struct CollectiveMma<
       SmemLayoutAtomB{},
       append(MmaShapeB_NK{}, Int<DispatchPolicy::Stages>{}),
       cute::conditional_t<TiledMma::tnspB == cute::xe4::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
-  using SmemLayoutAcc = decltype(UMMA::tile_to_mma_shape(
-      upcast<sizeof(ElementAccumulator)>(make_layout(Shape<_32,_32>{}, GenRowMajor{})),
-      MmaShapeC_MN{}, Step<_2,_1>{}));
+  using SmemLayoutC = decltype(UMMA::tile_to_mma_shape(
+      SmemLayoutAtomC{},
+      append(MmaShapeC_MN{}, Int<1>{}), Step<_2,_1,_3>{}));
+
+  using SmemLayoutAcc = decltype(make_layout(MmaShapeC_MN{}, GenRowMajor{}));
 
   struct SharedStorage
   {
@@ -190,9 +197,8 @@ struct CollectiveMma<
     using ClusterLayout_VMNK = decltype(tiled_divide(make_layout(ClusterShape{}),
                                                      make_tile(typename TiledMma::AtomThrID{})));
 
-    using TMA_A = decltype(make_tma_atom_A_xe4(
+    using TMA_A = decltype(make_tma_atom_A_sm100(
       GmemTiledCopyA{},
-      static_cast<uint64_t*>(nullptr),
       make_tensor(static_cast<ElementA const*>(nullptr), repeat_like(StrideA{}, int32_t(0)), StrideA{}),
       SmemLayoutA{}(_,_,_,cute::Int<0>{}),
       TileShape{},
@@ -200,9 +206,8 @@ struct CollectiveMma<
       ClusterLayout_VMNK{})
     );
 
-    using TMA_B = decltype(make_tma_atom_B_xe4(
+    using TMA_B = decltype(make_tma_atom_B_sm100(
         GmemTiledCopyB{},
-        static_cast<uint64_t*>(nullptr),
         make_tensor(static_cast<ElementB const*>(nullptr), repeat_like(StrideB{}, int32_t(0)), StrideB{}),
         SmemLayoutB{}(_,_,_,cute::Int<0>{}),
         TileShape{},
@@ -215,20 +220,18 @@ struct CollectiveMma<
   };
 
   CUTLASS_DEVICE
-  CollectiveMma(Params const& params, ClusterShape cluster_shape, uint32_t block_rank_in_cluster)
-    : cluster_shape_(cluster_shape)
-    , block_rank_in_cluster_(block_rank_in_cluster) {
+  CollectiveMma(Params const& params, ClusterShape cluster_shape) : cluster_shape_(cluster_shape) {
     {
+      initialize_mcast_masks();
       observed_tma_load_a_ = &params.tma_load_a;
       observed_tma_load_b_ = &params.tma_load_b;
     }
   }
 
-  template<class ProblemShape, class TensorDescTuple>
+  template<class ProblemShape>
   static constexpr Params
-  to_underlying_arguments(ProblemShape const& problem_shape, TensorDescTuple const& tdesc_tuple, Arguments const& args, void* workspace) {
+  to_underlying_arguments(ProblemShape const& problem_shape, Arguments const& args, void* workspace) {
     auto [M, N, K, L] = problem_shape;
-    auto [tdesc_a, tdesc_b] = tdesc_tuple;
 
     auto tensor_a = make_tensor(args.ptr_A, make_layout(make_shape(M,K,L), args.dA));
     auto tensor_b = make_tensor(args.ptr_B, make_layout(make_shape(N,K,L), args.dB));
@@ -236,18 +239,16 @@ struct CollectiveMma<
     auto cluster_shape = ClusterShape{};
     auto cluster_layout_vmnk = tiled_divide(make_layout(cluster_shape), make_tile(typename TiledMma::AtomThrID{}));
 
-    auto tma_load_a = make_tma_atom_A_xe4(
+    auto tma_load_a = make_tma_atom_A_sm100(
         GmemTiledCopyA{},
-        tdesc_a,
         tensor_a,
         SmemLayoutA{}(_,_,_,cute::Int<0>{}),
         TileShape{},
         TiledMma{},
         cluster_layout_vmnk);
 
-    auto tma_load_b = make_tma_atom_B_xe4(
+    auto tma_load_b = make_tma_atom_B_sm100(
         GmemTiledCopyB{},
-        tdesc_b,
         tensor_b,
         SmemLayoutB{}(_,_,_,cute::Int<0>{}),
         TileShape{},
@@ -257,13 +258,69 @@ struct CollectiveMma<
     return {tma_load_a, tma_load_b};
   }
 
-  template <class ProblemShape, class ClusterMask>
+  CUTLASS_DEVICE void
+  initialize_mcast_masks() {
+    uint32_t cluster_wgid_x = get_cluster_wgid<0>();
+    uint32_t cluster_wgid_y = get_cluster_wgid<1>();
+
+    auto [cluster_size_m, cluster_size_n, _] = ClusterShape{};
+
+    uint32_t cluster_mask_a = 0;
+    uint32_t cluster_mask_b = 0;
+    uint32_t coop_id_a = cluster_wgid_x;
+    uint32_t coop_id_b = cluster_wgid_y;
+    uint32_t coop_set_id_a = cluster_wgid_y;
+    uint32_t coop_set_id_b = cluster_wgid_x;
+    uint32_t wg_linear_id_in_cluster = 0;
+
+    uint32_t coop_num_a = cluster_size_n;
+    uint32_t coop_num_b = cluster_size_m;
+    uint32_t multicast_size_a = SlmBytesA / coop_num_a;
+    uint32_t multicast_size_b = SlmBytesB / coop_num_b;
+
+    if (multicast_size_a >= multicast_size_b) {
+      wg_linear_id_in_cluster = cluster_wgid_x * cluster_size_m + cluster_wgid_y;
+      cluster_mask_a = ((1u << coop_num_a) - 1) << (coop_set_id_a * coop_num_a); //0011
+      uint32_t cluster_mask_b_base = 1u << coop_set_id_b;
+      #pragma unroll
+      for (uint32_t i = 0; i < coop_num_b; i++) {
+        cluster_mask_b |= cluster_mask_b_base << (i * coop_num_a);
+      }
+    } else {
+      wg_linear_id_in_cluster = cluster_wgid_y * cluster_size_n + cluster_wgid_x;
+      cluster_wgid_x = wg_linear_id_in_cluster % coop_num_b;
+      cluster_wgid_y = wg_linear_id_in_cluster / coop_num_b;
+      coop_set_id_a = cluster_wgid_x;
+      coop_set_id_b = cluster_wgid_y;
+      coop_id_a = cluster_wgid_y;
+      coop_id_b = cluster_wgid_x;
+
+      cluster_mask_b = ((1u << coop_num_b) - 1) << (coop_set_id_b * coop_num_b); //0011
+      uint32_t cluster_mask_a_base = 1u << coop_set_id_a;
+      #pragma unroll
+      for (uint32_t i = 0; i < coop_num_a; i++) {
+        cluster_mask_a |= cluster_mask_a_base << (i * coop_num_b);
+      } //0101
+    }
+
+    block_rank_in_cluster_ = wg_linear_id_in_cluster;
+    coop_ids_ = make_tuple(coop_id_a, coop_id_b);
+    coop_set_ids_ = make_tuple(coop_set_id_a, coop_set_id_b);
+    cluster_masks_ = make_tuple(cluster_mask_a, cluster_mask_b);
+  }
+
+
+  template <class ProblemShape, class DescTuple>
   CUTLASS_DEVICE auto
-  load_init(ProblemShape const& problem_shape, TensorStorage& shared_tensors, ClusterMask const& cluster_mask) const {
+  load_init(ProblemShape const& problem_shape, TensorStorage& shared_tensors, DescTuple const& tdesc_tuple) const {
     using X = Underscore;
 
     // Separate out problem shape for convenience
     auto [M, N, K, L] = problem_shape;
+
+    auto [tdesc_a, tdesc_b] = tdesc_tuple;
+    observed_tma_load_a_->cache_.set_tensor_desc(tdesc_a);
+    observed_tma_load_b_->cache_.set_tensor_desc(tdesc_b);
 
     // Represent the full tensors -- get these from TMA
     auto mA_mkl = observed_tma_load_a_->get_tma_tensor(make_shape(M, K, L));   // (m,k,l)
@@ -298,8 +355,8 @@ struct CollectiveMma<
                                       group_modes<0,3>(sB), group_modes<0,3>(tCgB_nkl));
 
     // TMA Multicast Masks
-    uint32_t mcast_mask_a = get<0>(cluster_mask);
-    uint32_t mcast_mask_b = get<1>(cluster_mask);
+    uint32_t mcast_mask_a = get<0>(cluster_masks_);
+    uint32_t mcast_mask_b = get<1>(cluster_masks_);
 
     LoadParams load_params {
       shape<3>(gA_mkl),                      // for scheduler
@@ -312,9 +369,8 @@ struct CollectiveMma<
 
 
   /// Set up the data needed by this collective for mma compute.
-  template <class ClusterMask>
   CUTLASS_DEVICE auto
-  mma_init(TensorStorage& shared_tensors, ClusterMask const& cluster_mask) const {
+  mma_init(TensorStorage& shared_tensors) const {
     auto sA = make_tensor(shared_tensors.smem_A.data(), SmemLayoutA{});     // (BLK_M,BLK_K,PIPE)
     auto sB = make_tensor(shared_tensors.smem_B.data(), SmemLayoutB{});     // (BLK_N,BLK_K,PIPE)
     auto sAcc = make_tensor(shared_tensors.smem_Acc.data(), SmemLayoutAcc{}); // (BLK_M,BLK_N)
@@ -330,8 +386,8 @@ struct CollectiveMma<
     TiledMma tiled_mma;
 
     // TMA Multicast Masks
-    uint32_t mcast_mask_a = get<0>(cluster_mask);
-    uint32_t mcast_mask_b = get<1>(cluster_mask);
+    uint32_t mcast_mask_a = get<0>(cluster_masks_);
+    uint32_t mcast_mask_b = get<1>(cluster_masks_);
 
     MmaParams<decltype(tCsA), decltype(tCsB), decltype(tCsAcc)> mma_params {
       tiled_mma,
@@ -342,10 +398,10 @@ struct CollectiveMma<
     return mma_params;
   }
 
-  template <class LoadParams, class TileCoordMNKL, class CoopIds, class KTileIterator>
+  template <class LoadParams, class TileCoordMNKL, class KTileIterator>
   CUTLASS_DEVICE auto
   load(Params const& mainloop_params, MainloopPipeline mainloop_pipeline, MainloopPipelineState& slm_pipe_write,
-    LoadParams const& load_inputs, TileCoordMNKL const& cta_coord_mnkl, KTileIterator k_tile_iter, int k_tile_count, CoopIds const& coop_ids) {
+    LoadParams const& load_inputs, TileCoordMNKL const& cta_coord_mnkl, KTileIterator k_tile_iter, int k_tile_count) {
 
     auto [unused_k_tiles,
           tAgA_mkl, tBgB_nkl, tAsA, tBsB,
@@ -418,12 +474,16 @@ struct CollectiveMma<
     }
   }
 
-private:
+public:
   typename Params::TMA_A const* observed_tma_load_a_{nullptr};
   typename Params::TMA_B const* observed_tma_load_b_{nullptr};
 
   ClusterShape cluster_shape_;
   uint32_t block_rank_in_cluster_;
+
+  cute::tuple<uint32_t, uint32_t> coop_ids_;
+  cute::tuple<uint32_t, uint32_t> cluster_masks_;
+  cute::tuple<uint32_t, uint32_t> coop_set_ids_;
 };
 
 }

@@ -288,7 +288,9 @@ to_CUtensorMapL2promotion(L2Promotion const& t) {
 
 } // end namespace TMA
 
-#if (__CUDACC_VER_MAJOR__ >= 12) && !defined(__CUDACC_RTC__)
+#if defined(SYCL_INTEL_XE4_TARGET)
+  using TmaDescriptor = uint64_t*;
+#elif (__CUDACC_VER_MAJOR__ >= 12) && !defined(__CUDACC_RTC__)
   using TmaDescriptor = CUtensorMap;
   using Im2ColTmaDescriptor = CUtensorMap;
 #else

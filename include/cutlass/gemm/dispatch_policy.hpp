@@ -1067,10 +1067,14 @@ struct KernelImplicitTmaWarpSpecializedXe4 {
 };
 
 template<
+  int NumControlWarps_,
+  int NumEpilogueWarps_,
   int SchedulerPipelineStageCount_,
   int AccumulatorPipelineStageCount_
 >
 struct KernelTmaWarpSpecializedXe4 final {
+  static constexpr int NumControlWarps = NumControlWarps_;
+  static constexpr int NumEpilogueWarps = NumEpilogueWarps_;
   static constexpr int SchedulerPipelineStageCount = SchedulerPipelineStageCount_;
   static constexpr int AccumulatorPipelineStageCount = AccumulatorPipelineStageCount_;
 };
@@ -1078,6 +1082,8 @@ struct KernelTmaWarpSpecializedXe4 final {
 // n-buffer in smem (Xe4 DMA), pipelined with Xe4 Async MMA and DMA, Warp specialized dynamic schedule
 template<
   int Stages_,
+  int NumControlWarps_,
+  int NumEpilogueWarps_,
   int SchedulerPipelineStageCount_,
   int AccumulatorPipelineStageCount_,
   class ClusterShape_ = Shape<_1,_1,_1>
@@ -1086,7 +1092,7 @@ struct MainloopXe4DmaGmmaWarpSpecialized {
   constexpr static int Stages = Stages_;
   using ClusterShape = ClusterShape_;
   using ArchTag = arch::Xe4;
-  using Schedule = KernelTmaWarpSpecializedXe4<SchedulerPipelineStageCount_, AccumulatorPipelineStageCount_>;
+  using Schedule = KernelTmaWarpSpecializedXe4<NumControlWarps_, NumEpilogueWarps_, SchedulerPipelineStageCount_, AccumulatorPipelineStageCount_>;
   constexpr static bool IsOverlappingAccum = false;
 };
 

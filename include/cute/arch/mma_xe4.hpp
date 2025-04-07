@@ -8,7 +8,9 @@
 #include "mma_xe4_desc.hpp"
 
 namespace cute::xe4::GMMA {
-  using namespace cute;
+
+using namespace cute;
+
 enum class OpType {
   Cluster,
   NoneCluster
@@ -52,9 +54,6 @@ CUTE_HOST_DEVICE constexpr
 auto
 ss_op_selector()
 {
-  using MatrixDesc = uint32_t;
-  using Abarrier = uint64_t*;
-
   static_assert(is_static<TileShape_MNK>::value, "TileShape_MNK must be static.");
   static_assert(rank(TileShape_MNK{}) == 3, "TileShape_MNK must be rank 3.");
 
@@ -80,9 +79,9 @@ ss_op_selector()
   using MMA_Shape = Shape<Int<MMA_M>, Int<MMA_N>, Int<MMA_K>>;
 
   if constexpr (size(ClusterShape_MNK{}) == 1) {
-    return XE4_ASYNC_GMMA<ElementTupleC, ElementA, ElementB, MMA_Shape, majorA, majorB, MatrixDesc, Abarrier>();
+    return XE4_ASYNC_GMMA<ElementTupleC, ElementA, ElementB, MMA_Shape, majorA, majorB>();
   } else {
-    return XE4_ASYNC_GMMA_MULTICAST<ElementTupleC, ElementA, ElementB, MMA_Shape, majorA, majorB, MatrixDesc, Abarrier>();
+    return XE4_ASYNC_GMMA_MULTICAST<ElementTupleC, ElementA, ElementB, MMA_Shape, majorA, majorB>();
   }
 
   CUTE_GCC_UNREACHABLE;

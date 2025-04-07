@@ -3,8 +3,12 @@
 #include "inline_pisa.hpp"
 #include "util.hpp"
 
-namespace cute::xe4
-{
+namespace cute {
+
+template <typename CopyOperation>
+struct Xe4CopyOp {};
+
+namespace xe4 {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 /// ASYNC_TENSOR_LOAD: Initiates a async tensor copy from global memory to shared memory
@@ -17,46 +21,20 @@ struct DMA_MULTICAST {};
 template <slm_matrix_type cm_type>
 struct ASYNC_TENSOR_LOAD : public DMA_LOAD
 {
-  template<class TS, class TD>
+  template<class TS, class TD, class Coord>
   CUTE_HOST_DEVICE static void
-  copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, TD* slm_ptr, int32_t crd0, int32_t crd1)
+  copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, TD* slm_ptr, Coord const& coord)
   {
-    auto coord = sycl::vec<int32_t, 2>{crd0, crd1};
-    async_tensor_load<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, coord, abar_ptr);
+    constexpr int dim = 2;
+    async_tensor_load<dim, cm_type>(slm_space_cast(slm_ptr), gmem_ptr, tdesc_ptr, abar_ptr, coord.data());
   }
 
-  template<class TS, class TD>
+  template<class DimIdx, class TS, class TD, class Coord>
   CUTE_HOST_DEVICE static void
-  copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, TD* slm_ptr, int32_t crd0, int32_t crd1, int32_t crd2)
+  copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, DimIdx const& dim_index, uint32_t dim_size, uint64_t const* abar_ptr, TD* slm_ptr, Coord const& coord)
   {
-    (void)crd2;
-    copy(tdesc_ptr, gmem_ptr, abar_ptr, slm_ptr, crd0, crd1);
-  }
-
-  template<class DimIdx, class TS, class TD>
-  CUTE_HOST_DEVICE static void
-  copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, DimIdx const& dim_index, uint32_t dim_size, uint64_t const* abar_ptr, TD* slm_ptr, int32_t crd0, int32_t crd1)
-  {
-    auto coord = sycl::vec<int32_t, 2>{crd0, crd1};
     tensordesc_set_dim_size<DimIdx::value>(tdesc_ptr, dim_size);
-    async_tensor_load<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, coord, abar_ptr);
-  }
-
-  template<class DimIdx, class TS, class TD>
-  CUTE_HOST_DEVICE static void
-  copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, DimIdx const& dim_index, uint32_t dim_size, uint64_t const* abar_ptr, TD* slm_ptr, int32_t crd0, int32_t crd1, int32_t crd2)
-  {
-    (void)crd2;
-    copy(tdesc_ptr, gmem_ptr, dim_index, dim_size, abar_ptr, slm_ptr, crd0, crd1);
-  }
-
-  template<class TS, class TD>
-  CUTE_HOST_DEVICE static void
-  copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, TD* slm_ptr, int32_t crd0, int32_t crd1, int32_t crd2, int32_t crd3)
-  {
-    // Note: the coord order doesn't align with that in cutlass
-    auto coord = sycl::vec<int32_t, 4>{crd0, crd3, crd2, crd1};
-    async_tensor_load<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, coord, abar_ptr);
+    copy(tdesc_ptr, gmem_ptr, abar_ptr, slm_ptr, coord);
   }
 };
 
@@ -68,20 +46,12 @@ struct ASYNC_TENSOR_LOAD : public DMA_LOAD
 template <slm_matrix_type cm_type>
 struct ASYNC_TENSOR_STORE : public DMA_STORE
 {
-  template<class TS, class TD>
+  template<class TS, class TD, class Coord>
   CUTE_HOST_DEVICE static void
-  copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, TD* slm_ptr, int32_t crd0, int32_t crd1)
+  copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, TD* slm_ptr, Coord const& coord)
   {
-    auto coord = sycl::vec<int32_t, 2>{crd0, crd1};
-    async_tensor_store<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, coord, abar_ptr);
-  }
-
-  template<class TS, class TD>
-  CUTE_HOST_DEVICE static void
-  copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, TD* slm_ptr, int32_t crd0, int32_t crd1, int32_t crd2)
-  {
-    (void)crd2;
-    copy(tdesc_ptr, gmem_ptr, abar_ptr, slm_ptr, crd0, crd1);
+    constexpr int dim = 2;
+    async_tensor_store<dim, cm_type>(gmem_ptr, slm_space_cast(slm_ptr), tdesc_ptr, abar_ptr, coord.data());
   }
 };
 
@@ -93,20 +63,12 @@ struct ASYNC_TENSOR_STORE : public DMA_STORE
 template <slm_matrix_type cm_type>
 struct ASYNC_TENSOR_LOAD_MULTICAST : public DMA_LOAD, public DMA_MULTICAST
 {
-  template<class TS, class TD>
+  template<class TS, class TD, class Coord>
   CUTE_HOST_DEVICE static void
-  copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, uint32_t multicast_mask, TD* slm_ptr, int32_t crd0, int32_t crd1)
+  copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, uint32_t multicast_mask, TD* slm_ptr, Coord const& coord)
   {
-    auto coord = sycl::vec<int32_t, 2>{crd0, crd1};
-    async_tensor_load<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, coord, abar_ptr, multicast_mask);
-  }
-
-  template<class TS, class TD>
-  CUTE_HOST_DEVICE static void
-  copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, uint32_t multicast_mask, TD* slm_ptr, int32_t crd0, int32_t crd1, int32_t crd2)
-  {
-    (void)crd2;
-    copy(tdesc_ptr, gmem_ptr, abar_ptr, multicast_mask, slm_ptr, crd0, crd1);
+    constexpr int dim = 2;
+    async_tensor_load<dim, cm_type>(slm_space_cast(slm_ptr), gmem_ptr, tdesc_ptr, abar_ptr, multicast_mask, coord.data());
   }
 };
 
@@ -145,6 +107,8 @@ struct SLM_VSTORE
 /// ASYNC_ROW_LOAD_IM2COL: Initiates an im2col async row copy from global memory to shared memory
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+struct ASYNC_ROW_IM2COL {};
+
 template<typename T, int NumBytesPerCopy>
 struct alignas(64) Im2ColDescriptor {
   uint64_t bytes[10];   // support from 3D tensor to 5D tensor
@@ -178,7 +142,7 @@ inline uint32_t get_copy_size(const int32_t coord, const uint32_t shape, uint32_
 }
 
 template <slm_matrix_type cm_type>
-struct ASYNC_ROW_LOAD_IM2COL_4D : public DMA_LOAD
+struct ASYNC_ROW_LOAD_IM2COL_4D : public DMA_LOAD, public ASYNC_ROW_IM2COL
 {
   template<class TS, class TG, int NumBytesPerCopy>
   CUTE_HOST_DEVICE static void
@@ -204,7 +168,7 @@ struct ASYNC_ROW_LOAD_IM2COL_4D : public DMA_LOAD
 };
 
 template <slm_matrix_type cm_type>
-struct ASYNC_ROW_LOAD_IM2COL : public DMA_LOAD
+struct ASYNC_ROW_LOAD_IM2COL : public DMA_LOAD, public ASYNC_ROW_IM2COL
 {
   template<class TS, class TG, int NumBytesPerCopy>
   CUTE_HOST_DEVICE static void
@@ -224,7 +188,7 @@ struct ASYNC_ROW_LOAD_IM2COL : public DMA_LOAD
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <slm_matrix_type cm_type>
-struct XE4_ASYNC_ROW_STORE_IM2COL_4D : public DMA_STORE
+struct XE4_ASYNC_ROW_STORE_IM2COL_4D : public DMA_STORE, public ASYNC_ROW_IM2COL
 {
   template<class TS, class TG, int NumBytesPerCopy>
   CUTE_HOST_DEVICE static void
@@ -247,7 +211,7 @@ struct XE4_ASYNC_ROW_STORE_IM2COL_4D : public DMA_STORE
 };
 
 template <slm_matrix_type cm_type>
-struct ASYNC_ROW_STORE_IM2COL : public DMA_STORE
+struct ASYNC_ROW_STORE_IM2COL : public DMA_STORE, public ASYNC_ROW_IM2COL
 {
   template<class TS, class TG, int NumBytesPerCopy>
   CUTE_HOST_DEVICE static void
@@ -259,4 +223,37 @@ struct ASYNC_ROW_STORE_IM2COL : public DMA_STORE
     return Impl::template copy<TS, TG, NumBytesPerCopy>(tma_desc, abar_ptr, slm_ptr, crd_c, crd_w, crd_h, crd_n);
   }
 };
-} // namespace cute::xe4
+
+} // namespace xe4
+
+
+template <class CopyOp>
+struct XE4_COPY_Unpack
+{
+  template <class... Args,
+            class TS, class SLayout,
+            class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits<CopyOp, Args...> const& traits,
+              Tensor<TS,SLayout>           const& src,
+              Tensor<TD,DLayout>                & dst)
+  {
+    constexpr auto isLoadOperation = !cute::is_base_of<xe4::DMA_STORE, CopyOp>::value;
+
+    if constexpr (isLoadOperation) {
+      auto dst_ptr = cute::raw_pointer_cast(dst.data());
+      auto src_coord = cute::to_array<int32_t>(src.data().coord_);
+      return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
+                                  traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
+                                  make_tuple(dst_ptr, src_coord), seq<0, 1>{});
+    } else {
+      auto src_ptr = cute::raw_pointer_cast(src.data());
+      auto dst_coord = cute::to_array<int32_t>(dst.data().coord_);
+      return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
+                                  traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
+                                  make_tuple(src_ptr, dst_coord), seq<0, 1>{});
+    }
+  }
+};
+
+} // namespace cute
