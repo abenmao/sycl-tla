@@ -65,7 +65,7 @@ else()
   add_subdirectory(layout)
   add_subdirectory(msvc_compilation)
   
-  if(SYCL_INTEL_TARGET)
+  if(SYCL_INTEL_TARGET STREQUAL "intel-xe")
     add_subdirectory(intel_xe)
   endif()
 

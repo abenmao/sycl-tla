@@ -117,13 +117,13 @@ if (CUTLASS_ENABLE_SYCL)
     set(SYCL_NVIDIA_TARGET ON)
     add_compile_definitions(SYCL_NVIDIA_TARGET)
   elseif(DPCPP_SYCL_TARGET STREQUAL "intel_gpu_xe4")
-    set(SYCL_INTEL_TARGET ON)
+    set(SYCL_INTEL_TARGET "intel-xe4")
     add_compile_definitions(SYCL_INTEL_TARGET)
     add_compile_definitions(SYCL_INTEL_XE4_TARGET)
   elseif(DPCPP_SYCL_TARGET STREQUAL "intel_gpu_pvc" OR
          DPCPP_SYCL_TARGET STREQUAL "spir64" OR
          DPCPP_SYCL_TARGET STREQUAL "intel_gpu_bmg_g21")
-    set(SYCL_INTEL_TARGET ON)
+    set(SYCL_INTEL_TARGET "intel-xe")
     add_compile_definitions(SYCL_INTEL_TARGET)
   endif()
 

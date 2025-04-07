@@ -27,9 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-if(DPCPP_SYCL_TARGET STREQUAL "intel_gpu_xe4")
-  add_subdirectory(xe4)
-else()
+if(SYCL_INTEL_TARGET STREQUAL "intel-xe")
   add_subdirectory(00_bmg_gemm)
   add_subdirectory(01_bmg_gemm_with_collective_builder)
   add_subdirectory(02_bmg_gemm_mixed_dtype)
@@ -40,6 +38,8 @@ else()
   add_subdirectory(07_bmg_dual_gemm)
   add_subdirectory(08_bmg_gemm_f8)
   add_subdirectory(09_bmg_grouped_gemm_f8)
+elseif(SYCL_INTEL_TARGET STREQUAL "intel-xe4")
+  add_subdirectory(xe4)
 endif()
 
 if (CUTLASS_ENABLE_SYCL)
