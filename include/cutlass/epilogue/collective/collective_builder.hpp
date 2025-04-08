@@ -122,7 +122,9 @@ struct CallbacksBuilder<
 #include "builders/sm100_builder.inl"
 #include "builders/sm120_builder.inl"
 
-#if defined(SYCL_INTEL_TARGET)
+#if defined(SYCL_INTEL_XE4_TARGET)
+#include "builders/xe4_builder.inl"
+#elif defined(SYCL_INTEL_TARGET)
 #include "builders/xe_builder.inl"
 #endif
 
