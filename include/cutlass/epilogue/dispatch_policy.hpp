@@ -274,11 +274,15 @@ struct Sm120PtrArrayTmaWarpSpecialized {
 
 #if defined (SYCL_INTEL_XE4_TARGET)
 template<
+  int StagesC_,
+  int StagesD_,
   int FragmentSize_,
   int NumControlWarps_,
   int NumEpilogueWarps_
 >
 struct Xe4DmaWarpSpecialized {
+  constexpr static int StagesC = StagesC_;
+  constexpr static int StagesD = StagesD_;
   constexpr static int FragmentSize = FragmentSize_;
   constexpr static int NumControlWarps = NumControlWarps_;
   constexpr static int NumEpilogueWarps = NumEpilogueWarps_;

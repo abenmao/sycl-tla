@@ -27,6 +27,8 @@ using namespace cutlass::epilogue::thread::detail;
 /// Applies an element wise operation to all elements within the fragment
 /// and writes them out to destination storage.
 template <
+  int StagesC,
+  int StagesD,
   int FragmentSize,
   int NumControlWarps_,
   int NumEpilogueWarps_,
@@ -37,7 +39,7 @@ template <
   class FusionCallbacks_
 >
 class CollectiveEpilogue<
-  Xe4DmaWarpSpecialized<FragmentSize, NumControlWarps_, NumEpilogueWarps_>,
+  Xe4DmaWarpSpecialized<StagesC, StagesD, FragmentSize, NumControlWarps_, NumEpilogueWarps_>,
   ElementD_,
   StrideD_,
   SmemLayoutD_,
@@ -56,7 +58,8 @@ public:
   using AccumulatorPipeline = cutlass::PipelineTmaAsync<1>;
   using AccumulatorPipelineState = typename AccumulatorPipeline::PipelineState;
 
-  using StorePipeline = cutlass::PipelineTmaAsync<1>;
+  // TMA pipeline for storing D
+  using StorePipeline = cutlass::PipelineTmaAsync<StagesD>;
   using StorePipelineState = typename StorePipeline::PipelineState;
 
   using SmemLayoutAtomD = decltype(make_ordered_layout(select<0,1>(TileShape{}), Step<_1, _0>{}));
@@ -123,27 +126,35 @@ public:
   // Note: SharedStorage is unused for CollectiveEpilogue
   template <class TensorDesc>
   CUTLASS_DEVICE
-  CollectiveEpilogue(Params const& params, TensorDesc tensor_desc) : _params(params) {
+  CollectiveEpilogue(Params const& params_, TensorDesc tensor_desc) : params(params_) {
     params.store_d.cache_.set_tensor_desc(tensor_desc);
   }
 
-  template <class ProblemShape>
-  CUTLASS_DEVICE void
-  operator()(ProblemShape const& problem_shape,
-    cute::tuple<StorePipeline, AccumulatorPipeline> pipelines,
-    cute::tuple<StorePipelineState, AccumulatorPipelineState> pipeline_states,
-    TensorStorage& shared_tensors, uint32_t local_id)
+  template<
+    class Pipelines,
+    class PipelineStates,
+    class ProblemShapeMNKL,
+    class CtaCoordMNL
+  >
+  CUTLASS_DEVICE auto
+  store(
+      Pipelines pipelines,
+      PipelineStates pipeline_states,
+      ProblemShapeMNKL problem_shape_mnkl,
+      CtaCoordMNL cta_coord_mnl,
+      TensorStorage& shared_tensors)
   {
+    uint32_t local_id = sycl::ext::oneapi::this_work_item::get_nd_item<3>().get_local_linear_id();
     uint32_t worker_id = local_id - NumControlWarps * NumThreadsPerWarp;
 
     auto [store_pipeline, accumulator_pipeline] = pipelines;
-    auto [store_pipe_producer_state, accumulator_pipe_consumer_state] = pipeline_states;
+    auto [store_pipe_producer_state, store_pipe_consumer_state, accumulator_pipe_consumer_state] = pipeline_states;
 
     accumulator_pipeline.consumer_try_wait(accumulator_pipe_consumer_state);
     accumulator_pipeline.consumer_release(accumulator_pipe_consumer_state);
 
-    constexpr auto tile_mn = take<0,2>(TileShape{});
-    auto tensor_d = make_tensor(shared_tensors.smem_D.data(), CoreMatrix::retile<ElementD>(tile_mn));
+    auto ptr_sD = shared_tensors.smem_D.data();
+    auto tensor_d = make_tensor(ptr_sD, CoreMatrix::retile<ElementD>(take<0,2>(TileShape{})));
 
     auto empty_tuple = cute::tuple<>{};
     auto dummy_tensor = make_tensor<float>(Int<1>{});
@@ -162,51 +173,51 @@ public:
       worker_id          // thread_idx
     );
 
-
     auto callback_args = typename FusionCallbacks::Arguments{};
-    auto callback_params = FusionCallbacks::to_underlying_arguments(problem_shape, callback_args, nullptr);
+    auto callback_params = FusionCallbacks::to_underlying_arguments(problem_shape_mnkl, callback_args, nullptr);
 
     FusionCallbacks fusion_callbacks(callback_params, shared_tensors.thread);
     auto cst_callbacks = fusion_callbacks.template get_consumer_store_callbacks<true>(cst_args);
     pattern2<FragmentSize, NumEpilogueWarps>(cst_callbacks, tensor_d, tensor_d, worker_id);
 
     store_pipeline.producer_commit(store_pipe_producer_state, 1);
-  }
 
-  template<
-    class ProblemShape,
-    class BlockCoordMNL
-  >
-  CUTLASS_DEVICE void
-  store(
-      StorePipeline store_pipeline,
-      StorePipelineState& store_pipe_state,
-      ProblemShape const& problem_shape,
-      BlockCoordMNL blk_coord_mnl,
-      TensorStorage& shared_tensors)
-  {
-    store_pipeline.consumer_try_wait(store_pipe_state);       // Wait for all postop threads finish their calculation
+    // Indexing variables
+    auto [M, N, K, L] = problem_shape_mnkl;
+    auto [m_coord, n_coord, l_coord] = cta_coord_mnl;
 
-    auto sD = make_tensor(shared_tensors.smem_D.data(), SmemLayoutD {});
-    auto [M, N, K, L] = problem_shape;
-    auto mD_mnl = _params.store_d.get_tma_tensor(make_shape(M, N, L)); // (m,n,l)
+    // Represent the full output tensor, slice to get the tile this CTA is responsible for
+    auto mD_mnl = params.store_d.get_tma_tensor(make_shape(M, N, L));                                  //       (M,N,L)
     auto gD_mnl = flat_divide(mD_mnl, take<0,2>(TileShape {})); // (BLK_M,BLK_N,m,n,l)
-    auto block_store_d = _params.store_d.get_slice(0);
-    auto [m_coord, n_coord, l_coord] = blk_coord_mnl;
+
+    // Construct the corresponding pipelined smem tensors
+    auto sD = make_tensor(shared_tensors.smem_D.data(), SmemLayoutD {});
+    auto block_store_d = params.store_d.get_slice(0);
 
     auto gD = gD_mnl(_, _, m_coord, n_coord, l_coord);  // (BLK_M,BLK_N)
     auto tDgD = block_store_d.partition_S(gD);           // (TMA,TMA_M,TMA_N)
     auto tDsD = block_store_d.partition_D(sD);    // (TMA,TMA_M,TMA_N)
 
-    auto abar_store = store_pipeline.consumer_get_barrier(store_pipe_state);
-    copy(_params.store_d.with(abar_store), tDsD, tDgD);
-    store_pipeline.consumer_commit(store_pipe_state, TransactionBytesStore);
-    store_pipeline.producer_try_acquire(store_pipe_state);
-    ++store_pipe_state;
+    store_pipeline.consumer_try_wait(store_pipe_consumer_state);       // Wait for all postop threads finish their calculation
+    auto abar_store = store_pipeline.consumer_get_barrier(store_pipe_consumer_state);
+    if (worker_id == 0) {
+      copy(params.store_d.with(abar_store), tDsD, tDgD);
+      store_pipeline.consumer_commit(store_pipe_consumer_state, TransactionBytesStore);
+    }
+
+    ++store_pipe_producer_state;
+    ++store_pipe_consumer_state;
+    ++accumulator_pipe_consumer_state;
+
+    return make_tuple(
+      store_pipe_producer_state,
+      store_pipe_consumer_state,
+      accumulator_pipe_consumer_state
+    );
   }
 
 private:
-  Params const& _params;
+  Params const& params;
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////

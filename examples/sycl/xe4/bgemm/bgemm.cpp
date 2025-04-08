@@ -142,10 +142,13 @@ void run_test(bool is_persistent_mode = false)
   using FusionCallbacks = fusion::Sm90EVT<fusion::Sm90AccFetch>;
 #endif
 
+  constexpr static int StageC = 1;
+  constexpr static int StageD = 1;
+
   using SmemLayoutAtomC = Layout<Shape<Int<wg_m>, Int<wg_n>>, Stride<Int<wg_n>, _1>>;
 
   using CollectiveEpilogue = CollectiveEpilogue<
-    Xe4DmaWarpSpecialized<FragmentSize, NumControlSubGroup, NumPostOpSubGroup>,
+    Xe4DmaWarpSpecialized<StageC, StageD, FragmentSize, NumControlSubGroup, NumPostOpSubGroup>,
     dtypeC, cutlass::detail::TagToStrideC_t<LayoutC>, SmemLayoutAtomC, Shape<Int<wg_m>, Int<wg_n>>, FusionCallbacks
   >;
 

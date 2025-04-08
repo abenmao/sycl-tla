@@ -154,7 +154,7 @@ public:
     MMA          = 0,
     Sched        = 1,
     MainloopLoad = 2,
-    EpilogueStore = 3,
+    EpilogueLoad = 3,
     Epilogue     = 4
   };
 
@@ -162,7 +162,7 @@ public:
     uint32_t mma       = false;
     uint32_t sched     = false;
     uint32_t main_load = false;
-    uint32_t epi_store  = false;
+    uint32_t epi_load  = false;
     uint32_t epilogue  = false;
   };
 
@@ -221,7 +221,7 @@ public:
       (warp_category == WarpCategory::MMA),                                 // mma
       (warp_category == WarpCategory::Sched) && is_first_cta_in_cluster,    // sched
       (warp_category == WarpCategory::MainloopLoad),                        // main_load
-      (warp_category == WarpCategory::EpilogueStore),                       // epi_store
+      (warp_category == WarpCategory::EpilogueLoad),                        // epi_load
       (warp_category == WarpCategory::Epilogue)                             // epilogue
     };
 
@@ -255,12 +255,6 @@ public:
 
     // Epilogue Store pipeline
     typename EpiStorePipeline::Params epi_store_pipeline_params;
-    if (WarpCategory::Epilogue == warp_category) {
-      epi_store_pipeline_params.role = EpiStorePipeline::ThreadCategory::Producer;
-    }
-    if (WarpCategory::EpilogueStore == warp_category) {
-      epi_store_pipeline_params.role = EpiStorePipeline::ThreadCategory::Consumer;
-    }
     epi_store_pipeline_params.initializing_warp = 2;
     epi_store_pipeline_params.num_producers = NumEpilogueThreads;
     epi_store_pipeline_params.num_consumers = 1;
@@ -297,8 +291,8 @@ public:
     auto accumulator_pipe_producer_state = cutlass::make_producer_start_state<AccumulatorPipeline>();
     auto accumulator_pipe_consumer_state = AccumulatorPipelineState{};
 
-    auto store_pipe_producer_state = cutlass::make_producer_start_state<EpiStorePipeline>();
-    auto store_pipe_consumer_state = EpiStorePipelineState{};
+    auto epi_store_pipe_producer_state = cutlass::make_producer_start_state<EpiStorePipeline>();
+    auto epi_store_pipe_consumer_state = EpiStorePipelineState{};
 
     auto clc_pipe_throttle_producer_state = cutlass::make_producer_start_state<CLCThrottlePipeline>();
     auto clc_pipe_throttle_consumer_state = CLCThrottlePipelineState{};
@@ -402,7 +396,7 @@ public:
 
         mainloop_pipe_consumer_state = collective_mainloop.mma(
           cute::make_tuple(mainloop_pipeline, epi_store_pipeline, accumulator_pipeline),
-          cute::make_tuple(mainloop_pipe_consumer_state, store_pipe_producer_state, accumulator_pipe_producer_state),
+          cute::make_tuple(mainloop_pipe_consumer_state, epi_store_pipe_producer_state, accumulator_pipe_producer_state),
           tensorD, mma_inputs, k_tile_count);
 
         auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
@@ -410,28 +404,30 @@ public:
           ++clc_pipe_consumer_state;
         }
 
-        ++store_pipe_producer_state;
+        ++epi_store_pipe_producer_state;
         ++accumulator_pipe_producer_state;
         work_tile_info = next_work_tile_info;
       } while (work_tile_info.is_valid());
     } else if (is_participant.epilogue)  {
-      do {
-        collective_epilogue(problem_shape, cute::make_tuple(epi_store_pipeline, accumulator_pipeline),
-          cute::make_tuple(store_pipe_producer_state, accumulator_pipe_consumer_state), shared_tensors.epilogue, local_id);
+      auto prev_epi_store_consumer_state = epi_store_pipe_consumer_state;
 
-        auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
-        if (increment_pipe) {
-          ++clc_pipe_consumer_state;
-        }
-
-        ++store_pipe_producer_state;
-        ++accumulator_pipe_consumer_state;
-        work_tile_info = next_work_tile_info;
-      } while (work_tile_info.is_valid());
-    } else if (is_participant.epi_store)  {
       do {
         auto cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);
-        collective_epilogue.store(epi_store_pipeline, store_pipe_consumer_state, problem_shape, cta_coord_mnkl, shared_tensors.epilogue);
+
+        //
+        // Epilogue and write to gD
+        //
+        auto [store_prod_state_next, store_cons_state_next, acc_state_next] = collective_epilogue.store(
+          cute::make_tuple(epi_store_pipeline, accumulator_pipeline),
+          cute::make_tuple(epi_store_pipe_producer_state, epi_store_pipe_consumer_state, accumulator_pipe_consumer_state),
+          problem_shape,
+          cta_coord_mnkl,
+          shared_tensors.epilogue
+        );
+        prev_epi_store_consumer_state = epi_store_pipe_consumer_state;
+        epi_store_pipe_producer_state = store_prod_state_next;
+        epi_store_pipe_consumer_state = store_cons_state_next;
+        accumulator_pipe_consumer_state = acc_state_next;
 
         auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
         if (increment_pipe) {
@@ -439,6 +435,8 @@ public:
         }
         work_tile_info = next_work_tile_info;
       } while (work_tile_info.is_valid());
+
+      epi_store_pipeline.producer_try_acquire(prev_epi_store_consumer_state);
     }
   }
 };
