@@ -8,6 +8,7 @@
 #include "cute/arch/mma_xe4.hpp"
 #include "cute/arch/copy_xe4_dma.hpp"
 #include "cutlass/gemm/kernel/gemm_universal.hpp"
+#include "cutlass/gemm/device/gemm_universal_adapter.h"
 #include "cutlass/gemm/collective/collective_builder.hpp"
 #include "validation.hpp"
 
@@ -15,7 +16,6 @@ using namespace cute;
 using namespace sycl;
 using namespace cute::xe4;
 using namespace cutlass::gemm;
-using namespace cutlass::epilogue;
 using namespace cutlass::gemm::collective;
 using namespace cutlass::epilogue::collective;
 using namespace cutlass::epilogue::collective::detail;
@@ -132,7 +132,7 @@ void run_test(bool is_persistent_mode = false)
 
 #ifdef ENABLE_EPILOGUE_RELU
   static constexpr int FragmentSize = 2;
-  using FusionOp = fusion::LinCombEltAct<thread::ReLu, dtypeC, dtypeC, void>;  // LinCombEltAct<ElementOutput, ElementCompute, ElementSource>
+  using FusionOp = fusion::LinCombEltAct<cutlass::epilogue::thread::ReLu, dtypeC, dtypeC, void>;  // LinCombEltAct<ElementOutput, ElementCompute, ElementSource>
   using FusionCallbacks = fusion::FusionCallbacks<
     Sm90TmaWarpSpecialized<1, 1, FragmentSize, false, false>,
     FusionOp, Shape<Int<wg_m>, Int<wg_n>, _1>, Shape<_2,_1>
@@ -156,12 +156,14 @@ void run_test(bool is_persistent_mode = false)
     void
   >;
 
+  using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
+
   using StrideA = typename GemmKernel::StrideA;
   using StrideB = typename GemmKernel::StrideB;
   using StrideC = typename GemmKernel::StrideC;
 
   q.parallel_for<test>(Range, [=](nd_item<3> item) {
-    auto args = typename GemmKernel::Arguments {
+    auto args = typename Gemm::GemmKernel::Arguments {
       make_shape(mat_m, mat_n, mat_k, mat_l),
       {
         A_s, cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(mat_m, mat_k, mat_l)),

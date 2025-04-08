@@ -49,6 +49,7 @@ public:
   using StrideD = StrideD_;
   using TileShape = TileShape_;
   using FusionCallbacks = FusionCallbacks_;
+  using ThreadEpilogueOp = typename fusion::FusionCallbacksTraits<FusionCallbacks>::Operation;
 
   using TiledCopyD = cute::xe4::ASYNC_TENSOR_STORE<slm_matrix_type::type1>;
 

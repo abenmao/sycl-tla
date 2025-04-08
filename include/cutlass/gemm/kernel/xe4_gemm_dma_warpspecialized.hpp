@@ -52,7 +52,10 @@ public:
 
   // Epilogue derived types
   using CollectiveEpilogue = CollectiveEpilogue_;
+  using ElementC = typename CollectiveEpilogue::ElementD;
   using StrideC = typename CollectiveEpilogue::StrideD;
+  using ElementD = typename CollectiveEpilogue::ElementD;
+  using StrideD = typename CollectiveEpilogue::StrideD;
   using EpilogueArguments = typename CollectiveEpilogue::Arguments;
   using EpilogueParams = typename CollectiveEpilogue::Params;
 
@@ -73,6 +76,18 @@ public:
 
   static constexpr uint32_t NumControlWarps  = CollectiveEpilogue::NumControlWarps;
   static constexpr uint32_t NumEpilogueWarps = CollectiveEpilogue::NumEpilogueWarps;
+
+  // Warp specialization thread count per threadblock
+  static constexpr uint32_t NumSchedThreads         = NumThreadsPerWarp; // 1 subgroup
+  static constexpr uint32_t NumMMAThreads           = NumThreadsPerWarp; // 1 subgroup
+  static constexpr uint32_t NumMainloopLoadThreads  = NumThreadsPerWarp; // 1 subgroup
+  static constexpr uint32_t NumEpilogueStoreThreads = NumThreadsPerWarp; // 1 subgroup
+  static constexpr uint32_t NumEpilogueThreads      = NumEpilogueWarps * NumThreadsPerWarp;
+
+  static constexpr uint32_t MaxThreadsPerBlock = NumSchedThreads +
+                                                 NumMainloopLoadThreads + NumMMAThreads +
+                                                 NumEpilogueStoreThreads + NumEpilogueThreads;
+  static constexpr uint32_t MinBlocksPerMultiprocessor = 1;
 
   // Pipeline and pipeline state types
   using MainloopPipeline = typename CollectiveMainloop::MainloopPipeline;
@@ -171,13 +186,6 @@ public:
   operator()(Params const& params) {
     auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
     auto& problem_shape = params.problem_shape;
-
-    // Warp specialization thread count per threadblock
-    uint32_t NumSchedThreads         = NumThreadsPerWarp; // 1 subgroup
-    uint32_t NumMMAThreads           = NumThreadsPerWarp; // 1 subgroup
-    uint32_t NumMainloopLoadThreads  = NumThreadsPerWarp; // 1 subgroup
-    uint32_t NumEpilogueStoreThreads = NumThreadsPerWarp; // 1 subgroup
-    uint32_t NumEpilogueThreads      = NumEpilogueWarps * NumThreadsPerWarp;
 
     // Separate out problem shape for convenience
     // Optionally append 1s until problem shape is rank-4 in case its is only rank-3 (MNK)
