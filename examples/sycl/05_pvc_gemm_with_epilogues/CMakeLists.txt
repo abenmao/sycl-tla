@@ -1,4 +1,4 @@
-# Copyright (c) 2024 - 2024 Codeplay Software Ltd. All rights reserved.
+# Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -26,12 +26,44 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#cutlass_example_add_executable(
-#  device_agnostic_gemm
-#  device_agnostic_gemm.cpp
-#)
-#
-#cutlass_example_add_executable(
-#  device_agnostic_collective_builder
-#  device_agnostic_collective_builder.cpp
-#)
+set(TEST_BATCHES --l=2)
+
+cutlass_example_add_executable(
+  05_pvc_gemm_with_epilogue_gelu
+  05_pvc_gemm_with_epilogue_gelu.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_BATCHES
+)
+
+#TODO(Codeplay): enable batch > 1 test once implementation is fixed.
+cutlass_example_add_executable(
+  05_pvc_gemm_with_epilogue_lincombdeeltact
+  05_pvc_gemm_with_epilogue_lincombdeeltact.cpp
+)
+
+cutlass_example_add_executable(
+  05_pvc_gemm_with_epilogue_relu
+  05_pvc_gemm_with_epilogue_relu.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_BATCHES
+)
+
+#TODO(Codeplay): enable batch > 1 test once implementation is fixed.
+cutlass_example_add_executable(
+  05_pvc_gemm_with_epilogue_softmax
+  05_pvc_gemm_with_epilogue_softmax.cpp
+)
+
+cutlass_example_add_executable(
+  05_pvc_gemm_with_per_row_bias
+  05_pvc_gemm_with_per_row_bias.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_BATCHES
+)
+
+cutlass_example_add_executable(
+  05_pvc_gemm_with_topk_and_softmax
+  05_pvc_gemm_with_topk_and_softmax.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_BATCHES
+)
