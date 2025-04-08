@@ -16,8 +16,6 @@ using namespace cutlass::gemm;
 
 template <
   int Stages,
-  int NumControlWarps,
-  int NumEpilogueWarps,
   int SchedulerPipelineStageCount,
   int AccumulatorPipelineStageCount,
   class ClusterShape,
@@ -36,7 +34,7 @@ template <
   class SmemCopyAtomB_,
   class TransformB_>
 struct CollectiveMma<
-  MainloopXe4DmaGmmaWarpSpecialized<Stages, NumControlWarps, NumEpilogueWarps, SchedulerPipelineStageCount, AccumulatorPipelineStageCount, ClusterShape>,
+  MainloopXe4DmaGmmaWarpSpecialized<Stages, SchedulerPipelineStageCount, AccumulatorPipelineStageCount, ClusterShape>,
   TileShape_,
   ElementA_,
   StrideA_,
@@ -57,8 +55,6 @@ struct CollectiveMma<
 
   using DispatchPolicy = MainloopXe4DmaGmmaWarpSpecialized<
                           Stages,
-                          NumControlWarps,
-                          NumEpilogueWarps,
                           SchedulerPipelineStageCount,
                           AccumulatorPipelineStageCount,
                           ClusterShape>;

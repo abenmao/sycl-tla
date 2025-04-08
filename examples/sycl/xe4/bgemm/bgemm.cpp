@@ -128,7 +128,7 @@ void run_test(bool is_persistent_mode = false)
     dtypeB, LayoutB, 16,
     tuple<dtypeAcc, dtypeC>,
     TileShape, ClusterShape, cutlass::gemm::collective::StageCount<stage>,
-    cutlass::gemm::KernelTmaWarpSpecializedXe4<NumControlSubGroup, NumPostOpSubGroup, stage, 1>>::CollectiveOp;
+    cutlass::gemm::KernelTmaWarpSpecializedXe4<stage, 1>>::CollectiveOp;
 
 #ifdef ENABLE_EPILOGUE_RELU
   static constexpr int FragmentSize = 2;
@@ -145,7 +145,7 @@ void run_test(bool is_persistent_mode = false)
   using SmemLayoutAtomC = Layout<Shape<Int<wg_m>, Int<wg_n>>, Stride<Int<wg_n>, _1>>;
 
   using CollectiveEpilogue = CollectiveEpilogue<
-    Xe4DmaWarpSpecialized<FragmentSize, NumPostOpSubGroup, SubGroupSize>,
+    Xe4DmaWarpSpecialized<FragmentSize, NumControlSubGroup, NumPostOpSubGroup>,
     dtypeC, cutlass::detail::TagToStrideC_t<LayoutC>, SmemLayoutAtomC, Shape<Int<wg_m>, Int<wg_n>>, FusionCallbacks
   >;
 
@@ -174,7 +174,7 @@ void run_test(bool is_persistent_mode = false)
 
     GemmKernel kernel;
     auto params = kernel.to_underlying_arguments(args, nullptr);
-    kernel(params, item);
+    kernel(params);
    }).wait();
 
   uint32_t err_cnt = validate_gemm_result(A_s, B_s, C_s, mat_m, mat_n, mat_k, layout_a, layout_b, ReluOp{});

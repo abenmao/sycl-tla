@@ -91,8 +91,6 @@ struct CollectiveBuilder<
   using DispatchPolicy =
     cutlass::gemm::MainloopXe4DmaGmmaWarpSpecialized<
         PipelineStages,
-        KernelScheduleType::NumControlWarps,
-        KernelScheduleType::NumEpilogueWarps,
         SchedulerPipelineStageCount,
         AccumulatorPipelineStageCount,
         ClusterShape_MNK

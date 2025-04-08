@@ -60,8 +60,6 @@ public:
   // determines how many waves (stages-1) a warp can race ahead
   static constexpr uint32_t SchedulerPipelineStageCount = DispatchPolicy::Schedule::SchedulerPipelineStageCount;
   static constexpr uint32_t AccumulatorPipelineStageCount = DispatchPolicy::Schedule::AccumulatorPipelineStageCount;
-  static constexpr uint32_t NumControlWarps = DispatchPolicy::Schedule::NumControlWarps;
-  static constexpr uint32_t NumEpilogueWarps = DispatchPolicy::Schedule::NumEpilogueWarps;
   static constexpr bool IsOverlappingAccum = DispatchPolicy::IsOverlappingAccum;
 
   // TileID scheduler
@@ -72,6 +70,9 @@ public:
     TileSchedulerTag, ArchTag, TileShape, ClusterShape, SchedulerPipelineStageCount>::Scheduler;
 
   static constexpr bool IsSchedDynamicPersistent = TileScheduler::IsDynamicPersistent;
+
+  static constexpr uint32_t NumControlWarps  = CollectiveEpilogue::NumControlWarps;
+  static constexpr uint32_t NumEpilogueWarps = CollectiveEpilogue::NumEpilogueWarps;
 
   // Pipeline and pipeline state types
   using MainloopPipeline = typename CollectiveMainloop::MainloopPipeline;
@@ -167,7 +168,8 @@ public:
 
   CUTLASS_DEVICE
   void
-  operator()(Params const& params, sycl::nd_item<3> item) {
+  operator()(Params const& params) {
+    auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
     auto& problem_shape = params.problem_shape;
 
     // Warp specialization thread count per threadblock
@@ -405,10 +407,9 @@ public:
         work_tile_info = next_work_tile_info;
       } while (work_tile_info.is_valid());
     } else if (is_participant.epilogue)  {
-      uint32_t work_id = local_id - NumControlWarps * NumThreadsPerWarp;
       do {
         collective_epilogue(problem_shape, cute::make_tuple(epi_store_pipeline, accumulator_pipeline),
-          cute::make_tuple(store_pipe_producer_state, accumulator_pipe_consumer_state), shared_tensors.epilogue, work_id);
+          cute::make_tuple(store_pipe_producer_state, accumulator_pipe_consumer_state), shared_tensors.epilogue, local_id);
 
         auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
         if (increment_pipe) {

@@ -28,8 +28,8 @@ using namespace cutlass::epilogue::thread::detail;
 /// and writes them out to destination storage.
 template <
   int FragmentSize,
-  uint32_t EpiSgNum,
-  uint32_t SgSize,
+  int NumControlWarps_,
+  int NumEpilogueWarps_,
   class ElementD_,
   class StrideD_,
   class SmemLayoutD_,
@@ -37,7 +37,7 @@ template <
   class FusionCallbacks_
 >
 class CollectiveEpilogue<
-  Xe4DmaWarpSpecialized<FragmentSize, EpiSgNum, SgSize>,
+  Xe4DmaWarpSpecialized<FragmentSize, NumControlWarps_, NumEpilogueWarps_>,
   ElementD_,
   StrideD_,
   SmemLayoutD_,
@@ -75,6 +75,9 @@ public:
   };
 
   using TensorStorage = typename SharedStorage::TensorStorage;
+
+  static constexpr int NumControlWarps = NumControlWarps_;
+  static constexpr int NumEpilogueWarps = NumEpilogueWarps_;
 
   static constexpr uint32_t TransactionBytesStore = sizeof(ElementD) * size(SmemLayoutD {});
 
@@ -128,8 +131,10 @@ public:
   operator()(ProblemShape const& problem_shape,
     cute::tuple<StorePipeline, AccumulatorPipeline> pipelines,
     cute::tuple<StorePipelineState, AccumulatorPipelineState> pipeline_states,
-    TensorStorage& shared_tensors, uint32_t worker_id)
+    TensorStorage& shared_tensors, uint32_t local_id)
   {
+    uint32_t worker_id = local_id - NumControlWarps * NumThreadsPerWarp;
+
     auto [store_pipeline, accumulator_pipeline] = pipelines;
     auto [store_pipe_producer_state, accumulator_pipe_consumer_state] = pipeline_states;
 
@@ -162,7 +167,7 @@ public:
 
     FusionCallbacks fusion_callbacks(callback_params, shared_tensors.thread);
     auto cst_callbacks = fusion_callbacks.template get_consumer_store_callbacks<true>(cst_args);
-    pattern2<FragmentSize, EpiSgNum, SgSize>(cst_callbacks, tensor_d, tensor_d, worker_id);
+    pattern2<FragmentSize, NumEpilogueWarps>(cst_callbacks, tensor_d, tensor_d, worker_id);
 
     store_pipeline.producer_commit(store_pipe_producer_state, 1);
   }

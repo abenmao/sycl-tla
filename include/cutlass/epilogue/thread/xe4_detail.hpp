@@ -46,7 +46,7 @@ enum class EpilogueAccessPattern {
   Pattern3, // TODO
 };
 
-template <template <uint32_t> class SlmVOp, class ValType, int SubgroupNum, int SubgroupSize, class TileShape>
+template <template <uint32_t> class SlmVOp, class ValType, int NumEpilogueWarps, class TileShape>
 CUTLASS_HOST_DEVICE constexpr auto make_pattern2_tiled_copy(TileShape const& tile_shape) {
   static_assert(is_static<TileShape>::value, "Tile shape must be static");
 
@@ -63,10 +63,10 @@ CUTLASS_HOST_DEVICE constexpr auto make_pattern2_tiled_copy(TileShape const& til
    */
   constexpr int maxLanesPerRow = cute::min(tile_N / maxValuesPerLoad, kMaxLanesPerRow);
   static_assert(cute::popcount(maxLanesPerRow) == 1, "maxLanesPerRow must be a power of 2!");
-  constexpr int minRowsPerSubgroupPerIter = SubgroupSize / maxLanesPerRow;
+  constexpr int minRowsPerSubgroupPerIter = NumThreadsPerWarp / maxLanesPerRow;
 
-  static_assert(tile_M % SubgroupNum == 0, "tile_M must be divisible by SubgroupNum!");
-  constexpr int totalRowsPerSubgroup = tile_M / SubgroupNum;
+  static_assert(tile_M % NumEpilogueWarps == 0, "tile_M must be divisible by NumEpilogueWarps!");
+  constexpr int totalRowsPerSubgroup = tile_M / NumEpilogueWarps;
 
   /**
    * @brief Lanes are supposed to load SLM with `kMaxBytesPerLoad`, but if this cause some subgroups
@@ -76,12 +76,12 @@ CUTLASS_HOST_DEVICE constexpr auto make_pattern2_tiled_copy(TileShape const& til
   static_assert(tile_M % numRowsPerSubgroup == 0, "tile_M must be divisible by numRowsPerSubgroup!");
   static_assert(cute::popcount(numRowsPerSubgroup) == 1, "numRowsPerSubgroup must be a power of 2!");
 
-  constexpr int numLanesPerRow = SubgroupSize / numRowsPerSubgroup;
+  constexpr int numLanesPerRow = NumThreadsPerWarp / numRowsPerSubgroup;
   static_assert(tile_N % numLanesPerRow == 0, "tile_N must be divisible by numLanesPerRow!");
   constexpr int numValuesPerLane = cute::min(tile_N / numLanesPerRow, maxValuesPerLoad);
 
   auto thr_layout = make_ordered_layout(
-    Shape<Shape<Int<numRowsPerSubgroup>, Int<SubgroupNum>>, Int<numLanesPerRow>>{},
+    Shape<Shape<Int<numRowsPerSubgroup>, Int<NumEpilogueWarps>>, Int<numLanesPerRow>>{},
     Step<Step<_0,_2>,_1>{}
   );
 
@@ -106,8 +106,7 @@ CUTLASS_HOST_DEVICE constexpr auto make_register_tensor(Tensor const& tensor) {
 
 template <
   int FragmentSize,
-  int SubgroupNum,
-  int SubgroupSize,
+  int NumEpilogueWarps,
   typename CstCallbacks,
   typename STensor,
   typename DTensor
@@ -119,11 +118,11 @@ void pattern2(CstCallbacks& cst_callbacks, STensor const& src_tensor, DTensor& d
 
   auto tile_shape = product_each(shape(dst_tensor));
 
-  auto tiled_s2r = make_pattern2_tiled_copy<cute::xe4::SLM_VLOAD, SType, SubgroupNum, SubgroupSize>(tile_shape);
+  auto tiled_s2r = make_pattern2_tiled_copy<cute::xe4::SLM_VLOAD, SType, NumEpilogueWarps>(tile_shape);
   auto thread_s2r = tiled_s2r.get_thread_slice(worker_id);
   Tensor tSR_src = thread_s2r.partition_S(src_tensor);
 
-  auto tiled_r2s = make_pattern2_tiled_copy<cute::xe4::SLM_VSTORE, SType, SubgroupNum, SubgroupSize>(tile_shape);
+  auto tiled_r2s = make_pattern2_tiled_copy<cute::xe4::SLM_VSTORE, SType, NumEpilogueWarps>(tile_shape);
   auto thread_r2s = tiled_r2s.get_thread_slice(worker_id);
   Tensor tRS_dst = thread_r2s.partition_D(dst_tensor);
 
