@@ -1,27 +1,14 @@
-#include <sycl/sycl.hpp>
 #include <cute/tensor.hpp>
+#include <cutlass/epilogue/collective/collective_builder.hpp>
+#include <cutlass/gemm/collective/collective_builder.hpp>
+#include <cutlass/gemm/device/gemm_universal_adapter.h>
+#include <cutlass/gemm/kernel/gemm_universal.hpp>
+#include <sycl/sycl.hpp>
 
-#include "cutlass/layout/matrix.h"
-#include "cutlass/detail/layout.hpp"
-#include "cutlass/util/packed_stride.hpp"
-
-#include "cute/arch/mma_xe4.hpp"
-#include "cute/arch/copy_xe4_dma.hpp"
-#include "cutlass/gemm/kernel/gemm_universal.hpp"
-#include "cutlass/gemm/device/gemm_universal_adapter.h"
-#include "cutlass/gemm/collective/collective_builder.hpp"
-#include "cutlass/epilogue/collective/collective_builder.hpp"
 #include "validation.hpp"
 
 using namespace cute;
 using namespace sycl;
-using namespace cute::xe4;
-using namespace cutlass;
-using namespace cutlass::gemm;
-using namespace cutlass::gemm::collective;
-using namespace cutlass::epilogue::collective;
-using namespace cutlass::epilogue::collective::detail;
-using namespace cutlass::epilogue::thread;
 
 struct BGEMM_TEST_CONFIG {
   using ElementA = fp16;
@@ -29,11 +16,15 @@ struct BGEMM_TEST_CONFIG {
   using ElementC = fp16;
   using ElementAccumulator = float;
   using CtaTileShape_MNK = Shape<_256,_512,_128>;
+  using CtaNum_MN = Shape<_2, _1>;
+  using ClusterShape_MNK = Shape<_1, _1, _1>;
+
   static constexpr int StagesA = 3;
   static constexpr int StagesC = 1;
   static constexpr int FragmentSize = 2;
   static constexpr int num_xecore_x = 1;
   static constexpr int num_xecore_y = 2;
+  static constexpr cute::array<int, 4> ProblemShape_MNKL = {1024, 1024, 1024, 1};
 };
 
 struct BGEMM_ROW_ROW : public BGEMM_TEST_CONFIG {
@@ -90,7 +81,7 @@ void run_test(bool is_persistent_mode = false)
   using ArchTag             = cutlass::arch::Xe4;                             // Tag indicating the minimum SM that supports the intended feature
   using OperatorClass       = cutlass::arch::OpClassTensorOp;                 // Operator class tag
   using TileShape           = typename Config::CtaTileShape_MNK;              // Threadblock-level tile size
-  using ClusterShape        = Shape<_1, _1, _1>;                              // Shape of the threadblocks in a cluster
+  using ClusterShape        = typename Config::ClusterShape_MNK;              // Shape of the threadblocks in a cluster
 
   // Build the epilogue
   using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
@@ -125,17 +116,18 @@ void run_test(bool is_persistent_mode = false)
   using StrideA = typename GemmKernel::StrideA;
   using StrideB = typename GemmKernel::StrideB;
   using StrideC = typename GemmKernel::StrideC;
+  using StrideD = typename GemmKernel::StrideD;
+
+  /////////////////////////////////////////////////////////////////////////////////////////////////
+  /// GEMM setup and evaluation
+  /////////////////////////////////////////////////////////////////////////////////////////////////
 
   queue q;
   auto dev = q.get_device();
   std::cout << "Running on " << dev.get_info<info::device::name>() << "\n";
 
-  int mat_m = 1024;
-  int mat_n = 1024;
-  int mat_k = 256;
-  int mat_l = 1;
-
-  auto problem_shape_mnkl = make_shape(mat_m, mat_n, mat_k, mat_l);
+  auto problem_shape_mnkl = typename GemmKernel::ProblemShape {};
+  cute::fill_int_tuple_from(problem_shape_mnkl, Config::ProblemShape_MNKL);
 
   uint32_t sizeA = size(select<0,2,3>(problem_shape_mnkl));
   uint32_t sizeB = size(select<1,2,3>(problem_shape_mnkl));
@@ -148,14 +140,19 @@ void run_test(bool is_persistent_mode = false)
   std::generate_n(B_s, sizeB, [=]() { return static_cast<float>(rand()) / static_cast<float>(RAND_MAX); });
 
   auto C_s = malloc_shared<ElementC>(sizeC, q);
-  std::fill_n(C_s, sizeC, ElementC(0));
+  std::generate_n(C_s, sizeC, [=]() { return static_cast<float>(rand()) / static_cast<float>(RAND_MAX); });
 
-  auto num_groups = ceil_div(problem_shape_mnkl, TileShape{});
-  range<3> local_range(1, NumControlWarps + NumEpilogueWarps, NumThreadsPerWarp);
+  auto D_s = malloc_shared<ElementC>(sizeC, q);
+  std::fill_n(D_s, sizeC, ElementC(0));
+
+  auto num_groups = ceil_div(problem_shape_mnkl, TileShape {});
+  range<3> local_range(1, NumControlWarps + NumEpilogueWarps, cutlass::NumThreadsPerWarp);
   range<3> group_range(1, get<0>(num_groups), get<1>(num_groups));
   if (is_persistent_mode) {
-    group_range[1] = min(group_range[1], Config::num_xecore_y);
-    group_range[2] = min(group_range[2], Config::num_xecore_x);
+    auto [cta_num_y, cta_num_x] = typename Config::CtaNum_MN {};
+    auto [cluster_size_y, cluster_size_x, _] = typename Config::ClusterShape_MNK {};
+    group_range[1] = min(group_range[1], cta_num_y * cluster_size_y);
+    group_range[2] = min(group_range[2], cta_num_x * cluster_size_x);
   }
   nd_range<3> Range(group_range * local_range, local_range);
 
@@ -168,12 +165,13 @@ void run_test(bool is_persistent_mode = false)
   auto stride_A = cutlass::make_cute_packed_stride(StrideA{}, select<0,2,3>(problem_shape_mnkl));
   auto stride_B = cutlass::make_cute_packed_stride(StrideB{}, select<1,2,3>(problem_shape_mnkl));
   auto stride_C = cutlass::make_cute_packed_stride(StrideC{}, select<0,1,3>(problem_shape_mnkl));
+  auto stride_D = cutlass::make_cute_packed_stride(StrideD{}, select<0,1,3>(problem_shape_mnkl));
 
   q.parallel_for<Config>(Range, [=](nd_item<3> item) {
     auto args = typename Gemm::GemmKernel::Arguments {
       problem_shape_mnkl,
       { A_s, stride_A, B_s, stride_B },
-      { C_s, stride_C }
+      { C_s, stride_C, D_s, stride_D }
     };
 
     GemmKernel kernel;
@@ -191,7 +189,8 @@ void run_test(bool is_persistent_mode = false)
     }
   };
 
-  uint32_t err_cnt = validate_gemm_result(A_s, B_s, C_s, mat_m, mat_n, mat_k, as_mem_layout(LayoutA{}), as_mem_layout(LayoutB{}), ReluOp{});
+  auto [mat_m, mat_n, mat_k, _] = problem_shape_mnkl;
+  uint32_t err_cnt = validate_gemm_result(A_s, B_s, D_s, mat_m, mat_n, mat_k, as_mem_layout(LayoutA{}), as_mem_layout(LayoutB{}), ReluOp{});
   if (err_cnt > 0) {
     std::runtime_error("Test Failed!");
   } else {

@@ -96,8 +96,8 @@ public:
   using EpiStorePipeline = typename CollectiveEpilogue::StorePipeline;
   using EpiStorePipelineState = typename CollectiveEpilogue::StorePipelineState;
 
-  using AccumulatorPipeline = typename CollectiveEpilogue::AccumulatorPipeline;
-  using AccumulatorPipelineState = typename CollectiveEpilogue::AccumulatorPipelineState;
+  using AccumulatorPipeline = cutlass::PipelineTmaAsync<AccumulatorPipelineStageCount>;
+  using AccumulatorPipelineState = typename AccumulatorPipeline::PipelineState;
 
   using CLCPipeline = cutlass::PipelineTmaAsync<SchedulerPipelineStageCount>;
   using CLCPipelineState = typename CLCPipeline::PipelineState;
@@ -212,7 +212,7 @@ public:
     auto& shared_pipelines = *reinterpret_cast<typename SharedStorage::PipelineStorage*>(abar_base);
 
     CollectiveMainloop collective_mainloop(params.mainloop, cluster_shape);
-    CollectiveEpilogue collective_epilogue(params.epilogue, tdesc_c);
+    CollectiveEpilogue collective_epilogue(params.epilogue, shared_tensors.epilogue, tdesc_c);
 
     // Do we load source tensor C or other aux inputs
     bool is_epi_load_needed = false;
@@ -303,8 +303,7 @@ public:
     auto wg_k = get<2>(TileShape{});
     uint32_t k_tile_count = (K + wg_k -1) / wg_k;
 
-    using SmemLayoutD = typename CollectiveEpilogue::SmemLayoutD;
-    auto tensorD = make_tensor(shared_tensors.epilogue.smem_D.data(), SmemLayoutD{});
+    auto intermedia_tensor = CollectiveEpilogue::get_intermedia_tensor(shared_tensors.epilogue);
 
     auto cluster_wait_fn = [&] () {
       // We need this to guarantee that the Pipeline init is visible
@@ -397,7 +396,7 @@ public:
         mainloop_pipe_consumer_state = collective_mainloop.mma(
           cute::make_tuple(mainloop_pipeline, epi_store_pipeline, accumulator_pipeline),
           cute::make_tuple(mainloop_pipe_consumer_state, epi_store_pipe_producer_state, accumulator_pipe_producer_state),
-          tensorD, mma_inputs, k_tile_count);
+          intermedia_tensor, mma_inputs, k_tile_count);
 
         auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
         if (increment_pipe) {

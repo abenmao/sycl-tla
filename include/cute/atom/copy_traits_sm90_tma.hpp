@@ -1111,6 +1111,8 @@ struct Xe4DmaCache2 {
   template <typename CopyOp>
   using OpUnpack = XE4_COPY_Unpack<CopyOp>;
 
+  Xe4DmaCache2() = default;
+
   Xe4DmaCache2(GmemDetails const& gmem_details, AuxParams const& aux_params, GmemPtr gmem_ptr)
     : gmem_details_(gmem_details), aux_params_(aux_params), gmem_ptr_(gmem_ptr) {}
 

@@ -462,7 +462,8 @@ struct CollectiveMma<
       accumulator_pipeline.producer_acquire(accumulator_pipe_producer_state);
       auto abar_cons = mainloop_pipeline.consumer_get_barrier(mainloop_pipe_consumer_state);
       auto abar_cons_d = accumulator_pipeline.producer_get_barrier(accumulator_pipe_producer_state);
-      cute::gemm(tiled_mma.with(dstTypeMatC, mma_ctrl, abar_cons_d, abar_cons, mcast_mask_a, abar_cons, mcast_mask_b), tCsC, tCsA(_,_,_,read_stage), tCsB(_,_,_,read_stage), tCsAcc);
+      cute::gemm(tiled_mma.with(dstTypeMatC, mma_ctrl, abar_cons_d, abar_cons, mcast_mask_a, abar_cons, mcast_mask_b),
+        tCsC(_,_,_,accumulator_pipe_producer_state.index()), tCsA(_,_,_,read_stage), tCsB(_,_,_,read_stage), tCsAcc);
       mainloop_pipeline.consumer_commit(mainloop_pipe_consumer_state, cluster_expect_tx);
       ++mainloop_pipe_consumer_state;
 

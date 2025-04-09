@@ -41,6 +41,8 @@
 #include "cutlass/numeric_size.h" // cutlass::bytes_to_bits
 #include "cutlass/gemm/gemm.h"
 
+#include "cute/arch/copy_xe4_dma.hpp"
+
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -74,7 +76,9 @@ private:
   using GmemStrideTypeC = cutlass::detail::TagToStrideC_t<GmemLayoutTagC>;
   using GmemStrideTypeD = cutlass::detail::TagToStrideC_t<GmemLayoutTagD>;
 
+  using CtaTileShape_MNK = MmaTileShape_MNK;
   using TileShape_MN = decltype(select<0,1>(MmaTileShape_MNK{}));
+  using EpilogueTile_MN = decltype(select<0,1>(MmaTileShape_MNK{}));
 
   static constexpr int StagesC = 1;
   static constexpr int StagesD = 1;
@@ -89,14 +93,28 @@ private:
   >;
 
   using SmemLayoutAtomC = decltype(make_ordered_layout(TileShape_MN{}, Step<_1, _0>{}));
+  using SmemLayoutAtomD = decltype(make_ordered_layout(TileShape_MN{}, Step<_1, _0>{}));
 
 public:
   static_assert(cute::is_same_v<EpilogueTileType, EpilogueTileAuto>, "Don't specify epilogue tile with auto schedule");
 
   using CollectiveOp =
     cutlass::epilogue::collective::CollectiveEpilogue<
-    Xe4DmaWarpSpecialized<StagesC, StagesD, FragmentSize, NumControlWarps, NumEpilogueWarps>,
-    ElementC, GmemStrideTypeD, SmemLayoutAtomC, TileShape_MN, FusionCallbacks
+      Xe4DmaWarpSpecialized<StagesC, StagesD, FragmentSize, false, false, NumControlWarps, NumEpilogueWarps>,
+      CtaTileShape_MNK,
+      EpilogueTile_MN,
+      ElementC,
+      GmemStrideTypeC,
+      ElementD,
+      GmemStrideTypeD,
+      FusionCallbacks,
+      xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1>,
+      SmemLayoutAtomC,
+      void,
+      xe4::ASYNC_TENSOR_STORE<slm_matrix_type::type1>,
+      SmemLayoutAtomD,
+      void,
+      void
     >;
 };
 

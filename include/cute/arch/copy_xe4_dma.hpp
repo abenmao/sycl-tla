@@ -48,10 +48,10 @@ struct ASYNC_TENSOR_STORE : public DMA_STORE
 {
   template<class TS, class TD, class Coord>
   CUTE_HOST_DEVICE static void
-  copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, TD* slm_ptr, Coord const& coord)
+  copy(uint64_t const* tdesc_ptr, TS gmem_ptr, uint64_t const* abar_ptr, TD* slm_ptr, Coord const& coord)
   {
     constexpr int dim = 2;
-    async_tensor_store<dim, cm_type>(gmem_ptr, slm_space_cast(slm_ptr), tdesc_ptr, abar_ptr, coord.data());
+    async_tensor_store<dim, cm_type>(raw_pointer_cast(gmem_ptr), slm_space_cast(slm_ptr), tdesc_ptr, abar_ptr, coord.data());
   }
 };
 
