@@ -762,8 +762,26 @@ inline void async_gmma(const mat_desc_t &mat_desc_d, const mat_desc_t &mat_desc_
 template <typename TD, typename TC, typename TA, typename TB, uint32_t M, uint32_t N, uint32_t K,
           mem_layout layout_a = mem_layout::row_major, mem_layout layout_b = mem_layout::row_major,
           typename mat_desc_t = uint32_t, typename abar_t = uint64_t *, typename ctrl_t = uint64_t>
+inline void async_gmma2(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b,
+                        ctrl_t ctrl, abar_t abar_d) {
+  return AsyncMMA<TD, TC, TA, TB, M, N, K, layout_a, layout_b, mat_desc_t, abar_t, ctrl_t>::fma(
+      mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, ctrl, abar_d);
+}
+
+template <typename TD, typename TC, typename TA, typename TB, uint32_t M, uint32_t N, uint32_t K,
+          mem_layout layout_a = mem_layout::row_major, mem_layout layout_b = mem_layout::row_major,
+          typename mat_desc_t = uint32_t, typename abar_t = uint64_t *, typename ctrl_t = uint64_t>
 inline void async_gmma(const mat_desc_t &mat_desc_d, const mat_desc_t &mat_desc_c, const mat_desc_t &mat_desc_a,
                        const mat_desc_t &mat_desc_b, const ctrl_t &ctrl, const abar_t &abar_a, const abar_t &abar_b) {
+  return AsyncMMA<TD, TC, TA, TB, M, N, K, layout_a, layout_b, mat_desc_t, abar_t, ctrl_t>::fma(
+      mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, ctrl, abar_a, abar_b);
+}
+
+template <typename TD, typename TC, typename TA, typename TB, uint32_t M, uint32_t N, uint32_t K,
+          mem_layout layout_a = mem_layout::row_major, mem_layout layout_b = mem_layout::row_major,
+          typename mat_desc_t = uint32_t, typename abar_t = uint64_t *, typename ctrl_t = uint64_t>
+inline void async_gmma2(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b,
+                        ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
   return AsyncMMA<TD, TC, TA, TB, M, N, K, layout_a, layout_b, mat_desc_t, abar_t, ctrl_t>::fma(
       mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, ctrl, abar_a, abar_b);
 }
@@ -781,6 +799,15 @@ inline void async_gmma(const mat_desc_t &mat_desc_d, const mat_desc_t &mat_desc_
 template <typename TD, typename TC, typename TA, typename TB, uint32_t M, uint32_t N, uint32_t K,
           mem_layout layout_a = mem_layout::row_major, mem_layout layout_b = mem_layout::row_major,
           typename mat_desc_t = uint32_t, typename abar_t = uint64_t *, typename ctrl_t = uint64_t>
+inline void async_gmma2(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b,
+                        ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
+  return AsyncMMA<TD, TC, TA, TB, M, N, K, layout_a, layout_b, mat_desc_t, abar_t, ctrl_t>::fma(
+      mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, ctrl, abar_d, abar_a, abar_b);
+}
+
+template <typename TD, typename TC, typename TA, typename TB, uint32_t M, uint32_t N, uint32_t K,
+          mem_layout layout_a = mem_layout::row_major, mem_layout layout_b = mem_layout::row_major,
+          typename mat_desc_t = uint32_t, typename abar_t = uint64_t *, typename ctrl_t = uint64_t>
 inline void async_gmma(const mat_desc_t &mat_desc_d, const mat_desc_t &mat_desc_c, const mat_desc_t &mat_desc_a,
                        const mat_desc_t &mat_desc_b, const ctrl_t &ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b,
                        uint32_t mask_b) {
@@ -791,9 +818,27 @@ inline void async_gmma(const mat_desc_t &mat_desc_d, const mat_desc_t &mat_desc_
 template <typename TD, typename TC, typename TA, typename TB, uint32_t M, uint32_t N, uint32_t K,
           mem_layout layout_a = mem_layout::row_major, mem_layout layout_b = mem_layout::row_major,
           typename mat_desc_t = uint32_t, typename abar_t = uint64_t *, typename ctrl_t = uint64_t>
+inline void async_gmma2(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b,
+                        ctrl_t ctrl, abar_t abar_a, abar_t abar_b, uint32_t mask_a, uint32_t mask_b) {
+  return AsyncMMA<TD, TC, TA, TB, M, N, K, layout_a, layout_b, mat_desc_t, abar_t, ctrl_t>::fma(
+      mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, ctrl, abar_a, mask_a, abar_b, mask_b);
+}
+
+template <typename TD, typename TC, typename TA, typename TB, uint32_t M, uint32_t N, uint32_t K,
+          mem_layout layout_a = mem_layout::row_major, mem_layout layout_b = mem_layout::row_major,
+          typename mat_desc_t = uint32_t, typename abar_t = uint64_t *, typename ctrl_t = uint64_t>
 inline void async_gmma(const mat_desc_t &mat_desc_d, const mat_desc_t &mat_desc_c, const mat_desc_t &mat_desc_a,
                        const mat_desc_t &mat_desc_b, const ctrl_t &ctrl, const abar_t &abar_d, abar_t abar_a,
                        uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+  return AsyncMMA<TD, TC, TA, TB, M, N, K, layout_a, layout_b, mat_desc_t, abar_t, ctrl_t>::fma(
+      mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, ctrl, abar_d, abar_a, mask_a, abar_b, mask_b);
+}
+
+template <typename TD, typename TC, typename TA, typename TB, uint32_t M, uint32_t N, uint32_t K,
+          mem_layout layout_a = mem_layout::row_major, mem_layout layout_b = mem_layout::row_major,
+          typename mat_desc_t = uint32_t, typename abar_t = uint64_t *, typename ctrl_t = uint64_t>
+inline void async_gmma2(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b,
+                        ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b, uint32_t mask_a, uint32_t mask_b) {
   return AsyncMMA<TD, TC, TA, TB, M, N, K, layout_a, layout_b, mat_desc_t, abar_t, ctrl_t>::fma(
       mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, ctrl, abar_d, abar_a, mask_a, abar_b, mask_b);
 }

@@ -40,7 +40,7 @@ struct XE4_ASYNC_GMMA
 
     using TC = tuple_element_t<0, TupleC>;
     using TD = tuple_element_t<static_cast<int>(ConstDstType::value), TupleC>;
-    async_gmma<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, static_cast<Args&&>(args)...);
+    async_gmma2<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, static_cast<Args&&>(args)...);
   }
 };
 
@@ -75,7 +75,7 @@ struct XE4_ASYNC_GMMA_MULTICAST
 
     using TC = tuple_element_t<0, TupleC>;
     using TD = tuple_element_t<static_cast<int>(ConstDstType::value), TupleC>;
-    async_gmma<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, static_cast<Args&&>(args)...);
+    async_gmma2<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, static_cast<Args&&>(args)...);
   }
 };
 
@@ -112,7 +112,7 @@ struct XE4_ASYNC_GMMA_SCALE
 
     using TC = tuple_element_t<0, TupleC>;
     using TD = tuple_element_t<static_cast<int>(ConstDstType::value), TupleC>;
-    async_gmma<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b, ScaleA, ScaleB>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, mat_desc_meta_a, mat_desc_meta_b, static_cast<Args&&>(args)...);
+    async_gmma2<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b, ScaleA, ScaleB>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, mat_desc_meta_a, mat_desc_meta_b, static_cast<Args&&>(args)...);
   }
 };
 

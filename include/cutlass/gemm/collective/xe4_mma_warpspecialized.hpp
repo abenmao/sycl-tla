@@ -144,20 +144,15 @@ struct CollectiveMma<
     GTensorPartitionedB tBgB_nkl;
     STensorA tAsA;
     STensorB tBsB;
-    // the TMA multicast masks
-    uint32_t mcast_mask_a;
-    uint32_t mcast_mask_b;
 
     CUTLASS_DEVICE
     LoadParams (
         KTileCount k_tiles_,
         GTensorPartitionedA tAgA_mkl_, GTensorPartitionedB tBgB_nkl_,
-        STensorA tAsA_, STensorB tBsB_,
-        uint32_t mcast_mask_a_, uint32_t mcast_mask_b_)
+        STensorA tAsA_, STensorB tBsB_)
     : k_tiles(k_tiles_)
     , tAgA_mkl(tAgA_mkl_), tBgB_nkl(tBgB_nkl_)
-    , tAsA(tAsA_), tBsB(tBsB_)
-    , mcast_mask_a(mcast_mask_a_), mcast_mask_b(mcast_mask_b_) {}
+    , tAsA(tAsA_), tBsB(tBsB_) {}
   };
 
   template<class FragmentA, class FragmentB, class FragmentC>
@@ -166,18 +161,13 @@ struct CollectiveMma<
     FragmentA tCrA;
     FragmentB tCrB;
     FragmentC tCrC;
-    // the TMA multicast masks
-    uint32_t mcast_mask_a;
-    uint32_t mcast_mask_b;
 
     CUTLASS_DEVICE
     MmaParams (
         TiledMma tiled_mma_,
-        FragmentA tCrA_, FragmentB tCrB_, FragmentC tCrC_,
-        uint32_t mcast_mask_a_, uint32_t mcast_mask_b_)
+        FragmentA tCrA_, FragmentB tCrB_, FragmentC tCrC_)
     : tiled_mma(tiled_mma_)
-    , tCrA(tCrA_), tCrB(tCrB_), tCrC(tCrC_)
-    , mcast_mask_a(mcast_mask_a_), mcast_mask_b(mcast_mask_b_) {}
+    , tCrA(tCrA_), tCrB(tCrB_), tCrC(tCrC_) {}
   };
 
   // Host side kernel arguments
@@ -350,14 +340,9 @@ struct CollectiveMma<
                                       get<1>(cta_coord_vmnk), make_layout(size<1>(cta_layout_vmnk)),
                                       group_modes<0,3>(sB), group_modes<0,3>(tCgB_nkl));
 
-    // TMA Multicast Masks
-    uint32_t mcast_mask_a = get<0>(cluster_masks_);
-    uint32_t mcast_mask_b = get<1>(cluster_masks_);
-
     LoadParams load_params {
       shape<3>(gA_mkl),                      // for scheduler
-      tAgA_mkl, tBgB_nkl, tAsA, tBsB,        // for input tensor values
-      mcast_mask_a, mcast_mask_b             // multicast masks
+      tAgA_mkl, tBgB_nkl, tAsA, tBsB         // for input tensor values
     };
 
     return load_params;
@@ -381,14 +366,9 @@ struct CollectiveMma<
 
     TiledMma tiled_mma;
 
-    // TMA Multicast Masks
-    uint32_t mcast_mask_a = get<0>(cluster_masks_);
-    uint32_t mcast_mask_b = get<1>(cluster_masks_);
-
     MmaParams<decltype(tCsA), decltype(tCsB), decltype(tCsAcc)> mma_params {
       tiled_mma,
-      tCsA, tCsB, tCsAcc,
-      mcast_mask_a, mcast_mask_b             // multicast masks
+      tCsA, tCsB, tCsAcc
     };
 
     return mma_params;
@@ -399,9 +379,8 @@ struct CollectiveMma<
   load(Params const& mainloop_params, MainloopPipeline mainloop_pipeline, MainloopPipelineState& slm_pipe_write,
     LoadParams const& load_inputs, TileCoordMNKL const& cta_coord_mnkl, KTileIterator k_tile_iter, int k_tile_count) {
 
-    auto [unused_k_tiles,
-          tAgA_mkl, tBgB_nkl, tAsA, tBsB,
-          mcast_mask_a, mcast_mask_b] = load_inputs;
+    auto [mcast_mask_a, mcast_mask_b] = cluster_masks_;
+    auto [unused_k_tiles, tAgA_mkl, tBgB_nkl, tAsA, tBsB] = load_inputs;
 
     // slice out the work coord from partitioned tensors
     Tensor tAgA = tAgA_mkl(_, get<0>(cta_coord_mnkl) / size(typename TiledMma::AtomThrID{}), _, get<2>(cta_coord_mnkl));
@@ -435,7 +414,7 @@ struct CollectiveMma<
 
     auto [mainloop_pipeline, store_pipeline, accumulator_pipeline] = pipelines;
     auto [mainloop_pipe_consumer_state, store_pipe_producer_state, accumulator_pipe_producer_state] = pipeline_states;
-    auto [tiled_mma, tCsA, tCsB, tCsAcc, mcast_mask_a, mcast_mask_b] = mma_inputs;
+    auto [tiled_mma, tCsA, tCsB, tCsAcc] = mma_inputs;
 
     auto thread_mma = tiled_mma.get_thread_slice(0);
     auto tCsC = thread_mma.partition_fragment_C(tensor_c);        // (MMA,MMA_M,MMA_N)
@@ -449,7 +428,7 @@ struct CollectiveMma<
       uint32_t read_stage = mainloop_pipe_consumer_state.index();
       mainloop_pipeline.consumer_wait(mainloop_pipe_consumer_state);
       auto abar_cons = mainloop_pipeline.consumer_get_barrier(mainloop_pipe_consumer_state);
-      cute::gemm(tiled_mma.with(dstType, mma_ctrl, abar_cons, mcast_mask_a, abar_cons, mcast_mask_b), tCsA(_,_,_,read_stage), tCsB(_,_,_,read_stage), tCsAcc);
+      cute::gemm(tiled_mma.with(dstType, mma_ctrl, make_tuple(abar_cons, abar_cons), cluster_masks_), tCsA(_,_,_,read_stage), tCsB(_,_,_,read_stage), tCsAcc);
       mainloop_pipeline.consumer_commit(mainloop_pipe_consumer_state, cluster_expect_tx);
       mma_ctrl = 0;
     }
@@ -462,7 +441,7 @@ struct CollectiveMma<
       accumulator_pipeline.producer_acquire(accumulator_pipe_producer_state);
       auto abar_cons = mainloop_pipeline.consumer_get_barrier(mainloop_pipe_consumer_state);
       auto abar_cons_d = accumulator_pipeline.producer_get_barrier(accumulator_pipe_producer_state);
-      cute::gemm(tiled_mma.with(dstTypeMatC, mma_ctrl, abar_cons_d, abar_cons, mcast_mask_a, abar_cons, mcast_mask_b),
+      cute::gemm(tiled_mma.with(dstTypeMatC, mma_ctrl, make_tuple(abar_cons_d, abar_cons, abar_cons), cluster_masks_),
         tCsC(_,_,_,accumulator_pipe_producer_state.index()), tCsA(_,_,_,read_stage), tCsB(_,_,_,read_stage), tCsAcc);
       mainloop_pipeline.consumer_commit(mainloop_pipe_consumer_state, cluster_expect_tx);
       ++mainloop_pipe_consumer_state;

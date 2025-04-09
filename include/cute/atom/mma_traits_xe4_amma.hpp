@@ -110,24 +110,19 @@ struct MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>>
   static constexpr xe4::GMMA::Major tnspA = tnspA_;
   static constexpr xe4::GMMA::Major tnspB = tnspB_;
 
-  GMMA::ScaleOut accumulate_ = GMMA::ScaleOut::One;
-
-  template<typename... TraitsArgs, __CUTE_REQUIRES(sizeof...(TraitsArgs) <= 4)>
+  template<class DstType, class MmaCtrl, class Abarriers>
   CUTE_HOST_DEVICE static auto
-  with(TraitsArgs&&... args) {
+  with(DstType dstType, MmaCtrl mmaCtrl, Abarriers barriers) {
+    static_assert(is_tuple_v<Abarriers>, "Abarriers must be a tuple");
     using MMA_Op = XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>;
-    auto opargs = make_tuple(static_cast<TraitsArgs&&>(args)...);
+    auto opargs = tuple_cat(make_tuple(dstType, mmaCtrl), barriers);
     return MMA_Traits<XE4_ASYNC_GMMA_OP, decltype(opargs), MMA_Op>{{}, opargs};
   }
 
-  template<typename... TraitsArgs, __CUTE_REQUIRES(sizeof...(TraitsArgs) >= 5)>
+  template<class DstType, class MmaCtrl, class Abarriers, class McastMasks>
   CUTE_HOST_DEVICE static auto
-  with(TraitsArgs&&... args) {
-    using MMA_Op = XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>;
-    auto opargs = make_tuple(static_cast<TraitsArgs&&>(args)...);
-    auto tmp_opargs = remove<sizeof...(args)-1>(opargs);
-    auto opargs_reduced = remove<sizeof...(args)-3>(tmp_opargs);
-    return MMA_Traits<XE4_ASYNC_GMMA_OP, decltype(opargs_reduced), MMA_Op>{{}, opargs_reduced};
+  with(DstType dstType, MmaCtrl mmaCtrl, Abarriers barriers, McastMasks masks) {
+    return with(dstType, mmaCtrl, barriers);
   }
 };
 
@@ -175,19 +170,20 @@ struct MMA_Traits<XE4_ASYNC_GMMA_MULTICAST<TupleC, TA, TB, Shape_MNK_, tnspA_, t
   static constexpr xe4::GMMA::Major tnspA = tnspA_;
   static constexpr xe4::GMMA::Major tnspB = tnspB_;
 
-  template<typename... TraitsArgs, __CUTE_REQUIRES(sizeof...(TraitsArgs) <= 4)>
+  template<class DstType, class MmaCtrl, class Abarriers>
   CUTE_HOST_DEVICE static auto
-  with(TraitsArgs&&... args) {
-    if constexpr (sizeof...(args) <= 4) {
-      return MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>>::with(static_cast<TraitsArgs&&>(args)...);
-    }
+  with(DstType dstType, MmaCtrl mmaCtrl, Abarriers barriers) {
+    return MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>>::with(dstType, mmaCtrl, barriers);
   }
 
-  template<typename... TraitsArgs, __CUTE_REQUIRES(sizeof...(TraitsArgs) > 4)>
+  template<class DstType, class MmaCtrl, class Abarriers, class McastMasks>
   CUTE_HOST_DEVICE static auto
-  with(TraitsArgs&&... args) {
+  with(DstType dstType, MmaCtrl mmaCtrl, Abarriers barriers, McastMasks masks) {
+    static_assert(is_tuple_v<Abarriers>, "Abarriers must be a tuple");
+    static_assert(is_tuple_v<McastMasks>, "McastMasks must be a tuple");
+
     using MMA_Op = XE4_ASYNC_GMMA_MULTICAST<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>;
-    auto opargs = make_tuple(static_cast<TraitsArgs&&>(args)...);
+    auto opargs = tuple_cat(make_tuple(dstType, mmaCtrl), barriers, masks);
     return MMA_Traits<XE4_ASYNC_GMMA_OP, decltype(opargs), MMA_Op>{{}, opargs};
   }
 };
