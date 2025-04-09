@@ -22,13 +22,13 @@ struct XE4_ASYNC_GMMA
   using BRegisters = MatDesc[1];
   using CRegisters = MatDesc[1];
 
-  template<typename ConstDstType, typename... Args>
+  template<typename DstType, typename... Args>
   CUTE_HOST_DEVICE static void
   fma(MatDesc const& mat_desc_d,
       MatDesc const& mat_desc_c,
       MatDesc const& mat_desc_a,
       MatDesc const& mat_desc_b,
-      ConstDstType const& dst_type,
+      DstType const& dst_type,
       Args&&... args)
   {
     constexpr auto Tile_M = get<0>(Shape_MNK{});
@@ -39,8 +39,8 @@ struct XE4_ASYNC_GMMA
     constexpr mem_layout layout_b = (tnspB == xe4::GMMA::Major::MN) ? mem_layout::row_major: mem_layout::col_major;
 
     using TC = tuple_element_t<0, TupleC>;
-    using TD = tuple_element_t<static_cast<int>(ConstDstType::value), TupleC>;
-    async_gmma2<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, static_cast<Args&&>(args)...);
+    using TD = tuple_element_t<static_cast<int>(DstType::value), TupleC>;
+    async_gmma<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, static_cast<Args&&>(args)...);
   }
 };
 
@@ -56,13 +56,14 @@ struct XE4_ASYNC_GMMA_MULTICAST
   using BRegisters = MatDesc[1];
   using CRegisters = MatDesc[1];
 
-  template<typename ConstDstType, typename... Args>
+  template<typename DstType, typename MmaCtrl, typename... Args>
   CUTE_HOST_DEVICE static void
   fma(MatDesc const& mat_desc_d,
       MatDesc const& mat_desc_c,
       MatDesc const& mat_desc_a,
       MatDesc const& mat_desc_b,
-      ConstDstType const& dst_type,
+      DstType const& dst_type,
+      MmaCtrl mma_ctrl,
       Args&&... args)
   {
 
@@ -74,8 +75,20 @@ struct XE4_ASYNC_GMMA_MULTICAST
     constexpr mem_layout layout_b = (tnspB == xe4::GMMA::Major::MN) ? mem_layout::row_major: mem_layout::col_major;
 
     using TC = tuple_element_t<0, TupleC>;
-    using TD = tuple_element_t<static_cast<int>(ConstDstType::value), TupleC>;
-    async_gmma2<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, static_cast<Args&&>(args)...);
+    using TD = tuple_element_t<static_cast<int>(DstType::value), TupleC>;
+
+    constexpr auto args_count = sizeof...(args);
+    auto args_tuple = std::make_tuple(static_cast<Args&&>(args)...);
+
+    if constexpr (args_count == 4) {
+      auto [abar_a, abar_b, mask_a, mask_b] = args_tuple;
+      async_gmma<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, mma_ctrl, abar_a, mask_a, abar_b, mask_b);
+    } else if constexpr (args_count == 5) {
+      auto [abar_d, abar_a, abar_b, mask_a, mask_b] = args_tuple;
+      async_gmma<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, mma_ctrl, abar_d, abar_a, mask_a, abar_b, mask_b);
+    } else {
+      static_assert(args_count == 4 || args_count == 5, "Invalid number of arguments for async_gmma_multicast");
+    }
   }
 };
 
@@ -92,7 +105,7 @@ struct XE4_ASYNC_GMMA_SCALE
   using BRegisters = MatDesc[1];
   using CRegisters = MatDesc[1];
 
-  template<typename ConstDstType, typename... Args>
+  template<typename DstType, typename... Args>
   CUTE_HOST_DEVICE static void
   fma(MatDesc const& mat_desc_d,
       MatDesc const& mat_desc_c,
@@ -100,7 +113,7 @@ struct XE4_ASYNC_GMMA_SCALE
       MatDesc const& mat_desc_b,
       MetaDesc const& mat_desc_meta_a,
       MetaDesc const& mat_desc_meta_b,
-      ConstDstType const& dst_type,
+      DstType const& dst_type,
       Args&&... args)
   {
     constexpr auto Tile_M = get<0>(Shape_MNK{});
@@ -111,8 +124,8 @@ struct XE4_ASYNC_GMMA_SCALE
     constexpr mem_layout layout_b = (tnspB == xe4::GMMA::Major::MN) ? mem_layout::row_major: mem_layout::col_major;
 
     using TC = tuple_element_t<0, TupleC>;
-    using TD = tuple_element_t<static_cast<int>(ConstDstType::value), TupleC>;
-    async_gmma2<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b, ScaleA, ScaleB>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, mat_desc_meta_a, mat_desc_meta_b, static_cast<Args&&>(args)...);
+    using TD = tuple_element_t<static_cast<int>(DstType::value), TupleC>;
+    async_gmma<TD, TC, TA, TB, Tile_M, Tile_N, Tile_K, layout_a, layout_b, ScaleA, ScaleB>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, mat_desc_meta_a, mat_desc_meta_b, static_cast<Args&&>(args)...);
   }
 };
 
