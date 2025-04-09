@@ -267,7 +267,7 @@ public:
     } else {
       clc_pipeline_params.role = CLCPipeline::ThreadCategory::Consumer;
     }
-    clc_pipeline_params.initializing_warp = 3;
+    clc_pipeline_params.initializing_warp = 4;
     clc_pipeline_params.num_producers = NumSchedThreads;
     clc_pipeline_params.num_consumers = NumSchedThreads + NumMMAThreads + NumMainloopLoadThreads + NumEpilogueStoreThreads + NumEpilogueThreads;
     CLCPipeline clc_pipeline(shared_pipelines.clc, clc_pipeline_params, cluster_shape, true_type{}, false_type{});
@@ -302,8 +302,6 @@ public:
 
     auto wg_k = get<2>(TileShape{});
     uint32_t k_tile_count = (K + wg_k -1) / wg_k;
-
-    auto intermedia_tensor = CollectiveEpilogue::get_intermedia_tensor(shared_tensors.epilogue);
 
     auto cluster_wait_fn = [&] () {
       // We need this to guarantee that the Pipeline init is visible
@@ -389,6 +387,7 @@ public:
       }
     } else if (is_participant.mma) {
       auto mma_inputs = collective_mainloop.mma_init(shared_tensors.mainloop);
+      auto intermedia_tensor = CollectiveEpilogue::get_intermedia_tensor(shared_tensors.epilogue);
 
       do {
         auto cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);
