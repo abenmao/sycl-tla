@@ -23,10 +23,10 @@ struct CoreMatrix {
     Step<Step<_1,_3,_2>,_0>{}
   );
 
-  template<typename ValType, typename TileShape>
-  CUTLASS_HOST_DEVICE static constexpr auto retile(TileShape const& tile_shape) {
+  template<typename ValType, typename EpilogueTile>
+  CUTLASS_HOST_DEVICE static constexpr auto retile(EpilogueTile const& epilogue_tile) {
     auto cm_layout = recast_layout<uint8_t, ValType>(kCmLayoutRaw);
-    auto retiled_layout = tile_to_shape(cm_layout, tile_shape, Step<_1,_0>{});
+    auto retiled_layout = tile_to_shape(cm_layout, epilogue_tile, Step<_1,_0>{});
     auto swizzled_layout = composition(make_swizzle<ValType>(), retiled_layout);
     return swizzled_layout;
   }
@@ -46,7 +46,7 @@ enum class EpilogueAccessPattern {
   Pattern3, // TODO
 };
 
-template <template <uint32_t> class SlmVOp, class ValType, int NumEpilogueWarps, class TileShape>
+template <template <int, class, class> class SlmVOp, class ValType, int NumEpilogueWarps, class TileShape>
 CUTLASS_HOST_DEVICE constexpr auto make_pattern2_tiled_copy(TileShape const& tile_shape) {
   static_assert(is_static<TileShape>::value, "Tile shape must be static");
 
@@ -87,7 +87,7 @@ CUTLASS_HOST_DEVICE constexpr auto make_pattern2_tiled_copy(TileShape const& til
 
   auto val_layout = make_layout(Shape<_1,Int<numValuesPerLane>>{}, GenRowMajor{});
 
-  using Copy_Traits = Copy_Traits<SlmVOp<numValuesPerLane>, Int<8 * numValuesPerLane * sizeof(ValType)>>;
+  using Copy_Traits = Copy_Traits<SlmVOp<numValuesPerLane,ValType,ValType>>;
   using Atom = Copy_Atom<Copy_Traits, ValType>;
   auto tiled_copy = make_tiled_copy(Atom{}, thr_layout, val_layout);
 
@@ -104,6 +104,7 @@ CUTLASS_HOST_DEVICE constexpr auto make_register_tensor(Tensor const& tensor) {
   return cute::Tensor<Engine, Layout>();
 }
 
+#if 0
 template <
   int FragmentSize,
   int NumEpilogueWarps,
@@ -118,41 +119,18 @@ void pattern2(CstCallbacks& cst_callbacks, STensor const& src_tensor, DTensor& d
 
   auto tile_shape = product_each(shape(dst_tensor));
 
-  auto tiled_s2r = make_pattern2_tiled_copy<cute::xe4::SLM_VLOAD, SType, NumEpilogueWarps>(tile_shape);
+  auto tiled_s2r = make_pattern2_tiled_copy<cute::xe4::XE4_LDSM, SType, NumEpilogueWarps>(tile_shape);
   auto thread_s2r = tiled_s2r.get_thread_slice(worker_id);
   Tensor tSR_src = thread_s2r.partition_S(src_tensor);
 
-  auto tiled_r2s = make_pattern2_tiled_copy<cute::xe4::SLM_VSTORE, SType, NumEpilogueWarps>(tile_shape);
+  auto tiled_r2s = make_pattern2_tiled_copy<cute::xe4::XE4_STSM, SType, NumEpilogueWarps>(tile_shape);
   auto thread_r2s = tiled_r2s.get_thread_slice(worker_id);
   Tensor tRS_dst = thread_r2s.partition_D(dst_tensor);
 
   Tensor src_v = group_modes<1,-1>(tSR_src);
   Tensor dst_v = group_modes<1,-1>(tRS_dst);
-
-  cst_callbacks.begin();
-
-  int epi_m = 0, epi_n = 0;
-
-  CUTE_UNROLL
-  for (int i = 0; i < size<1>(src_v); ++i) {
-    auto src_r = make_register_tensor(src_v(_, _0{}));
-    auto dst_r = make_register_tensor(dst_v(_, _0{}));
-
-    copy(tiled_s2r, src_v(_, i), src_r);
-
-    auto trSrc_frg = recast<Array<SType, FragmentSize>>(src_r);
-    auto trDst_frg = recast<Array<DType, FragmentSize>>(dst_r);
-
-    CUTE_UNROLL
-    for (int epi_v = 0; epi_v < size(trSrc_frg); ++epi_v) {
-      trDst_frg(epi_v) = cst_callbacks.visit(trSrc_frg(epi_v), epi_v, epi_m, epi_n);
-    }
-
-    copy(tiled_r2s, dst_r, dst_v(_, i));
-  }
-
-  cst_callbacks.end();
 }
+#endif
 
 } // namespace detail
 } // namespace thread

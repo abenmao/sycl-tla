@@ -50,6 +50,24 @@ namespace cutlass::epilogue::collective {
 
 namespace detail {
 
+// Selects the largest vectorized smem store atom available
+template <int NumElementsPerThread, class ElementD>
+constexpr auto
+xe4_get_smem_store_op() {
+  constexpr int CoreMatrixRowSize = 32;  // 32B
+  constexpr int VS = cute::min(CoreMatrixRowSize/sizeof(ElementD), NumElementsPerThread);
+  return cute::xe4::XE4_STSM<VS, ElementD, ElementD>{};
+}
+
+// Selects the largest vectorized smem load atom available
+template <int NumElementsPerThread, class ElementD>
+constexpr auto
+xe4_get_smem_load_op() {
+  constexpr int CoreMatrixRowSize = 32;  // 32B
+  constexpr int VS = cute::min(CoreMatrixRowSize/sizeof(ElementD), NumElementsPerThread);
+  return cute::xe4::XE4_LDSM<VS, ElementD, ElementD>{};
+}
+
 // Helper for building TMA warp-specialized collective epilogues, specialized by
 // the fusion operation performed and the dispatch policy to use.
 template <
@@ -70,6 +88,13 @@ template <
 >
 struct Xe4TmaBuilderImpl {
 private:
+  static constexpr int StagesC = 1;
+  static constexpr int StagesD = 1;
+  static constexpr int NumControlWarps = 4;
+  static constexpr int NumEpilogueWarps = 16;
+  static constexpr int NumElementsPerThread = 32;
+  static constexpr int FragmentSize = 32 / sizeof(ElementD);
+
   static constexpr bool DisableSource = cute::is_void_v<ElementC_>;
   using ElementC = cute::conditional_t<DisableSource, ElementD, ElementC_>; // prevents void ref breakages
   using GmemLayoutTagC = cute::conditional_t<DisableSource, GmemLayoutTagD, GmemLayoutTagC_>;
@@ -78,13 +103,25 @@ private:
 
   using CtaTileShape_MNK = MmaTileShape_MNK;
   using TileShape_MN = decltype(select<0,1>(MmaTileShape_MNK{}));
-  using EpilogueTile_MN = decltype(select<0,1>(MmaTileShape_MNK{}));
 
-  static constexpr int StagesC = 1;
-  static constexpr int StagesD = 1;
-  static constexpr int FragmentSize = 2;
-  static constexpr int NumControlWarps = 4;
-  static constexpr int NumEpilogueWarps = 16;
+  static constexpr auto
+  epilogue_tile() {
+    using namespace cute;
+    if constexpr (not is_same_v<EpilogueTileType, EpilogueTileAuto>) {
+      static_assert(is_tuple_v<EpilogueTileType>, "Shape or Tile");
+      return EpilogueTileType{};
+    }
+    else {
+      constexpr int CtaM = size<0>(CtaTileShape_MNK{});
+      constexpr int CtaN = size<1>(CtaTileShape_MNK{});
+      constexpr int M = cutlass::NumThreadsPerWarp;
+      constexpr int N = 32 * NumEpilogueWarps; // 32 elems per warp at dim N
+      static_assert(CtaM >= M, "CTA tile too small");
+      static_assert(CtaN >= N, "CTA tile too small");
+      return make_tile(Int<M>{}, Int<N>{});
+    }
+  }
+  using EpilogueTile = decltype(epilogue_tile());
 
   using FusionOp = fusion::LinCombEltAct<cutlass::epilogue::thread::ReLu, ElementC, ElementC, void>;
   using FusionCallbacks = fusion::FusionCallbacks<
@@ -92,17 +129,15 @@ private:
     FusionOp, decltype(append(TileShape_MN{}, _1{})), Shape<_2,_1>
   >;
 
-  using SmemLayoutAtomC = decltype(make_ordered_layout(TileShape_MN{}, Step<_1, _0>{}));
+  using SmemLayoutAtomC = decltype(make_ordered_layout(EpilogueTile{}, Step<_1, _0>{}));
   using SmemLayoutAtomD = decltype(make_ordered_layout(TileShape_MN{}, Step<_1, _0>{}));
 
 public:
-  static_assert(cute::is_same_v<EpilogueTileType, EpilogueTileAuto>, "Don't specify epilogue tile with auto schedule");
-
   using CollectiveOp =
     cutlass::epilogue::collective::CollectiveEpilogue<
       Xe4DmaWarpSpecialized<StagesC, StagesD, FragmentSize, false, false, NumControlWarps, NumEpilogueWarps>,
       CtaTileShape_MNK,
-      EpilogueTile_MN,
+      EpilogueTile,
       ElementC,
       GmemStrideTypeC,
       ElementD,
@@ -110,10 +145,10 @@ public:
       FusionCallbacks,
       xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1>,
       SmemLayoutAtomC,
-      void,
+      decltype(xe4_get_smem_load_op<NumElementsPerThread, ElementD>()),
       xe4::ASYNC_TENSOR_STORE<slm_matrix_type::type1>,
       SmemLayoutAtomD,
-      void,
+      decltype(xe4_get_smem_store_op<NumElementsPerThread, ElementD>()),
       void
     >;
 };

@@ -67,7 +67,7 @@ public:
 
   // TileID scheduler
   // Get Blk and Scheduling tile shapes
-  using CtaShape_MNK = typename CollectiveMainloop::TileShape;
+  using CtaShape_MNK = typename CollectiveMainloop::CtaShape_MNK;
   using TileSchedulerTag = TileScheduler_;
   using TileScheduler = typename detail::TileSchedulerSelector<
     TileSchedulerTag, ArchTag, TileShape, ClusterShape, SchedulerPipelineStageCount>::Scheduler;
@@ -320,6 +320,7 @@ public:
     cluster_wait_fn();
 
     auto load_inputs = collective_mainloop.load_init(problem_shape, shared_tensors.mainloop, make_tuple(tdesc_a, tdesc_b));
+    auto intermedia_tensor = CollectiveEpilogue::get_intermedia_tensor(shared_tensors.epilogue);
 
     auto coop_set_ids = collective_mainloop.coop_set_ids_;
     auto problem_blocks_shape = TileScheduler::calculate_problem_blocks_shape(problem_shape_MNKL, CtaShape_MNK{});
@@ -387,7 +388,6 @@ public:
       }
     } else if (is_participant.mma) {
       auto mma_inputs = collective_mainloop.mma_init(shared_tensors.mainloop);
-      auto intermedia_tensor = CollectiveEpilogue::get_intermedia_tensor(shared_tensors.epilogue);
 
       do {
         auto cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);
@@ -418,8 +418,10 @@ public:
         auto [store_prod_state_next, store_cons_state_next, acc_state_next] = collective_epilogue.store(
           cute::make_tuple(epi_store_pipeline, accumulator_pipeline),
           cute::make_tuple(epi_store_pipe_producer_state, epi_store_pipe_consumer_state, accumulator_pipe_consumer_state),
-          problem_shape,
+          problem_shape_MNKL,
+          CtaShape_MNK{},
           cta_coord_mnkl,
+          intermedia_tensor,
           shared_tensors.epilogue
         );
         prev_epi_store_consumer_state = epi_store_pipe_consumer_state;

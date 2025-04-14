@@ -74,15 +74,14 @@ struct ASYNC_TENSOR_LOAD_MULTICAST : public DMA_LOAD, public DMA_MULTICAST
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-/// SLM_VLOAD: Initiates a slm load from shared memory to register
+/// XE4_LDSM: Initiates a slm load from shared memory to register
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template<uint32_t VS>
-struct SLM_VLOAD
+template<int VS, class TS, class TD = TS>
+struct XE4_LDSM
 {
-  template<typename SlmType, typename RegType>
   CUTE_HOST_DEVICE static void
-  copy(SlmType* slm_ptr, RegType* reg_ptr)
+  copy(const TS* slm_ptr, TD* reg_ptr)
   {
     slm_vload<VS>(reg_ptr, slm_space_cast(slm_ptr));
   }
@@ -90,15 +89,14 @@ struct SLM_VLOAD
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-/// SLM_VSTORE: Initiates a slm store from register to shared memory
+/// XE4_STSM: Initiates a slm store from register to shared memory
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template<uint32_t VS>
-struct SLM_VSTORE
+template<int VS, class TS, class TD = TS>
+struct XE4_STSM
 {
-  template<typename SlmType, typename RegType>
   CUTE_HOST_DEVICE static void
-  copy(RegType* reg_ptr, SlmType* slm_ptr)
+  copy(const TS* reg_ptr, TD* slm_ptr)
   {
     slm_vstore<VS>(slm_space_cast(slm_ptr), reg_ptr);
   }

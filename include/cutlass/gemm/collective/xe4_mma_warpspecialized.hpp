@@ -380,11 +380,12 @@ struct CollectiveMma<
     LoadParams const& load_inputs, TileCoordMNKL const& cta_coord_mnkl, KTileIterator k_tile_iter, int k_tile_count) {
 
     auto [mcast_mask_a, mcast_mask_b] = cluster_masks_;
+    auto [m_coord, n_coord, k_coord, l_coord] = cta_coord_mnkl;
     auto [unused_k_tiles, tAgA_mkl, tBgB_nkl, tAsA, tBsB] = load_inputs;
 
     // slice out the work coord from partitioned tensors
-    Tensor tAgA = tAgA_mkl(_, get<0>(cta_coord_mnkl) / size(typename TiledMma::AtomThrID{}), _, get<2>(cta_coord_mnkl));
-    Tensor tBgB = tBgB_nkl(_, get<1>(cta_coord_mnkl), _, get<2>(cta_coord_mnkl));
+    Tensor tAgA = tAgA_mkl(_, m_coord / size(typename TiledMma::AtomThrID{}), _, l_coord);
+    Tensor tBgB = tBgB_nkl(_, n_coord, _, l_coord);
 
     // Issue the Mainloop loads
     CUTLASS_PRAGMA_UNROLL

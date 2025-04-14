@@ -106,6 +106,7 @@ public:
     return cute::make_coord(
       work_tile_info.M_idx,
       work_tile_info.N_idx,
+      int32_t(0),
       work_tile_info.L_idx
     );
   }
