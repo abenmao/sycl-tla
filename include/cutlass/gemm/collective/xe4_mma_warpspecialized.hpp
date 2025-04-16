@@ -116,13 +116,15 @@ struct CollectiveMma<
 
   using SmemLayoutAcc = decltype(make_layout(MmaShapeC_MN{}, GenRowMajor{}));
 
+  constexpr static size_t SmemAlignment = 512;
+
   struct SharedStorage
   {
-    struct TensorStorage
+    struct TensorStorage : cute::aligned_struct<SmemAlignment, _0>
     {
-      cute::array<ElementA, cute::cosize_v<SmemLayoutA>> smem_A;
-      cute::array<ElementB, cute::cosize_v<SmemLayoutB>> smem_B;
-      cute::array<ElementAccumulator, cute::cosize_v<SmemLayoutAcc>> smem_Acc;
+      cute::array_aligned<ElementA, cute::cosize_v<SmemLayoutA>, SmemAlignment> smem_A;
+      cute::array_aligned<ElementB, cute::cosize_v<SmemLayoutB>, SmemAlignment> smem_B;
+      cute::array_aligned<ElementAccumulator, cute::cosize_v<SmemLayoutAcc>, SmemAlignment> smem_Acc;
     };
   };
 

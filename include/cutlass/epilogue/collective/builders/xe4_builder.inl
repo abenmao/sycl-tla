@@ -90,6 +90,8 @@ struct Xe4TmaBuilderImpl {
 private:
   static constexpr int StagesC = 1;
   static constexpr int StagesD = 1;
+  static constexpr bool ReuseSmemC = false;
+  static constexpr bool DelayTmaStore = false;
   static constexpr int NumControlWarps = 4;
   static constexpr int NumEpilogueWarps = 16;
   static constexpr int NumElementsPerThread = 32;
@@ -123,10 +125,9 @@ private:
   }
   using EpilogueTile = decltype(epilogue_tile());
 
-  using FusionOp = fusion::LinCombEltAct<cutlass::epilogue::thread::ReLu, ElementC, ElementC, void>;
   using FusionCallbacks = fusion::FusionCallbacks<
-    Sm90TmaWarpSpecialized<1, 1, FragmentSize, false, false>,
-    FusionOp, decltype(append(TileShape_MN{}, _1{})), Shape<_2,_1>
+    Sm90TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
+    FusionOpOrCallbacks, CtaTileShape_MNK, EpilogueTile
   >;
 
   using SmemLayoutAtomC = decltype(make_ordered_layout(EpilogueTile{}, Step<_1, _0>{}));
@@ -135,7 +136,7 @@ private:
 public:
   using CollectiveOp =
     cutlass::epilogue::collective::CollectiveEpilogue<
-      Xe4DmaWarpSpecialized<StagesC, StagesD, FragmentSize, false, false, NumControlWarps, NumEpilogueWarps>,
+      Xe4DmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore, NumControlWarps, NumEpilogueWarps>,
       CtaTileShape_MNK,
       EpilogueTile,
       ElementC,

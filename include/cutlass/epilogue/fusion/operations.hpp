@@ -133,6 +133,24 @@ struct LinCombEltAct
   static constexpr bool IsEltActSupported = true;
 };
 
+// D = activation(acc) * C
+template<
+  template <class> class ActivationFn_,
+  class ElementOutput_,
+  class ElementCompute_,
+  class ElementSource_ = ElementOutput_,
+  FloatRoundStyle RoundStyle_ = FloatRoundStyle::round_to_nearest
+>
+struct EltActMul : FusionOperation {
+  using ElementOutput = ElementOutput_;
+  using ElementCompute = ElementCompute_;
+  using ElementSource = ElementSource_;
+  using ActivationFn = ActivationFn_<ElementCompute_>;
+  static constexpr bool IsSourceSupported = true;
+  static constexpr bool IsEltActSupported = true;
+  static constexpr auto RoundStyle = RoundStyle_;
+};
+
 // D = softmax(top_k(alpha * acc + beta * C))
 template<
   int TopK,

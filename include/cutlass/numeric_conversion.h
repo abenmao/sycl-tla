@@ -1033,6 +1033,37 @@ struct NumericArrayConverter<cutlass::half_t, float, N, Round> {
   }
 };
 
+#if defined(SYCL_INTEL_XE4_TARGET)
+template <
+  int N,
+  FloatRoundStyle Round
+>
+struct NumericArrayConverter<sycl::half, float, N, Round> {
+
+  using result_type = Array<sycl::half, N>;
+  using source_type = Array<float, N>;
+  static FloatRoundStyle const round_style = Round;
+
+  CUTLASS_HOST_DEVICE
+  static result_type convert(source_type const & source) {
+    result_type result;
+
+    uint32_t *result_ptr = reinterpret_cast<uint32_t *>(&result);
+    copy_cvt_pack<sycl::half, N>(result_ptr, source.data());
+
+    if (N % 2) {
+      result[N - 1] = source[N - 1];
+    }
+
+    return result;
+  }
+
+  CUTLASS_HOST_DEVICE
+  result_type operator()(source_type const &s) const {
+    return convert(s);
+  }
+};
+#endif
 
 /// Partial specialization for Array<half> <= Array<float>
 template <

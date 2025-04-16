@@ -1237,7 +1237,7 @@ make_tma_copy_atom(CopyOp,
   //
 
 #if defined(SYCL_INTEL_XE4_TARGET)
-  auto gmem_ptr = recast<TmaInternalType>(gtensor).data();
+  auto gmem_ptr = cute::raw_pointer_cast(recast<TmaInternalType>(gtensor).data());
   constexpr int num_bits_per_tma = size(tma_gbasis) * sizeof_bits_v<TmaInternalType>;
   using DmaCache = Xe4DmaCache<decltype(tma_desc), decltype(aux_params), decltype(gmem_ptr)>;
   using Traits = Copy_Traits<Xe4CopyOp<CopyOp>, cute::C<num_bits_per_tma>, DmaCache>;

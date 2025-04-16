@@ -99,6 +99,9 @@ public:
   using AccumulatorPipeline = cutlass::PipelineTmaAsync<AccumulatorPipelineStageCount>;
   using AccumulatorPipelineState = typename AccumulatorPipeline::PipelineState;
 
+  using EpiLoadPipeline = typename CollectiveEpilogue::LoadPipeline;
+  using EpiLoadPipelineState = typename CollectiveEpilogue::LoadPipelineState;
+
   using CLCPipeline = cutlass::PipelineTmaAsync<SchedulerPipelineStageCount>;
   using CLCPipelineState = typename CLCPipeline::PipelineState;
 
@@ -113,19 +116,21 @@ public:
       using MainloopTensorStorage = typename CollectiveMainloop::TensorStorage;
       using EpilogueTensorStorage = typename CollectiveEpilogue::TensorStorage;
 
-      MainloopTensorStorage mainloop;
       EpilogueTensorStorage epilogue;
+      MainloopTensorStorage mainloop;
       typename TileScheduler::CLCResponse clc_response[SchedulerPipelineStageCount];
     } tensors;
 
     struct PipelineStorage {
       using MainloopPipelineStorage = typename MainloopPipeline::SharedStorage;
+      using EpiLoadPipelineStorage = typename EpiLoadPipeline::SharedStorage;
       using AccumulatorPipelineStorage = typename AccumulatorPipeline::SharedStorage;
       using EpiStorePipelineStorage = typename EpiStorePipeline::SharedStorage;
       using CLCPipelineStorage = typename CLCPipeline::SharedStorage;
       using CLCThrottlePipelineStorage = typename CLCThrottlePipeline::SharedStorage;
 
       MainloopPipelineStorage mainloop;
+      EpiLoadPipelineStorage epi_load;
       AccumulatorPipelineStorage accumulator;
       EpiStorePipelineStorage epi_store;
       CLCPipelineStorage clc;
@@ -133,6 +138,7 @@ public:
     } pipelines;
   };
 
+  using TensorStorage = typename SharedStorage::TensorStorage;
   static constexpr int TensorStorageSize = sizeof(typename SharedStorage::TensorStorage);
   static constexpr int PipelineStorageSize = sizeof(typename SharedStorage::PipelineStorage);
 
@@ -207,12 +213,13 @@ public:
     auto tdesc_a = allocate_tdesc<0>();
     auto tdesc_b = allocate_tdesc<1>();
     auto tdesc_c = allocate_tdesc<2>();
+    auto tdesc_d = allocate_tdesc<3>();
 
     auto abar_base = allocate_abar_bytes<0, PipelineStorageSize>();
     auto& shared_pipelines = *reinterpret_cast<typename SharedStorage::PipelineStorage*>(abar_base);
 
     CollectiveMainloop collective_mainloop(params.mainloop, cluster_shape);
-    CollectiveEpilogue collective_epilogue(params.epilogue, shared_tensors.epilogue, tdesc_c);
+    CollectiveEpilogue collective_epilogue(params.epilogue, shared_tensors.epilogue, make_tuple(tdesc_c, tdesc_d));
 
     // Do we load source tensor C or other aux inputs
     bool is_epi_load_needed = false;
@@ -236,8 +243,23 @@ public:
     mainloop_pipeline_params.is_leader = lane_predicate && is_participant.main_load;
     mainloop_pipeline_params.transaction_bytes = CollectiveMainloop::TmaTransactionBytes;
     mainloop_pipeline_params.num_consumers = 1;
-    mainloop_pipeline_params.initializing_warp = 0;
+    mainloop_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::MainloopLoad);
     MainloopPipeline mainloop_pipeline(shared_pipelines.mainloop, mainloop_pipeline_params, cluster_shape, true_type{}, false_type{});
+
+    // Epilogue Load pipeline
+    typename EpiLoadPipeline::Params epi_load_pipeline_params;
+    if (WarpCategory::EpilogueLoad == warp_category) {
+      epi_load_pipeline_params.role = EpiLoadPipeline::ThreadCategory::Producer;
+    }
+    if (WarpCategory::Epilogue == warp_category) {
+      epi_load_pipeline_params.role = EpiLoadPipeline::ThreadCategory::Consumer;
+    }
+    mainloop_pipeline_params.is_leader = lane_predicate && is_participant.epi_load;
+    epi_load_pipeline_params.transaction_bytes = CollectiveEpilogue::TmaTransactionBytes;
+    epi_load_pipeline_params.producer_arv_count = NumThreadsPerWarp;
+    epi_load_pipeline_params.consumer_arv_count = NumEpilogueThreads;
+    epi_load_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::EpilogueLoad);
+    EpiLoadPipeline epi_load_pipeline(shared_pipelines.epi_load, epi_load_pipeline_params, true_type{});
 
     // Mainloop-Epilogue pipeline
     typename AccumulatorPipeline::Params accumulator_pipeline_params;
@@ -250,12 +272,12 @@ public:
     accumulator_pipeline_params.is_leader = lane_predicate && is_participant.mma;
     accumulator_pipeline_params.num_consumers = NumEpilogueThreads;
     accumulator_pipeline_params.transaction_bytes = 1;
-    accumulator_pipeline_params.initializing_warp = 1;
+    accumulator_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::MMA);
     AccumulatorPipeline accumulator_pipeline(shared_pipelines.accumulator, accumulator_pipeline_params, cluster_shape, true_type{}, false_type{});
 
     // Epilogue Store pipeline
     typename EpiStorePipeline::Params epi_store_pipeline_params;
-    epi_store_pipeline_params.initializing_warp = 2;
+    epi_store_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::Epilogue);
     epi_store_pipeline_params.num_producers = NumEpilogueThreads;
     epi_store_pipeline_params.num_consumers = 1;
     EpiStorePipeline epi_store_pipeline(shared_pipelines.epi_store, epi_store_pipeline_params, cluster_shape, true_type{}, false_type{});
@@ -267,7 +289,7 @@ public:
     } else {
       clc_pipeline_params.role = CLCPipeline::ThreadCategory::Consumer;
     }
-    clc_pipeline_params.initializing_warp = 4;
+    clc_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::Sched);
     clc_pipeline_params.num_producers = NumSchedThreads;
     clc_pipeline_params.num_consumers = NumSchedThreads + NumMMAThreads + NumMainloopLoadThreads + NumEpilogueStoreThreads + NumEpilogueThreads;
     CLCPipeline clc_pipeline(shared_pipelines.clc, clc_pipeline_params, cluster_shape, true_type{}, false_type{});
@@ -280,13 +302,16 @@ public:
     if (WarpCategory::Sched == warp_category)  {
       clc_throttle_pipeline_params.role = CLCThrottlePipeline::ThreadCategory::Consumer;
     }
-    clc_throttle_pipeline_params.initializing_warp = 4;
+    clc_throttle_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::Sched);
     clc_throttle_pipeline_params.num_producers = NumThreadsPerWarp;
     clc_throttle_pipeline_params.num_consumers = NumThreadsPerWarp;
     CLCThrottlePipeline clc_throttle_pipeline(shared_pipelines.clc_throttle, clc_throttle_pipeline_params, cluster_shape, true_type{}, false_type{});
 
     auto mainloop_pipe_producer_state = cutlass::make_producer_start_state<MainloopPipeline>();
     auto mainloop_pipe_consumer_state = MainloopPipelineState{};
+
+    auto epi_load_pipe_producer_state = cutlass::make_producer_start_state<EpiLoadPipeline>();
+    auto epi_load_pipe_consumer_state = EpiLoadPipelineState{};
 
     auto accumulator_pipe_producer_state = cutlass::make_producer_start_state<AccumulatorPipeline>();
     auto accumulator_pipe_consumer_state = AccumulatorPipelineState{};
@@ -406,6 +431,34 @@ public:
         ++accumulator_pipe_producer_state;
         work_tile_info = next_work_tile_info;
       } while (work_tile_info.is_valid());
+    } else if (is_participant.epi_load) {
+      int current_wave = 0;
+      bool reverse_epi_n = false;
+      static constexpr bool IsOverlappingAccum = false;
+
+      do {
+        auto cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);
+
+        epi_load_pipe_producer_state = collective_epilogue.template load<IsOverlappingAccum>(
+          epi_load_pipeline,
+          epi_load_pipe_producer_state,
+          problem_shape_MNKL,
+          CtaShape_MNK{},
+          cta_coord_mnkl,
+          TileShape{},
+          TiledMma{},
+          shared_tensors.epilogue,
+          reverse_epi_n
+        );
+
+        auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
+        if (increment_pipe) {
+          ++clc_pipe_consumer_state;
+        }
+
+        work_tile_info = next_work_tile_info;
+        current_wave++;
+      } while (work_tile_info.is_valid());
     } else if (is_participant.epilogue)  {
       auto prev_epi_store_consumer_state = epi_store_pipe_consumer_state;
 
@@ -415,16 +468,19 @@ public:
         //
         // Epilogue and write to gD
         //
-        auto [store_prod_state_next, store_cons_state_next, acc_state_next] = collective_epilogue.store(
-          cute::make_tuple(epi_store_pipeline, accumulator_pipeline),
-          cute::make_tuple(epi_store_pipe_producer_state, epi_store_pipe_consumer_state, accumulator_pipe_consumer_state),
+        auto [load_state_next, store_prod_state_next, store_cons_state_next, acc_state_next] = collective_epilogue.store(
+          cute::make_tuple(epi_load_pipeline, epi_store_pipeline, accumulator_pipeline),
+          cute::make_tuple(epi_load_pipe_consumer_state, epi_store_pipe_producer_state, epi_store_pipe_consumer_state, accumulator_pipe_consumer_state),
           problem_shape_MNKL,
           CtaShape_MNK{},
           cta_coord_mnkl,
+          TileShape{},
+          TiledMma{},
           intermedia_tensor,
           shared_tensors.epilogue
         );
         prev_epi_store_consumer_state = epi_store_pipe_consumer_state;
+        epi_load_pipe_consumer_state = load_state_next;
         epi_store_pipe_producer_state = store_prod_state_next;
         epi_store_pipe_consumer_state = store_cons_state_next;
         accumulator_pipe_consumer_state = acc_state_next;

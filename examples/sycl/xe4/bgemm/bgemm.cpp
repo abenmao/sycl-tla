@@ -51,6 +51,84 @@ struct BGEMM_COL_COL : public BGEMM_TEST_CONFIG {
   using LayoutC = cutlass::layout::RowMajor;
 };
 
+// Define a macro to extract memory info (offset and raw size)
+#define GET_MEM_INFO(cls, path) \
+    std::make_tuple( \
+        (size_t)&(((cls*)0)->path), \
+        sizeof(((cls*)0)->path) \
+    )
+
+// Add function to get shared memory information
+template<typename GemmKernel>
+std::string get_shared_memory_info() {
+  using TensorStorage = typename GemmKernel::TensorStorage;
+
+  std::ostringstream oss;
+
+  // Lambda to convert bytes to KB with proper formatting
+  auto bytes2kb = [](size_t bytes) -> std::string {
+    double kb = bytes / 1024.0;
+    std::ostringstream format;
+    if (bytes < 1024) {
+      // No decimal point for integer byte values
+      format << bytes << " Bytes";
+    } else if (bytes >= 1024 * 1024) {
+      format << std::fixed << std::setprecision(2) << kb / 1024.0 << " MB";
+    } else if (bytes % 1024 == 0) {
+      // No decimal point for integer KB values
+      format << static_cast<int>(kb) << " KB";
+    } else {
+      // Two decimal places for non-integer KB values
+      format << std::fixed << std::setprecision(2) << kb << " KB";
+    }
+    return format.str();
+  };
+
+  // Extract memory information using the macro
+  auto [offset_A, raw_size_A] = GET_MEM_INFO(TensorStorage, mainloop.smem_A);
+  auto [offset_B, raw_size_B] = GET_MEM_INFO(TensorStorage, mainloop.smem_B);
+  auto [offset_Acc, raw_size_Acc] = GET_MEM_INFO(TensorStorage, mainloop.smem_Acc);
+  auto [offset_C, raw_size_C] = GET_MEM_INFO(TensorStorage, epilogue.collective.smem_C);
+  auto [offset_D, raw_size_D] = GET_MEM_INFO(TensorStorage, epilogue.collective.smem_D);
+  auto [offset_thread, raw_size_thread] = GET_MEM_INFO(TensorStorage, epilogue.thread);
+
+  // Calculate the size of each memory block after alignment
+  size_t aligned_size_A = offset_B - offset_A;
+  size_t aligned_size_B = offset_Acc - offset_B;
+  size_t aligned_size_Acc = offset_C - offset_Acc;
+  size_t aligned_size_C = offset_D - offset_C;
+  size_t aligned_size_D = offset_thread - offset_D;
+  size_t aligned_size_thread = sizeof(TensorStorage) - offset_thread;
+
+  // Use sizeof(TensorStorage) to get the actual total size
+  size_t total_size = sizeof(TensorStorage);
+
+  // Format output information
+  oss << "Share Memory Allocation (Total: " << bytes2kb(total_size) << ")" << std::endl;
+  oss << "- Mainloop" << std::endl;
+  oss << "    A: raw_size=" << bytes2kb(raw_size_A)
+      << ", aligned_size=" << bytes2kb(aligned_size_A)
+      << ", range=[" << offset_A << " - " << (offset_A + raw_size_A - 1) << "]" << std::endl;
+  oss << "    B: raw_size=" << bytes2kb(raw_size_B)
+      << ", aligned_size=" << bytes2kb(aligned_size_B)
+      << ", range=[" << offset_B << " - " << (offset_B + raw_size_B - 1) << "]" << std::endl;
+  oss << "    Acc: raw_size=" << bytes2kb(raw_size_Acc)
+      << ", aligned_size=" << bytes2kb(aligned_size_Acc)
+      << ", range=[" << offset_Acc << " - " << (offset_Acc + raw_size_Acc - 1) << "]" << std::endl;
+  oss << "- Epilogue" << std::endl;
+  oss << "    C: raw_size=" << bytes2kb(raw_size_C)
+      << ", aligned_size=" << bytes2kb(aligned_size_C)
+      << ", range=[" << offset_C << " - " << (offset_C + raw_size_C - 1) << "]" << std::endl;
+  oss << "    D: raw_size=" << bytes2kb(raw_size_D)
+      << ", aligned_size=" << bytes2kb(aligned_size_D)
+      << ", range=[" << offset_D << " - " << (offset_D + raw_size_D - 1) << "]" << std::endl;
+  oss << "    Thread: raw_size=" << bytes2kb(raw_size_thread)
+      << ", aligned_size=" << bytes2kb(aligned_size_thread)
+      << ", range=[" << offset_thread << " - " << (offset_thread + raw_size_thread - 1) << "]" << std::endl;
+
+  return oss.str();
+}
+
 template<typename Config>
 void run_test(bool is_persistent_mode = false)
 {
@@ -64,17 +142,17 @@ void run_test(bool is_persistent_mode = false)
   // A matrix configuration
   using         ElementA    = typename Config::ElementA;                      // Element type for A matrix operand
   using         LayoutA     = typename Config::LayoutA;                       // Layout type for A matrix operand
-  constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
+  constexpr int AlignmentA  = 512;                                            // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
 
   // B matrix configuration
   using         ElementB    = typename Config::ElementB;                      // Element type for B matrix operand
   using         LayoutB     = typename Config::LayoutB;                       // Layout type for B matrix operand
-  constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
+  constexpr int AlignmentB  = 512;                                            // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
   // C/D matrix configuration
   using         ElementC    = typename Config::ElementC;                      // Element type for C and D matrix operands
   using         LayoutC     = typename Config::LayoutC;                       // Layout type for C and D matrix operands
-  constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementC>::value;    // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
+  constexpr int AlignmentC  = 512;                                            // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
 
   // Kernel functional config
   using ElementAccumulator  = typename Config::ElementAccumulator;            // Element type for internal accumulation
@@ -82,6 +160,9 @@ void run_test(bool is_persistent_mode = false)
   using OperatorClass       = cutlass::arch::OpClassTensorOp;                 // Operator class tag
   using TileShape           = typename Config::CtaTileShape_MNK;              // Threadblock-level tile size
   using ClusterShape        = typename Config::ClusterShape_MNK;              // Shape of the threadblocks in a cluster
+
+  using ElementEpilogueCompute = float;
+  using SiLuMulOperation = cutlass::epilogue::fusion::EltActMul<cutlass::epilogue::thread::SiLu, ElementC, ElementEpilogueCompute>;
 
   // Build the epilogue
   using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
@@ -91,7 +172,8 @@ void run_test(bool is_persistent_mode = false)
       ElementAccumulator, ElementAccumulator,
       ElementC, LayoutC, AlignmentC,
       ElementC, LayoutC, AlignmentC,
-      cutlass::epilogue::collective::EpilogueScheduleAuto
+      cutlass::epilogue::collective::EpilogueScheduleAuto,
+      SiLuMulOperation
     >::CollectiveOp;
 
   // Build the mainloop
@@ -167,6 +249,9 @@ void run_test(bool is_persistent_mode = false)
   auto stride_C = cutlass::make_cute_packed_stride(StrideC{}, select<0,1,3>(problem_shape_mnkl));
   auto stride_D = cutlass::make_cute_packed_stride(StrideD{}, select<0,1,3>(problem_shape_mnkl));
 
+  auto smem_info = get_shared_memory_info<GemmKernel>();
+  std::cout << smem_info << std::endl;
+
   q.parallel_for<Config>(Range, [=](nd_item<3> item) {
     auto args = typename Gemm::GemmKernel::Arguments {
       problem_shape_mnkl,
@@ -189,13 +274,31 @@ void run_test(bool is_persistent_mode = false)
     }
   };
 
+  auto silu_mul_op = [&](auto&& vec) {
+    constexpr auto one = ElementEpilogueCompute(1.0);
+
+    auto sigmod = [&](const auto &x) {
+      return one / (one + sycl::exp(-x));
+    };
+
+    for (int i = 0; i < vec.size(); ++i) {
+      auto val = ElementEpilogueCompute(vec[i]);
+      vec[i] = val * sigmod(val) * ElementEpilogueCompute(C_s[i]);
+    }
+
+    return vec;
+  };
+
   auto [mat_m, mat_n, mat_k, _] = problem_shape_mnkl;
-  uint32_t err_cnt = validate_gemm_result(A_s, B_s, D_s, mat_m, mat_n, mat_k, as_mem_layout(LayoutA{}), as_mem_layout(LayoutB{}), ReluOp{});
+  uint32_t err_cnt = validate_gemm_result(A_s, B_s, D_s, mat_m, mat_n, mat_k, as_mem_layout(LayoutA{}), as_mem_layout(LayoutB{}), NoOp{}, silu_mul_op);
+
   if (err_cnt > 0) {
-    std::runtime_error("Test Failed!");
-  } else {
-    std::cout << "Test Pass!" << std::endl;
+    std::cout << smem_info << std::endl;
+    std::cerr << "Test Failed!" << std::endl;
+    exit(1);
   }
+
+  std::cout << "Test Pass!" << std::endl;
 }
 
 int main()

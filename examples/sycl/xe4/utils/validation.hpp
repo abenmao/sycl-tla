@@ -391,21 +391,7 @@ void get_gemm_gold(const size_t m, const size_t k, const size_t n, const mem_lay
     cblas_dgemm(layout, transa, transb, m, n, k, alpha, tmp_A.data(), lda, tmp_B.data(), ldb, beta, C, ldc);
 }
 
-struct Identity {
-  template <class T>
-  constexpr
-  decltype(auto) operator()(T&& arg) const {
-    return static_cast<T&&>(arg);
-  }
-};
-
-struct ReluOp {
-  template <typename T>
-  std::vector<T> &operator()(std::vector<T> &vec) const {
-    std::transform(vec.begin(), vec.end(), vec.begin(), [](const T &val) { return std::max(val, static_cast<T>(0)); });
-    return vec;
-  }
-};
+struct NoOp {};
 
 template <typename dtype_c, typename dtype_acc>
 int check_and_log(dtype_c *C, dtype_acc *golden, uint32_t matrix_m, uint32_t matrix_n, tolerance<dtype_c> tol) {
@@ -422,18 +408,27 @@ int check_and_log(dtype_c *C, dtype_acc *golden, uint32_t matrix_m, uint32_t mat
   return err_cnt;
 }
 
-template <typename dtype_a, typename dtype_b, typename dtype_c, typename dtype_acc = float,
-          typename post_op_t = Identity>
-int validate_gemm_result(dtype_a *A, dtype_b *B, dtype_c *C, uint32_t matrix_m, uint32_t matrix_n, uint32_t matrix_k,
+template <typename TA, typename TB, typename TC, typename TAcc = float, typename Prelogue = NoOp, typename Epilogue = NoOp>
+int validate_gemm_result(TA *A, TB *B, TC *C, uint32_t matrix_m, uint32_t matrix_n, uint32_t matrix_k,
                          mem_layout layout_a = mem_layout::row_major, mem_layout layout_b = mem_layout::row_major,
-                         post_op_t post_op = {}, bool negative_axb = false, tolerance<dtype_c> tol = {}) {
-  std::vector<dtype_acc> gold_acc(matrix_m * matrix_n, 0);
-  dtype_acc alpha = negative_axb ? -1.0 : 1.0;
-  get_gemm_gold<dtype_a, dtype_b, dtype_acc>(matrix_m, matrix_k, matrix_n, layout_a, layout_b, A, B, gold_acc.data(),
-                                             alpha);
-  gold_acc = post_op(gold_acc);
+						             Prelogue prelogue = Prelogue{}, Epilogue epilogue = Epilogue{}, bool negative_axb = false, tolerance<TC> tol = {}) {
+  TAcc alpha = negative_axb ? -1.0 : 1.0;
+  std::vector<TAcc> gold_acc(matrix_m * matrix_n, 0);
 
-  return check_and_log(C, gold_acc.data(), matrix_m, matrix_n, tol);
+  if constexpr (std::is_same_v<Prelogue, NoOp>) {
+    uint32_t matrix_k_sparse = matrix_k;
+    get_gemm_gold(matrix_m, matrix_k_sparse, matrix_n, layout_a, layout_b, A, B, gold_acc.data(), alpha);
+  } else {
+    auto [A_, B_] = prelogue(A, B, matrix_m, matrix_n, layout_a, layout_b);
+    get_gemm_gold(matrix_m, B_.size() / matrix_n, matrix_n, layout_a, layout_b, A_.data(), B_.data(), gold_acc.data(), alpha);
+  }
+
+  if constexpr (std::is_same_v<Epilogue, NoOp>) {
+    return check_and_log(C, gold_acc.data(), matrix_m, matrix_n, tol);
+  } else {
+    auto gold_c = epilogue(gold_acc);
+    return check_and_log(C, gold_c.data(), matrix_m, matrix_n, tol);
+  }
 }
 
 template <typename dtype_a, typename dtype_acc, typename dtype_mxfp_meta>
