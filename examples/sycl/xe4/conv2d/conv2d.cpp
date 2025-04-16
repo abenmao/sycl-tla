@@ -60,10 +60,10 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
     uint32_t dilation_h = problem_shape.get_dilation_h();
     uint32_t dilation_w = problem_shape.get_dilation_w();
 
-    using ElementAct = bf16;
-    using ElementFlt = bf16;
+    using ElementAct = fp16;
+    using ElementFlt = fp16;
     using ElementAcc = float;
-    using ElementOut = bf16;
+    using ElementOut = fp16;
 
     constexpr uint32_t Stages = 3;
     static constexpr auto tnspA = xe4::GMMA::Major::K;

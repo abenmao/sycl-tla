@@ -411,7 +411,7 @@ public:
 
       do {
         auto cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);
-
+        
         //
         // Epilogue and write to gD
         //

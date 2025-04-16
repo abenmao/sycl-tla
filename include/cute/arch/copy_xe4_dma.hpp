@@ -25,7 +25,7 @@ struct ASYNC_TENSOR_LOAD : public DMA_LOAD
   CUTE_HOST_DEVICE static void
   copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, TD* slm_ptr, Coord const& coord)
   {
-    constexpr int dim = 2;
+    constexpr int dim = Coord{}.size();
     async_tensor_load<dim, cm_type>(slm_space_cast(slm_ptr), gmem_ptr, tdesc_ptr, abar_ptr, coord.data());
   }
 
@@ -107,31 +107,6 @@ struct XE4_STSM
 
 struct ASYNC_ROW_IM2COL {};
 
-template<typename T, int NumBytesPerCopy>
-struct alignas(64) Im2ColDescriptor {
-  uint64_t bytes[10];   // support from 3D tensor to 5D tensor
-};
-
-template <int NumBytesPerCopy, class GTensor>
-CUTE_HOST_DEVICE auto
-make_async_row_copy_desc(GTensor const& gtensor)
-{
-  using T = typename GTensor::value_type;
-
-  Im2ColDescriptor<T, NumBytesPerCopy> tdesc_ptr;
-  tdesc_ptr.bytes[0] = reinterpret_cast<uint64_t>(gtensor.data());
-  tdesc_ptr.bytes[1] = shape<0>(layout<1>(gtensor));
-  tdesc_ptr.bytes[2] = shape<0>(layout<0>(gtensor));
-  tdesc_ptr.bytes[3] = shape<1>(layout<0>(gtensor));
-  tdesc_ptr.bytes[4] = shape<2>(layout<0>(gtensor));
-
-  tdesc_ptr.bytes[6] = stride<0>(layout<0>(gtensor)) * sizeof(T);
-  tdesc_ptr.bytes[7] = stride<1>(layout<0>(gtensor)) * sizeof(T);
-  tdesc_ptr.bytes[8] = stride<2>(layout<0>(gtensor)) * sizeof(T);
-
-  return tdesc_ptr;
-}
-
 template <typename T>
 inline uint32_t get_copy_size(const int32_t coord, const uint32_t shape, uint32_t width_2d) {
     uint32_t left_size = (shape - coord) * sizeof(T);
@@ -144,7 +119,7 @@ struct ASYNC_ROW_LOAD_IM2COL_4D : public DMA_LOAD, public ASYNC_ROW_IM2COL
 {
   template<class TS, class TG, int NumBytesPerCopy>
   CUTE_HOST_DEVICE static void
-  copy(Im2ColDescriptor<TG, NumBytesPerCopy> const* tma_desc, uint64_t const* abar_ptr,
+  copy(Im2ColTmaDescriptor<TG, NumBytesPerCopy> const* tma_desc, uint64_t const* abar_ptr,
                               TS const* slm_ptr,
                               int32_t crd_c, int32_t crd_w, int32_t crd_h, int32_t crd_n, int32_t crd_s, int32_t crd_r)
   {
@@ -168,16 +143,14 @@ struct ASYNC_ROW_LOAD_IM2COL_4D : public DMA_LOAD, public ASYNC_ROW_IM2COL
 template <slm_matrix_type cm_type>
 struct ASYNC_ROW_LOAD_IM2COL : public DMA_LOAD, public ASYNC_ROW_IM2COL
 {
-  template<class TS, class TG, int NumBytesPerCopy>
+  template<class TS, class TG, int NumBytesPerCopy, class Coord>
   CUTE_HOST_DEVICE static void
-  copy(Im2ColDescriptor<TG, NumBytesPerCopy> const* tma_desc, uint64_t const* abar_ptr,
-                              TS const* slm_ptr,
-                              int32_t crd_c, int32_t crd_w, int32_t crd_h, int32_t crd_n,
-                              int32_t crd_s, int32_t crd_r)
+  copy(Im2ColTmaDescriptor<TG, NumBytesPerCopy> const* tma_desc, uint64_t const* abar_ptr,
+                              TS const* slm_ptr, Coord coord)
   {
     using Impl = ASYNC_ROW_LOAD_IM2COL_4D<cm_type>;
     return Impl::template copy<TS, TG, NumBytesPerCopy>(
-      tma_desc, abar_ptr, slm_ptr, crd_c, crd_w, crd_h, crd_n, crd_s, crd_r);
+      tma_desc, abar_ptr, slm_ptr, coord[0], coord[1], coord[2], coord[3], coord[4], coord[5]);
   }
 };
 
@@ -190,7 +163,7 @@ struct XE4_ASYNC_ROW_STORE_IM2COL_4D : public DMA_STORE, public ASYNC_ROW_IM2COL
 {
   template<class TS, class TG, int NumBytesPerCopy>
   CUTE_HOST_DEVICE static void
-  copy(Im2ColDescriptor<TG, NumBytesPerCopy> const* tma_desc, uint64_t const* abar_ptr, TS const* slm_ptr,
+  copy(Im2ColTmaDescriptor<TG, NumBytesPerCopy> const* tma_desc, uint64_t const* abar_ptr, TS const* slm_ptr,
                               int32_t crd_c, int32_t crd_w, int32_t crd_h, int32_t crd_n)
   {
     constexpr uint32_t slm_stride = NumBytesPerCopy / sizeof(TG);
@@ -211,47 +184,16 @@ struct XE4_ASYNC_ROW_STORE_IM2COL_4D : public DMA_STORE, public ASYNC_ROW_IM2COL
 template <slm_matrix_type cm_type>
 struct ASYNC_ROW_STORE_IM2COL : public DMA_STORE, public ASYNC_ROW_IM2COL
 {
-  template<class TS, class TG, int NumBytesPerCopy>
+  template<class TS, class TG, int NumBytesPerCopy, class Coord>
   CUTE_HOST_DEVICE static void
-  copy(Im2ColDescriptor<TG, NumBytesPerCopy> const* tma_desc, uint64_t const* abar_ptr,
-                              TS const* slm_ptr,
-                              int32_t crd_c, int32_t crd_w, int32_t crd_h, int32_t crd_n)
+  copy(Im2ColTmaDescriptor<TG, NumBytesPerCopy> const* tma_desc, uint64_t const* abar_ptr,
+                              TS const* slm_ptr, Coord coord)
   {
+
     using Impl = XE4_ASYNC_ROW_STORE_IM2COL_4D<cm_type>;
-    return Impl::template copy<TS, TG, NumBytesPerCopy>(tma_desc, abar_ptr, slm_ptr, crd_c, crd_w, crd_h, crd_n);
+    return Impl::template copy<TS, TG, NumBytesPerCopy>(tma_desc, abar_ptr, slm_ptr, coord[0], coord[1], coord[2], coord[3]);
   }
 };
 
 } // namespace xe4
-
-
-template <class CopyOp>
-struct XE4_COPY_Unpack
-{
-  template <class... Args,
-            class TS, class SLayout,
-            class TD, class DLayout>
-  CUTE_HOST_DEVICE friend constexpr void
-  copy_unpack(Copy_Traits<CopyOp, Args...> const& traits,
-              Tensor<TS,SLayout>           const& src,
-              Tensor<TD,DLayout>                & dst)
-  {
-    constexpr auto isLoadOperation = !cute::is_base_of<xe4::DMA_STORE, CopyOp>::value;
-
-    if constexpr (isLoadOperation) {
-      auto dst_ptr = cute::raw_pointer_cast(dst.data());
-      auto src_coord = cute::to_array<int32_t>(src.data().coord_);
-      return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
-                                  traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
-                                  make_tuple(dst_ptr, src_coord), seq<0, 1>{});
-    } else {
-      auto src_ptr = cute::raw_pointer_cast(src.data());
-      auto dst_coord = cute::to_array<int32_t>(dst.data().coord_);
-      return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
-                                  traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
-                                  make_tuple(src_ptr, dst_coord), seq<0, 1>{});
-    }
-  }
-};
-
 } // namespace cute

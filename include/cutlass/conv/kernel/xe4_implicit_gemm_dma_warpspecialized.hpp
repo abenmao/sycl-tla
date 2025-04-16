@@ -64,9 +64,6 @@ public:
   using TileSchedulerTag = TileScheduler_;
   using TileScheduler = typename cutlass::gemm::kernel::detail::TileSchedulerSelector<
     TileSchedulerTag, ArchTag, TileShape, ClusterShape, SchedulerPipelineStageCount>::Scheduler;
-  using TileSchedulerArguments = typename TileScheduler::Arguments;
-  using TileSchedulerParams = typename TileScheduler::Params;
-
   static constexpr bool IsSchedDynamicPersistent = TileScheduler::IsDynamicPersistent;
 
   using MainloopPipeline = typename CollectiveMainloop::MainloopPipeline;
@@ -133,7 +130,6 @@ public:
     ProblemShape problem_shape;
     MainloopParams mainloop;
     EpilogueParams epilogue;
-    TileSchedulerParams scheduler;
   };
 
   enum class WarpCategory : int32_t {
@@ -157,10 +153,6 @@ public:
   to_underlying_arguments(Arguments const& args, void* workspace) {
     auto tdesc_b = allocate_tdesc<0>();
 
-    auto scheduler_args = typename TileScheduler::Arguments {
-      {CollectiveMainloop::SlmBytesA, CollectiveMainloop::SlmBytesB}
-    };
-
     CollectiveMainloop collective_mainloop;
     auto conv_problem_shape = collective_mainloop.get_problem_shape_MNKL(args.problem_shape);
     auto problem_shape = replace<3>(conv_problem_shape, 1);
@@ -169,9 +161,7 @@ public:
       args.group_info,
       args.problem_shape,
       CollectiveMainloop::to_underlying_arguments(args.problem_shape, tdesc_b, args.mainloop, workspace),
-      CollectiveEpilogue::to_underlying_arguments(args.problem_shape, args.epilogue, workspace),
-      TileScheduler::to_underlying_arguments(problem_shape, TileShape{}, ClusterShape{},
-        scheduler_args)
+      CollectiveEpilogue::to_underlying_arguments(args.problem_shape, args.epilogue, workspace)
     };
   }
 
@@ -301,12 +291,15 @@ public:
 
     item.barrier(access::fence_space::local_space);
 
-    auto scheduler = TileScheduler(&shared_tensors.clc_response[0], params.scheduler);
+    auto coop_set_ids = make_tuple(uint32_t(0), uint32_t(0));
+    auto conv_problem_shape_mnl = replace<3>(conv_problem_shape, 1);
+    auto problem_blocks_shape = TileScheduler::calculate_problem_blocks_shape(conv_problem_shape_mnl, TileShape{});
+    auto scheduler = TileScheduler(&shared_tensors.clc_response[0], problem_blocks_shape, coop_set_ids);
     auto work_tile_info = scheduler.initial_work_tile_info();
 
     if (is_participant.main_load) {
       do {
-        auto [m_coord, n_coord, _] = scheduler.work_tile_to_cta_coord(work_tile_info);
+        auto [m_coord, n_coord, _, l_coord] = scheduler.work_tile_to_cta_coord(work_tile_info);
         n_coord = idx2crd(n_coord, shape<2>(gB_nk), compact_col_major(shape<2>(gB_nk)));
         auto blk_coord = make_tuple(m_coord, n_coord);
 
@@ -333,7 +326,7 @@ public:
     } else if (is_participant.epi_store)  {
       uint32_t work_id = local_id - (group_info.mma_subgroup_num + group_info.sched_subgroup_num + group_info.load_subgroup_num) * group_info.subgroup_size;
       do {
-        auto [m_coord, n_coord, _] = scheduler.work_tile_to_cta_coord(work_tile_info);
+        auto [m_coord, n_coord, _, l_coord] = scheduler.work_tile_to_cta_coord(work_tile_info);
         auto blk_coord = make_coord(m_coord, n_coord);
         collective_epilogue.store(params.epilogue, epilogue_store_pipeline,
           epilogue_pipe_store_consumer_state, conv_problem_shape, blk_coord, work_id,

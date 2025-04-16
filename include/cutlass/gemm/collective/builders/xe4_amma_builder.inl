@@ -95,7 +95,7 @@ struct CollectiveBuilder<
         AccumulatorPipelineStageCount,
         ClusterShape_MNK
     >;
-
+    
   static constexpr slm_matrix_type cmTypeA =
     cutlass::gemm::detail::is_mn_major_A<GmemLayoutATag>() ? slm_matrix_type::type2 : slm_matrix_type::type1;
 

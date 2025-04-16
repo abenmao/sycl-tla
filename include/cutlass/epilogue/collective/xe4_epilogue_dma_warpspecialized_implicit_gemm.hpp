@@ -69,11 +69,9 @@ public:
   {
     using GmemTiledCopyD = cute::xe4::ASYNC_ROW_STORE_IM2COL<slm_matrix_type::type1>;
 
-    return make_im2col_tma_copy<GmemTiledCopyD>(tensor_d,
+    return make_im2col_tma_copy<GmemTiledCopyD>(GmemTiledCopyD{}, tensor_d,
       make_layout(make_shape(shape<0>(TileShape{}), shape<1>(TileShape{})),
                   make_stride(shape<1>(TileShape{}), Int<1>{})),
-      Layout<Shape<cute::C<LANESIZE>, _1>>{},
-      make_layout(make_shape(Int<1>{}, shape<1>(TileShape{}))),
       make_shape(shape<0>(TileShape{}), shape<1>(TileShape{})),
       1,
       append<2>(Stride<_0>{}, Int<0>{}),

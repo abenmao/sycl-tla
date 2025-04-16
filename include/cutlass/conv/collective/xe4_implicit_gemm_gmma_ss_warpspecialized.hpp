@@ -2,7 +2,7 @@
 
 #include "cutlass/pipeline/pipeline.hpp"
 #include "cutlass/util/packed_stride.hpp"
-#include "cute/atom/copy_traits_xe4_im2col.hpp"
+#include "cute/atom/copy_traits_sm90_im2col.hpp"
 #include "cute/arch/mma_xe4_amma.hpp"
 #include "cutlass/gemm/dispatch_policy.hpp"
 #include "cutlass/conv/detail.hpp"
@@ -165,12 +165,10 @@ private:
         problem_shape.dilation[NumSpatialDimensions-1-i];
     }
 
-    return make_im2col_tma_copy<GmemTiledCopyA>(
+    return make_im2col_tma_copy<GmemTiledCopyA>(GmemTiledCopyA{}, 
       tensor_a,
       make_layout(make_shape(size<0>(TileShape{}), size<2>(TileShape{})),
         make_stride(size<2>(TileShape{}), Int<1>{})),
-      Layout<Shape<cute::C<LANESIZE>, _1>>{},
-      make_layout(make_shape(Int<1>{}, size<2>(TileShape{}))),
       make_shape(size<0>(TileShape{}), size<2>(TileShape{})),
       1,
       shape(lower_corner_whd),
@@ -184,17 +182,14 @@ private:
   }
 
   // Get tma_load_b instantce.
-  template <class TensorB, class TensorDesc>
+  template <class TensorB>
   static constexpr auto
-  get_tma_load_b_instance(TensorDesc tensor_desc, TensorB const& tensor_b, ProblemShape const& problem_shape) {
-    auto layoutSB = make_layout(make_shape(size<1>(TileShape{}), size<2>(TileShape{}), Int<Stages>{}),
-                                make_stride(size<2>(TileShape{}), Int<1>{}, size<1>(TileShape{}) * size<2>(TileShape{})));
-
-    return make_xe4_copy_conv2d<GmemTiledCopyB>(
-      tensor_desc,
+  get_tma_load_b_instance(TensorB const& tensor_b, ProblemShape const& problem_shape) {
+    return make_tma_copy<GmemTiledCopyB>(GmemTiledCopyB{},
       tensor_b,
       LayoutSB{}(_, _, 0),
-      make_shape(size<1>(TileShape{}), make_shape(size<2>(TileShape{})))
+      make_shape(size<1>(TileShape{}), make_shape(size<2>(TileShape{}))),
+      _1{}
     );
   }
 
@@ -224,7 +219,6 @@ public:
     );
 
     using TMA_B = decltype(get_tma_load_b_instance(
-      static_cast<uint64_t*>(nullptr),
       make_tensor(static_cast<ElementB const*>(nullptr), make_layout(TensorShapeB{}, StrideB{})),
       ProblemShape{})
     );
@@ -258,7 +252,8 @@ public:
     Tensor tensor_b = make_tensor(args.ptr_B, make_layout(shape_B_orig, dB));
 
     auto tma_load_a = get_tma_load_a_instance(tensor_a, problem_shape);
-    auto tma_load_b = get_tma_load_b_instance(tensor_desc, tensor_b, problem_shape);
+    auto tma_load_b = get_tma_load_b_instance(tensor_b, problem_shape);
+    tma_load_b.cache_.set_tensor_desc(tensor_desc);
 
     return {
       tma_load_a,
@@ -368,7 +363,7 @@ public:
       uint32_t abar_index = slm_pipe_read.index();
       auto abar_cons = pipeline.consumer_get_barrier(slm_pipe_read);
       pipeline.consumer_wait(slm_pipe_read);
-      cute::gemm(tiled_mma.with(dstIsAccum, mma_ctrl, abar_cons), tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
+      cute::gemm(tiled_mma.with(dstIsAccum, mma_ctrl, make_tuple(abar_cons)), tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
       pipeline.consumer_commit(slm_pipe_read, 1);
       ++slm_pipe_read;
       mma_ctrl = 0;
@@ -379,7 +374,7 @@ public:
       uint32_t abar_index = slm_pipe_read.index();
       pipeline.consumer_wait(slm_pipe_read);
       finalPipeline.producer_acquire(finalPipelineState);
-      cute::gemm(tiled_mma.with(dstIsMatC, mma_ctrl, abar_cons, abar_store), tCrC, tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
+      cute::gemm(tiled_mma.with(dstIsMatC, mma_ctrl, make_tuple(abar_cons, abar_store)), tCrC, tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
       pipeline.consumer_commit(slm_pipe_read, 1);
       ++slm_pipe_read;
     }

@@ -61,6 +61,54 @@ struct AuxTmaParams {
   static_assert(is_static<TmaSwizzle>::value);
 };
 
+#if defined(SYCL_INTEL_XE4_TARGET)
+template <class CopyOp>
+struct XE4_COPY_Unpack
+{
+  template <class... Args,
+            class TS, class SLayout,
+            class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits<CopyOp, Args...> const& traits,
+              Tensor<TS,SLayout>           const& src,
+              Tensor<TD,DLayout>                & dst)
+  {
+    constexpr auto isLoadOperation = !cute::is_base_of<xe4::DMA_STORE, CopyOp>::value;
+    constexpr auto isIm2ColOperation = cute::is_base_of<xe4::ASYNC_ROW_IM2COL, CopyOp>::value;
+
+    if constexpr (isLoadOperation) {
+      auto dst_ptr = cute::raw_pointer_cast(dst.data());
+      if constexpr(isIm2ColOperation) {
+        auto src_coord = cute::to_array<int32_t>(src(Int<0>{}));
+        return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
+                                    traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
+                                    make_tuple(dst_ptr, src_coord), seq<0, 1>{});
+      } else {
+        auto src_coord = cute::to_array<int32_t>(src.data().coord_);
+        return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
+                                    traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
+                                    make_tuple(dst_ptr, src_coord), seq<0, 1>{});
+      }
+
+    } else {
+      auto src_ptr = cute::raw_pointer_cast(src.data());
+      if constexpr(isIm2ColOperation) {
+        auto dst_coord = cute::to_array<int32_t>(take<0,3>(dst(Int<0>{})));
+        return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
+                                    traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
+                                    make_tuple(src_ptr, dst_coord), seq<0, 1>{});
+      } else {
+        auto dst_coord = cute::to_array<int32_t>(dst.data().coord_);
+        return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
+                                    traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
+                                    make_tuple(src_ptr, dst_coord), seq<0, 1>{});
+      }
+
+    }
+  }
+};
+#endif
+
 // Utility for unpacking TMA_LOAD arguments into a CopyOp
 template <class CopyOp, class... Args>
 struct TMA_LOAD_Unpack
@@ -1107,13 +1155,13 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
 }
 
 template <class GmemDetails, class AuxParams, class GmemPtr>
-struct Xe4DmaCache2 {
+struct Xe4DmaCache {
   template <typename CopyOp>
   using OpUnpack = XE4_COPY_Unpack<CopyOp>;
 
-  Xe4DmaCache2() = default;
+  Xe4DmaCache() = default;
 
-  Xe4DmaCache2(GmemDetails const& gmem_details, AuxParams const& aux_params, GmemPtr gmem_ptr)
+  Xe4DmaCache(GmemDetails const& gmem_details, AuxParams const& aux_params, GmemPtr gmem_ptr)
     : gmem_details_(gmem_details), aux_params_(aux_params), gmem_ptr_(gmem_ptr) {}
 
   CUTE_DEVICE void
@@ -1191,7 +1239,7 @@ make_tma_copy_atom(CopyOp,
 #if defined(SYCL_INTEL_XE4_TARGET)
   auto gmem_ptr = recast<TmaInternalType>(gtensor).data();
   constexpr int num_bits_per_tma = size(tma_gbasis) * sizeof_bits_v<TmaInternalType>;
-  using DmaCache = Xe4DmaCache2<decltype(tma_desc), decltype(aux_params), decltype(gmem_ptr)>;
+  using DmaCache = Xe4DmaCache<decltype(tma_desc), decltype(aux_params), decltype(gmem_ptr)>;
   using Traits = Copy_Traits<Xe4CopyOp<CopyOp>, cute::C<num_bits_per_tma>, DmaCache>;
   using Atom   = Copy_Atom<Traits, typename GEngine::value_type>;
 

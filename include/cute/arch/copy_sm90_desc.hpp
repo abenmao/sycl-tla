@@ -290,6 +290,10 @@ to_CUtensorMapL2promotion(L2Promotion const& t) {
 
 #if defined(SYCL_INTEL_XE4_TARGET)
   using TmaDescriptor = uint64_t*;
+  template<typename T, int NumBytesPerCopy>
+  struct alignas(64) Im2ColTmaDescriptor {
+    uint64_t bytes[10];   // support from 3D tensor to 5D tensor
+  };
 #elif (__CUDACC_VER_MAJOR__ >= 12) && !defined(__CUDACC_RTC__)
   using TmaDescriptor = CUtensorMap;
   using Im2ColTmaDescriptor = CUtensorMap;
