@@ -139,7 +139,7 @@ public:
       Xe4DmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore, NumControlWarps, NumEpilogueWarps>,
       CtaTileShape_MNK,
       EpilogueTile,
-      ElementC,
+      ElementC_, // Need to pass void through to expose via GemmUniversal
       GmemStrideTypeC,
       ElementD,
       GmemStrideTypeD,

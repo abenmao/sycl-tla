@@ -77,10 +77,10 @@ struct FusionCallbacks<
     CtaTileShapeMNK,
     EpilogueTile
 > : Sm90EVT<Sm90Compute<multiplies, ElementOutput, ElementCompute, RoundStyle>,
-      Sm90ScalarBroadcast<ElementScalar, Stride<_0,_0,int64_t>>, 
+      Sm90ScalarBroadcast<ElementScalar, Stride<_0,_0,int64_t>>,
       Sm90AccFetch
     > {
-  using Impl = 
+  using Impl =
     Sm90EVT<Sm90Compute<multiplies, ElementOutput, ElementCompute, RoundStyle>,
       Sm90ScalarBroadcast<ElementScalar, Stride<_0,_0,int64_t>>,
       Sm90AccFetch
@@ -223,11 +223,11 @@ template <
   class EpilogueTile
 >
 struct FusionCallbacks<
-    epilogue::Sm90PtrArrayTmaWarpSpecialized<StagesC, 
-                                             StagesD, 
-                                             FragmentSize, 
-                                             ReuseSmemC, 
-                                             DelayTmaStore, 
+    epilogue::Sm90PtrArrayTmaWarpSpecialized<StagesC,
+                                             StagesD,
+                                             FragmentSize,
+                                             ReuseSmemC,
+                                             DelayTmaStore,
                                              NumEpilogueWarpGroups
                                             >,
     fusion::LinearCombination<ElementOutput, ElementCompute, ElementSource, ElementScalar, RoundStyle>,
@@ -347,6 +347,58 @@ struct FusionCallbacks<
   using Impl::Impl;
 };
 
+// D = activation(acc)
+template<
+  template <class> class ActivationFn,
+  class ElementOutput,
+  class ElementCompute,
+  FloatRoundStyle RoundStyle = FloatRoundStyle::round_to_nearest
+>
+using Xe4EltAct =
+  Sm90EVT<
+    Sm90Compute<ActivationFn, ElementOutput, ElementCompute, RoundStyle>, // activation(acc)
+    Sm90AccFetch // acc
+  >;
+
+template <
+  int StagesC,
+  int StagesD,
+  int FragmentSize,
+  bool ReuseSmemC,
+  bool DelayTmaStore,
+  template <class> class ActivationFn,
+  class ElementOutput,
+  class ElementCompute,
+  FloatRoundStyle RoundStyle,
+  class CtaTileShapeMNK,
+  class EpilogueTile
+>
+struct FusionCallbacks<
+    epilogue::Sm90TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
+    fusion::EltAct<ActivationFn, ElementOutput, ElementCompute, RoundStyle>,
+    CtaTileShapeMNK,
+    EpilogueTile
+> : Xe4EltAct<ActivationFn, ElementOutput, ElementCompute, RoundStyle> {
+
+  using Impl = Xe4EltAct<ActivationFn, ElementOutput, ElementCompute, RoundStyle>;
+  using Operation = fusion::EltAct<ActivationFn, ElementOutput, ElementCompute, RoundStyle>;
+
+  struct Arguments {
+    using ActivationArguments = typename Sm90Compute<ActivationFn, ElementOutput, ElementCompute, RoundStyle>::Arguments;
+    ActivationArguments activation = ActivationArguments();
+
+    operator typename Impl::Arguments() const {
+      return
+        {                     // unary op : activation(acc)
+          {},                     // leaf args : acc
+          activation              // unary args: activation
+        };                   // end unary op
+    }
+  };
+  // Ctor inheritance
+  using Impl::Impl;
+};
+
 // D = activation(acc) * C
 template<
   template <class> class ActivationFn,
@@ -442,11 +494,11 @@ template <
   class EpilogueTile
 >
 struct FusionCallbacks<
-    epilogue::Sm90PtrArrayTmaWarpSpecialized<StagesC, 
-                                             StagesD, 
-                                             FragmentSize, 
-                                             ReuseSmemC, 
-                                             DelayTmaStore, 
+    epilogue::Sm90PtrArrayTmaWarpSpecialized<StagesC,
+                                             StagesD,
+                                             FragmentSize,
+                                             ReuseSmemC,
+                                             DelayTmaStore,
                                              NumEpilogueWarpGroups
                                             >,
     fusion::LinCombEltAct<ActivationFn, ElementOutput, ElementCompute, ElementSource, ElementScalar, RoundStyle>,
@@ -1409,7 +1461,7 @@ using Sm90ScaledLinCombPerRowBias =
   >;
 
 // Z = scale_a * scale_b * alpha * acc + beta * scale_c * C + per-row bias
-// if D is fp8 
+// if D is fp8
 //   D = scale_d * activation(Z)
 // else
 //   D = activation(Z)
@@ -1508,7 +1560,7 @@ struct FusionCallbacks<
                },  // leaf args : (scale_c * beta)
               {},  // leaf args : C
               {    // ternary op : (scale_a * scale_b * alpha) * acc + bias
-                {{alpha, scale_a, scale_b}, 
+                {{alpha, scale_a, scale_b},
                  {alpha_ptr, scale_a_ptr, scale_b_ptr},
                  {dAlpha, {_0{}, _0{}, 0}, {_0{}, _0{}, 0}}
                  },                   // leaf args : (scale_a * scale_b * alpha)
@@ -1557,7 +1609,7 @@ using Sm90ScaledLinCombPerColBias =
   >;
 
 // Z = scale_a * scale_b * alpha * acc + beta * scale_c * C + per-col bias
-// if D is fp8 
+// if D is fp8
 //   D = scale_d * activation(Z)
 // else
 //   D = activation(Z)
@@ -1656,7 +1708,7 @@ struct FusionCallbacks<
                },  // leaf args : (scale_c * beta)
               {},  // leaf args : C
               {    // ternary op : (scale_a * scale_b * alpha) * acc + bias
-                {{alpha, scale_a, scale_b}, 
+                {{alpha, scale_a, scale_b},
                  {alpha_ptr, scale_a_ptr, scale_b_ptr},
                  {dAlpha, {_0{}, _0{}, 0}, {_0{}, _0{}, 0}}
                  },                   // leaf args : (scale_a * scale_b * alpha)
@@ -1683,12 +1735,12 @@ struct FusionCallbacks<
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Z = scale_a * scale_b * alpha * acc + scale_c * beta * C + per-row bias
-// if D is fp8 
+// if D is fp8
 //   amax_d = max(abs(elements in activation(Z)))
 //   D = scale_d * activation(Z)
 // else
 //   D = activation(Z)
-// if Aux is fp8 
+// if Aux is fp8
 //   amax_aux = max(abs(elements in Z))
 //   Aux = scale_aux * Z
 // else
@@ -1914,7 +1966,7 @@ struct FusionCallbacks<
              },  // leaf args : (scale_c * beta)
             {},  // leaf args : C
             {    // ternary op : (scale_a * scale_b * alpha) * acc + bias
-              {{alpha, scale_a, scale_b}, 
+              {{alpha, scale_a, scale_b},
                {alpha_ptr, scale_a_ptr, scale_b_ptr},
                {dAlpha ,{_0{}, _0{}, 0}, {_0{}, _0{}, 0}}
                },                   // leaf args : (scale_a * scale_b * alpha)
@@ -1972,7 +2024,7 @@ struct FusionCallbacks<
                     },                // leaf args : (scale_c * beta)
                     {},               // leaf args : C
                     {                 // ternary op : (scale_a * scale_b * alpha) * acc + bias
-                      {{alpha, scale_a, scale_b}, 
+                      {{alpha, scale_a, scale_b},
                        {alpha_ptr, scale_a_ptr, scale_b_ptr},
                        {dAlpha, {_0{}, _0{}, 0}}
                       },                // leaf args : (scale_a * scale_b * alpha)
@@ -2003,12 +2055,12 @@ struct FusionCallbacks<
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Z = scale_a * scale_b * alpha * acc + scale_c * beta * C + per-col bias
-// if D is fp8 
+// if D is fp8
 //   amax_d = max(abs(elements in activation(Z)))
 //   D = scale_d * activation(Z)
 // else
 //   D = activation(Z)
-// if Aux is fp8 
+// if Aux is fp8
 //   amax_aux = max(abs(elements in Z))
 //   Aux = scale_aux * Z
 // else
@@ -2234,7 +2286,7 @@ struct FusionCallbacks<
              },  // leaf args : (scale_c * beta)
             {},  // leaf args : C
             {    // ternary op : (scale_a * scale_b * alpha) * acc + bias
-              {{alpha, scale_a, scale_b}, 
+              {{alpha, scale_a, scale_b},
                {alpha_ptr, scale_a_ptr, scale_b_ptr},
                {dAlpha, {_0{}, _0{}, 0}, {_0{}, _0{}, 0}}
                },                   // leaf args : (scale_a * scale_b * alpha)
@@ -2292,7 +2344,7 @@ struct FusionCallbacks<
                     },  // leaf args : (scale_c * beta)
                     {},               // leaf args : C
                     {                 // ternary op : (scale_a * scale_b * alpha) * acc + bias
-                      {{alpha, scale_a, scale_b}, 
+                      {{alpha, scale_a, scale_b},
                        {alpha_ptr, scale_a_ptr, scale_b_ptr},
                        {dAlpha, {_0{}, _0{}, 0}, {_0{}, _0{}, 0}}
                       },                // leaf args : (scale_a * scale_b * alpha)

@@ -14,6 +14,7 @@ struct BGEMM_TEST_CONFIG {
   using ElementA = fp16;
   using ElementB = fp16;
   using ElementC = fp16;
+  using ElementD = fp16;
   using ElementAccumulator = float;
   using CtaTileShape_MNK = Shape<_256,_512,_128>;
   using CtaNum_MN = Shape<_2, _1>;
@@ -48,6 +49,13 @@ struct BGEMM_ROW_COL : public BGEMM_TEST_CONFIG {
 struct BGEMM_COL_COL : public BGEMM_TEST_CONFIG {
   using LayoutA = cutlass::layout::ColumnMajor;
   using LayoutB = cutlass::layout::ColumnMajor;
+  using LayoutC = cutlass::layout::RowMajor;
+};
+
+struct BGEMM_ROW_ROW_VOID_C : public BGEMM_ROW_ROW {
+  using ElementC = void;
+  using LayoutA = cutlass::layout::RowMajor;
+  using LayoutB = cutlass::layout::RowMajor;
   using LayoutC = cutlass::layout::RowMajor;
 };
 
@@ -150,7 +158,8 @@ void run_test(bool is_persistent_mode = false)
   constexpr int AlignmentB  = 512;                                            // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
   // C/D matrix configuration
-  using         ElementC    = typename Config::ElementC;                      // Element type for C and D matrix operands
+  using         ElementC    = typename Config::ElementC;                      // Element type for C matrix operands
+  using         ElementD    = typename Config::ElementD;                      // Element type for D matrix operands
   using         LayoutC     = typename Config::LayoutC;                       // Layout type for C and D matrix operands
   constexpr int AlignmentC  = 512;                                            // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
 
@@ -162,7 +171,12 @@ void run_test(bool is_persistent_mode = false)
   using ClusterShape        = typename Config::ClusterShape_MNK;              // Shape of the threadblocks in a cluster
 
   using ElementEpilogueCompute = float;
-  using SiLuMulOperation = cutlass::epilogue::fusion::EltActMul<cutlass::epilogue::thread::SiLu, ElementC, ElementEpilogueCompute>;
+  using EpilogueScheduleType = cutlass::epilogue::collective::EpilogueScheduleAuto;
+  using EpilogueOperation = cute::conditional_t<
+    cute::is_void_v<ElementC>,
+    cutlass::epilogue::fusion::EltAct<cutlass::epilogue::thread::SiLu, ElementD, ElementEpilogueCompute>,
+    cutlass::epilogue::fusion::EltActMul<cutlass::epilogue::thread::SiLu, ElementD, ElementEpilogueCompute>
+  >;
 
   // Build the epilogue
   using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
@@ -171,9 +185,9 @@ void run_test(bool is_persistent_mode = false)
       cutlass::epilogue::collective::EpilogueTileAuto,
       ElementAccumulator, ElementAccumulator,
       ElementC, LayoutC, AlignmentC,
-      ElementC, LayoutC, AlignmentC,
-      cutlass::epilogue::collective::EpilogueScheduleAuto,
-      SiLuMulOperation
+      ElementD, LayoutC, AlignmentC,
+      EpilogueScheduleType,
+      EpilogueOperation
     >::CollectiveOp;
 
   // Build the mainloop
@@ -181,7 +195,7 @@ void run_test(bool is_persistent_mode = false)
       ArchTag, OperatorClass,
       ElementA, LayoutA, AlignmentA,
       ElementB, LayoutB, AlignmentB,
-      tuple<ElementAccumulator, ElementC>,
+      tuple<ElementAccumulator, ElementD>,
       TileShape, ClusterShape, cutlass::gemm::collective::StageCount<Config::StagesA>,
       cutlass::gemm::KernelTmaWarpSpecializedXe4<Config::StagesA, 1>
     >::CollectiveOp;
@@ -221,11 +235,14 @@ void run_test(bool is_persistent_mode = false)
   auto B_s = malloc_shared<ElementB>(sizeB, q);
   std::generate_n(B_s, sizeB, [=]() { return static_cast<float>(rand()) / static_cast<float>(RAND_MAX); });
 
-  auto C_s = malloc_shared<ElementC>(sizeC, q);
-  std::generate_n(C_s, sizeC, [=]() { return static_cast<float>(rand()) / static_cast<float>(RAND_MAX); });
+  ElementC* C_s = nullptr;
+  if constexpr (!cute::is_void_v<ElementC>) {
+    C_s = malloc_shared<ElementC>(sizeC, q);
+    std::generate_n(C_s, sizeC, [=]() { return static_cast<float>(rand()) / static_cast<float>(RAND_MAX); });
+  }
 
-  auto D_s = malloc_shared<ElementC>(sizeC, q);
-  std::fill_n(D_s, sizeC, ElementC(0));
+  auto D_s = malloc_shared<ElementD>(sizeC, q);
+  std::fill_n(D_s, sizeC, ElementD(0));
 
   auto num_groups = ceil_div(problem_shape_mnkl, TileShape {});
   range<3> local_range(1, NumControlWarps + NumEpilogueWarps, cutlass::NumThreadsPerWarp);
@@ -283,7 +300,13 @@ void run_test(bool is_persistent_mode = false)
 
     for (int i = 0; i < vec.size(); ++i) {
       auto val = ElementEpilogueCompute(vec[i]);
-      vec[i] = val * sigmod(val) * ElementEpilogueCompute(C_s[i]);
+      auto result = val * sigmod(val);
+
+      if constexpr (cute::is_void_v<ElementC>) {
+        vec[i] = val * sigmod(val);
+      } else {
+        vec[i] = val * sigmod(val) * ElementEpilogueCompute(C_s[i]);
+      }
     }
 
     return vec;
@@ -304,6 +327,6 @@ void run_test(bool is_persistent_mode = false)
 int main()
 {
   bool is_persistent_mode = true;
-  run_test<BGEMM_COL_ROW>(is_persistent_mode);
+  run_test<BGEMM_ROW_ROW_VOID_C>(is_persistent_mode);
   return 0;
 }

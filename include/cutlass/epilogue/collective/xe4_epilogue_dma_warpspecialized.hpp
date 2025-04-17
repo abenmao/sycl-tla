@@ -569,7 +569,6 @@ public:
       worker_id
     );
 
-    bool is_producer_load_needed = fusion_callbacks.is_producer_load_needed();
     bool is_C_load_needed = is_source_supported && fusion_callbacks.is_C_load_needed();
     auto cst_callbacks = fusion_callbacks.template get_consumer_store_callbacks<true>(cst_args);
 
@@ -592,18 +591,16 @@ public:
 
         cst_callbacks.begin_loop(epi_m, epi_n);
 
-        if (is_producer_load_needed) {
-          // Wait for the producer load to fill smem
-          load_pipeline.consumer_wait(load_pipe_consumer_state);
+        // Wait for the producer load to fill smem
+        load_pipeline.consumer_wait(load_pipe_consumer_state);
 
-          if (is_C_load_needed) {
-            // Copy source tile from smem to register
-            copy(tiled_s2r, tSR_sC(_,_,_,load_pipe_consumer_state.index()), tSR_rC);
-          }
-
-          load_pipeline.consumer_release(load_pipe_consumer_state);
-          ++load_pipe_consumer_state;
+        if (is_C_load_needed) {
+          // Copy source tile from smem to register
+          copy(tiled_s2r, tSR_sC(_,_,_,load_pipe_consumer_state.index()), tSR_rC);
         }
+
+        load_pipeline.consumer_release(load_pipe_consumer_state);
+        ++load_pipe_consumer_state;
 
         // The current tile in smem
         Tensor tSR_sAcc_mn = tSR_sAcc(_,_,_,epi_m,epi_n);

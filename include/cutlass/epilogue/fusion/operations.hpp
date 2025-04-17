@@ -133,6 +133,21 @@ struct LinCombEltAct
   static constexpr bool IsEltActSupported = true;
 };
 
+// D = activation(acc)
+template<
+  template <class> class ActivationFn_,
+  class ElementOutput_,
+  class ElementCompute_,
+  FloatRoundStyle RoundStyle_ = FloatRoundStyle::round_to_nearest
+>
+struct EltAct : FusionOperation {
+  using ElementOutput = ElementOutput_;
+  using ElementCompute = ElementCompute_;
+  using ActivationFn = ActivationFn_<ElementCompute_>;
+  static constexpr bool IsEltActSupported = true;
+  static constexpr auto RoundStyle = RoundStyle_;
+};
+
 // D = activation(acc) * C
 template<
   template <class> class ActivationFn_,
@@ -141,14 +156,9 @@ template<
   class ElementSource_ = ElementOutput_,
   FloatRoundStyle RoundStyle_ = FloatRoundStyle::round_to_nearest
 >
-struct EltActMul : FusionOperation {
-  using ElementOutput = ElementOutput_;
-  using ElementCompute = ElementCompute_;
+struct EltActMul : EltAct<ActivationFn_, ElementOutput_, ElementCompute_, RoundStyle_> {
   using ElementSource = ElementSource_;
-  using ActivationFn = ActivationFn_<ElementCompute_>;
   static constexpr bool IsSourceSupported = true;
-  static constexpr bool IsEltActSupported = true;
-  static constexpr auto RoundStyle = RoundStyle_;
 };
 
 // D = softmax(top_k(alpha * acc + beta * C))
@@ -361,7 +371,7 @@ struct PerColLinCombPerColBiasEltAct
 };
 
 // Z = scale_a * scale_b * alpha * acc + beta * scale_c * C + per-row bias
-// if D is fp8 
+// if D is fp8
 //   D = scale_d * activation(Z)
 // else
 //   D = activation(Z)
@@ -382,7 +392,7 @@ struct ScaledLinCombPerRowBiasEltAct
 };
 
 // Z = scale_a * scale_b * alpha * acc + beta * scale_c * C + per-col bias
-// if D is fp8 
+// if D is fp8
 //   D = scale_d * activation(Z)
 // else
 //   D = activation(Z)
@@ -403,12 +413,12 @@ struct ScaledLinCombPerColBiasEltAct
 };
 
 // Z = scale_a * scale_b * alpha * acc + scale_c * beta * C + per-row bias
-// if D is fp8 
+// if D is fp8
 //   amax_d = max(abs(elements in activation(Z)))
 //   D = scale_d * activation(Z)
 // else
 //   D = activation(Z)
-// if Aux is fp8 
+// if Aux is fp8
 //   amax_aux = max(abs(elements in Z))
 //   Aux = scale_aux * Z
 // else
@@ -440,12 +450,12 @@ struct ScaledLinCombPerRowBiasEltActAmaxAux
 };
 
 // Z = scale_a * scale_b * alpha * acc + scale_c * beta * C + per-col bias
-// if D is fp8 
+// if D is fp8
 //   amax_d = max(abs(elements in activation(Z)))
 //   D = scale_d * activation(Z)
 // else
 //   D = activation(Z)
-// if Aux is fp8 
+// if Aux is fp8
 //   amax_aux = max(abs(elements in Z))
 //   Aux = scale_aux * Z
 // else
