@@ -435,13 +435,14 @@ public:
       int current_wave = 0;
       bool reverse_epi_n = false;
       static constexpr bool IsOverlappingAccum = false;
+      auto prev_epi_store_consumer_state = epi_store_pipe_consumer_state;
 
       do {
         auto cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);
 
-        epi_load_pipe_producer_state = collective_epilogue.template load<IsOverlappingAccum>(
-          epi_load_pipeline,
-          epi_load_pipe_producer_state,
+        auto [load_state_next, store_cons_state_next] = collective_epilogue.template load<IsOverlappingAccum>(
+          cute::make_tuple(epi_load_pipeline, epi_store_pipeline),
+          cute::make_tuple(epi_load_pipe_producer_state, epi_store_pipe_consumer_state),
           problem_shape_MNKL,
           CtaShape_MNK{},
           cta_coord_mnkl,
@@ -450,6 +451,9 @@ public:
           shared_tensors.epilogue,
           reverse_epi_n
         );
+        prev_epi_store_consumer_state = epi_store_pipe_consumer_state;
+        epi_load_pipe_producer_state = load_state_next;
+        epi_store_pipe_consumer_state = store_cons_state_next;
 
         auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
         if (increment_pipe) {
@@ -459,18 +463,18 @@ public:
         work_tile_info = next_work_tile_info;
         current_wave++;
       } while (work_tile_info.is_valid());
-    } else if (is_participant.epilogue)  {
-      auto prev_epi_store_consumer_state = epi_store_pipe_consumer_state;
 
+      epi_store_pipeline.producer_try_acquire(prev_epi_store_consumer_state);
+    } else if (is_participant.epilogue)  {
       do {
         auto cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);
-        
+
         //
         // Epilogue and write to gD
         //
-        auto [load_state_next, store_prod_state_next, store_cons_state_next, acc_state_next] = collective_epilogue.store(
+        auto [load_state_next, store_prod_state_next, acc_state_next] = collective_epilogue.store(
           cute::make_tuple(epi_load_pipeline, epi_store_pipeline, accumulator_pipeline),
-          cute::make_tuple(epi_load_pipe_consumer_state, epi_store_pipe_producer_state, epi_store_pipe_consumer_state, accumulator_pipe_consumer_state),
+          cute::make_tuple(epi_load_pipe_consumer_state, epi_store_pipe_producer_state, accumulator_pipe_consumer_state),
           problem_shape_MNKL,
           CtaShape_MNK{},
           cta_coord_mnkl,
@@ -479,10 +483,8 @@ public:
           intermedia_tensor,
           shared_tensors.epilogue
         );
-        prev_epi_store_consumer_state = epi_store_pipe_consumer_state;
         epi_load_pipe_consumer_state = load_state_next;
         epi_store_pipe_producer_state = store_prod_state_next;
-        epi_store_pipe_consumer_state = store_cons_state_next;
         accumulator_pipe_consumer_state = acc_state_next;
 
         auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
@@ -491,8 +493,6 @@ public:
         }
         work_tile_info = next_work_tile_info;
       } while (work_tile_info.is_valid());
-
-      epi_store_pipeline.producer_try_acquire(prev_epi_store_consumer_state);
     }
   }
 };

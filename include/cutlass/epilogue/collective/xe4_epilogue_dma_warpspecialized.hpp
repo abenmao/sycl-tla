@@ -310,6 +310,8 @@ public:
 
   template<
     bool ReuseTmem = false,
+    class Pipelines,
+    class PipelineStates,
     class ProblemShapeMNKL,
     class CtaTileMNK,
     class CtaCoordMNKL,
@@ -318,8 +320,8 @@ public:
   >
   CUTLASS_DEVICE auto
   load(
-    LoadPipeline load_pipeline,
-    LoadPipelineState load_pipe_producer_state,
+    Pipelines pipelines,
+    PipelineStates pipeline_states,
     ProblemShapeMNKL problem_shape_mnkl,
     CtaTileMNK cta_tile_mnk,
     CtaCoordMNKL cta_coord_mnkl,
@@ -343,14 +345,19 @@ public:
     Tensor mC = coalesce(mC_mn, take<0,2>(cta_tile_mnk));
     Tensor gC = local_tile(mC, take<0,2>(cta_tile_mnk), coord_shape);                                  // (CTA_M,CTA_N)
 
-    // Apply epilogue subtile, get matching smem tensor
-    auto ptr_sC = shared_tensors.collective.smem_C.begin();
-    Tensor gC_epi = flat_divide(gC, EpilogueTile{});                             // (EPI_TILE_M,EPI_TILE_N,EPI_M,EPI_N)
-    Tensor sC_epi = make_tensor(make_smem_ptr(ptr_sC), SmemLayoutC{});           //      (EPI_TILE_M,EPI_TILE_N,PIPE_C)
+    Tensor mD_mnl = params.tma_store_d.get_tma_tensor(make_shape(M,N,L));   // (M,N,L)
+    Tensor mD = coalesce(mD_mnl, take<0,2>(cta_tile_mnk));
+    Tensor gD = local_tile(mD, take<0,2>(cta_tile_mnk), coord_shape);   // (CTA_M,CTA_N)
 
-    // gC      (int, int, int) o (_256, _512):(E<1>, E<0>)
-    // gC_epi  (int, int, int) o (_32, _512, _8, _1):(E<1>, E<0>, _32*E<1>, _0)
-    // sC_epi  smem_ptr<half*> o ((_32, _1), (_512, _1), _1):((_512, _0), (_1, _0), _16384)
+    // Apply epilogue subtile, get matching smem tensor
+    Tensor gC_epi = flat_divide(gC, EpilogueTile{});                             // (EPI_TILE_M,EPI_TILE_N,EPI_M,EPI_N)
+    Tensor gD_epi = flat_divide(  gD, take<0,2>(CtaTileShape{}));                // (CTA_TILE_M,CTA_TILE_N,CTA_M,CTA_N)
+
+    // Construct the corresponding pipelined smem tensors
+    auto ptr_sC = shared_tensors.collective.smem_C.begin();
+    auto ptr_sD = shared_tensors.collective.smem_D.begin();
+    auto sC_epi = make_tensor(make_smem_ptr(ptr_sC), SmemLayoutC{});           // (EPI_TILE_M,EPI_TILE_N,PIPE_C)
+    auto sD_epi = make_tensor(make_smem_ptr(ptr_sD), SmemLayoutD{});           // (CTA_M,CTA_N,PIPE_D)
 
     // Prepare the thread(b)lock's (G)mem to (S)mem TMA tiled copy (bGS_)
     ThrCopy thrblk_g2s = params.tma_load_c.get_slice(Int<0>{});
@@ -359,6 +366,14 @@ public:
 
     // bGS_gC (int, int, int) o (((_512, _32), _1), _1, _1, _8, _1):(((E<0>, E<1>), _0), _0, _0, _32*E<1>, _0)
     // bGS_sC smem_ptr<half*> o (((_512, _32), _1), _1, _1, _1):(((_1, _512), _0), _0, _0, _16384)
+
+    // thread(b)lock-partition for (s)mem to (g)mem copy (bSG_)
+    ThrCopy thrblk_s2g = params.tma_store_d.get_slice(Int<0>{});
+    auto bSG_sD = thrblk_s2g.partition_S(sD_epi);   // (S2G,S2G_M,S2G_N,PIPE_D)
+    auto bSG_gD = thrblk_s2g.partition_D(gD_epi);   // (S2G,S2G_M,S2G_N,EPI_M,EPI_N)
+
+    // bSG_sD smem_ptr<half*> o (((_512, _256), _1), _1, _1, _1):(((_1, _512), _0), _0, _0, _131072)
+    // bSG_gD (int, int, int) o (((_512, _256), _1), _1, _1, _1, _1):(((E<0>, E<1>), _0), _0, _0, _0, _0)
 
     // Get the fusion callbacks for the producer load warp
     auto pld_args = cutlass::epilogue::fusion::detail::ProducerLoadArgs{
@@ -373,10 +388,13 @@ public:
     bool is_C_load_needed = is_source_supported && fusion_callbacks.is_C_load_needed();
 
     // Predication for TMA load (one thread issues TMA load)
-    bool issue_tma_load = cute::elect_one_sync();
+    bool lane_predicate = cute::elect_one_sync();
 
     // Pre-loop fusion callback entry point
     pld_callbacks.begin();
+
+    auto [load_pipeline, store_pipeline] = pipelines;
+    auto [load_pipe_producer_state, store_pipe_consumer_state] = pipeline_states;
 
     CUTLASS_PRAGMA_UNROLL
     for (int iter_m = 0; iter_m < size<2>(gC_epi); ++iter_m) {
@@ -389,7 +407,7 @@ public:
         auto tma_barrier = load_pipeline.producer_get_barrier(load_pipe_producer_state);
 
         // Execute the TMA load for C if needed
-        if (issue_tma_load && is_C_load_needed) {
+        if (lane_predicate && is_C_load_needed) {
           constexpr uint16_t mcast_mask = 0;
           copy(params.tma_load_c.with(tma_barrier, mcast_mask),
               bGS_gC(_,_,_,epi_m,epi_n), bGS_sC(_,_,_,load_pipe_producer_state.index()));
@@ -397,7 +415,7 @@ public:
         }
 
         // Loop fusion callback entry point
-        // pld_callbacks.step(tma_barrier, epi_m, epi_n, load_pipe_producer_state.count(), issue_tma_load);
+        // pld_callbacks.step(tma_barrier, epi_m, epi_n, load_pipe_producer_state.count(), lane_predicate);
 
         // Commit TMA loads for this stage and release the lock
         load_pipeline.producer_commit(load_pipe_producer_state);
@@ -408,7 +426,16 @@ public:
     // Post-loop fusion callback entry point
     pld_callbacks.end();
 
-    return load_pipe_producer_state;
+    store_pipeline.consumer_try_wait(store_pipe_consumer_state);  // ensure all threads have issued their async fence
+    if (lane_predicate) {
+      auto abar_store = store_pipeline.consumer_get_barrier(store_pipe_consumer_state);
+      copy(params.tma_store_d.with(abar_store), bSG_sD(_,_,_,store_pipe_consumer_state.index()), bSG_gD(_,_,_,_0{},_0{}));
+      store_pipeline.consumer_commit(store_pipe_consumer_state, TransactionBytesStore);
+    }
+
+    ++store_pipe_consumer_state;
+
+    return make_tuple(load_pipe_producer_state, store_pipe_consumer_state);
   }
 
   template<
@@ -446,7 +473,7 @@ public:
     uint32_t worker_id = local_id - NumControlWarps * NumThreadsPerWarp;
 
     auto [load_pipeline, store_pipeline, accumulator_pipeline] = pipelines;
-    auto [load_pipe_consumer_state, store_pipe_producer_state, store_pipe_consumer_state, accumulator_pipe_consumer_state] = pipeline_states;
+    auto [load_pipe_consumer_state, store_pipe_producer_state, accumulator_pipe_consumer_state] = pipeline_states;
 
     // The tma tensor D under im2col mode only has two modes (M, N) which
     // should be local tiled with only (m_coord, n_coord).
@@ -460,7 +487,6 @@ public:
     };
 
     // Represent the full output tensor, slice to get the tile this CTA is responsible for
-    // auto mD_mnl = params.tma_store_d.get_tma_tensor(Shape<_1024,_1024,_1>{});   // (M,N,L)  (_0, _0, _0) o (_1024, _1024, _1):(E<1>, E<0>, E<2>)
     auto mD_mnl = params.tma_store_d.get_tma_tensor(make_shape(M,N,L));   // (M,N,L)
     auto mD = coalesce(mD_mnl, take<0,2>(cta_tile_mnk));
     auto gD = local_tile(mD, take<0,2>(cta_tile_mnk), coord_shape);   // (CTA_M,CTA_N)
@@ -512,14 +538,6 @@ public:
 
     // tRS_sD smem_ptr <half*> o ((_16, _2), _8, _1, _1):((_1, _512), _16384, _0, _131072)
     // tRS_rD   Array<half, 256> o ((_16, _2), _8, _1):((_1, _16), _32, _0)
-
-    // thread(b)lock-partition for (s)mem to (g)mem copy (bSG_)
-    ThrCopy thrblk_s2g = params.tma_store_d.get_slice(Int<0>{});
-    auto bSG_sD = thrblk_s2g.partition_S(sD_epi);   // (S2G,S2G_M,S2G_N,PIPE_D)
-    auto bSG_gD = thrblk_s2g.partition_D(gD_epi);   // (S2G,S2G_M,S2G_N,EPI_M,EPI_N)
-
-    // bSG_sD smem_ptr<half*> o (((_512, _256), _1), _1, _1, _1):(((_1, _512), _0), _0, _0, _131072)
-    // bSG_gD (int, int, int) o (((_512, _256), _1), _1, _1, _1, _1):(((E<0>, E<1>), _0), _0, _0, _0, _0)
 
     // OOB predication for tile quantization "residue"
     // Absolute coordinate tensors (dynamic)
@@ -611,18 +629,10 @@ public:
 
     cst_callbacks.end();
 
-    store_pipeline.consumer_try_wait(store_pipe_consumer_state);  // ensure all threads have issued their async fence
-    if (worker_id == 0) {
-      auto abar_store = store_pipeline.consumer_get_barrier(store_pipe_consumer_state);
-      copy(params.tma_store_d.with(abar_store), bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,_0{},_0{}));
-      store_pipeline.consumer_commit(store_pipe_consumer_state, TransactionBytesStore);
-    }
-
     ++store_pipe_producer_state;
-    ++store_pipe_consumer_state;
     ++accumulator_pipe_consumer_state;
 
-    return make_tuple(load_pipe_consumer_state, store_pipe_producer_state, store_pipe_consumer_state, accumulator_pipe_consumer_state);
+    return make_tuple(load_pipe_consumer_state, store_pipe_producer_state, accumulator_pipe_consumer_state);
   }
 };
 
