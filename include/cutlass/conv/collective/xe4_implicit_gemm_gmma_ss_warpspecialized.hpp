@@ -363,8 +363,8 @@ public:
       uint32_t abar_index = slm_pipe_read.index();
       auto abar_cons = pipeline.consumer_get_barrier(slm_pipe_read);
       pipeline.consumer_wait(slm_pipe_read);
-      cute::gemm(tiled_mma.with(dstIsAccum, mma_ctrl, make_tuple(abar_cons)), tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
-      pipeline.consumer_commit(slm_pipe_read, 1);
+      cute::gemm(tiled_mma.with(dstIsAccum, mma_ctrl, make_tuple(abar_cons, abar_cons)), tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
+      pipeline.consumer_commit(slm_pipe_read, 2);
       ++slm_pipe_read;
       mma_ctrl = 0;
     }
@@ -374,8 +374,8 @@ public:
       uint32_t abar_index = slm_pipe_read.index();
       pipeline.consumer_wait(slm_pipe_read);
       finalPipeline.producer_acquire(finalPipelineState);
-      cute::gemm(tiled_mma.with(dstIsMatC, mma_ctrl, make_tuple(abar_cons, abar_store)), tCrC, tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
-      pipeline.consumer_commit(slm_pipe_read, 1);
+      cute::gemm(tiled_mma.with(dstIsMatC, mma_ctrl, make_tuple(abar_store, abar_cons, abar_cons)), tCrC, tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
+      pipeline.consumer_commit(slm_pipe_read, 2);
       ++slm_pipe_read;
     }
     return slm_pipe_read;
