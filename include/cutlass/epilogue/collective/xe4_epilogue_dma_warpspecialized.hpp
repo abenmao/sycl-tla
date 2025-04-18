@@ -156,6 +156,8 @@ public:
   using StorePipeline = cutlass::PipelineTmaAsync<StagesD>;
   using StorePipelineState = typename StorePipeline::PipelineState;
 
+  using WaveOrderBarrier = cutlass::OrderedSequenceBarrier<1,1>;
+
   static_assert(ReuseSmemC==false, "Not support ReuseSmemC yet");
 
   struct SharedStorage
@@ -288,8 +290,14 @@ public:
   //
   template <class TensorDescTuple>
   CUTLASS_DEVICE
-  CollectiveEpilogue(Params const& params_, TensorStorage& shared_tensors, TensorDescTuple tdesc_tuple)
-      : params(params_), fusion_callbacks(params_.thread, shared_tensors.thread) {
+  CollectiveEpilogue(
+    Params const& params_,
+    TensorStorage& shared_tensors,
+    WaveOrderBarrier& wave_order_barrier_,
+    TensorDescTuple tdesc_tuple)
+      : params(params_)
+      , fusion_callbacks(params_.thread, shared_tensors.thread)
+      , wave_order_barrier(wave_order_barrier_) {
     auto [tensor_desc_c, tensor_desc_d] = tdesc_tuple;
     params.tma_load_c.cache_.set_tensor_desc(tensor_desc_c);
     params.tma_store_d.cache_.set_tensor_desc(tensor_desc_d);
@@ -298,6 +306,7 @@ public:
 private:
   Params const& params;
   FusionCallbacks fusion_callbacks;
+  WaveOrderBarrier& wave_order_barrier;
 
   //
   // Non-static Device Functions
@@ -591,6 +600,8 @@ public:
 
         cst_callbacks.begin_loop(epi_m, epi_n);
 
+        wave_order_barrier.wait();
+
         // Wait for the producer load to fill smem
         load_pipeline.consumer_wait(load_pipe_consumer_state);
 
@@ -618,6 +629,8 @@ public:
 
         // copy output tile from register to smem
         copy(tiled_r2s, tRS_rD(_,_0{},_0{}), tRS_sD(_,epi_m,epi_n,store_pipe_producer_state.index()));
+
+        wave_order_barrier.arrive();
       }
     }
 

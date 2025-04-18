@@ -93,14 +93,16 @@ public:
   using MainloopPipeline = typename CollectiveMainloop::MainloopPipeline;
   using MainloopPipelineState = typename CollectiveMainloop::MainloopPipelineState;
 
-  using EpiStorePipeline = typename CollectiveEpilogue::StorePipeline;
-  using EpiStorePipelineState = typename CollectiveEpilogue::StorePipelineState;
+  using EpiLoadPipeline = typename CollectiveEpilogue::LoadPipeline;
+  using EpiLoadPipelineState = typename CollectiveEpilogue::LoadPipelineState;
 
   using AccumulatorPipeline = cutlass::PipelineTmaAsync<AccumulatorPipelineStageCount>;
   using AccumulatorPipelineState = typename AccumulatorPipeline::PipelineState;
 
-  using EpiLoadPipeline = typename CollectiveEpilogue::LoadPipeline;
-  using EpiLoadPipelineState = typename CollectiveEpilogue::LoadPipelineState;
+  using EpiStorePipeline = typename CollectiveEpilogue::StorePipeline;
+  using EpiStorePipelineState = typename CollectiveEpilogue::StorePipelineState;
+
+  using EpiWaveOrderBarrier = typename CollectiveEpilogue::WaveOrderBarrier;
 
   using CLCPipeline = cutlass::PipelineTmaAsync<SchedulerPipelineStageCount>;
   using CLCPipelineState = typename CLCPipeline::PipelineState;
@@ -126,6 +128,7 @@ public:
       using EpiLoadPipelineStorage = typename EpiLoadPipeline::SharedStorage;
       using AccumulatorPipelineStorage = typename AccumulatorPipeline::SharedStorage;
       using EpiStorePipelineStorage = typename EpiStorePipeline::SharedStorage;
+      using EpiWaveOrderBarrierStorage = typename EpiWaveOrderBarrier::SharedStorage;
       using CLCPipelineStorage = typename CLCPipeline::SharedStorage;
       using CLCThrottlePipelineStorage = typename CLCThrottlePipeline::SharedStorage;
 
@@ -133,6 +136,7 @@ public:
       EpiLoadPipelineStorage epi_load;
       AccumulatorPipelineStorage accumulator;
       EpiStorePipelineStorage epi_store;
+      EpiWaveOrderBarrierStorage epi_wave_order;
       CLCPipelineStorage clc;
       CLCThrottlePipelineStorage clc_throttle;
     } pipelines;
@@ -218,9 +222,6 @@ public:
     auto abar_base = allocate_abar_bytes<0, PipelineStorageSize>();
     auto& shared_pipelines = *reinterpret_cast<typename SharedStorage::PipelineStorage*>(abar_base);
 
-    CollectiveMainloop collective_mainloop(params.mainloop, cluster_shape);
-    CollectiveEpilogue collective_epilogue(params.epilogue, shared_tensors.epilogue, make_tuple(tdesc_c, tdesc_d));
-
     // Do we load source tensor C or other aux inputs
     bool is_epi_load_needed = false;
     bool is_first_cta_in_cluster = true;
@@ -281,6 +282,13 @@ public:
     epi_store_pipeline_params.num_producers = NumEpilogueThreads;
     epi_store_pipeline_params.num_consumers = 1;
     EpiStorePipeline epi_store_pipeline(shared_pipelines.epi_store, epi_store_pipeline_params, cluster_shape, true_type{}, false_type{});
+
+    // Epilogue wave order barrier
+    typename EpiWaveOrderBarrier::Params epi_wave_order_barrier_params;
+    epi_wave_order_barrier_params.group_id = 0;
+    epi_wave_order_barrier_params.group_size = NumEpilogueThreads;
+    epi_wave_order_barrier_params.initializing_warp = static_cast<int>(WarpCategory::Epilogue);
+    EpiWaveOrderBarrier epi_wave_order_barrier(shared_pipelines.epi_wave_order, epi_wave_order_barrier_params);
 
     // CLC pipeline
     typename CLCPipeline::Params clc_pipeline_params;
@@ -343,6 +351,9 @@ public:
 
     // Wait for all thread blocks in the Cluster
     cluster_wait_fn();
+
+    CollectiveMainloop collective_mainloop(params.mainloop, cluster_shape);
+    CollectiveEpilogue collective_epilogue(params.epilogue, shared_tensors.epilogue, epi_wave_order_barrier, make_tuple(tdesc_c, tdesc_d));
 
     auto load_inputs = collective_mainloop.load_init(problem_shape, shared_tensors.mainloop, make_tuple(tdesc_a, tdesc_b));
     auto intermedia_tensor = CollectiveEpilogue::get_intermedia_tensor(shared_tensors.epilogue);
