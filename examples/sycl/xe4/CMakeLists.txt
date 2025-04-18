@@ -26,11 +26,22 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-set(INCLUDE_DIRS
-  ${CMAKE_CURRENT_SOURCE_DIR}/utils
-  ${CMAKE_SOURCE_DIR}/include/cute/arch/xe4
-  ${CMAKE_SOURCE_DIR}/include/cute/arch/xe4/auto_generated
-)
+set(INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/utils)
+set(MMA_GENERATOR ${CMAKE_CURRENT_SOURCE_DIR}/utils/generator/gen_mma.py)
+
+function(generate_amma_header TARGET_NAME)
+  set(AMMA_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/generated_headers/async_gmma.hpp)
+  set(GEN_ARGS ${ARGN} --output ${AMMA_HEADER})
+
+  add_custom_command(
+    OUTPUT ${AMMA_HEADER}
+    COMMAND ${Python3_EXECUTABLE} ${MMA_GENERATOR} ${GEN_ARGS}
+    DEPENDS ${MMA_GENERATOR}
+    COMMENT "Generating header file with ${TARGET_NAME}")
+
+  add_custom_target(${TARGET_NAME} ALL DEPENDS ${AMMA_HEADER})
+endfunction()
+
 
 function(add_xe4_test TARGET_NAME SRCS)
   cutlass_example_add_executable(${TARGET_NAME} ${SRCS} ${ARGN})

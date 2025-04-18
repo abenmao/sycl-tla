@@ -2,7 +2,9 @@
 
 #include "./util.hpp"
 
-#include "async_gmma.hpp"
+#ifdef AMMA_GENERATED
+#include "generated_headers/async_gmma.hpp"
+#endif
 
 #ifdef VC_WA
 #define ALLOCATE_ABAR(reg_name, abar_name, abar_bytes)

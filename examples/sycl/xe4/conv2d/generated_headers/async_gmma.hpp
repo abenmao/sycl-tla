@@ -8,12 +8,122 @@
 
 /* clang-format off */
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
 template<typename TD, typename TC, typename TA, typename TB, uint32_t M, uint32_t N, uint32_t K, mem_layout layout_a, mem_layout layout_b>
 struct AsyncMMA {
   static_assert(false, "Could not find a async_gmma specialization.");
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
+
+template<>
+struct AsyncMMA<float, float, fp16, fp16, 128, 128, 128, mem_layout::row_major, mem_layout::row_major> {
+  // non-cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+  }
+
+  // cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+};
+
+template<>
+struct AsyncMMA<float, float, fp16, fp16, 128, 128, 128, mem_layout::row_major, mem_layout::col_major> {
+  // non-cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.bt.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.bt.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.bt.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+  }
+
+  // cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.bt.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.bt.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+};
+
+template<>
+struct AsyncMMA<float, float, fp16, fp16, 128, 128, 128, mem_layout::col_major, mem_layout::row_major> {
+  // non-cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+  }
+
+  // cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+};
+
+template<>
+struct AsyncMMA<float, float, fp16, fp16, 128, 128, 128, mem_layout::col_major, mem_layout::col_major> {
+  // non-cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.bt.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.bt.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.bt.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+  }
+
+  // cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.bt.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.bt.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+};
 
 template<>
 struct AsyncMMA<float, float, fp16, fp16, 256, 512, 128, mem_layout::row_major, mem_layout::row_major> {
@@ -124,110 +234,218 @@ struct AsyncMMA<float, float, fp16, fp16, 256, 512, 128, mem_layout::col_major, 
 };
 
 template<>
-struct AsyncMMA<float, float, fp16, fp16, 128, 128, 128, mem_layout::row_major, mem_layout::row_major> {
+struct AsyncMMA<float, float, fp16, fp16, 256, 128, 128, mem_layout::row_major, mem_layout::row_major> {
   // non-cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
   }
 
   // cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
 };
 
 template<>
-struct AsyncMMA<float, float, fp16, fp16, 128, 128, 128, mem_layout::row_major, mem_layout::col_major> {
+struct AsyncMMA<float, float, fp16, fp16, 256, 128, 128, mem_layout::row_major, mem_layout::col_major> {
   // non-cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.bt.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.bt.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.bt.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.bt.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.bt.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.bt.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
   }
 
   // cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.bt.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.bt.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.bt.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.bt.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
 };
 
 template<>
-struct AsyncMMA<float, float, fp16, fp16, 128, 128, 128, mem_layout::col_major, mem_layout::row_major> {
+struct AsyncMMA<float, float, fp16, fp16, 256, 128, 128, mem_layout::col_major, mem_layout::row_major> {
   // non-cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.at.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.at.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.at.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
   }
 
   // cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.at.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.at.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
 };
 
 template<>
-struct AsyncMMA<float, float, fp16, fp16, 128, 128, 128, mem_layout::col_major, mem_layout::col_major> {
+struct AsyncMMA<float, float, fp16, fp16, 256, 128, 128, mem_layout::col_major, mem_layout::col_major> {
   // non-cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.bt.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.at.bt.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.bt.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.at.bt.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.bt.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.at.bt.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
   }
 
   // cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.bt.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.at.bt.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f32_f16_f16_f32.at.bt.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f32_f16_f16_f32.at.bt.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+};
+
+template<>
+struct AsyncMMA<fp16, float, fp16, fp16, 128, 128, 128, mem_layout::row_major, mem_layout::row_major> {
+  // non-cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+  }
+
+  // cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+};
+
+template<>
+struct AsyncMMA<fp16, float, fp16, fp16, 128, 128, 128, mem_layout::row_major, mem_layout::col_major> {
+  // non-cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.bt.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.bt.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.bt.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+  }
+
+  // cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.bt.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.bt.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+};
+
+template<>
+struct AsyncMMA<fp16, float, fp16, fp16, 128, 128, 128, mem_layout::col_major, mem_layout::row_major> {
+  // non-cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+  }
+
+  // cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+};
+
+template<>
+struct AsyncMMA<fp16, float, fp16, fp16, 128, 128, 128, mem_layout::col_major, mem_layout::col_major> {
+  // non-cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.bt.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.bt.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.bt.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+  }
+
+  // cluster version
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.bt.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+  }
+  template<typename mat_desc_t, typename abar_t, typename ctrl_t>
+  static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
+    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.bt.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
 };
 
@@ -340,112 +558,114 @@ struct AsyncMMA<fp16, float, fp16, fp16, 256, 512, 128, mem_layout::col_major, m
 };
 
 template<>
-struct AsyncMMA<fp16, float, fp16, fp16, 128, 128, 128, mem_layout::row_major, mem_layout::row_major> {
+struct AsyncMMA<fp16, float, fp16, fp16, 256, 128, 128, mem_layout::row_major, mem_layout::row_major> {
   // non-cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
   }
 
   // cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
 };
 
 template<>
-struct AsyncMMA<fp16, float, fp16, fp16, 128, 128, 128, mem_layout::row_major, mem_layout::col_major> {
+struct AsyncMMA<fp16, float, fp16, fp16, 256, 128, 128, mem_layout::row_major, mem_layout::col_major> {
   // non-cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.bt.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.bt.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.bt.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.bt.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.bt.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.bt.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
   }
 
   // cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.bt.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.bt.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.bt.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.bt.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
 };
 
 template<>
-struct AsyncMMA<fp16, float, fp16, fp16, 128, 128, 128, mem_layout::col_major, mem_layout::row_major> {
+struct AsyncMMA<fp16, float, fp16, fp16, 256, 128, 128, mem_layout::col_major, mem_layout::row_major> {
   // non-cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.at.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.at.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.at.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
   }
 
   // cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.at.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.at.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
 };
 
 template<>
-struct AsyncMMA<fp16, float, fp16, fp16, 128, 128, 128, mem_layout::col_major, mem_layout::col_major> {
+struct AsyncMMA<fp16, float, fp16, fp16, 256, 128, 128, mem_layout::col_major, mem_layout::col_major> {
   // non-cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.bt.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.at.bt.dtm %0, %1, %2, %3, %4, [%5];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.bt.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.at.bt.atm.btm %0, %1, %2, %3, %4, [%5], [%6];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(abar_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, abar_t abar_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.bt.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.at.bt.dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(abar_b));
   }
 
   // cluster version
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.bt.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.at.bt.atmm.btmm %0, %1, %2, %3, %4, [%5], %6, [%7], %8;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
   template<typename mat_desc_t, typename abar_t, typename ctrl_t>
   static void fma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
-    INLINE_PISA("async_gmma.m128n128k128.f16_f16_f16_f32.at.bt.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
+    INLINE_PISA("async_gmma.m256n128k128.f16_f16_f16_f32.at.bt.dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7, [%8], %9;" ::"r"(ctrl), "r"(mat_desc_d), "r"(mat_desc_a), "r"(mat_desc_b), "r"(mat_desc_c), "r"(abar_d), "r"(abar_a), "r"(mask_a), "r"(abar_b), "r"(mask_b));
   }
 };
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename TD, typename TC, typename TA, typename TB, uint32_t M, uint32_t N, uint32_t K,
   mem_layout layout_a = mem_layout::row_major, mem_layout layout_b = mem_layout::row_major, typename mat_desc_t = uint32_t, typename abar_t = uint64_t*, typename ctrl_t = uint64_t>
@@ -476,3 +696,5 @@ template<typename TD, typename TC, typename TA, typename TB, uint32_t M, uint32_
 inline void async_gmma(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat_desc_t mat_desc_a, mat_desc_t mat_desc_b, ctrl_t ctrl, abar_t abar_d, abar_t abar_a, uint32_t mask_a, abar_t abar_b, uint32_t mask_b) {
   return AsyncMMA<TD, TC, TA, TB, M, N, K, layout_a, layout_b>::fma(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, ctrl, abar_d, abar_a, mask_a, abar_b, mask_b);
 }
+
+/* clang-format on */
