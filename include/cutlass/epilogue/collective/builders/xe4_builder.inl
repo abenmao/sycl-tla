@@ -114,13 +114,23 @@ private:
       return EpilogueTileType{};
     }
     else {
-      constexpr int CtaM = size<0>(CtaTileShape_MNK{});
-      constexpr int CtaN = size<1>(CtaTileShape_MNK{});
-      constexpr int M = cutlass::NumThreadsPerWarp;
-      constexpr int N = 32 * NumEpilogueWarps; // 32 elems per warp at dim N
-      static_assert(CtaM >= M, "CTA tile too small");
-      static_assert(CtaN >= N, "CTA tile too small");
-      return make_tile(Int<M>{}, Int<N>{});
+      constexpr int WarpSizeM = cutlass::NumThreadsPerWarp;
+      constexpr int ElementsPerWarpN = 32;
+      constexpr int TileShapeM = size<0>(CtaTileShape_MNK{});
+      constexpr int TileShapeN = size<1>(CtaTileShape_MNK{});
+      static_assert(TileShapeM % WarpSizeM == 0, "CTA tile must be divisible by warp size in M dimension");
+      static_assert(TileShapeN % ElementsPerWarpN == 0, "CTA tile must be divisible by elements per warp in N dimension");
+
+      constexpr int WarpsAlongM = TileShapeM / WarpSizeM;
+      constexpr int WarpsAlongN = TileShapeN / ElementsPerWarpN;
+      static_assert((WarpsAlongM * WarpsAlongN) % (NumEpilogueWarps) == 0, "Total warp count must be divisible by NumEpilogueWarps");
+
+      constexpr int EpilogueTilesN = min(WarpsAlongN, NumEpilogueWarps);
+      constexpr int EpilogueTilesM = (WarpsAlongM * WarpsAlongN) / EpilogueTilesN;
+      constexpr int EpilogueTileM = EpilogueTilesM * WarpSizeM;
+      constexpr int EpilogueTileN = EpilogueTilesN * ElementsPerWarpN;
+
+      return make_tile(Int<EpilogueTileM>{}, Int<EpilogueTileN>{});
     }
   }
   using EpilogueTile = decltype(epilogue_tile());

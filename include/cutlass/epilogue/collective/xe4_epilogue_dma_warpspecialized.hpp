@@ -365,8 +365,8 @@ public:
     // Construct the corresponding pipelined smem tensors
     auto ptr_sC = shared_tensors.collective.smem_C.begin();
     auto ptr_sD = shared_tensors.collective.smem_D.begin();
-    auto sC_epi = make_tensor(make_smem_ptr(ptr_sC), SmemLayoutC{});           // (EPI_TILE_M,EPI_TILE_N,PIPE_C)
-    auto sD_epi = make_tensor(make_smem_ptr(ptr_sD), SmemLayoutD{});           // (CTA_M,CTA_N,PIPE_D)
+    auto sC_epi = make_slm_tensor<SmemElementC>(ptr_sC, SmemLayoutC{});   // (EPI_TILE_M,EPI_TILE_N,PIPE_C)
+    auto sD_epi = make_slm_tensor<SmemElementD>(ptr_sD, SmemLayoutD{});   // (CTA_M,CTA_N,PIPE_D)
 
     // Prepare the thread(b)lock's (G)mem to (S)mem TMA tiled copy (bGS_)
     ThrCopy thrblk_g2s = params.tma_load_c.get_slice(Int<0>{});
@@ -489,17 +489,11 @@ public:
     auto coord_shape =
       conditional_return<is_im2col_D>(make_coord(m_coord, n_coord), make_coord(m_coord, n_coord, l_coord));
 
-    auto as_swizzle_tensor = [](auto tensor) {
-      using ValType = typename decltype(tensor)::value_type;
-      auto swizzled_layout = composition(CoreMatrix::make_swizzle<ValType>(), tensor.layout());
-      return make_tensor(make_smem_ptr(tensor.data()), swizzled_layout);
-    };
-
     // Represent the full output tensor, slice to get the tile this CTA is responsible for
     auto mD_mnl = params.tma_store_d.get_tma_tensor(make_shape(M,N,L));   // (M,N,L)
     auto mD = coalesce(mD_mnl, take<0,2>(cta_tile_mnk));
     auto gD = local_tile(mD, take<0,2>(cta_tile_mnk), coord_shape);   // (CTA_M,CTA_N)
-    auto sAcc = as_swizzle_tensor(accumulators(_,_,_0{}));            // (CTA_M,CTA_N)
+    auto sAcc = as_cm_tensor(accumulators)(_,_,_0{});                 // (CTA_M,CTA_N)
 
     // Apply epilogue subtiling
     auto sAcc_epi = flat_divide(sAcc, EpilogueTile{});                // (EPI_TILE_M,EPI_TILE_N,EPI_M,EPI_N)
@@ -508,8 +502,8 @@ public:
     // Construct the corresponding pipelined smem tensors
     auto ptr_sC = shared_tensors.collective.smem_C.begin();
     auto ptr_sD = shared_tensors.collective.smem_D.begin();
-    auto sC_epi = as_swizzle_tensor(make_tensor(ptr_sC, SmemLayoutC{}));   // (EPI_TILE_M,EPI_TILE_N,PIPE_C)
-    auto sD_epi = as_swizzle_tensor(make_tensor(ptr_sD, SmemLayoutD{}));   // (CTA_M,CTA_N,PIPE_D)
+    auto sC_epi = make_slm_tensor<SmemElementC>(ptr_sC, SmemLayoutC{});   // (EPI_TILE_M,EPI_TILE_N,PIPE_C)
+    auto sD_epi = make_slm_tensor<SmemElementD>(ptr_sD, SmemLayoutD{});   // (CTA_M,CTA_N,PIPE_D)
 
     // (t)hread-partition for (s)mem to (r)egister copy (tSR_)
     TiledCopy tiled_s2r = make_core_matrix_copy(CopyOpS2R{}, sAcc_epi(_,_,_0{},_0{}));
@@ -643,6 +637,21 @@ public:
     ++accumulator_pipe_consumer_state;
 
     return make_tuple(load_pipe_consumer_state, store_pipe_producer_state, accumulator_pipe_consumer_state);
+  }
+
+private:
+  template <class T, class Iterator, class Layout>
+  CUTLASS_HOST_DEVICE
+  static constexpr auto make_slm_tensor(Iterator const& iter, Layout const& layout) {
+    auto retiled_layout = CoreMatrix::retile<T>(layout);
+    return make_tensor(make_smem_ptr(iter), retiled_layout);
+  }
+
+  template <class Tensor>
+  CUTLASS_HOST_DEVICE
+  static constexpr auto as_cm_tensor(Tensor tensor) {
+    using ValType = typename decltype(tensor)::value_type;
+    return make_slm_tensor<ValType>(tensor.data(), tensor.layout());
   }
 };
 
