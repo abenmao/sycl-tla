@@ -6,6 +6,10 @@
 #include "generated_headers/async_gmma.hpp"
 #endif
 
+#ifdef TP_GENERATED
+#include "generated_headers/tensorpipe_inline.hpp"
+#endif
+
 #ifdef VC_WA
 #define ALLOCATE_ABAR(reg_name, abar_name, abar_bytes)
 #define ALLOCATE_TDESC(reg_name, tdesc_name, ret)
@@ -234,9 +238,9 @@ inline void tensordesc_fill_element_stride(tdesc_ptr_t tdesc_ptr, const strides_
   }
 }
 
-template <int dim, slm_matrix_type cm_type, typename slm_dtype, typename dtype, typename tdesc_t, typename abar_t,
-          typename coord_t>
-inline void async_tensor_load(slm_dtype *slm_ptr, dtype *gmem_ptr, tdesc_t tdesc, abar_t abar, const coord_t &coord) {
+template <slm_matrix_type cm_type, size_t dim, typename dtype, typename slm_dtype, typename tdesc_t, typename abar_t>
+inline void async_tensor_load(tdesc_t tdesc, slm_dtype *slm_ptr, dtype *gmem_ptr,
+                              const sycl::marray<int32_t, dim> &coord, abar_t abar) {
   using newVecT = vector_t<int32_t, dim>;
   if constexpr (dim == 2) {
     if constexpr (cm_type == slm_matrix_type::type1) {
@@ -426,10 +430,9 @@ inline void async_tensor_load(slm_dtype *slm_ptr, dtype *gmem_ptr, tdesc_t tdesc
   }
 }
 
-template <int dim, slm_matrix_type cm_type, typename slm_dtype, typename dtype, typename tdesc_t, typename abar_t,
-          typename coord_t>
-inline void async_tensor_load(slm_dtype *slm_ptr, dtype *gmem_ptr, tdesc_t tdesc, abar_t abar, uint32_t wg_mask,
-                              const coord_t &coord) {
+template <slm_matrix_type cm_type, size_t dim, typename dtype, typename slm_dtype, typename tdesc_t, typename abar_t>
+inline void async_tensor_load(tdesc_t tdesc, slm_dtype *slm_ptr, dtype *gmem_ptr,
+                              const sycl::marray<int32_t, dim> &coord, abar_t abar, uint32_t wg_mask) {
   using newVecT = vector_t<int32_t, dim>;
   if constexpr (dim == 2) {
     if constexpr (cm_type == slm_matrix_type::type1) {
@@ -558,22 +561,8 @@ inline void async_tensor_load(slm_dtype *slm_ptr, dtype *gmem_ptr, tdesc_t tdesc
   }
 }
 
-template <slm_matrix_type cm_type, int dim, typename dtype, typename slm_dtype, typename tdesc_ptr_t = uint64_t *,
-          typename abar_ptr_t = uint64_t *>
-inline void async_tensor_load(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *gmem_ptr,
-                              const sycl::vec<int32_t, dim> &toff, abar_ptr_t abar_ptr) {
-  async_tensor_load<dim, cm_type>(slm_ptr, gmem_ptr, tdesc_ptr, abar_ptr, toff);
-}
-
-template <slm_matrix_type cm_type, int dim, typename dtype, typename slm_dtype, typename tdesc_ptr_t = uint64_t *,
-          typename abar_ptr_t = uint64_t *>
-inline void async_tensor_load(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *gmem_ptr,
-                              const sycl::vec<int32_t, dim> &toff, abar_ptr_t abar_ptr, uint32_t wg_mask) {
-  async_tensor_load<dim, cm_type>(slm_ptr, gmem_ptr, tdesc_ptr, abar_ptr, wg_mask, toff);
-}
-
 template <uint32_t dim, typename dtype, typename tdesc_ptr_t = uint64_t *>
-inline void async_tensor_prefetch(tdesc_ptr_t tdesc_ptr, dtype *gmem_ptr, const sycl::vec<int32_t, dim> &toff) {
+inline void async_tensor_prefetch(tdesc_ptr_t tdesc_ptr, dtype *gmem_ptr, const sycl::marray<int32_t, dim> &toff) {
   if constexpr (dim == 2) {
     if constexpr (sizeof(dtype) == 1) {
       INLINE_PISA("async_tensor_prefetch.2d.8b.L2c.L3c.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
@@ -611,9 +600,9 @@ inline void async_tensor_prefetch(tdesc_ptr_t tdesc_ptr, dtype *gmem_ptr, const 
   }
 }
 
-template <int dim, slm_matrix_type cm_type, typename slm_dtype, typename dtype, typename tdesc_t, typename abar_t,
-          typename coord_t>
-inline void async_tensor_store(dtype *gmem_ptr, slm_dtype *slm_ptr, tdesc_t tdesc, abar_t abar, const coord_t &coord) {
+template <slm_matrix_type cm_type, size_t dim, typename dtype, typename slm_dtype, typename tdesc_t, typename abar_t>
+inline void async_tensor_store(tdesc_t tdesc, slm_dtype *slm_ptr, dtype *gmem_ptr,
+                               const sycl::marray<int32_t, dim> &coord, abar_t abar) {
   using newVecT = vector_t<int32_t, dim>;
   if constexpr (dim == 2) {
     if constexpr (cm_type == slm_matrix_type::type1) {
@@ -803,11 +792,169 @@ inline void async_tensor_store(dtype *gmem_ptr, slm_dtype *slm_ptr, tdesc_t tdes
   }
 }
 
-template <slm_matrix_type cm_type, int dim, typename dtype, typename slm_dtype, typename tdesc_ptr_t = uint64_t *,
-          typename abar_ptr_t = uint64_t *>
-inline void async_tensor_store(tdesc_ptr_t tdesc_ptr, slm_dtype *slm_ptr, dtype *gmem_ptr,
-                               const sycl::vec<int32_t, dim> &toff, abar_ptr_t abar_ptr) {
-  async_tensor_store<dim, cm_type>(gmem_ptr, slm_ptr, tdesc_ptr, abar_ptr, toff);
+template <slm_matrix_type cm_type, size_t dim, typename dtype, typename slm_dtype, typename tdesc_t, typename abar_t>
+inline void async_tensor_atomic_store(tdesc_t tdesc, slm_dtype *slm_ptr, dtype *gmem_ptr,
+                                      const sycl::marray<int32_t, dim> &coord, abar_t abar) {
+  using newVecT = vector_t<int32_t, dim>;
+  if constexpr (dim == 2) {
+    if constexpr (cm_type == slm_matrix_type::type1) {
+      if constexpr (std::is_same_v<dtype, fp16>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.2d.type1.add.hf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, bf16>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.2d.type1.add.bf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, float>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.2d.type1.add.f.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
+                "r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, double>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.2d.type1.add.df.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else {
+        static_assert(false, "Unsupported data size");
+      }
+    } else if constexpr (cm_type == slm_matrix_type::type2) {
+      if constexpr (std::is_same_v<dtype, fp16>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.2d.type2.add.hf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, bf16>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.2d.type2.add.bf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, float>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.2d.type2.add.f.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
+                "r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, double>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.2d.type2.add.df.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else {
+        static_assert(false, "Unsupported data size");
+      }
+    } else {
+      static_assert(false, "Unsupported matrix type");
+    }
+  } else if constexpr (dim == 3) {
+    if constexpr (cm_type == slm_matrix_type::type1) {
+      if constexpr (std::is_same_v<dtype, fp16>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.3d.type1.add.hf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, bf16>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.3d.type1.add.bf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, float>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.3d.type1.add.f.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
+                "r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, double>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.3d.type1.add.df.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else {
+        static_assert(false, "Unsupported data size");
+      }
+    } else if constexpr (cm_type == slm_matrix_type::type2) {
+      if constexpr (std::is_same_v<dtype, fp16>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.3d.type2.add.hf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, bf16>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.3d.type2.add.bf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, float>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.3d.type2.add.f.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
+                "r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, double>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.3d.type2.add.df.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else {
+        static_assert(false, "Unsupported data size");
+      }
+    } else {
+      static_assert(false, "Unsupported matrix type");
+    }
+  } else if constexpr (dim == 4) {
+    if constexpr (cm_type == slm_matrix_type::type1) {
+      if constexpr (std::is_same_v<dtype, fp16>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.4d.type1.add.hf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, bf16>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.4d.type1.add.bf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, float>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.4d.type1.add.f.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
+                "r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, double>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.4d.type1.add.df.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else {
+        static_assert(false, "Unsupported data size");
+      }
+    } else if constexpr (cm_type == slm_matrix_type::type2) {
+      if constexpr (std::is_same_v<dtype, fp16>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.4d.type2.add.hf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, bf16>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.4d.type2.add.bf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, float>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.4d.type2.add.f.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
+                "r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else if constexpr (std::is_same_v<dtype, double>) {
+        INLINE_PISA(
+            "async_tensor_fred.global.shared_workgroup.4d.type2.add.df.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
+            "%4;" ::"r"(gmem_ptr),
+            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(vec_as<newVecT>(coord)));
+      } else {
+        static_assert(false, "Unsupported data size");
+      }
+    } else {
+      static_assert(false, "Unsupported matrix type");
+    }
+  } else {
+    static_assert(false, "Unsupported dim");
+  }
 }
 
 inline void cbar_arrive() {
@@ -863,6 +1010,13 @@ template <typename slm_dtype, typename dtype, typename abar_ptr_t = uint64_t *>
 inline void async_linear_load(slm_dtype *slm_ptr, dtype *gmem_ptr, uint32_t size, abar_ptr_t abar_ptr) {
   INLINE_PISA("async_linear_copy.shared_workgroup.global.L2c.L3c.abarrier [%0], [%1], [%2], %3;" ::"r"(slm_ptr),
               "r"(gmem_ptr), "r"(abar_ptr), "r"(size));
+}
+
+template <typename slm_dtype, typename dtype, typename abar_ptr_t = uint64_t *>
+inline void async_linear_load(slm_dtype *slm_ptr, dtype *gmem_ptr, uint32_t size, abar_ptr_t abar_ptr,
+                              uint32_t wg_mask) {
+  INLINE_PISA("async_linear_copy.shared_cluster.global.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, %4;" ::"r"(slm_ptr),
+              "r"(gmem_ptr), "r"(abar_ptr), "r"(size), "r"(wg_mask));
 }
 
 template <typename slm_dtype, typename dtype, typename abar_ptr_t = uint64_t *>
@@ -1233,7 +1387,7 @@ inline void row_copy_tiled_a64_load(slm_dtype *slm_ptr, uint64_t offset, uint32_
       } else {
         static_assert(false, "Unsupported row size");
       }
-    }else {
+    } else {
       static_assert(false, "Unsupported data type");
     }
   } else if constexpr (cm_type == slm_matrix_type::type2) {
@@ -1351,7 +1505,7 @@ inline void row_copy_tiled_store(slm_dtype *slm_ptr, dtype *gmem_ptr, uint32_t o
       } else {
         static_assert(false, "Unsupported row size");
       }
-    }else if constexpr (std::is_same_v<dtype, bf16>) {
+    } else if constexpr (std::is_same_v<dtype, bf16>) {
       if constexpr (row_size == 32) {
         INLINE_PISA(
             "async_row_copy.global.shared_workgroup.32.tiled.type1.a32s.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
@@ -1533,14 +1687,14 @@ inline void row_copy_tiled_a64_store(slm_dtype *slm_ptr, uint64_t offset, uint32
   }
 }
 
-template <typename dtype_dst, typename dtyep_src>
-inline void cvt(dtype_dst &dst, const dtyep_src &src) {
-  if constexpr (std::is_same_v<dtype_dst, bf16> && std::is_same_v<dtyep_src, float>) {
+template <typename dtype_dst, typename dtype_src>
+inline void cvt(dtype_dst &dst, const dtype_src &src) {
+  if constexpr (std::is_same_v<dtype_dst, bf16> && std::is_same_v<dtype_src, float>) {
     INLINE_PISA("ftrunc.bf.f %0, %1;" : "=r"(dst) : "r"(src));
-  } else if constexpr (std::is_same_v<dtype_dst, float> && std::is_same_v<dtyep_src, bf16>) {
+  } else if constexpr (std::is_same_v<dtype_dst, float> && std::is_same_v<dtype_src, bf16>) {
     INLINE_PISA("fext.f.bf %0, %1;" : "=r"(dst) : "r"(src));
   }
-  // else if constexpr (std::is_same_v<dtype_dst, int8_t> && std::is_same_v<dtyep_src, float>) {
+  // else if constexpr (std::is_same_v<dtype_dst, int8_t> && std::is_same_v<dtype_src, float>) {
   //   INLINE_PISA("f2i.s8.f %0, %1;" : "=r"(dst) : "r"(src));
   // }
   else {
@@ -1548,27 +1702,27 @@ inline void cvt(dtype_dst &dst, const dtyep_src &src) {
   }
 }
 
-template <typename dtype_dst, typename dtype_packed, typename dtyep_src>
-inline void cvt_pack(dtype_packed &dst_packed, const dtyep_src &src0, const dtyep_src &src1) {
-  if constexpr (std::is_same_v<dtype_dst, bf16> && std::is_same_v<dtyep_src, float>) {
+template <typename dtype_dst, typename dtype_packed, typename dtype_src>
+inline void cvt_pack(dtype_packed &dst_packed, const dtype_src &src0, const dtype_src &src1) {
+  if constexpr (std::is_same_v<dtype_dst, bf16> && std::is_same_v<dtype_src, float>) {
     INLINE_PISA("ftrunc2.bfx2 %0, %1, %2;" : "=r"(dst_packed) : "r"(src0), "r"(src1));
-  } else if constexpr (std::is_same_v<dtype_dst, fp16> && std::is_same_v<dtyep_src, float>) {
+  } else if constexpr (std::is_same_v<dtype_dst, fp16> && std::is_same_v<dtype_src, float>) {
     INLINE_PISA("ftrunc2.hfx2 %0, %1, %2;" : "=r"(dst_packed) : "r"(src0), "r"(src1));
   } else {
     static_assert(false, "Unsupported dtype");
   }
 }
 
-template <uint32_t n_elem, typename dtype_dst, typename dtyep_src>
-inline void copy_cvt(dtype_dst *dst_ptr, dtyep_src *src_ptr) {
+template <uint32_t n_elem, typename dtype_dst, typename dtype_src>
+inline void copy_cvt(dtype_dst *dst_ptr, dtype_src *src_ptr) {
 #pragma unroll
   for (int i = 0; i < n_elem; i++) {
     cvt(dst_ptr[i], src_ptr[i]);
   }
 }
 
-template <typename dtype_dst, uint32_t n_elem, typename dtype_packed, typename dtyep_src>
-inline void copy_cvt_pack(dtype_packed *dst_packed_ptr, dtyep_src *src_ptr) {
+template <typename dtype_dst, uint32_t n_elem, typename dtype_packed, typename dtype_src>
+inline void copy_cvt_pack(dtype_packed *dst_packed_ptr, dtype_src *src_ptr) {
   constexpr uint32_t packed_num = sizeof(dtype_packed) / sizeof(dtype_dst);
   static_assert(packed_num == 2);
 #pragma unroll
@@ -1577,12 +1731,14 @@ inline void copy_cvt_pack(dtype_packed *dst_packed_ptr, dtyep_src *src_ptr) {
   }
 }
 
-template <uint32_t n_packed_elem, typename dtype_dst, typename dtyep_src>
-inline void pack_data(dtype_dst *dst_ptr, dtyep_src *src_ptr) {
-  constexpr uint32_t packed_num = sizeof(dtype_dst) / sizeof(dtyep_src);
+template <uint32_t n_elem_to_pack, typename dtype_dst, typename dtype_src>
+inline void pack_data(dtype_dst *dst_ptr, dtype_src *src_ptr) {
+  constexpr uint32_t packed_num = sizeof(dtype_dst) / sizeof(dtype_src);
+  constexpr uint32_t n_packed_elem = n_elem_to_pack / packed_num;
+  constexpr uint32_t n_packed_elem_left = n_elem_to_pack % packed_num;
 #pragma unroll
   for (int i = 0; i < n_packed_elem; i++) {
-    sycl::marray<dtyep_src, packed_num> src_tmp;
+    sycl::marray<dtype_src, packed_num> src_tmp;
     sycl::marray<dtype_dst, 1> dst_tmp;
 #pragma unroll
     for (int j = 0; j < packed_num; j++) {
@@ -1591,20 +1747,44 @@ inline void pack_data(dtype_dst *dst_ptr, dtyep_src *src_ptr) {
     dst_tmp = sycl::bit_cast<sycl::marray<dtype_dst, 1>>(src_tmp);
     dst_ptr[i] = dst_tmp[0];
   }
+
+  if constexpr (n_packed_elem_left > 0) {
+    sycl::marray<dtype_src, packed_num> src_tmp;
+    sycl::marray<dtype_dst, 1> dst_tmp;
+#pragma unroll
+    for (int j = 0; j < n_packed_elem_left; j++) {
+      src_tmp[j] = src_ptr[n_packed_elem * packed_num + j];
+    }
+    dst_tmp = sycl::bit_cast<sycl::marray<dtype_dst, 1>>(src_tmp);
+    dst_ptr[n_packed_elem] = dst_tmp[0];
+  }
 }
 
-template <uint32_t n_packed_elem, typename dtype_dst, typename dtyep_src>
-inline void unpack_data(dtype_dst *dst_ptr, dtyep_src *src_ptr) {
-  constexpr uint32_t packed_num = sizeof(dtyep_src) / sizeof(dtype_dst);
+template <uint32_t n_elem_to_unpack, typename dtype_dst, typename dtype_src>
+inline void unpack_data(dtype_dst *dst_ptr, dtype_src *src_ptr) {
+  constexpr uint32_t packed_num = sizeof(dtype_src) / sizeof(dtype_dst);
+  constexpr uint32_t n_packed_elem = n_elem_to_unpack / packed_num;
+  constexpr uint32_t n_packed_elem_left = n_elem_to_unpack % packed_num;
 #pragma unroll
   for (int i = 0; i < n_packed_elem; i++) {
     sycl::marray<dtype_dst, packed_num> dst_tmp;
-    sycl::marray<dtyep_src, 1> src_tmp;
+    sycl::marray<dtype_src, 1> src_tmp;
     src_tmp[0] = src_ptr[i];
     dst_tmp = sycl::bit_cast<sycl::marray<dtype_dst, packed_num>>(src_tmp);
 #pragma unroll
     for (int j = 0; j < packed_num; j++) {
       dst_ptr[i * packed_num + j] = dst_tmp[j];
+    }
+  }
+
+  if constexpr (n_packed_elem_left > 0) {
+    sycl::marray<dtype_dst, packed_num> dst_tmp;
+    sycl::marray<dtype_src, 1> src_tmp;
+    src_tmp[0] = src_ptr[n_packed_elem];
+    dst_tmp = sycl::bit_cast<sycl::marray<dtype_dst, packed_num>>(src_tmp);
+#pragma unroll
+    for (int j = 0; j < n_packed_elem_left; j++) {
+      dst_ptr[n_packed_elem * packed_num + j] = dst_tmp[j];
     }
   }
 }
@@ -2158,10 +2338,12 @@ inline float gtp_texp_red_sum(dtype_reg *dst_ptr, const dtype_reg *src_ptr, floa
 
 template <typename dtype_dst, typename dtype_src, uint32_t N, typename dtype_reg>
 inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
-  constexpr uint32_t N_dst = N * ::sizeof_bits<dtype_dst>() / BITS_PER_BYTE / sizeof(dtype_reg);
-  constexpr uint32_t N_src = N * sizeof(dtype_src) / sizeof(dtype_reg);
-  constexpr uint32_t N_u32_dst = N * ::sizeof_bits<dtype_dst>() / BITS_PER_BYTE / sizeof(uint32_t);
-  constexpr uint32_t N_u32_src = N * sizeof(dtype_src) / sizeof(uint32_t);
+  constexpr uint32_t N_dst =
+      (N * ::sizeof_bits<dtype_dst>() / BITS_PER_BYTE + sizeof(dtype_reg) - 1) / sizeof(dtype_reg);
+  constexpr uint32_t N_src = (N * sizeof(dtype_src) + sizeof(dtype_reg) - 1) / sizeof(dtype_reg);
+  constexpr uint32_t N_u32_dst =
+      (N * ::sizeof_bits<dtype_dst>() / BITS_PER_BYTE + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+  constexpr uint32_t N_u32_src = (N * sizeof(dtype_src) + sizeof(uint32_t) - 1) / sizeof(uint32_t);
   sycl::marray<dtype_reg, N_src> src;
   using vtype_src = vector_t<uint32_t, N_u32_src>;
   using vtype_dst = vector_t<uint32_t, N_u32_dst>;
@@ -2178,6 +2360,8 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
         INLINE_PISA("tcvd.e5m2.f16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 8) {
         INLINE_PISA("tcvd.e5m2.f16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvd.e5m2.f16.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -2440,8 +2624,9 @@ inline void tcvdmx_rednd_mxnd_srnd(dstType *dst, srcType *src, metaType *meta, u
 
       auto sDst = sycl::bit_cast<sycl::marray<uint8_t, DstSize * 4>>(sdstVecT);
       uint8_t *matD_ptr = reinterpret_cast<uint8_t *>(dst);
+      constexpr uint32_t N_dst_size = (N * ::sizeof_bits<dstType>() + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
 #pragma unroll
-      for (int i = 0; i < DstSize * 4; i++) {
+      for (int i = 0; i < N_dst_size; i++) {
         matD_ptr[i] = sDst[i];
       }
 
@@ -2450,6 +2635,81 @@ inline void tcvdmx_rednd_mxnd_srnd(dstType *dst, srcType *src, metaType *meta, u
     } else {
       static_assert(false, "tcvdmx Unsupported M and N");
     }
+  } else {
+    static_assert(false, "tcvdmx_rednd_mxnd_srnd only support ");
+  }
+}
+
+template <typename dstType, typename srcType, typename metaType, uint32_t M, uint32_t N, bool ndim = true>
+inline void tcvdmx_rne(dstType *dst, srcType *src, metaType *meta) {
+
+  static_assert(sizeof(srcType) == 2, "tcvdmx_rednd_mxnd_srnd only support srcType as bf16 or fp16");
+  static_assert(sizeof(metaType) == 1, "tcvdmx_rednd_mxnd_srnd only support metaType as uint8_t");
+
+  if constexpr (std::is_same_v<srcType, fp16> && std::is_same_v<metaType, e8m0> && std::is_same_v<dstType, bf8>) {
+
+    constexpr int SrcPack = sizeof(uint32_t) / sizeof(srcType);
+    constexpr int SrcSize = (N + SrcPack - 1) / SrcPack;
+    sycl::marray<uint32_t, SrcSize> sSrc;
+    uint32_t *matC_ptr = reinterpret_cast<uint32_t *>(src);
+#pragma unroll
+    for (int i = 0; i < SrcSize; i++) {
+      sSrc[i] = matC_ptr[i];
+    }
+
+    constexpr int DstPack = sizeof(uint32_t) * 8u / ::sizeof_bits<dstType>();
+    constexpr int DstSize = (N + DstPack - 1) / DstPack;
+    vector_t<uint32_t, DstSize> sdstVecT;
+
+    uint32_t sMetaVecT;
+
+    if constexpr (M == 32 && N == 32) {
+      if constexpr (ndim) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n32.rednd.mxnd.rne %[dst], %[dm], %[src0] ;"
+                    : [dst] "=r"(sdstVecT), [dm] "=r"(sMetaVecT)
+                    : [src0] "r"(sycl::bit_cast<vector_t<uint32_t, SrcSize>>(sSrc)));
+      } else {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n32.redmd.mxmd.rne %[dst], %[dm], %[src0] ;"
+                    : [dst] "=r"(sdstVecT), [dm] "=r"(sMetaVecT)
+                    : [src0] "r"(sycl::bit_cast<vector_t<uint32_t, SrcSize>>(sSrc)));
+      }
+    } else if constexpr (M == 32 && N == 16) {
+
+      if constexpr (ndim) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n16.rednd.mxnd.rne %[dst], %[dm], %[src0] ;"
+                    : [dst] "=r"(sdstVecT), [dm] "=r"(sMetaVecT)
+                    : [src0] "r"(sycl::bit_cast<vector_t<uint32_t, SrcSize>>(sSrc)));
+      } else {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n16.redmd.mxmd.rne %[dst], %[dm], %[src0] ;"
+                    : [dst] "=r"(sdstVecT), [dm] "=r"(sMetaVecT)
+                    : [src0] "r"(sycl::bit_cast<vector_t<uint32_t, SrcSize>>(sSrc)));
+      }
+    } else if constexpr (M == 32 && N == 1) {
+
+      if constexpr (ndim) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n1.rednd.mxnd.rne %[dst], %[dm], %[src0] ;"
+                    : [dst] "=r"(sdstVecT), [dm] "=r"(sMetaVecT)
+                    : [src0] "r"(sycl::bit_cast<vector_t<uint32_t, SrcSize>>(sSrc)));
+      } else {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n1.redmd.mxmd.rne %[dst], %[dm], %[src0] ;"
+                    : [dst] "=r"(sdstVecT), [dm] "=r"(sMetaVecT)
+                    : [src0] "r"(sycl::bit_cast<vector_t<uint32_t, SrcSize>>(sSrc)));
+      }
+    } else {
+      static_assert(false, "tcvdmx Unsupported M and N");
+    }
+
+    auto sDst = sycl::bit_cast<sycl::marray<uint8_t, DstSize * 4>>(sdstVecT);
+    uint8_t *matD_ptr = reinterpret_cast<uint8_t *>(dst);
+    constexpr uint32_t N_dst_size = (N * ::sizeof_bits<dstType>() + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
+#pragma unroll
+    for (int i = 0; i < N_dst_size; i++) {
+      matD_ptr[i] = sDst[i];
+    }
+
+    uint8_t *meta_ptr = reinterpret_cast<uint8_t *>(meta);
+    *meta_ptr = sMetaVecT & 0xff;
+
   } else {
     static_assert(false, "tcvdmx_rednd_mxnd_srnd only support ");
   }
