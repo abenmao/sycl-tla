@@ -32,6 +32,13 @@ struct tolerance_traits<uint32_t> {
 };
 
 template <>
+struct tolerance_traits<int32_t> {
+  static constexpr int32_t abs_tolerance = 0;
+  static constexpr double rel_tolerance = 0;
+  static constexpr uint32_t ulp_tolerance = 0;
+};
+
+template <>
 struct tolerance_traits<uint64_t> {
   static constexpr uint32_t abs_tolerance = 0;
   static constexpr double rel_tolerance = 0;

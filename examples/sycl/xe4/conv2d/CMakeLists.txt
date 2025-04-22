@@ -42,11 +42,19 @@ target_compile_definitions(xe4_conv2d_dgrad PRIVATE AMMA_GENERATED)
 target_compile_definitions(xe4_conv2d_dgrad PRIVATE -DTEST_WITH_PAD_WITH_DILATION)
 target_link_options(xe4_conv2d_dgrad PUBLIC "-Xs;\"-xe-set-abarrier-arrive-lmc -disable-branch-fold\"")
 
+add_xe4_test(xe4_conv2d_int8 conv2d_int8.cpp)
+target_link_libraries(xe4_conv2d_int8 PRIVATE DNNL::dnnl)
+target_include_directories(xe4_conv2d_int8 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(xe4_conv2d_int8 PRIVATE AMMA_GENERATED)
+target_compile_definitions(xe4_conv2d_int8 PRIVATE -DTEST_SMALL_WITH_PAD_WITH_STRIDE)
+target_link_options(xe4_conv2d_int8 PUBLIC "-Xs;\"-xe-set-abarrier-arrive-lmc -disable-branch-fold\"")
+
 generate_amma_header(
   xe4_conv2d_helper
   "--mma_type" "mma"
-  "--shape" "128x128x128;256x512x128;256x128x128"
-  "--dtype" "f32_f32_f16_f16;f16_f32_f16_f16"
+  "--shape" "128x128x128;256x512x128;256x128x128;256x256x128"
+  "--dtype" "f32_f32_f16_f16;f16_f32_f16_f16;s32_s32_s8_s8"
 )
 add_dependencies(xe4_conv2d xe4_conv2d_helper)
 add_dependencies(xe4_conv2d_dgrad xe4_conv2d_helper)
+add_dependencies(xe4_conv2d_int8 xe4_conv2d_helper)

@@ -1387,6 +1387,35 @@ inline void row_copy_tiled_a64_load(slm_dtype *slm_ptr, uint64_t offset, uint32_
       } else {
         static_assert(false, "Unsupported row size");
       }
+    } else if constexpr (std::is_same_v<dtype, int8_t>) {
+      if constexpr (row_size == 32) {
+        INLINE_PISA(
+            "async_row_copy.shared_workgroup.global.32.tiled.type1.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
+            "[%2], %3;" ::"r"(slm_ptr),
+            "r"(offset), "r"(abar_ptr), "r"(size));
+      } else if constexpr (row_size == 128) {
+        INLINE_PISA(
+            "async_row_copy.shared_workgroup.global.128.tiled.type1.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
+            "[%2], %3;" ::"r"(slm_ptr),
+            "r"(offset), "r"(abar_ptr), "r"(size));
+      } else if constexpr (row_size == 256) {
+        INLINE_PISA(
+            "async_row_copy.shared_workgroup.global.256.tiled.type1.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
+            "[%2], %3;" ::"r"(slm_ptr),
+            "r"(offset), "r"(abar_ptr), "r"(size));
+      } else if constexpr (row_size == 512) {
+        INLINE_PISA(
+            "async_row_copy.shared_workgroup.global.512.tiled.type1.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
+            "[%2], %3;" ::"r"(slm_ptr),
+            "r"(offset), "r"(abar_ptr), "r"(size));
+      } else if constexpr (row_size == 1024) {
+        INLINE_PISA(
+            "async_row_copy.shared_workgroup.global.1024.tiled.type1.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
+            "[%2], %3;" ::"r"(slm_ptr),
+            "r"(offset), "r"(abar_ptr), "r"(size));
+      } else {
+        static_assert(false, "Unsupported row size");
+      }
     } else {
       static_assert(false, "Unsupported data type");
     }
@@ -1443,6 +1472,35 @@ inline void row_copy_tiled_a64_load(slm_dtype *slm_ptr, uint64_t offset, uint32_
       } else if constexpr (row_size == 1024) {
         INLINE_PISA(
             "async_row_copy.shared_workgroup.global.1024.tiled.type2.a64.16b.fp16.zero.L2uc.L3uc.abarrier [%0], [%1], "
+            "[%2], %3;" ::"r"(slm_ptr),
+            "r"(offset), "r"(abar_ptr), "r"(size));
+      } else {
+        static_assert(false, "Unsupported row size");
+      }
+    } else if constexpr (std::is_same_v<dtype, int8_t>) {
+      if constexpr (row_size == 32) {
+        INLINE_PISA(
+            "async_row_copy.shared_workgroup.global.32.tiled.type2.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
+            "[%2], %3;" ::"r"(slm_ptr),
+            "r"(offset), "r"(abar_ptr), "r"(size));
+      } else if constexpr (row_size == 128) {
+        INLINE_PISA(
+            "async_row_copy.shared_workgroup.global.128.tiled.type2.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
+            "[%2], %3;" ::"r"(slm_ptr),
+            "r"(offset), "r"(abar_ptr), "r"(size));
+      } else if constexpr (row_size == 256) {
+        INLINE_PISA(
+            "async_row_copy.shared_workgroup.global.256.tiled.type2.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
+            "[%2], %3;" ::"r"(slm_ptr),
+            "r"(offset), "r"(abar_ptr), "r"(size));
+      } else if constexpr (row_size == 512) {
+        INLINE_PISA(
+            "async_row_copy.shared_workgroup.global.512.tiled.type2.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
+            "[%2], %3;" ::"r"(slm_ptr),
+            "r"(offset), "r"(abar_ptr), "r"(size));
+      } else if constexpr (row_size == 1024) {
+        INLINE_PISA(
+            "async_row_copy.shared_workgroup.global.1024.tiled.type2.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
             "[%2], %3;" ::"r"(slm_ptr),
             "r"(offset), "r"(abar_ptr), "r"(size));
       } else {
@@ -1632,6 +1690,30 @@ inline void row_copy_tiled_a64_store(slm_dtype *slm_ptr, uint64_t offset, uint32
       } else {
         static_assert(false, "Unsupported row size");
       }
+    } else if constexpr (std::is_same_v<dtype, int32_t>) {
+      if constexpr (row_size == 32) {
+        INLINE_PISA(
+            "async_row_copy.global.shared_workgroup.32.tiled.type1.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
+                "r"(offset),
+            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+      } else if constexpr (row_size == 256) {
+        INLINE_PISA(
+            "async_row_copy.global.shared_workgroup.256.tiled.type1.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
+                "r"(offset),
+            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+      } else if constexpr (row_size == 512) {
+        INLINE_PISA(
+            "async_row_copy.global.shared_workgroup.512.tiled.type1.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
+                "r"(offset),
+            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+      } else if constexpr (row_size == 1024) {
+        INLINE_PISA(
+            "async_row_copy.global.shared_workgroup.1024.tiled.type1.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], "
+            "%3;" ::"r"(offset),
+            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+      } else {
+        static_assert(false, "Unsupported row size");
+      }
     } else {
       static_assert(false, "Unsupported data type");
     }
@@ -1674,6 +1756,30 @@ inline void row_copy_tiled_a64_store(slm_dtype *slm_ptr, uint64_t offset, uint32
       } else if constexpr (row_size == 1024) {
         INLINE_PISA(
             "async_row_copy.global.shared_workgroup.1024.tiled.type2.a64.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], "
+            "%3;" ::"r"(offset),
+            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+      } else {
+        static_assert(false, "Unsupported row size");
+      }
+    } else if constexpr (std::is_same_v<dtype, int32_t>) {
+      if constexpr (row_size == 32) {
+        INLINE_PISA(
+            "async_row_copy.global.shared_workgroup.32.tiled.type2.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
+                "r"(offset),
+            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+      } else if constexpr (row_size == 256) {
+        INLINE_PISA(
+            "async_row_copy.global.shared_workgroup.256.tiled.type2.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
+                "r"(offset),
+            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+      } else if constexpr (row_size == 512) {
+        INLINE_PISA(
+            "async_row_copy.global.shared_workgroup.512.tiled.type2.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
+                "r"(offset),
+            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+      } else if constexpr (row_size == 1024) {
+        INLINE_PISA(
+            "async_row_copy.global.shared_workgroup.1024.tiled.type2.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], "
             "%3;" ::"r"(offset),
             "r"(slm_ptr), "r"(abar_ptr), "r"(size));
       } else {

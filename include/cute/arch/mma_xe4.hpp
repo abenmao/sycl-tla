@@ -21,7 +21,7 @@ constexpr uint32_t getMinMmaK() {
   if constexpr (std::is_same_v<T, bf16> || std::is_same_v<T, fp16>) {
     return 16;
   }
-  if constexpr (std::is_same_v<T, bf8>) {
+  if constexpr (std::is_same_v<T, bf8> || std::is_same_v<T, int8_t>) {
     return 32;
   }
 
@@ -33,7 +33,7 @@ constexpr uint32_t getMaxMmaK() {
   if constexpr (std::is_same_v<T, bf16> || std::is_same_v<T, fp16>) {
     return 128;
   }
-  if constexpr (std::is_same_v<T, bf8>) {
+  if constexpr (std::is_same_v<T, bf8> || std::is_same_v<T, int8_t>) {
     return 256;
   }
 
