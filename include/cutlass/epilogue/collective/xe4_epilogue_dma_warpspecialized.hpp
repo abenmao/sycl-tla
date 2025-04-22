@@ -167,9 +167,6 @@ public:
       using CollectiveStorage = cute::conditional_t<not is_source_supported, CollectiveStorageWithoutC,
                                   cute::conditional_t<ReuseSmemC, CollectiveStorageReuseC, CollectiveStorageWithC>>;
       CollectiveStorage collective;
-
-      using FusionStorage = typename FusionCallbacks::SharedStorage;
-      FusionStorage thread;
     };
   };
 
@@ -296,7 +293,7 @@ public:
     WaveOrderBarrier& wave_order_barrier_,
     TensorDescTuple tdesc_tuple)
       : params(params_)
-      , fusion_callbacks(params_.thread, shared_tensors.thread)
+      , fusion_callbacks(params_.thread, {})
       , wave_order_barrier(wave_order_barrier_) {
     auto [tensor_desc_c, tensor_desc_d] = tdesc_tuple;
     params.tma_load_c.cache_.set_tensor_desc(tensor_desc_c);

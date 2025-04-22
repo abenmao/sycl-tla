@@ -93,47 +93,24 @@ std::string get_shared_memory_info() {
   };
 
   // Extract memory information using the macro
-  auto [offset_A, raw_size_A] = GET_MEM_INFO(TensorStorage, mainloop.smem_A);
-  auto [offset_B, raw_size_B] = GET_MEM_INFO(TensorStorage, mainloop.smem_B);
-  auto [offset_Acc, raw_size_Acc] = GET_MEM_INFO(TensorStorage, mainloop.smem_Acc);
-  auto [offset_C, raw_size_C] = GET_MEM_INFO(TensorStorage, epilogue.collective.smem_C);
-  auto [offset_D, raw_size_D] = GET_MEM_INFO(TensorStorage, epilogue.collective.smem_D);
-  auto [offset_thread, raw_size_thread] = GET_MEM_INFO(TensorStorage, epilogue.thread);
+  auto [offsetA, sizeA] = GET_MEM_INFO(TensorStorage, mainloop.smem_A);
+  auto [offsetB, sizeB] = GET_MEM_INFO(TensorStorage, mainloop.smem_B);
+  auto [offsetAcc, sizeAcc] = GET_MEM_INFO(TensorStorage, mainloop.smem_Acc);
+  auto [offsetC, sizeC] = GET_MEM_INFO(TensorStorage, epilogue.collective.smem_C);
+  auto [offsetD, sizeD] = GET_MEM_INFO(TensorStorage, epilogue.collective.smem_D);
 
-  // Calculate the size of each memory block after alignment
-  size_t aligned_size_A = offset_B - offset_A;
-  size_t aligned_size_B = offset_Acc - offset_B;
-  size_t aligned_size_Acc = offset_C - offset_Acc;
-  size_t aligned_size_C = offset_D - offset_C;
-  size_t aligned_size_D = offset_thread - offset_D;
-  size_t aligned_size_thread = sizeof(TensorStorage) - offset_thread;
-
-  // Use sizeof(TensorStorage) to get the actual total size
+  // Calculate the total size of TensorStorage
   size_t total_size = sizeof(TensorStorage);
 
   // Format output information
   oss << "Share Memory Allocation (Total: " << bytes2kb(total_size) << ")" << std::endl;
   oss << "- Mainloop" << std::endl;
-  oss << "    A: raw_size=" << bytes2kb(raw_size_A)
-      << ", aligned_size=" << bytes2kb(aligned_size_A)
-      << ", range=[" << offset_A << " - " << (offset_A + raw_size_A - 1) << "]" << std::endl;
-  oss << "    B: raw_size=" << bytes2kb(raw_size_B)
-      << ", aligned_size=" << bytes2kb(aligned_size_B)
-      << ", range=[" << offset_B << " - " << (offset_B + raw_size_B - 1) << "]" << std::endl;
-  oss << "    Acc: raw_size=" << bytes2kb(raw_size_Acc)
-      << ", aligned_size=" << bytes2kb(aligned_size_Acc)
-      << ", range=[" << offset_Acc << " - " << (offset_Acc + raw_size_Acc - 1) << "]" << std::endl;
+  oss << "    A: size=" << bytes2kb(sizeA) << ", offset=" << bytes2kb(offsetA) << std::endl;
+  oss << "    B: size=" << bytes2kb(sizeB) << ", offset=" << bytes2kb(offsetB) << std::endl;
+  oss << "    Acc: size=" << bytes2kb(sizeAcc) << ", offset=" << bytes2kb(offsetAcc) << std::endl;
   oss << "- Epilogue" << std::endl;
-  oss << "    C: raw_size=" << bytes2kb(raw_size_C)
-      << ", aligned_size=" << bytes2kb(aligned_size_C)
-      << ", range=[" << offset_C << " - " << (offset_C + raw_size_C - 1) << "]" << std::endl;
-  oss << "    D: raw_size=" << bytes2kb(raw_size_D)
-      << ", aligned_size=" << bytes2kb(aligned_size_D)
-      << ", range=[" << offset_D << " - " << (offset_D + raw_size_D - 1) << "]" << std::endl;
-  oss << "    Thread: raw_size=" << bytes2kb(raw_size_thread)
-      << ", aligned_size=" << bytes2kb(aligned_size_thread)
-      << ", range=[" << offset_thread << " - " << (offset_thread + raw_size_thread - 1) << "]" << std::endl;
-
+  oss << "    C: size=" << bytes2kb(sizeC) << ", offset=" << bytes2kb(offsetC) << std::endl;
+  oss << "    D: size=" << bytes2kb(sizeD) << ", offset=" << bytes2kb(offsetD) << std::endl;
   return oss.str();
 }
 
