@@ -370,16 +370,10 @@ public:
     Tensor bGS_gC = thrblk_g2s.partition_S(gC_epi);                                    // (TMA,TMA_M,TMA_N,EPI_M,EPI_N)
     Tensor bGS_sC = thrblk_g2s.partition_D(sC_epi);                                    // (TMA,TMA_M,TMA_N,PIPE_C)
 
-    // bGS_gC (int, int, int) o (((_512, _32), _1), _1, _1, _8, _1):(((E<0>, E<1>), _0), _0, _0, _32*E<1>, _0)
-    // bGS_sC smem_ptr<half*> o (((_512, _32), _1), _1, _1, _1):(((_1, _512), _0), _0, _0, _16384)
-
     // thread(b)lock-partition for (s)mem to (g)mem copy (bSG_)
     ThrCopy thrblk_s2g = params.tma_store_d.get_slice(Int<0>{});
     auto bSG_sD = thrblk_s2g.partition_S(sD_epi);   // (S2G,S2G_M,S2G_N,PIPE_D)
     auto bSG_gD = thrblk_s2g.partition_D(gD_epi);   // (S2G,S2G_M,S2G_N,EPI_M,EPI_N)
-
-    // bSG_sD smem_ptr<half*> o (((_512, _256), _1), _1, _1, _1):(((_1, _512), _0), _0, _0, _131072)
-    // bSG_gD (int, int, int) o (((_512, _256), _1), _1, _1, _1, _1):(((E<0>, E<1>), _0), _0, _0, _0, _0)
 
     // Get the fusion callbacks for the producer load warp
     auto pld_args = cutlass::epilogue::fusion::detail::ProducerLoadArgs{
@@ -503,16 +497,18 @@ public:
     auto sD_epi = make_slm_tensor<SmemElementD>(ptr_sD, SmemLayoutD{});   // (CTA_M,CTA_N,PIPE_D)
 
     // (t)hread-partition for (s)mem to (r)egister copy (tSR_)
-    TiledCopy tiled_s2r = make_core_matrix_copy(CopyOpS2R{}, sAcc_epi(_,_,_0{},_0{}));
+    TiledCopy tiled_s2r = []() {
+      constexpr int NumElementsPerThread = 32;
+      constexpr int NumWarpsAlongM = get<0>(EpilogueTile{}) / NumThreadsPerWarp;
+      constexpr int NumWarpsAlongN = get<1>(EpilogueTile{}) / NumElementsPerThread;
+      auto thr_layout = make_ordered_layout(Shape<Shape<Int<NumThreadsPerWarp>,Int<NumWarpsAlongM>>,Int<NumWarpsAlongN>>{}, Step<Step<_0,_2>,_1>{});
+      auto val_layout = make_ordered_layout(Shape<_1,Int<NumElementsPerThread>>{}, Step<_1,_0>{});
+      return make_tiled_copy(Copy_Atom<CopyOpS2R, SmemElementD>{}, thr_layout, val_layout);
+    }();
     ThrCopy thread_s2r = tiled_s2r.get_slice(worker_id);
     auto tSR_sC   = thread_s2r.partition_S(sC_epi);           // (S2R, S2R_M, S2R_N, EPI_M, EPI_N)
     auto tSR_sAcc = thread_s2r.partition_S(sAcc_epi);         // (S2R, S2R_M, S2R_N, EPI_M, EPI_N)
     auto tSR_sD = thread_s2r.partition_D(sD_epi(_,_,_0{}));   // (S2R, S2R_M, S2R_N)
-
-    // sAcc_epi smem_ptr<half*> o (_32, _512, _8, _1):(_512, _1, _16384, _0)
-    // sD_epi   smem_ptr<half*> o ((_256, _1), (_512, _1), _1):((_512, _0), (_1, _0), _131072)
-    // tSR_sAcc smem_ptr<half*> o ((_16, _2), _1, _1, _8, _1):((_1, _512), _0, _0, _16384, _0)
-    // tSR_sD   smem_ptr<half*> o ((_16, _2), _8, _1):((_1, _512), _16384, _0)
 
     // Allocate D and accumulator registers
     // Does directly store the visitor into smem.
@@ -527,17 +523,11 @@ public:
     auto tSR_rD_frg = recast<Array<RegisterElementD, FragmentSize>>(coalesce(tSR_rD));        // (EPI_V)
     CUTE_STATIC_ASSERT(size(tSR_rAcc) % DispatchPolicy::FragmentSize == 0, "Fragment size does not vectorize properly");
 
-    // tSR_rAcc_frg Array<half, 16>* o (_2):(_1)
-    // tSR_rD_frg   Array<half, 16>* o (_2):(_1)
-
     // (t)hread-partition for (r)egister to (s)mem copy (tRS_)
     TiledCopy tiled_r2s = make_tiled_copy_D(Copy_Atom<CopyOpR2S, SmemElementD>{}, tiled_s2r);
     ThrCopy thread_r2s = tiled_r2s.get_slice(worker_id);
     auto tRS_sD = thread_r2s.partition_D(sD_epi);   // (R2S, R2S_M, R2S_N, EPI_M, EPI_N)
     auto tRS_rD = make_tensor<SmemElementD>(shape(tRS_sD(_,_,_,_0{})));
-
-    // tRS_sD smem_ptr <half*> o ((_16, _2), _8, _1, _1):((_1, _512), _16384, _0, _131072)
-    // tRS_rD   Array<half, 256> o ((_16, _2), _8, _1):((_1, _16), _32, _0)
 
     // OOB predication for tile quantization "residue"
     // Absolute coordinate tensors (dynamic)

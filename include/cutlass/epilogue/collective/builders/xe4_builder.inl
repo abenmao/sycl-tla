@@ -125,10 +125,10 @@ private:
       constexpr int WarpsAlongN = TileShapeN / ElementsPerWarpN;
       static_assert((WarpsAlongM * WarpsAlongN) % (NumEpilogueWarps) == 0, "Total warp count must be divisible by NumEpilogueWarps");
 
-      constexpr int EpilogueTilesN = min(WarpsAlongN, NumEpilogueWarps);
-      constexpr int EpilogueTilesM = (WarpsAlongM * WarpsAlongN) / EpilogueTilesN;
-      constexpr int EpilogueTileM = EpilogueTilesM * WarpSizeM;
-      constexpr int EpilogueTileN = EpilogueTilesN * ElementsPerWarpN;
+      constexpr int NumWarpsAlongN = min(WarpsAlongN, NumEpilogueWarps);
+      constexpr int NumWarpsAlongM = min(WarpsAlongM, NumEpilogueWarps / NumWarpsAlongN);
+      constexpr int EpilogueTileM = NumWarpsAlongM * WarpSizeM;
+      constexpr int EpilogueTileN = NumWarpsAlongN * ElementsPerWarpN;
 
       return make_tile(Int<EpilogueTileM>{}, Int<EpilogueTileN>{});
     }

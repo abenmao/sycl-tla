@@ -16,12 +16,12 @@ struct BGEMM_TEST_CONFIG {
   using ElementC = fp16;
   using ElementD = fp16;
   using ElementAccumulator = float;
-  using CtaTileShape_MNK = Shape<_256,_512,_128>;
+  using CtaTileShape_MNK = Shape<_256,_256,_128>;
   using CtaNum_MN = Shape<_2, _1>;
   using ClusterShape_MNK = Shape<_1, _1, _1>;
 
   static constexpr int StagesA = 3;
-  static constexpr int StagesC = 1;
+  static constexpr int StagesC = 2;
   static constexpr int FragmentSize = 2;
   static constexpr int num_xecore_x = 1;
   static constexpr int num_xecore_y = 2;
@@ -304,6 +304,6 @@ void run_test(bool is_persistent_mode = false)
 int main()
 {
   bool is_persistent_mode = true;
-  run_test<BGEMM_ROW_ROW_VOID_C>(is_persistent_mode);
+  run_test<BGEMM_ROW_ROW>(is_persistent_mode);
   return 0;
 }
