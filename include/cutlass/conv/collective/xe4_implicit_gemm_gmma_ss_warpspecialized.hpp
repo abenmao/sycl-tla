@@ -105,18 +105,18 @@ struct CollectiveConv
   using LayoutSB = decltype(Xe4_dispatch_policy_to_layoutSB<ConvOp_, TileShape, Stages>());
 
   static constexpr slm_matrix_type cmTypeA =
-    TiledMma::tnspA == cute::xe4::GMMA::Major::K ? slm_matrix_type::type1 : slm_matrix_type::type2;
+    TiledMma::tnspA == cute::SM90::GMMA::Major::K ? slm_matrix_type::type1 : slm_matrix_type::type2;
   using GmemTiledCopyA = cute::xe4::ASYNC_ROW_LOAD_IM2COL<cmTypeA>;
   using GmemTiledCopyB = cute::xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1>;
 
   using SmemLayoutA = decltype(tile_to_shape(
     SmemLayoutAtomA{},
     append(select<0,2>(TileShape{}), Int<Stages>{}),
-    cute::conditional_t<TiledMma::tnspA == cute::xe4::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
+    cute::conditional_t<TiledMma::tnspA == cute::SM90::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
   using SmemLayoutB = decltype(tile_to_shape(
     SmemLayoutAtomB{},
     append(select<1,2>(TileShape{}), Int<Stages>{}),
-    cute::conditional_t<TiledMma::tnspB == cute::xe4::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
+    cute::conditional_t<TiledMma::tnspB == cute::SM90::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
 
   using MainloopPipeline = cutlass::PipelineTmaAsync<DispatchPolicy::Stages>;
   using PipelineState  = typename MainloopPipeline::PipelineState;
@@ -356,14 +356,12 @@ public:
     auto tCrC = thread_mma.partition_fragment_C(sC);            // (MMA,MMA_M,MMA_N)
 
     uint64_t mma_ctrl = 0x100;
-    constexpr auto dstIsAccum = cute::C<cute::xe4::GMMA::DstType::Accum>{};
-    constexpr auto dstIsMatC = cute::C<cute::xe4::GMMA::DstType::MatC>{};
 
     for (uint32_t i = 0; i < k_tile_count - 1; i++) {
       uint32_t abar_index = slm_pipe_read.index();
       auto abar_cons = pipeline.consumer_get_barrier(slm_pipe_read);
       pipeline.consumer_wait(slm_pipe_read);
-      cute::gemm(tiled_mma.with(dstIsAccum, mma_ctrl, make_tuple(abar_cons, abar_cons)), tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
+      cute::gemm(tiled_mma.with(mma_ctrl, make_tuple(abar_cons, abar_cons)), tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
       pipeline.consumer_commit(slm_pipe_read, 2);
       ++slm_pipe_read;
       mma_ctrl = 0;
@@ -374,7 +372,7 @@ public:
       uint32_t abar_index = slm_pipe_read.index();
       pipeline.consumer_wait(slm_pipe_read);
       finalPipeline.producer_acquire(finalPipelineState);
-      cute::gemm(tiled_mma.with(dstIsMatC, mma_ctrl, make_tuple(abar_store, abar_cons, abar_cons)), tCrC, tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
+      cute::gemm(tiled_mma.with(mma_ctrl, make_tuple(abar_store, abar_cons, abar_cons)), tCrC, tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
       pipeline.consumer_commit(slm_pipe_read, 2);
       ++slm_pipe_read;
     }

@@ -104,12 +104,12 @@ struct CollectiveMma<
   using SmemLayoutA = decltype(UMMA::tile_to_mma_shape(
       SmemLayoutAtomA{},
       append(MmaShapeA_MK{}, Int<DispatchPolicy::Stages>{}),
-      cute::conditional_t<TiledMma::tnspA == cute::xe4::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
+      cute::conditional_t<TiledMma::tnspA == cute::SM90::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
   // (MMA_TILE_N,MMA_TILE_K),MMA_N,MMA_K,PIPE)
   using SmemLayoutB = decltype(UMMA::tile_to_mma_shape(
       SmemLayoutAtomB{},
       append(MmaShapeB_NK{}, Int<DispatchPolicy::Stages>{}),
-      cute::conditional_t<TiledMma::tnspB == cute::xe4::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
+      cute::conditional_t<TiledMma::tnspB == cute::SM90::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
   using SmemLayoutC = decltype(UMMA::tile_to_mma_shape(
       SmemLayoutAtomC{},
       append(MmaShapeC_MN{}, Int<1>{}), Step<_2,_1,_3>{}));
@@ -426,25 +426,23 @@ struct CollectiveMma<
     auto cluster_expect_tx = wg_expect_tx * (size<0>(cluster_shape_) + size<1>(cluster_shape_));
 
     uint64_t mma_ctrl = 0x100;
-    constexpr auto dstType = C<cute::xe4::GMMA::DstType::Accum>{};
     for (uint32_t i = 0; i < k_tile_count-1; ++i, ++mainloop_pipe_consumer_state) {
       uint32_t read_stage = mainloop_pipe_consumer_state.index();
       mainloop_pipeline.consumer_wait(mainloop_pipe_consumer_state);
       auto abar_cons = mainloop_pipeline.consumer_get_barrier(mainloop_pipe_consumer_state);
-      cute::gemm(tiled_mma.with(dstType, mma_ctrl, make_tuple(abar_cons, abar_cons), cluster_masks_), tCsA(_,_,_,read_stage), tCsB(_,_,_,read_stage), tCsAcc);
+      cute::gemm(tiled_mma.with(mma_ctrl, make_tuple(abar_cons, abar_cons), cluster_masks_), tCsA(_,_,_,read_stage), tCsB(_,_,_,read_stage), tCsAcc);
       mainloop_pipeline.consumer_commit(mainloop_pipe_consumer_state, cluster_expect_tx);
       mma_ctrl = 0;
     }
 
     {
       uint32_t read_stage = mainloop_pipe_consumer_state.index();
-      constexpr auto dstTypeMatC = C<cute::xe4::GMMA::DstType::MatC>{};
       mainloop_pipeline.consumer_wait(mainloop_pipe_consumer_state);
       store_pipeline.producer_try_acquire(store_pipe_producer_state);
       accumulator_pipeline.producer_acquire(accumulator_pipe_producer_state);
       auto abar_cons = mainloop_pipeline.consumer_get_barrier(mainloop_pipe_consumer_state);
       auto abar_cons_d = accumulator_pipeline.producer_get_barrier(accumulator_pipe_producer_state);
-      cute::gemm(tiled_mma.with(dstTypeMatC, mma_ctrl, make_tuple(abar_cons_d, abar_cons, abar_cons), cluster_masks_),
+      cute::gemm(tiled_mma.with(mma_ctrl, make_tuple(abar_cons_d, abar_cons, abar_cons), cluster_masks_),
         tCsC(_,_,_,accumulator_pipe_producer_state.index()), tCsA(_,_,_,read_stage), tCsB(_,_,_,read_stage), tCsAcc);
       mainloop_pipeline.consumer_commit(mainloop_pipe_consumer_state, cluster_expect_tx);
       ++mainloop_pipe_consumer_state;

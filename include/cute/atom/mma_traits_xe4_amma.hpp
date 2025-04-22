@@ -1,32 +1,17 @@
 #pragma once
 
 #include "cute/arch/mma_xe4_amma.hpp"
-#include "cute/arch/mma_xe4_desc.hpp"
 #include "util.hpp"
 
 namespace cute::xe4 {
 
-template <bool cm_major_x, class SEngine, class SLayout>
-CUTE_HOST_DEVICE constexpr
-auto make_matrix_desc(Tensor<SEngine, SLayout> const& sTensor) {
-  using Stride = decltype(stride(SLayout{}));
-  using Element = typename SEngine::element_type;
-
-  constexpr int leading_dim = cutlass::gemm::detail::is_mn_major<Stride>() ? 0 : 1;
-  constexpr uint32_t cm_size = cm_major_x ? 32 / sizeof(Element) : 32;
-  constexpr uint32_t cm_stride = size<leading_dim>(shape(SLayout{})) / cm_size;
-
-  MatDesc mat_desc = reinterpret_cast<uint64_t>(slm_space_cast(raw_pointer_cast(sTensor.data()))) >> 9;
-  mat_desc |= (cm_stride << 16);
-
-  return mat_desc;
-}
-
+template <typename T = void>
 struct MatDescIterator
 {
-  using reference    = MatDesc;
-  using element_type = MatDesc;
-  using value_type   = MatDesc;
+  using underlying_type = T;
+  using reference       = MatDesc;
+  using element_type    = MatDesc;
+  using value_type      = MatDesc;
 
   MatDesc desc_;
 
@@ -53,15 +38,31 @@ struct MatDescIterator
   print(MatDescIterator const& iter) { printf("xe4::MatDescIterator(%p)", iter.desc_); }
 };
 
-template <class T>
+template <bool cm_major_x, class SEngine, class SLayout>
+CUTE_HOST_DEVICE constexpr
+auto make_matrix_desc(Tensor<SEngine, SLayout> const& sTensor) {
+  using Stride = decltype(stride(SLayout{}));
+  using Element = typename SEngine::element_type;
+
+  constexpr int leading_dim = cutlass::gemm::detail::is_mn_major<Stride>() ? 0 : 1;
+  constexpr uint32_t cm_size = cm_major_x ? 32 / sizeof(Element) : 32;
+  constexpr uint32_t cm_stride = size<leading_dim>(shape(SLayout{})) / cm_size;
+
+  MatDesc mat_desc = reinterpret_cast<uint64_t>(slm_space_cast(raw_pointer_cast(sTensor.data()))) >> 9;
+  mat_desc |= (cm_stride << 16);
+
+  return MatDescIterator<Element>{mat_desc};
+}
+
+template <class T, class U>
 CUTE_HOST_DEVICE constexpr
 MatDesc
-raw_pointer_cast(MatDescIterator const& ptr) {
+raw_pointer_cast(MatDescIterator<U> const& ptr) {
   return ptr.desc_;
 }
 
 template <bool cm_major_x>
-struct slm_desc : MatDescIterator { };
+struct slm_desc : MatDescIterator<void> { };
 
 template <int M, int K>
 using ABLayout = Layout<Shape<_1,Shape<Int<M>,Int<K>>>, Stride<_0,Stride<_1,Int<M>>>>;
@@ -77,9 +78,9 @@ struct MakeTensor<xe4::slm_desc<cm_major_x>>
   CUTE_HOST_DEVICE constexpr auto
   operator()(Tensor<TEngine,TLayout> const& smem_tensor)
   {
-    auto mat_desc = xe4::make_matrix_desc<cm_major_x>(tensor<0>(smem_tensor));
+    auto mat_desc_iter = xe4::make_matrix_desc<cm_major_x>(tensor<0>(smem_tensor));
     auto new_layout = replace<0>(recast<uint8_t const>(smem_tensor).layout(), Layout<_1,_0>{});
-    return make_tensor(xe4::MatDescIterator{mat_desc}, new_layout);
+    return make_tensor(mat_desc_iter, new_layout);
   }
 };
 
@@ -89,7 +90,7 @@ struct XE4_ASYNC_GMMA_SCALE_OP {};
 template<bool B, auto TrueVal, auto FalseVal>
 constexpr auto condition_v = B ? TrueVal : FalseVal;
 
-template <class TupleC, class TA, class TB, class Shape_MNK_, xe4::GMMA::Major tnspA_, xe4::GMMA::Major tnspB_>
+template <class TupleC, class TA, class TB, class Shape_MNK_, SM90::GMMA::Major tnspA_, SM90::GMMA::Major tnspB_>
 struct MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>>
 {
   using ValTypeD = tuple_element_t<1, TupleC>;
@@ -97,7 +98,7 @@ struct MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>>
   using ValTypeB = TB;
   using ValTypeC = tuple_element_t<0, TupleC>;
 
-  using FrgTypeA = xe4::slm_desc<tnspA_==xe4::GMMA::Major::K>;
+  using FrgTypeA = xe4::slm_desc<tnspA_==SM90::GMMA::Major::K>;
   using FrgTypeB = xe4::slm_desc<true>;
   using FrgTypeC = xe4::slm_desc<true>;
 
@@ -107,22 +108,22 @@ struct MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>>
   using BLayout = xe4::ABLayout<get<1>(Shape_MNK{}), get<2>(Shape_MNK{})>;
   using CLayout = xe4::ABLayout<get<0>(Shape_MNK{}), get<1>(Shape_MNK{})>;
 
-  static constexpr xe4::GMMA::Major tnspA = tnspA_;
-  static constexpr xe4::GMMA::Major tnspB = tnspB_;
+  static constexpr SM90::GMMA::Major tnspA = tnspA_;
+  static constexpr SM90::GMMA::Major tnspB = tnspB_;
 
-  template<class DstType, class MmaCtrl, class Abarriers>
+  template<class MmaCtrl, class Abarriers>
   CUTE_HOST_DEVICE static auto
-  with(DstType dstType, MmaCtrl mmaCtrl, Abarriers barriers) {
+  with(MmaCtrl mmaCtrl, Abarriers barriers) {
     static_assert(is_tuple_v<Abarriers>, "Abarriers must be a tuple");
     using MMA_Op = XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>;
-    auto opargs = tuple_cat(make_tuple(dstType, mmaCtrl), barriers);
+    auto opargs = tuple_cat(make_tuple(mmaCtrl), barriers);
     return MMA_Traits<XE4_ASYNC_GMMA_OP, decltype(opargs), MMA_Op>{{}, opargs};
   }
 
-  template<class DstType, class MmaCtrl, class Abarriers, class McastMasks>
+  template<class MmaCtrl, class Abarriers, class McastMasks>
   CUTE_HOST_DEVICE static auto
-  with(DstType dstType, MmaCtrl mmaCtrl, Abarriers barriers, McastMasks masks) {
-    return with(dstType, mmaCtrl, barriers);
+  with(MmaCtrl mmaCtrl, Abarriers barriers, McastMasks masks) {
+    return with(mmaCtrl, barriers);
   }
 };
 
@@ -142,14 +143,14 @@ struct MMA_Traits<XE4_ASYNC_GMMA_OP, OpArgs, MMA_Op>: public MMA_Traits<MMA_Op> 
        Tensor<TB, BLayout> const& B,
        Tensor<TC, CLayout> const& C)
   {
-    auto matdesc_tuple = make_tuple(*D.data(), *C.data(), *A.data(), *B.data());
+    auto matdesc_tuple = make_tuple(D.data(), C.data(), A.data(), B.data());
     return detail::explode_tuple(detail::CallFMA<MMA_Op>{},
                                  matdesc_tuple, tuple_seq<decltype(matdesc_tuple)>{},
                                  traits.opargs_, tuple_seq<decltype(traits.opargs_)>{});
   }
 };
 
-template <class TupleC, class TA, class TB, class Shape_MNK_, xe4::GMMA::Major tnspA_, xe4::GMMA::Major tnspB_>
+template <class TupleC, class TA, class TB, class Shape_MNK_, SM90::GMMA::Major tnspA_, SM90::GMMA::Major tnspB_>
 struct MMA_Traits<XE4_ASYNC_GMMA_MULTICAST<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>>
 {
   using ValTypeD = tuple_element_t<1, TupleC>;
@@ -157,7 +158,7 @@ struct MMA_Traits<XE4_ASYNC_GMMA_MULTICAST<TupleC, TA, TB, Shape_MNK_, tnspA_, t
   using ValTypeB = TB;
   using ValTypeC = tuple_element_t<0, TupleC>;
 
-  using FrgTypeA = xe4::slm_desc<tnspA_==xe4::GMMA::Major::K>;
+  using FrgTypeA = xe4::slm_desc<tnspA_==SM90::GMMA::Major::K>;
   using FrgTypeB = xe4::slm_desc<true>;
   using FrgTypeC = xe4::slm_desc<true>;
 
@@ -167,23 +168,23 @@ struct MMA_Traits<XE4_ASYNC_GMMA_MULTICAST<TupleC, TA, TB, Shape_MNK_, tnspA_, t
   using BLayout = xe4::ABLayout<get<1>(Shape_MNK{}), get<2>(Shape_MNK{})>;
   using CLayout = xe4::ABLayout<get<0>(Shape_MNK{}), get<1>(Shape_MNK{})>;
 
-  static constexpr xe4::GMMA::Major tnspA = tnspA_;
-  static constexpr xe4::GMMA::Major tnspB = tnspB_;
+  static constexpr SM90::GMMA::Major tnspA = tnspA_;
+  static constexpr SM90::GMMA::Major tnspB = tnspB_;
 
-  template<class DstType, class MmaCtrl, class Abarriers>
+  template<class MmaCtrl, class Abarriers>
   CUTE_HOST_DEVICE static auto
-  with(DstType dstType, MmaCtrl mmaCtrl, Abarriers barriers) {
-    return MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>>::with(dstType, mmaCtrl, barriers);
+  with(MmaCtrl mmaCtrl, Abarriers barriers) {
+    return MMA_Traits<XE4_ASYNC_GMMA<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>>::with(mmaCtrl, barriers);
   }
 
-  template<class DstType, class MmaCtrl, class Abarriers, class McastMasks>
+  template<class MmaCtrl, class Abarriers, class McastMasks>
   CUTE_HOST_DEVICE static auto
-  with(DstType dstType, MmaCtrl mmaCtrl, Abarriers barriers, McastMasks masks) {
+  with(MmaCtrl mmaCtrl, Abarriers barriers, McastMasks masks) {
     static_assert(is_tuple_v<Abarriers>, "Abarriers must be a tuple");
     static_assert(is_tuple_v<McastMasks>, "McastMasks must be a tuple");
 
     using MMA_Op = XE4_ASYNC_GMMA_MULTICAST<TupleC, TA, TB, Shape_MNK_, tnspA_, tnspB_>;
-    auto opargs = tuple_cat(make_tuple(dstType, mmaCtrl), barriers, masks);
+    auto opargs = tuple_cat(make_tuple(mmaCtrl), barriers, masks);
     return MMA_Traits<XE4_ASYNC_GMMA_OP, decltype(opargs), MMA_Op>{{}, opargs};
   }
 };

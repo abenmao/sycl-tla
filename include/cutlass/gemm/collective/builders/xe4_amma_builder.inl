@@ -77,8 +77,8 @@ struct CollectiveBuilder<
 
   static_assert(cute::is_static_v<TileShape_MNK>, "TileShape has to be static");
 
-  static constexpr auto majorA = cutlass::gemm::detail::is_mn_major_A<GmemLayoutATag>() ? cute::xe4::GMMA::Major::MN : cute::xe4::GMMA::Major::K;
-  static constexpr auto majorB = cutlass::gemm::detail::is_mn_major_B<GmemLayoutBTag>() ? cute::xe4::GMMA::Major::MN : cute::xe4::GMMA::Major::K;
+  static constexpr auto majorA = cutlass::gemm::detail::is_mn_major_A<GmemLayoutATag>() ? cute::SM90::GMMA::Major::MN : cute::SM90::GMMA::Major::K;
+  static constexpr auto majorB = cutlass::gemm::detail::is_mn_major_B<GmemLayoutBTag>() ? cute::SM90::GMMA::Major::MN : cute::SM90::GMMA::Major::K;
 
   using TiledMma = decltype(cute::make_tiled_mma(
     cute::xe4::GMMA::ss_op_selector<ElementA, ElementB, ElementAccumulator,
@@ -115,14 +115,14 @@ struct CollectiveBuilder<
 
   using SmemLayoutAtomA =
     cute::conditional_t<
-      majorA == cute::xe4::GMMA::Major::K,
+      majorA == cute::SM90::GMMA::Major::K,
       decltype(make_layout(cute::select<0, 2>(TileShape_MNK{}), GenRowMajor{})),
       decltype(make_layout(cute::select<0, 2>(TileShape_MNK{}), GenColMajor{}))
     >;
 
   using SmemLayoutAtomB =
     cute::conditional_t<
-      majorB == cute::xe4::GMMA::Major::K,
+      majorB == cute::SM90::GMMA::Major::K,
       decltype(make_layout(cute::select<1, 2>(TileShape_MNK{}), GenRowMajor{})),
       decltype(make_layout(cute::select<1, 2>(TileShape_MNK{}), GenColMajor{}))
     >;

@@ -5,7 +5,6 @@
 #include "cute/layout.hpp"
 #include "inline_pisa.hpp"
 #include "mma_xe4_amma.hpp"
-#include "mma_xe4_desc.hpp"
 
 namespace cute::xe4::GMMA {
 
@@ -46,8 +45,8 @@ template <
   class ElementTupleC,
   class TileShape_MNK,
   class ClusterShape_MNK,
-  GMMA::Major majorA,
-  GMMA::Major majorB,
+  SM90::GMMA::Major majorA,
+  SM90::GMMA::Major majorB,
   auto... Args
 >
 CUTE_HOST_DEVICE constexpr
