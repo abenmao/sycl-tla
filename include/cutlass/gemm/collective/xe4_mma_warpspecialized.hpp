@@ -309,7 +309,7 @@ struct CollectiveMma<
     auto [tdesc_a, tdesc_b] = tdesc_tuple;
     observed_tma_load_a_->cache_.set_tensor_desc(tdesc_a);
     observed_tma_load_b_->cache_.set_tensor_desc(tdesc_b);
-    
+
     // Represent the full tensors -- get these from TMA
     auto mA_mkl = observed_tma_load_a_->get_tma_tensor(make_shape(M, K, L));   // (m,k,l)
     auto mB_nkl = observed_tma_load_b_->get_tma_tensor(make_shape(N, K, L));   // (n,k,l)
@@ -409,11 +409,9 @@ struct CollectiveMma<
     return cute::make_tuple(slm_pipe_write, k_tile_iter);
   }
 
-  template <class StorePipeline, class AccumulatorPipeline, class FrgTensorC, class MmaParams>
+  template <class Pipelines, class PipelineStates, class FrgTensorC, class MmaParams>
   CUTLASS_DEVICE auto
-  mma(cute::tuple<MainloopPipeline, StorePipeline, AccumulatorPipeline> pipelines,
-    cute::tuple<MainloopPipelineState, typename StorePipeline::PipelineState, typename AccumulatorPipeline::PipelineState> pipeline_states,
-    FrgTensorC& tensor_c, MmaParams const& mma_inputs,int k_tile_count) {
+  mma(Pipelines pipelines, PipelineStates pipeline_states, FrgTensorC& tensor_c, MmaParams const& mma_inputs, int k_tile_count) {
 
     auto [mainloop_pipeline, store_pipeline, accumulator_pipeline] = pipelines;
     auto [mainloop_pipe_consumer_state, store_pipe_producer_state, accumulator_pipe_producer_state] = pipeline_states;
@@ -426,29 +424,39 @@ struct CollectiveMma<
     auto cluster_expect_tx = wg_expect_tx * (size<0>(cluster_shape_) + size<1>(cluster_shape_));
 
     uint64_t mma_ctrl = 0x100;
-    for (uint32_t i = 0; i < k_tile_count-1; ++i, ++mainloop_pipe_consumer_state) {
-      uint32_t read_stage = mainloop_pipe_consumer_state.index();
-      mainloop_pipeline.consumer_wait(mainloop_pipe_consumer_state);
-      auto abar_cons = mainloop_pipeline.consumer_get_barrier(mainloop_pipe_consumer_state);
-      cute::gemm(tiled_mma.with(mma_ctrl, make_tuple(abar_cons, abar_cons), cluster_masks_), tCsA(_,_,_,read_stage), tCsB(_,_,_,read_stage), tCsAcc);
-      mainloop_pipeline.consumer_commit(mainloop_pipe_consumer_state, cluster_expect_tx);
-      mma_ctrl = 0;
-    }
 
-    {
-      uint32_t read_stage = mainloop_pipe_consumer_state.index();
+    while (k_tile_count > 0) {
       mainloop_pipeline.consumer_wait(mainloop_pipe_consumer_state);
-      store_pipeline.producer_try_acquire(store_pipe_producer_state);
-      accumulator_pipeline.producer_acquire(accumulator_pipe_producer_state);
-      auto abar_cons = mainloop_pipeline.consumer_get_barrier(mainloop_pipe_consumer_state);
-      auto abar_cons_d = accumulator_pipeline.producer_get_barrier(accumulator_pipe_producer_state);
-      cute::gemm(tiled_mma.with(mma_ctrl, make_tuple(abar_cons_d, abar_cons, abar_cons), cluster_masks_),
-        tCsC(_,_,_,accumulator_pipe_producer_state.index()), tCsA(_,_,_,read_stage), tCsB(_,_,_,read_stage), tCsAcc);
       mainloop_pipeline.consumer_commit(mainloop_pipe_consumer_state, cluster_expect_tx);
+
+      int read_stage = mainloop_pipe_consumer_state.index();
+      auto abar_cons = mainloop_pipeline.consumer_get_barrier(mainloop_pipe_consumer_state);
+
+      // Unroll the K mode manually so we can set mma_ctrl to 0
+      CUTLASS_PRAGMA_UNROLL
+      for (int k_block = 0; k_block < size<2>(tCsA); ++k_block) {
+        bool is_last_iter = (k_tile_count == 1) && (k_block == size<2>(tCsA) - 1);
+
+        if (is_last_iter) {
+          store_pipeline.producer_try_acquire(store_pipe_producer_state);
+          accumulator_pipeline.producer_acquire(accumulator_pipe_producer_state);
+
+          int write_stage = accumulator_pipe_producer_state.index();
+          auto abar_cons_d = accumulator_pipeline.producer_get_barrier(accumulator_pipe_producer_state);
+          auto new_tiled_mma = tiled_mma.with(mma_ctrl, make_tuple(abar_cons_d, abar_cons, abar_cons), cluster_masks_);
+          cute::gemm(new_tiled_mma, tCsC(_,_,_,write_stage), tCsA(_,_,k_block,read_stage), tCsB(_,_,k_block,read_stage), tCsAcc);
+        } else {
+          auto new_tiled_mma = tiled_mma.with(mma_ctrl, make_tuple(abar_cons, abar_cons), cluster_masks_);
+          cute::gemm(new_tiled_mma, tCsA(_,_,k_block,read_stage), tCsB(_,_,k_block,read_stage), tCsAcc);
+        }
+        mma_ctrl = 0;
+      }
+
+      --k_tile_count;
       ++mainloop_pipe_consumer_state;
-
-      return mainloop_pipe_consumer_state;
     }
+
+    return mainloop_pipe_consumer_state;
   }
 
 public:

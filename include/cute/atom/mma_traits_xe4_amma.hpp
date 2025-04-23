@@ -44,9 +44,9 @@ auto make_matrix_desc(Tensor<SEngine, SLayout> const& sTensor) {
   using Stride = decltype(stride(SLayout{}));
   using Element = typename SEngine::element_type;
 
-  constexpr int leading_dim = cutlass::gemm::detail::is_mn_major<Stride>() ? 0 : 1;
+  constexpr int non_leading_dim = cutlass::gemm::detail::is_mn_major<Stride>() ? 1 : 0;
   constexpr uint32_t cm_size = cm_major_x ? 32 / sizeof(Element) : 32;
-  constexpr uint32_t cm_stride = size<leading_dim>(shape(SLayout{})) / cm_size;
+  constexpr uint32_t cm_stride = size<non_leading_dim>(Stride{}) / cm_size;
 
   MatDesc mat_desc = reinterpret_cast<uint64_t>(slm_space_cast(raw_pointer_cast(sTensor.data()))) >> 9;
   mat_desc |= (cm_stride << 16);
@@ -78,8 +78,27 @@ struct MakeTensor<xe4::slm_desc<cm_major_x>>
   CUTE_HOST_DEVICE constexpr auto
   operator()(Tensor<TEngine,TLayout> const& smem_tensor)
   {
+    auto layout = recast<uint8_t const>(smem_tensor).layout();
+
+    constexpr auto get_cm_stride = [dim0_size = size<0>(layout)](auto stride_val) {
+      constexpr int ColsPerCoreMatrix = 32;
+      constexpr int BytesPerCoreMatrix = 1024;
+      constexpr int ScaleFactor = BytesPerCoreMatrix / ColsPerCoreMatrix;
+      constexpr int new_stride_val = (stride_val >= dim0_size) ? stride_val : ScaleFactor * stride_val;
+      return C<new_stride_val>{};
+    };
+
+    constexpr auto stride = layout.stride();
+    constexpr auto new_stride_1 = get_cm_stride(get<1>(stride));
+    constexpr auto new_stride_2 = get_cm_stride(get<2>(stride));
+
+    auto new_layout = make_layout(
+      tuple_cat(make_tuple(_1{}), take<1,-1>(shape(layout))),
+      tuple_cat(make_tuple(_0{}, new_stride_1, new_stride_2), take<3,-1>(stride))
+    );
+
     auto mat_desc_iter = xe4::make_matrix_desc<cm_major_x>(tensor<0>(smem_tensor));
-    auto new_layout = replace<0>(recast<uint8_t const>(smem_tensor).layout(), Layout<_1,_0>{});
+
     return make_tensor(mat_desc_iter, new_layout);
   }
 };
