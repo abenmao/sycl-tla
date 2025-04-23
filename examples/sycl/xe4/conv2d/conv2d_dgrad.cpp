@@ -68,11 +68,11 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
     using ClusterShapeMNK = Shape<_1, _1, _1>;
     using MmaTiler = Shape<Int<bM>, Int<bN>, Int<bK>>;
     using TiledMma = decltype(cute::make_tiled_mma(xe4::GMMA::ss_op_selector<ElementAct, ElementFlt, tuple<ElementAcc, ElementOut>, MmaTiler, ClusterShapeMNK, tnspA, tnspB>()));
-    using SmemLayoutAtomA = decltype(make_layout(Shape<_32, Int<32 / sizeof(ElementAct)>>{}, std::conditional_t<tnspA == SM90::GMMA::Major::K, GenRowMajor, GenColMajor>{}));
-    using SmemLayoutAtomB = decltype(upcast<sizeof(ElementFlt)>(make_layout(Shape<_32, _32>{}, std::conditional_t<tnspB == SM90::GMMA::Major::K, GenRowMajor, GenColMajor>{})));
+    using SmemLayoutAtomA = decltype(make_layout(Shape<Int<bM>, Int<bK>>{}, std::conditional_t<tnspA == SM90::GMMA::Major::K, GenRowMajor, GenColMajor>{}));
+    using SmemLayoutAtomB = decltype(make_layout(Shape<Int<bN>, Int<bK>>{}, std::conditional_t<tnspB == SM90::GMMA::Major::K, GenRowMajor, GenColMajor>{}));
     using SmemLayoutC = decltype(make_layout(make_shape(bM, bN), make_stride(bN, Int<1>{})));
 
-    // for dgrad, shapeA: NPQK, shapeB: CRSK, shapeC:NHWC 
+    // for dgrad, shapeA: NPQK, shapeB: CRSK, shapeC:NHWC
     uint32_t sizeA = Out_C * Out_W * Out_H * Out_N;
     uint32_t sizeB = K * S * R * C;
     uint32_t sizeC = C * W * H * N;

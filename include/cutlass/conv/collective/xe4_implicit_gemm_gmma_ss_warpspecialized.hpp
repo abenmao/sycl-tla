@@ -357,25 +357,34 @@ public:
 
     uint64_t mma_ctrl = 0x100;
 
-    for (uint32_t i = 0; i < k_tile_count - 1; i++) {
+    while (k_tile_count > 0) {
+      pipeline.consumer_wait(slm_pipe_read);
+      pipeline.consumer_commit(slm_pipe_read, 2);
+
       uint32_t abar_index = slm_pipe_read.index();
       auto abar_cons = pipeline.consumer_get_barrier(slm_pipe_read);
-      pipeline.consumer_wait(slm_pipe_read);
-      cute::gemm(tiled_mma.with(mma_ctrl, make_tuple(abar_cons, abar_cons)), tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
-      pipeline.consumer_commit(slm_pipe_read, 2);
+
+      // Unroll the K mode manually so we can set mma_ctrl to 0
+      CUTLASS_PRAGMA_UNROLL
+      for (int k_block = 0; k_block < size<2>(tCrA); ++k_block) {
+        bool is_last_iter = (k_tile_count == 1) && (k_block == size<2>(tCrA) - 1);
+
+        if (is_last_iter) {
+          finalPipeline.producer_acquire(finalPipelineState);
+          auto abar_store = finalPipeline.producer_get_barrier(finalPipelineState);
+          auto new_tiled_mma = tiled_mma.with(mma_ctrl, make_tuple(abar_store, abar_cons, abar_cons));
+          cute::gemm(new_tiled_mma, tCrC, tCrA(_,_,k_block,abar_index), tCrB(_,_,k_block,abar_index), accum);
+        } else {
+          auto new_tiled_mma = tiled_mma.with(mma_ctrl, make_tuple(abar_cons, abar_cons));
+          cute::gemm(new_tiled_mma, tCrA(_,_,k_block,abar_index), tCrB(_,_,k_block,abar_index), accum);
+        }
+        mma_ctrl = 0;
+      }
+
+      --k_tile_count;
       ++slm_pipe_read;
-      mma_ctrl = 0;
     }
-    {
-      auto abar_store = finalPipeline.producer_get_barrier(finalPipelineState);
-      auto abar_cons = pipeline.consumer_get_barrier(slm_pipe_read);
-      uint32_t abar_index = slm_pipe_read.index();
-      pipeline.consumer_wait(slm_pipe_read);
-      finalPipeline.producer_acquire(finalPipelineState);
-      cute::gemm(tiled_mma.with(mma_ctrl, make_tuple(abar_store, abar_cons, abar_cons)), tCrC, tCrA(_,_,_,abar_index), tCrB(_,_,_,abar_index), accum);
-      pipeline.consumer_commit(slm_pipe_read, 2);
-      ++slm_pipe_read;
-    }
+
     return slm_pipe_read;
   }
 };

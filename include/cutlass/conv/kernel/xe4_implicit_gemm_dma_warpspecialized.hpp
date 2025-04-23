@@ -267,15 +267,14 @@ public:
     auto clc_pipe_producer_state = cutlass::make_producer_start_state<CLCPipeline>();
     auto clc_pipe_consumer_state = CLCPipelineState{};
 
-    using SmemLayoutAtomAcc = decltype(make_layout(Shape<_32, Int<32 / sizeof(ElementAccumulator)>>{}, GenRowMajor{}));
-    using SmemLayoutAtomDst = decltype(make_layout(Shape<_32, Int<32 / sizeof(ElementD)>>{}, GenRowMajor{}));
+    using SmemLayoutAtomD = decltype(make_layout(select<0,1>(TileShape{}), GenRowMajor{}));
 
     using SmemLayoutAcc = decltype(tile_to_shape(
-        SmemLayoutAtomAcc{},
+        SmemLayoutAtomD{},
         make_shape(shape<0>(TileShape{}), shape<1>(TileShape{})),
         Step<_2,_1>{}));
     using SmemLayoutDst = decltype(tile_to_shape(
-        SmemLayoutAtomDst{},
+        SmemLayoutAtomD{},
         make_shape(shape<0>(TileShape{}), shape<1>(TileShape{})),
         Step<_2,_1>{}));
 
