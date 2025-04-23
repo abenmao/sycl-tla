@@ -50,5 +50,5 @@ function(add_xe4_test TARGET_NAME SRCS)
   target_link_libraries(${TARGET_NAME} PRIVATE -lur_loader)
 endfunction()
 
-add_subdirectory(bgemm)
+add_subdirectory(gemm)
 add_subdirectory(conv2d)

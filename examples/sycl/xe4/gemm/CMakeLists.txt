@@ -28,7 +28,7 @@
 
 
 set(TARGET_NAME xe4_bgemm)
-add_xe4_test(${TARGET_NAME} bgemm.cpp)
+add_xe4_test(${TARGET_NAME} gemm.cpp)
 target_compile_definitions(${TARGET_NAME} PRIVATE AMMA_GENERATED)
 target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_options(${TARGET_NAME} PUBLIC "-Xs;\"-xe-set-abarrier-arrive-lmc -disable-branch-fold\"")
