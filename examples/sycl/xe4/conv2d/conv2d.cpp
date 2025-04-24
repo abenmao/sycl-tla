@@ -3,7 +3,7 @@
 #include "cute/layout.hpp"
 #include "cute/tensor.hpp"
 #include "cute/arch/mma_xe4.hpp"
-#include "cutlass/conv/collective/xe4_implicit_gemm_gmma_ss_warpspecialized.hpp"
+#include "cutlass/conv/collective/collective_builder.hpp"
 #include "cutlass/conv/kernel/xe4_implicit_gemm_dma_warpspecialized.hpp"
 
 using namespace sycl;
@@ -66,19 +66,13 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
     using ElementOut = fp16;
 
     constexpr uint32_t Stages = 3;
-    static constexpr auto tnspA = SM90::GMMA::Major::K;
-    static constexpr auto tnspB = SM90::GMMA::Major::K;
 
     auto bM = wgM{};
     auto bN = wgN{};
     auto bK = wgK{};
     static_assert(bM % LANESIZE == 0);
-    using TileShape = Shape<Int<bM>, Int<bN>, Shape<Int<bK>>>;
+    using TileShapeMNK = Shape<Int<bM>, Int<bN>, Shape<Int<bK>>>;
     using ClusterShapeMNK = Shape<_1, _1, _1>;
-    using MmaTiler = Shape<Int<bM>, Int<bN>, Int<bK>>;
-    using TiledMma = decltype(cute::make_tiled_mma(xe4::GMMA::ss_op_selector<ElementAct, ElementFlt, tuple<ElementAcc, ElementOut>, MmaTiler, ClusterShapeMNK, tnspA, tnspB>()));
-    using SmemLayoutAtomA = decltype(make_layout(Shape<Int<bM>, Int<bK>>{}, std::conditional_t<tnspA == SM90::GMMA::Major::K, GenRowMajor, GenColMajor>{}));
-    using SmemLayoutAtomB = decltype(make_layout(Shape<Int<bN>, Int<bK>>{}, std::conditional_t<tnspB == SM90::GMMA::Major::K, GenRowMajor, GenColMajor>{}));
     using SmemLayoutC = decltype(make_layout(make_shape(bM, bN), make_stride(bN, Int<1>{})));
 
     uint32_t sizeA = C * W * H * N;
@@ -117,24 +111,21 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
         << group_range[2]  << "} \n";
     nd_range<3> Range(group_range * local_range, local_range);
 
-    using CollectiveMainloop = CollectiveConv<
-        cute::C<cutlass::conv::Operator::kFprop>,
-        Stages,
-        2,
-        ClusterShapeMNK,
-        KernelImplicitTmaWarpSpecializedXe4,
-        1,
-        TileShape,
-        ElementAct,
-        ElementFlt,
-        TiledMma,
-        SmemLayoutAtomA,
-        SmemLayoutAtomB>;
+    using CollectiveMainloop = typename cutlass::conv::collective::CollectiveBuilder<
+        cutlass::arch::Xe4, cutlass::arch::OpClassTensorOp,
+        cutlass::conv::Operator::kFprop,
+        ElementAct, cutlass::layout::TensorNHWC, 8,
+        ElementFlt, cutlass::layout::TensorNHWC, 8,
+        ElementAcc, ElementOut,
+        TileShapeMNK, ClusterShapeMNK,
+        cutlass::conv::collective::StageCount<static_cast<int>(Stages)>,
+        cutlass::conv::collective::KernelScheduleAuto
+    >::CollectiveOp;
     using CollectiveEpilogue = EpilogueConv<
         cutlass::conv::Operator::kFprop,
         CollectiveMainloop::DispatchPolicy::NumSpatialDimensions,
         SmemLayoutC,
-        TileShape,
+        TileShapeMNK,
         ElementOut>;
     using ProblemShape = cutlass::conv::ConvProblemShape<
         cutlass::conv::Operator::kFprop,

@@ -77,9 +77,18 @@ template <
   class ElementA_,
   class ElementB_,
   class TiledMma_,
-  class SmemLayoutAtomA_,
-  class SmemLayoutAtomB_>
-struct CollectiveConv
+  class TileTraitsA_,
+  class TileTraitsB_
+>
+struct CollectiveConv<
+    MainloopXe4DmaGmmaWarpSpecializedImplicitGemm<
+    ConvOp_, Stages, NumSpatialDims, ClusterShape, KernelSchedule, PipelineAsyncMmaStages>,
+    TileShape_,
+    ElementA_,
+    ElementB_,
+    TiledMma_,
+    TileTraitsA_,
+    TileTraitsB_>
 {
   static_assert(Stages >= 2, "Specialization requires Stages set to value 2 or more.");
 
@@ -92,8 +101,10 @@ struct CollectiveConv
   using ElementA = ElementA_;
   using ElementB = ElementB_;
   using TiledMma = TiledMma_;
-  using SmemLayoutAtomA = SmemLayoutAtomA_;
-  using SmemLayoutAtomB = SmemLayoutAtomB_;
+  using GmemTiledCopyA = typename TileTraitsA_::GmemTiledCopy;
+  using SmemLayoutA = typename TileTraitsA_::SmemLayout;
+  using GmemTiledCopyB = typename TileTraitsB_::GmemTiledCopy;
+  using SmemLayoutB = typename TileTraitsB_::SmemLayout;
   using ElementAccumulator = typename TiledMma::ValTypeC;
 
   using ArchTag = typename DispatchPolicy::ArchTag;
@@ -103,20 +114,6 @@ struct CollectiveConv
   using StrideA = decltype(Xe4_dispatch_policy_to_stride_A<ConvOp_>());
   using StrideB = decltype(Xe4_dispatch_policy_to_stride_B<ConvOp_>());
   using LayoutSB = decltype(Xe4_dispatch_policy_to_layoutSB<ConvOp_, TileShape, Stages>());
-
-  static constexpr slm_matrix_type cmTypeA =
-    TiledMma::tnspA == cute::SM90::GMMA::Major::K ? slm_matrix_type::type1 : slm_matrix_type::type2;
-  using GmemTiledCopyA = cute::xe4::ASYNC_ROW_LOAD_IM2COL<cmTypeA>;
-  using GmemTiledCopyB = cute::xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1>;
-
-  using SmemLayoutA = decltype(tile_to_shape(
-    SmemLayoutAtomA{},
-    append(select<0,2>(TileShape{}), Int<Stages>{}),
-    cute::conditional_t<TiledMma::tnspA == cute::SM90::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
-  using SmemLayoutB = decltype(tile_to_shape(
-    SmemLayoutAtomB{},
-    append(select<1,2>(TileShape{}), Int<Stages>{}),
-    cute::conditional_t<TiledMma::tnspB == cute::SM90::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
 
   using MainloopPipeline = cutlass::PipelineTmaAsync<DispatchPolicy::Stages>;
   using PipelineState  = typename MainloopPipeline::PipelineState;
@@ -165,7 +162,7 @@ private:
         problem_shape.dilation[NumSpatialDimensions-1-i];
     }
 
-    return make_im2col_tma_copy<GmemTiledCopyA>(GmemTiledCopyA{}, 
+    return make_im2col_tma_copy<GmemTiledCopyA>(GmemTiledCopyA{},
       tensor_a,
       make_layout(make_shape(size<0>(TileShape{}), size<2>(TileShape{})),
         make_stride(size<2>(TileShape{}), Int<1>{})),
