@@ -103,6 +103,9 @@ private:
   using GmemStrideTypeC = cutlass::detail::TagToStrideC_t<GmemLayoutTagC>;
   using GmemStrideTypeD = cutlass::detail::TagToStrideC_t<GmemLayoutTagD>;
 
+  constexpr static bool is_fp_postop = is_floating_t<ElementD>::value && (sizeof_bits_v<ElementD> < 16);
+  using ElementImm = cute::conditional_t<is_fp_postop, bf16, ElementD>;
+
   using CtaTileShape_MNK = MmaTileShape_MNK;
   using TileShape_MN = decltype(select<0,1>(MmaTileShape_MNK{}));
 
@@ -157,6 +160,7 @@ public:
       xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1>,
       SmemLayoutAtomC,
       decltype(xe4_get_smem_load_op<NumElementsPerThread, ElementD>()),
+      decltype(xe4_get_smem_load_op<NumElementsPerThread, ElementImm>()),
       xe4::ASYNC_TENSOR_STORE<slm_matrix_type::type1>,
       SmemLayoutAtomD,
       decltype(xe4_get_smem_store_op<NumElementsPerThread, ElementD>()),

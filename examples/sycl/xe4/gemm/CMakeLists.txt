@@ -37,6 +37,6 @@ generate_amma_header(
   ${TARGET_NAME}_helper
   "--mma_type" "mma"
   "--shape" "128x128x128;256x256x128;256x512x128"
-  "--dtype" "f32_f32_f16_f16;f16_f32_f16_f16"
+  "--dtype" "f32_f32_f16_f16;f16_f32_f16_f16;f32_f32_bf8_bf8;bf16_f32_bf8_bf8"
 )
 add_dependencies(${TARGET_NAME} ${TARGET_NAME}_helper)

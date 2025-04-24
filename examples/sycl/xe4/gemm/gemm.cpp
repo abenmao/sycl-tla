@@ -10,53 +10,55 @@
 using namespace cute;
 using namespace sycl;
 
+enum class ActivationType {
+  SiLu,
+  None
+};
+
 struct BGEMM_TEST_CONFIG {
   using ElementA = fp16;
   using ElementB = fp16;
   using ElementC = fp16;
   using ElementD = fp16;
   using ElementAccumulator = float;
+  using LayoutA = cutlass::layout::RowMajor;
+  using LayoutB = cutlass::layout::RowMajor;
+  using LayoutC = cutlass::layout::RowMajor;
   using CtaTileShape_MNK = Shape<_256,_256,_128>;
   using CtaNum_MN = Shape<_2, _1>;
   using ClusterShape_MNK = Shape<_1, _1, _1>;
 
   static constexpr int StagesA = 3;
   static constexpr int StagesC = 2;
-  static constexpr int FragmentSize = 2;
-  static constexpr int num_xecore_x = 1;
-  static constexpr int num_xecore_y = 2;
+  static constexpr auto activation_type = ActivationType::SiLu;
   static constexpr cute::array<int, 4> ProblemShape_MNKL = {1024, 1024, 1024, 1};
 };
 
 struct BGEMM_ROW_ROW : public BGEMM_TEST_CONFIG {
-  using LayoutA = cutlass::layout::RowMajor;
-  using LayoutB = cutlass::layout::RowMajor;
-  using LayoutC = cutlass::layout::RowMajor;
 };
 
 struct BGEMM_COL_ROW : public BGEMM_TEST_CONFIG {
   using LayoutA = cutlass::layout::ColumnMajor;
-  using LayoutB = cutlass::layout::RowMajor;
-  using LayoutC = cutlass::layout::RowMajor;
 };
 
 struct BGEMM_ROW_COL : public BGEMM_TEST_CONFIG {
-  using LayoutA = cutlass::layout::RowMajor;
   using LayoutB = cutlass::layout::ColumnMajor;
-  using LayoutC = cutlass::layout::RowMajor;
 };
 
 struct BGEMM_COL_COL : public BGEMM_TEST_CONFIG {
   using LayoutA = cutlass::layout::ColumnMajor;
   using LayoutB = cutlass::layout::ColumnMajor;
-  using LayoutC = cutlass::layout::RowMajor;
 };
 
 struct BGEMM_ROW_ROW_VOID_C : public BGEMM_ROW_ROW {
   using ElementC = void;
-  using LayoutA = cutlass::layout::RowMajor;
-  using LayoutB = cutlass::layout::RowMajor;
-  using LayoutC = cutlass::layout::RowMajor;
+};
+
+struct BF8_GEMM_ROW_ROW_VOID_C : public BGEMM_ROW_ROW_VOID_C {
+  using ElementA = bf8;
+  using ElementB = bf8;
+  using ElementD = bf8;
+  static constexpr auto activation_type = ActivationType::None;
 };
 
 // Define a macro to extract memory info (offset and raw size)
@@ -148,11 +150,22 @@ void run_test(bool is_persistent_mode = false)
   using ClusterShape        = typename Config::ClusterShape_MNK;              // Shape of the threadblocks in a cluster
 
   using ElementEpilogueCompute = float;
+  constexpr auto activation_type = Config::activation_type;
   using EpilogueScheduleType = cutlass::epilogue::collective::EpilogueScheduleAuto;
+
+  constexpr bool is_fp_postop = is_floating_t<ElementD>::value && (sizeof_bits_v<ElementD> < 16);
+  using ElementImm = cute::conditional_t<is_fp_postop, bf16, ElementD>;
+
   using EpilogueOperation = cute::conditional_t<
     cute::is_void_v<ElementC>,
-    cutlass::epilogue::fusion::EltAct<cutlass::epilogue::thread::SiLu, ElementD, ElementEpilogueCompute>,
-    cutlass::epilogue::fusion::EltActMul<cutlass::epilogue::thread::SiLu, ElementD, ElementEpilogueCompute>
+    cute::conditional_t<activation_type == ActivationType::None,
+      cutlass::epilogue::fusion::EltAct<cutlass::epilogue::thread::Identity, ElementD, ElementImm>,
+      cutlass::epilogue::fusion::EltAct<cutlass::epilogue::thread::SiLu, ElementD, ElementEpilogueCompute>
+    >,
+    cute::conditional_t<activation_type == ActivationType::None,
+      cutlass::epilogue::fusion::EltActMul<cutlass::epilogue::thread::Identity, ElementD, ElementImm>,
+      cutlass::epilogue::fusion::EltActMul<cutlass::epilogue::thread::SiLu, ElementD, ElementEpilogueCompute>
+    >
   >;
 
   // Build the epilogue
@@ -269,24 +282,36 @@ void run_test(bool is_persistent_mode = false)
   };
 
   auto silu_mul_op = [&](auto&& vec) {
+    std::vector<ElementD> result(vec.size());
+
     constexpr auto one = ElementEpilogueCompute(1.0);
 
     auto sigmod = [&](const auto &x) {
       return one / (one + sycl::exp(-x));
     };
 
-    for (int i = 0; i < vec.size(); ++i) {
-      auto val = ElementEpilogueCompute(vec[i]);
-      auto result = val * sigmod(val);
+    auto silu = [&](const auto &x) {
+      auto tmp = ElementEpilogueCompute(x);
+      return tmp * sigmod(tmp);
+    };
 
+    for (int i = 0; i < vec.size(); ++i) {
       if constexpr (cute::is_void_v<ElementC>) {
-        vec[i] = val * sigmod(val);
+        if (activation_type == ActivationType::None) {
+          result[i] = vec[i];
+        } else {
+          result[i] = silu(vec[i]);
+        }
       } else {
-        vec[i] = val * sigmod(val) * ElementEpilogueCompute(C_s[i]);
+        if (activation_type == ActivationType::None) {
+          result[i] = ElementEpilogueCompute(vec[i]) * ElementEpilogueCompute(C_s[i]);
+        } else {
+          result[i] = silu(vec[i]) * ElementEpilogueCompute(C_s[i]);
+        }
       }
     }
 
-    return vec;
+    return result;
   };
 
   auto [mat_m, mat_n, mat_k, _] = problem_shape_mnkl;

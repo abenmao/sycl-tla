@@ -44,6 +44,7 @@ template <
   class CopyOpG2S_,
   class SmemLayoutAtomC_,
   class CopyOpS2R_,
+  class CopyOpS2RImm_,
   class CopyOpS2G_,
   class SmemLayoutAtomD_,
   class CopyOpR2S_,
@@ -61,6 +62,7 @@ class CollectiveEpilogue<
   CopyOpG2S_,
   SmemLayoutAtomC_,
   CopyOpS2R_,
+  CopyOpS2RImm_,
   CopyOpS2G_,
   SmemLayoutAtomD_,
   CopyOpR2S_,
@@ -81,6 +83,7 @@ public:
   using CopyOpG2S = CopyOpG2S_;
   using SmemLayoutAtomC = SmemLayoutAtomC_;
   using CopyOpS2R = CopyOpS2R_;
+  using CopyOpS2RImm = CopyOpS2RImm_;
   using CopyOpS2G = CopyOpS2G_;
   using SmemLayoutAtomD = SmemLayoutAtomD_;
   using CopyOpR2S = CopyOpR2S_;
@@ -97,6 +100,9 @@ private:
   using GmemElementC = cute::conditional_t<cute::is_void_v<ElementC>,ElementD,ElementC>; // prevents void ref breakages
   using SmemElementD = typename cutlass::detail::get_unpacked_element_type<GmemElementD>::type;
   using SmemElementC = typename cutlass::detail::get_unpacked_element_type<GmemElementC>::type;
+
+  constexpr static bool is_fp_postop = is_floating_t<SmemElementD>::value && (sizeof_bits_v<SmemElementD> < 16);
+  using SmemElementImm = cute::conditional_t<is_fp_postop, bf16, SmemElementD>;
 
   constexpr static int StagesC = StagesC_;
   constexpr static int StagesD = StagesD_;
@@ -133,17 +139,24 @@ private:
 
   struct CollectiveStorageWithC {
     alignas(SmemAlignmentC) ArrayEngine<SmemElementC, cosize_v<SmemLayoutC>> smem_C;
-    alignas(SmemAlignmentD) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
+    union {
+      alignas(SmemAlignmentD) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
+      alignas(SmemAlignmentD) ArrayEngine<SmemElementImm, cosize_v<SmemLayoutD>> smem_Imm;
+    };
   };
 
   union CollectiveStorageWithoutC {
     cute::array<SmemElementC, 0> smem_C;
-    alignas(SmemAlignmentD) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
+    union {
+      alignas(SmemAlignmentD) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
+      alignas(SmemAlignmentD) ArrayEngine<SmemElementImm, cosize_v<SmemLayoutD>> smem_Imm;
+    };
   };
 
   union CollectiveStorageReuseC {
     alignas(MaxSmemAlignment) ArrayEngine<SmemElementC, cosize_v<SmemLayoutC>> smem_C;
     alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
+    alignas(MaxSmemAlignment) ArrayEngine<SmemElementImm, cosize_v<SmemLayoutD>> smem_Imm;
   };
 
 public:
@@ -277,9 +290,9 @@ public:
   CUTLASS_DEVICE
   static constexpr auto
   get_intermedia_tensor(TensorStorage& shared_tensors) {
-    auto ptr_sD = shared_tensors.collective.smem_D.begin();
-    auto tensor_d = make_tensor(make_smem_ptr(ptr_sD), SmemLayoutD{});
-    return tensor_d;
+    auto ptr_sImm = shared_tensors.collective.smem_Imm.begin();
+    auto tensor_imm = make_tensor(make_smem_ptr(ptr_sImm), SmemLayoutD{});
+    return tensor_imm;
   }
 
   //
@@ -497,17 +510,21 @@ public:
     auto sD_epi = make_slm_tensor<SmemElementD>(ptr_sD, SmemLayoutD{});   // (CTA_M,CTA_N,PIPE_D)
 
     // (t)hread-partition for (s)mem to (r)egister copy (tSR_)
-    TiledCopy tiled_s2r = []() {
+    auto [tiled_s2r, tiled_s2r_imm]  = []() {
       constexpr int NumElementsPerThread = 32;
       constexpr int NumWarpsAlongM = get<0>(EpilogueTile{}) / NumThreadsPerWarp;
       constexpr int NumWarpsAlongN = get<1>(EpilogueTile{}) / NumElementsPerThread;
       auto thr_layout = make_ordered_layout(Shape<Shape<Int<NumThreadsPerWarp>,Int<NumWarpsAlongM>>,Int<NumWarpsAlongN>>{}, Step<Step<_0,_2>,_1>{});
       auto val_layout = make_ordered_layout(Shape<_1,Int<NumElementsPerThread>>{}, Step<_1,_0>{});
-      return make_tiled_copy(Copy_Atom<CopyOpS2R, SmemElementD>{}, thr_layout, val_layout);
+      auto tiled_s2r = make_tiled_copy(Copy_Atom<CopyOpS2R, SmemElementD>{}, thr_layout, val_layout);
+      auto tiled_s2r_imm = make_tiled_copy(Copy_Atom<CopyOpS2RImm, SmemElementImm>{}, thr_layout, val_layout);
+      return make_tuple(tiled_s2r, tiled_s2r_imm);
     }();
+
     ThrCopy thread_s2r = tiled_s2r.get_slice(worker_id);
+    ThrCopy thread_s2r_imm = tiled_s2r_imm.get_slice(worker_id);
     auto tSR_sC   = thread_s2r.partition_S(sC_epi);           // (S2R, S2R_M, S2R_N, EPI_M, EPI_N)
-    auto tSR_sAcc = thread_s2r.partition_S(sAcc_epi);         // (S2R, S2R_M, S2R_N, EPI_M, EPI_N)
+    auto tSR_sAcc = thread_s2r_imm.partition_S(sAcc_epi);         // (S2R, S2R_M, S2R_N, EPI_M, EPI_N)
     auto tSR_sD = thread_s2r.partition_D(sD_epi(_,_,_0{}));   // (S2R, S2R_M, S2R_N)
 
     // Allocate D and accumulator registers
@@ -598,7 +615,7 @@ public:
         Tensor tSR_sAcc_mn = tSR_sAcc(_,_,_,epi_m,epi_n);
 
         // Copy accumulator tile from smem to register
-        copy(tiled_s2r, tSR_sAcc_mn, tSR_rAcc);
+        copy(tiled_s2r_imm, tSR_sAcc_mn, tSR_rAcc);
 
         // Vectorized fragment loop with visitor callback entry point
         CUTLASS_PRAGMA_UNROLL

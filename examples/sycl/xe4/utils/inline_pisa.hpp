@@ -1838,7 +1838,7 @@ inline void copy_cvt_pack(dtype_packed *dst_packed_ptr, dtype_src *src_ptr) {
 }
 
 template <uint32_t n_elem_to_pack, typename dtype_dst, typename dtype_src>
-inline void pack_data(dtype_dst *dst_ptr, dtype_src *src_ptr) {
+inline void pack_data(dtype_dst *dst_ptr, const dtype_src *src_ptr) {
   constexpr uint32_t packed_num = sizeof(dtype_dst) / sizeof(dtype_src);
   constexpr uint32_t n_packed_elem = n_elem_to_pack / packed_num;
   constexpr uint32_t n_packed_elem_left = n_elem_to_pack % packed_num;

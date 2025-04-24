@@ -6994,6 +6994,51 @@ public:
 
 #endif // defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
 
+#if defined(SYCL_INTEL_XE4_TARGET)
+
+template <typename ResultType, typename SourceType, int N>
+inline void xe4_convert_with_gtp_optimized(Array<SourceType, N> const& source, Array<ResultType, N>& result) {
+  using PackedType = uint32_t;
+
+  PackedType packed_source[N*sizeof(SourceType)/sizeof(PackedType)];
+  pack_data<N>(&packed_source[0], source.data());
+
+  PackedType packed_result[N*sizeof(ResultType)/sizeof(PackedType)];
+  gtp_tcvd<ResultType, SourceType, N, PackedType>(&packed_result[0], &packed_source[0]);
+
+  unpack_data<N>(result.data(), &packed_result[0]);
+}
+
+#define XE4_DEFINE_NUMERIC_ARRAY_CONVERTER(ResultType, SourceType) \
+template <FloatRoundStyle Round, int N> \
+struct NumericArrayConverter<ResultType, SourceType, N, Round> { \
+  using result_type = Array<ResultType, N>; \
+  using source_type = Array<SourceType, N>; \
+  static FloatRoundStyle const round_style = Round; \
+\
+public: \
+  CUTLASS_DEVICE \
+  static result_type convert(source_type const &source) { \
+    result_type result; \
+    xe4_convert_with_gtp_optimized(source, result); \
+    return result; \
+  } \
+\
+  CUTLASS_DEVICE \
+  result_type operator()(source_type const &s) const { \
+    return convert(s); \
+  } \
+};
+
+XE4_DEFINE_NUMERIC_ARRAY_CONVERTER(bf8, bf16)
+XE4_DEFINE_NUMERIC_ARRAY_CONVERTER(hf8, bf16)
+XE4_DEFINE_NUMERIC_ARRAY_CONVERTER(fp4_e3m0, bf16)
+XE4_DEFINE_NUMERIC_ARRAY_CONVERTER(bf8, fp16)
+XE4_DEFINE_NUMERIC_ARRAY_CONVERTER(hf8, fp16)
+XE4_DEFINE_NUMERIC_ARRAY_CONVERTER(fp4_e3m0, fp16)
+
+#endif // defined(SYCL_INTEL_XE4_TARGET)
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// FastNumericArrayConverter only works when the source is within center range.
