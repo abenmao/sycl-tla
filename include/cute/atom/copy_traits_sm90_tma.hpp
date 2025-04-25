@@ -1004,8 +1004,14 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
   // TMA smem desc info
   //
 
+#if defined(SYCL_INTEL_XE4_TARGET)
+  sycl::marray<uint32_t, tma_dim> smem_box_shape(uint32_t(1));
+  sycl::marray<uint32_t, tma_dim> smem_box_stride(uint32_t(1));
+#else
   cute::array<uint32_t, 5> smem_box_shape  = {1,1,1,1,1};
   cute::array<uint32_t, 5> smem_box_stride = {1,1,1,1,1};
+#endif
+
   // The smem box is simply given by the sizes of the modes in tma_gbasis
   for_each(make_seq<tma_dim>{}, [&](auto i) {
     smem_box_shape[i] *= size<i>(tma_gbasis);
@@ -1138,20 +1144,16 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
                                  decltype(tma_gbasis),
                                  decltype(swizzle)>;
 
-  #if defined(SYCL_INTEL_XE4_TARGET)
-    sycl::marray<uint32_t, tma_dim> gmem_shape;
-    for_each(make_seq<tma_dim>{}, [&](auto i) {gmem_shape[i] = gmem_prob_shape[i];});
-    sycl::marray<uint64_t, tma_dim-1> gmem_stride;
-    for_each(make_seq<tma_dim-1>{}, [&](auto i) {gmem_stride[i] = gmem_prob_stride[i+1];});
-    sycl::marray<uint32_t, tma_dim> roi_shape;
-    for_each(make_seq<tma_dim>{}, [&](auto i) {roi_shape[i] = smem_box_shape[i];});
-    sycl::marray<uint32_t, tma_dim> element_stride;
-    for_each(make_seq<tma_dim>{}, [&](auto i) {element_stride[i] = smem_box_stride[i];});
-    auto tma_desc_details = make_tuple(gmem_shape, gmem_stride, roi_shape, element_stride);
-    return cute::make_tuple(tma_desc_details, AuxParams{gmem_tma_basis_stride});
-  #else
-    return cute::make_tuple(tma_desc, AuxParams{gmem_tma_basis_stride});
-  #endif
+#if defined(SYCL_INTEL_XE4_TARGET)
+  sycl::marray<uint32_t, tma_dim> gmem_shape;
+  for_each(make_seq<tma_dim>{}, [&](auto i) {gmem_shape[i] = gmem_prob_shape[i];});
+  sycl::marray<uint64_t, tma_dim-1> gmem_stride;
+  for_each(make_seq<tma_dim-1>{}, [&](auto i) {gmem_stride[i] = gmem_prob_stride[i+1];});
+  auto tma_desc_details = make_tuple(gmem_shape, gmem_stride, smem_box_shape, smem_box_stride);
+  return cute::make_tuple(tma_desc_details, AuxParams{gmem_tma_basis_stride});
+#else
+  return cute::make_tuple(tma_desc, AuxParams{gmem_tma_basis_stride});
+#endif
 }
 
 template <class GmemDetails, class AuxParams, class GmemPtr>
