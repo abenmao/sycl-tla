@@ -27,11 +27,17 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-set(TARGET_NAME xe4_bgemm)
+set(TARGET_NAME xe4_gemm)
 add_xe4_test(${TARGET_NAME} gemm.cpp)
 target_compile_definitions(${TARGET_NAME} PRIVATE AMMA_GENERATED)
 target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_options(${TARGET_NAME} PUBLIC "-Xs;\"-xe-set-abarrier-arrive-lmc -disable-branch-fold\"")
+
+set(GEMM_CLUSTER_TARGET xe4_gemm_cluster)
+add_xe4_test(${GEMM_CLUSTER_TARGET} gemm_cluster.cpp)
+target_compile_definitions(${GEMM_CLUSTER_TARGET} PRIVATE AMMA_GENERATED)
+target_include_directories(${GEMM_CLUSTER_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(${GEMM_CLUSTER_TARGET} PUBLIC "-Xs;\"-xe-set-abarrier-arrive-lmc -disable-branch-fold\"")
 
 generate_amma_header(
   ${TARGET_NAME}_helper
@@ -40,3 +46,4 @@ generate_amma_header(
   "--dtype" "f32_f32_f16_f16;f16_f32_f16_f16;f32_f32_bf8_bf8;bf16_f32_bf8_bf8"
 )
 add_dependencies(${TARGET_NAME} ${TARGET_NAME}_helper)
+add_dependencies(${GEMM_CLUSTER_TARGET} ${TARGET_NAME}_helper)

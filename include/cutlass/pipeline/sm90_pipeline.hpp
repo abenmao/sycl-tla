@@ -319,11 +319,12 @@ public:
       uint32_t const producer_arv_cnt = params.num_producers;
       uint32_t const num_consumer_warpgroups_per_cluster = params.num_consumers / NumThreadsPerWarpGroup;
       uint32_t multicast_consumer_arrival_count = params.num_consumers; // If cluster_size is 1
+#if !defined(SYCL_INTEL_XE4_TARGET)
       if (cute::size(cluster_shape) > 1) {
         multicast_consumer_arrival_count = (cute::size<0>(cluster_shape) + cute::size<1>(cluster_shape) - 1) *
               num_consumer_warpgroups_per_cluster;
       }
-
+#endif
       cutlass::arch::detail::initialize_barrier_array_pair_aligned<decltype(storage.full_barrier_), decltype(storage.empty_barrier_), Stages>(
           storage.full_barrier_, storage.empty_barrier_, producer_arv_cnt, multicast_consumer_arrival_count);
     }

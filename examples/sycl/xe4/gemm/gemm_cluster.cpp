@@ -10,8 +10,8 @@ struct GEMM_TEST_CONFIG {
   using LayoutB = cutlass::layout::RowMajor;
   using LayoutC = cutlass::layout::RowMajor;
   using CtaTileShape_MNK = Shape<_256,_256,_128>;
-  using CtaNum_MN = Shape<_2, _1>;
-  using ClusterShape_MNK = Shape<_1, _1, _1>;
+  using CtaNum_MN = Shape<_1, _1>;
+  using ClusterShape_MNK = Shape<_2, _1, _1>;
 
   static constexpr int StagesA = 3;
   static constexpr bool is_persistent = false;
@@ -48,6 +48,6 @@ struct BF8_GEMM_ROW_ROW_VOID_C : public GEMM_ROW_ROW_VOID_C {
 
 int main()
 {
-  run_gemm<GEMM_ROW_ROW>();
+  run_gemm<GEMM_ROW_ROW_VOID_C>();
   return 0;
 }

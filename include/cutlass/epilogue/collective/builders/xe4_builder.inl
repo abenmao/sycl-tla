@@ -88,7 +88,7 @@ template <
 >
 struct Xe4TmaBuilderImpl {
 private:
-  static constexpr int StagesC = 1;
+  static constexpr int StagesC = 2;
   static constexpr int StagesD = 1;
   static constexpr bool ReuseSmemC = false;
   static constexpr bool DelayTmaStore = false;
