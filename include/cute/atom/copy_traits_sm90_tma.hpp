@@ -76,15 +76,23 @@ struct XE4_COPY_Unpack
     constexpr auto isLoadOperation = !cute::is_base_of<xe4::DMA_STORE, CopyOp>::value;
     constexpr auto isIm2ColOperation = cute::is_base_of<xe4::ASYNC_ROW_IM2COL, CopyOp>::value;
 
+    auto as_xe4_coord = [](auto const& t) {
+      auto flat_t = flatten_to_tuple(t);
+      constexpr size_t N = tuple_size<decltype(flat_t)>::value;
+      sycl::marray<int32_t, N> result;
+      for_each(make_seq<N>{}, [&] (auto i) { result[i] = get<i>(flat_t); });
+      return result;
+    };
+
     if constexpr (isLoadOperation) {
       auto dst_ptr = cute::raw_pointer_cast(dst.data());
       if constexpr(isIm2ColOperation) {
-        auto src_coord = cute::to_array<int32_t>(src(Int<0>{}));
+        auto src_coord = as_xe4_coord(src(Int<0>{}));
         return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
                                     traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
                                     make_tuple(dst_ptr, src_coord), seq<0, 1>{});
       } else {
-        auto src_coord = cute::to_array<int32_t>(src.data().coord_);
+        auto src_coord = as_xe4_coord(src.data().coord_);
         return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
                                     traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
                                     make_tuple(dst_ptr, src_coord), seq<0, 1>{});
@@ -93,12 +101,12 @@ struct XE4_COPY_Unpack
     } else {
       auto src_ptr = cute::raw_pointer_cast(src.data());
       if constexpr(isIm2ColOperation) {
-        auto dst_coord = cute::to_array<int32_t>(take<0,3>(dst(Int<0>{})));
+        auto dst_coord = as_xe4_coord(take<0,3>(dst(Int<0>{})));
         return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
                                     traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
                                     make_tuple(src_ptr, dst_coord), seq<0, 1>{});
       } else {
-        auto dst_coord = cute::to_array<int32_t>(dst.data().coord_);
+        auto dst_coord = as_xe4_coord(dst.data().coord_);
         return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
                                     traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
                                     make_tuple(src_ptr, dst_coord), seq<0, 1>{});

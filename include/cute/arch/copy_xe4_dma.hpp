@@ -18,17 +18,6 @@ struct DMA_LOAD {};
 struct DMA_STORE {};
 struct DMA_MULTICAST {};
 
-template <typename Coord>
-inline auto as_sycl_coord(Coord const& coord)
-{
-  constexpr size_t dims = Coord{}.size() & 0x6;  // TODO: workaround for odd dims not support yet
-  sycl::marray<int32_t, dims> sycl_coord;
-  for_each(make_seq<dims>(), [&](auto i) {
-    sycl_coord[i] = coord[i];
-  });
-  return sycl_coord;
-}
-
 template <slm_matrix_type cm_type>
 struct ASYNC_TENSOR_LOAD : public DMA_LOAD
 {
@@ -36,7 +25,7 @@ struct ASYNC_TENSOR_LOAD : public DMA_LOAD
   CUTE_HOST_DEVICE static void
   copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, TD* slm_ptr, Coord const& coord)
   {
-    async_tensor_load<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, as_sycl_coord(coord), abar_ptr);
+    async_tensor_load<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, coord, abar_ptr);
   }
 
   template<class DimIdx, class TS, class TD, class Coord>
@@ -60,7 +49,7 @@ struct ASYNC_TENSOR_STORE : public DMA_STORE
   CUTE_HOST_DEVICE static void
   copy(uint64_t const* tdesc_ptr, TS gmem_ptr, uint64_t const* abar_ptr, TD* slm_ptr, Coord const& coord)
   {
-    async_tensor_store<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, as_sycl_coord(coord), abar_ptr);
+    async_tensor_store<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, coord, abar_ptr);
   }
 };
 
@@ -76,7 +65,7 @@ struct ASYNC_TENSOR_LOAD_MULTICAST : public DMA_LOAD, public DMA_MULTICAST
   CUTE_HOST_DEVICE static void
   copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, uint32_t multicast_mask, TD* slm_ptr, Coord const& coord)
   {
-    async_tensor_load<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, as_sycl_coord(coord), abar_ptr, multicast_mask);
+    async_tensor_load<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, coord, abar_ptr, multicast_mask);
   }
 };
 

@@ -27,14 +27,20 @@ T vec_as(const F &x) {
   return sycl::bit_cast<T>(x);
 }
 
-template <class T, class F>
-T vec_as(F *x) {
-  return *reinterpret_cast<T *>(x);
-}
+template <class T, size_t N>
+inline auto as_vector_t(const sycl::marray<T, N> &arr) {
+  using result_type = vector_t<T, N>;
+  constexpr size_t newN = sizeof(result_type) / sizeof(T);
 
-template <class T, class F>
-T vec_as(const F *x) {
-  return *reinterpret_cast<const T *>(x);
+  if constexpr (N == newN) { return sycl::bit_cast<result_type>(arr); }
+
+  sycl::marray<T, newN> ext_arr;
+#pragma unroll
+  for (size_t i = 0; i < N; ++i) {
+    ext_arr[i] = arr[i];
+  }
+
+  return sycl::bit_cast<result_type>(ext_arr);
 }
 
 #define XETLA_MARKER(message) [[deprecated(message)]]
@@ -416,7 +422,7 @@ inline sycl::vec<DstT, Dim - 1> get_stride_from_shape(const sycl::vec<uint32_t, 
 }
 
 template <typename T, uint32_t Dim, typename DstT = uint64_t>
-inline DstT get_offset(const sycl::vec<int32_t, Dim> &coord, const sycl::vec<DstT, Dim - 1> &stride) {
+inline DstT get_offset(const sycl::marray<int32_t, Dim> &coord, const sycl::vec<DstT, Dim - 1> &stride) {
   DstT offset = coord[0] * sizeof(T);
 #pragma unroll
   for (uint32_t i = 1; i < Dim; i++) {
@@ -426,7 +432,7 @@ inline DstT get_offset(const sycl::vec<int32_t, Dim> &coord, const sycl::vec<Dst
 }
 
 template <uint32_t Dim>
-inline bool is_within_boundary(const sycl::vec<int32_t, Dim> &coord, const sycl::vec<uint32_t, Dim> &gmem_shape) {
+inline bool is_within_boundary(const sycl::marray<int32_t, Dim> &coord, const sycl::vec<uint32_t, Dim> &gmem_shape) {
   bool res = true;
 #pragma unroll
   for (uint32_t i = 0; i < Dim; i++) {
@@ -443,7 +449,7 @@ inline uint32_t generate_predicate_mask(uint32_t num) {
 }
 
 template <typename dtype>
-inline uint32_t get_offset(const sycl::vec<int32_t, 2> &gmem_coord, const sycl::vec<uint32_t, 2> &gmem_size,
+inline uint32_t get_offset(const sycl::marray<int32_t, 2> &gmem_coord, const sycl::vec<uint32_t, 2> &gmem_size,
                            const sycl::vec<uint64_t, 1> &gmem_stride) {
   bool is_valid_coord = is_within_boundary<2>(gmem_coord, gmem_size);
   uint32_t offset = is_valid_coord ? gmem_coord[1] * gmem_stride[0] + gmem_coord[0] * sizeof(dtype) : 0;
@@ -451,7 +457,7 @@ inline uint32_t get_offset(const sycl::vec<int32_t, 2> &gmem_coord, const sycl::
 }
 
 template <typename dtype>
-inline uint64_t get_offset_a64(dtype *ptr, const sycl::vec<int32_t, 2> &gmem_coord,
+inline uint64_t get_offset_a64(dtype *ptr, const sycl::marray<int32_t, 2> &gmem_coord,
                                const sycl::vec<uint32_t, 2> &gmem_size, const sycl::vec<uint64_t, 1> &gmem_stride) {
   bool is_valid_coord = is_within_boundary<2>(gmem_coord, gmem_size);
   uint32_t offset = is_valid_coord ? gmem_coord[1] * gmem_stride[0] + gmem_coord[0] * sizeof(dtype) : 0;
@@ -460,7 +466,7 @@ inline uint64_t get_offset_a64(dtype *ptr, const sycl::vec<int32_t, 2> &gmem_coo
 }
 
 template <typename dtype>
-inline uint32_t get_copy_size(const sycl::vec<int32_t, 2> &gmem_coord, const sycl::vec<uint32_t, 2> &gmem_size,
+inline uint32_t get_copy_size(const sycl::marray<int32_t, 2> &gmem_coord, const sycl::vec<uint32_t, 2> &gmem_size,
                               uint32_t width_2d) {
   bool is_valid_coord = is_within_boundary<2>(gmem_coord, gmem_size);
   uint32_t copy_size = is_valid_coord ? (gmem_size[0] - gmem_coord[0]) * sizeof(dtype) : 0;
