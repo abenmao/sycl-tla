@@ -116,7 +116,7 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
         cutlass::conv::Operator::kFprop,
         ElementAct, cutlass::layout::TensorNHWC, 8,
         ElementFlt, cutlass::layout::TensorNHWC, 8,
-        ElementAcc, ElementOut,
+        tuple<ElementAcc, ElementOut>,
         TileShapeMNK, ClusterShapeMNK,
         cutlass::conv::collective::StageCount<static_cast<int>(Stages)>,
         cutlass::conv::collective::KernelScheduleAuto

@@ -46,7 +46,6 @@ template <
   class GmemLayoutB,
   int AlignmentB,
   class ElementAccumulator,
-  class ElementOut,
   class TileShape_MNK,
   class ClusterShape_MNK,
   class StageCountType,
@@ -63,7 +62,6 @@ struct CollectiveBuilder<
     GmemLayoutB,
     AlignmentB,
     ElementAccumulator,
-    ElementOut,
     TileShape_MNK,
     ClusterShape_MNK,
     StageCountType,
@@ -83,7 +81,7 @@ struct CollectiveBuilder<
     (ConvOp == conv::Operator::kFprop) ? cute::SM90::GMMA::Major::K : cute::SM90::GMMA::Major::MN;
 
   using TiledMma = decltype(cute::make_tiled_mma(xe4::GMMA::ss_op_selector<
-      ElementAMma, ElementBMma, tuple<ElementAccumulator, ElementOut>, decltype(cute::product_each(TileShape_MNK{})), ClusterShape_MNK, GmmaMajorA, GmmaMajorB>()));
+      ElementAMma, ElementBMma, ElementAccumulator, decltype(cute::product_each(TileShape_MNK{})), ClusterShape_MNK, GmmaMajorA, GmmaMajorB>()));
 
   // For wgrad kernel, tensor A uses tma tiled mode and tensor B uses tma im2col mode.
   static constexpr slm_matrix_type cmTypeA = GmmaMajorA == cute::SM90::GMMA::Major::K ? slm_matrix_type::type1 : slm_matrix_type::type2;
@@ -159,7 +157,6 @@ template <
   class GmemLayoutB,
   int AlignmentB,
   class ElementAccumulator,
-  class ElementOut,
   class TileShape_MNK,
   class ClusterShape_MNK,
   class StageCountType,
@@ -176,7 +173,6 @@ struct CollectiveBuilder<
     GmemLayoutB,
     AlignmentB,
     ElementAccumulator,
-    ElementOut,
     TileShape_MNK,
     ClusterShape_MNK,
     StageCountType,
@@ -196,7 +192,6 @@ struct CollectiveBuilder<
       GmemLayoutB,
       AlignmentB,
       ElementAccumulator,
-      ElementOut,
       TileShape_MNK,
       ClusterShape_MNK,
       StageCountType,

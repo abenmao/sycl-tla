@@ -73,9 +73,6 @@ template <
   class GmemLayoutB,
   int AlignmentB,
   class ElementAccumulator,
-#if defined(SYCL_INTEL_XE4_TARGET)
-  class ElementOut,
-#endif
   class TileShape_MNK,
   class ClusterShape_MNK,
   class StageCountType,
