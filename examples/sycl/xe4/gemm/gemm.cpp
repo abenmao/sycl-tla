@@ -16,6 +16,7 @@ struct GEMM_TEST_CONFIG {
   static constexpr int StagesA = 3;
   static constexpr bool is_persistent = false;
   static constexpr auto activation_type = ActivationType::SiLu;
+  static constexpr auto operationC_type = OperationCType::Mul;
   static constexpr cute::array<int, 4> ProblemShape_MNKL = {1024, 1024, 1024, 1};
 };
 
@@ -39,6 +40,11 @@ struct GEMM_ROW_ROW_VOID_C : public GEMM_ROW_ROW {
   using ElementC = void;
 };
 
+struct GEMM_ROW_ROW_ResidualAddC : public GEMM_ROW_ROW {
+  static constexpr auto activation_type = ActivationType::None;
+  static constexpr auto operationC_type = OperationCType::Add;
+};
+
 struct BF8_GEMM_ROW_ROW_VOID_C : public GEMM_ROW_ROW_VOID_C {
   using ElementA = bf8;
   using ElementB = bf8;
@@ -48,6 +54,6 @@ struct BF8_GEMM_ROW_ROW_VOID_C : public GEMM_ROW_ROW_VOID_C {
 
 int main()
 {
-  run_gemm<GEMM_ROW_ROW>();
+  run_gemm<GEMM_ROW_ROW_ResidualAddC>();
   return 0;
 }

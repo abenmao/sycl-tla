@@ -15,6 +15,59 @@ enum class ActivationType {
   None
 };
 
+enum class OperationCType {
+  Mul,
+  Add,
+  None
+};
+
+template <ActivationType activation_type, OperationCType operationC_type, class ElementOutput, class ElementCompute>
+struct EpilogueOperationSelector {
+  static_assert(false, "Unsupported activation type or operationC type");
+};
+
+template <class ElementOutput, class ElementCompute>
+struct EpilogueOperationSelector<ActivationType::SiLu, OperationCType::Mul, ElementOutput, ElementCompute> {
+  using type = cutlass::epilogue::fusion::EltActMul<cutlass::epilogue::thread::SiLu, ElementOutput, ElementCompute>;
+};
+
+template <class ElementOutput, class ElementCompute>
+struct EpilogueOperationSelector<ActivationType::SiLu, OperationCType::Add, ElementOutput, ElementCompute> {
+  using type = cutlass::epilogue::fusion::EltActAdd<cutlass::epilogue::thread::SiLu, ElementOutput, ElementCompute>;
+};
+
+template <class ElementOutput, class ElementCompute>
+struct EpilogueOperationSelector<ActivationType::SiLu, OperationCType::None, ElementOutput, ElementCompute> {
+  using type = cutlass::epilogue::fusion::EltAct<cutlass::epilogue::thread::SiLu, ElementOutput, ElementCompute>;
+};
+
+template <class ElementOutput>
+struct ImmediateTypeSelector {
+  static constexpr bool is_fp_postop = is_floating_t<ElementOutput>::value && (sizeof_bits_v<ElementOutput> < 16);
+  using type = cute::conditional_t<is_fp_postop, bf16, ElementOutput>;
+};
+
+template <class ElementOutput>
+using immediate_type = typename ImmediateTypeSelector<ElementOutput>::type;
+
+template <class ElementOutput, class ElementCompute>
+struct EpilogueOperationSelector<ActivationType::None, OperationCType::Mul, ElementOutput, ElementCompute> {
+  using type = cutlass::epilogue::fusion::EltActMul<cutlass::epilogue::thread::Identity, ElementOutput, ElementCompute, immediate_type<ElementOutput>>;
+};
+
+template <class ElementOutput, class ElementCompute>
+struct EpilogueOperationSelector<ActivationType::None, OperationCType::Add, ElementOutput, ElementCompute> {
+  using type = cutlass::epilogue::fusion::EltActAdd<cutlass::epilogue::thread::Identity, ElementOutput, ElementCompute, immediate_type<ElementOutput>>;
+};
+
+template <class ElementOutput, class ElementCompute>
+struct EpilogueOperationSelector<ActivationType::None, OperationCType::None, ElementOutput, ElementCompute> {
+  using type = cutlass::epilogue::fusion::EltAct<cutlass::epilogue::thread::Identity, ElementOutput, immediate_type<ElementOutput>>;
+};
+
+template <ActivationType activation_type, OperationCType operationC_type, class ElementOutput, class ElementCompute>
+using select_epilogue_operation = typename EpilogueOperationSelector<activation_type, operationC_type, ElementOutput, ElementCompute>::type;
+
 // Define a macro to extract memory info (offset and raw size)
 #define GET_MEM_INFO(cls, path) std::make_tuple((size_t) & (((cls *)0)->path), sizeof(((cls *)0)->path))
 
@@ -99,24 +152,16 @@ void run_gemm()
   using TileShape           = typename Config::CtaTileShape_MNK;              // Threadblock-level tile size
   using ClusterShape        = typename Config::ClusterShape_MNK;              // Shape of the threadblocks in a cluster
 
-  using ElementEpilogueCompute = float;
   constexpr auto activation_type = Config::activation_type;
+  constexpr auto operationC_type = Config::operationC_type;
+
+  if constexpr (cute::is_void_v<ElementC> && operationC_type != OperationCType::None) {
+    static_assert(false, "OperationC is not supported with void C");
+  }
+
+  using ElementEpilogueCompute = float;
   using EpilogueScheduleType = cutlass::epilogue::collective::EpilogueScheduleAuto;
-
-  constexpr bool is_fp_postop = is_floating_t<ElementD>::value && (sizeof_bits_v<ElementD> < 16);
-  using ElementImm = cute::conditional_t<is_fp_postop, bf16, ElementD>;
-
-  using EpilogueOperation = cute::conditional_t<
-    cute::is_void_v<ElementC>,
-    cute::conditional_t<activation_type == ActivationType::None,
-      cutlass::epilogue::fusion::EltAct<cutlass::epilogue::thread::Identity, ElementD, ElementImm>,
-      cutlass::epilogue::fusion::EltAct<cutlass::epilogue::thread::SiLu, ElementD, ElementEpilogueCompute>
-    >,
-    cute::conditional_t<activation_type == ActivationType::None,
-      cutlass::epilogue::fusion::EltActMul<cutlass::epilogue::thread::Identity, ElementD, ElementImm>,
-      cutlass::epilogue::fusion::EltActMul<cutlass::epilogue::thread::SiLu, ElementD, ElementEpilogueCompute>
-    >
-  >;
+  using EpilogueOperation = select_epilogue_operation<activation_type, operationC_type, ElementD, ElementEpilogueCompute>;
 
   // Build the epilogue
   using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
@@ -242,7 +287,7 @@ void run_gemm()
     }
   };
 
-  auto silu_mul_op = [&](auto&& vec) {
+  auto post_op = [&](auto&& vec) {
     std::vector<ElementD> result(vec.size());
 
     constexpr auto one = ElementEpilogueCompute(1.0);
@@ -264,11 +309,20 @@ void run_gemm()
           result[i] = silu(vec[i]);
         }
       } else {
-        if (activation_type == ActivationType::None) {
-          result[i] = ElementEpilogueCompute(vec[i]) * ElementEpilogueCompute(C_s[i]);
-        } else {
-          result[i] = silu(vec[i]) * ElementEpilogueCompute(C_s[i]);
+        auto value = ElementEpilogueCompute(vec[i]);
+        auto valueC = ElementEpilogueCompute(C_s[i]);
+
+        if (activation_type == ActivationType::SiLu) {
+          value = silu(value);
         }
+
+        if (operationC_type == OperationCType::Mul) {
+          value *= valueC;
+        } else if (operationC_type == OperationCType::Add) {
+          value += valueC;
+        }
+
+        result[i] = ElementD(value);
       }
     }
 
@@ -276,7 +330,7 @@ void run_gemm()
   };
 
   auto [mat_m, mat_n, mat_k, _] = problem_shape_mnkl;
-  uint32_t err_cnt = validate_gemm_result(A_s, B_s, D_s, mat_m, mat_n, mat_k, as_mem_layout(LayoutA{}), as_mem_layout(LayoutB{}), NoOp{}, silu_mul_op);
+  uint32_t err_cnt = validate_gemm_result(A_s, B_s, D_s, mat_m, mat_n, mat_k, as_mem_layout(LayoutA{}), as_mem_layout(LayoutB{}), NoOp{}, post_op);
 
   if (err_cnt > 0) {
     std::cout << smem_info << std::endl;

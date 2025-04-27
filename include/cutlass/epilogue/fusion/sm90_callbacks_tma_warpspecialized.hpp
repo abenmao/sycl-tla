@@ -461,6 +461,68 @@ struct FusionCallbacks<
   using Impl::Impl;
 };
 
+// D = activation(acc) + C
+template<
+  template <class> class ActivationFn,
+  class ElementOutput,
+  class ElementCompute,
+  class ElementSource = ElementOutput,
+  FloatRoundStyle RoundStyle = FloatRoundStyle::round_to_nearest
+>
+using Xe4EltActAdd =
+  Sm90EVT<
+    Sm90Compute<plus, ElementOutput, ElementCompute, RoundStyle>, // activation(acc) + C
+      Sm90EVT<
+        Sm90Compute<ActivationFn, ElementCompute, ElementCompute, RoundStyle>, // activation(acc)
+        Sm90AccFetch // acc
+      >,
+      Sm90SrcFetch<ElementSource> // C
+  >;
+
+template <
+  int StagesC,
+  int StagesD,
+  int FragmentSize,
+  bool ReuseSmemC,
+  bool DelayTmaStore,
+  template <class> class ActivationFn,
+  class ElementOutput,
+  class ElementCompute,
+  class ElementSource,
+  FloatRoundStyle RoundStyle,
+  class CtaTileShapeMNK,
+  class EpilogueTile
+>
+struct FusionCallbacks<
+    epilogue::Sm90TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
+    fusion::EltActAdd<ActivationFn, ElementOutput, ElementCompute, ElementSource, RoundStyle>,
+    CtaTileShapeMNK,
+    EpilogueTile
+> : Xe4EltActAdd<ActivationFn, ElementOutput, ElementCompute, ElementSource, RoundStyle> {
+
+  using Impl = Xe4EltActAdd<ActivationFn, ElementOutput, ElementCompute, ElementSource, RoundStyle>;
+  using Operation = fusion::EltActAdd<ActivationFn, ElementOutput, ElementCompute, ElementSource, RoundStyle>;
+
+  struct Arguments {
+    using ActivationArguments = typename Sm90Compute<ActivationFn, ElementOutput, ElementCompute, RoundStyle>::Arguments;
+    ActivationArguments activation = ActivationArguments();
+
+    operator typename Impl::Arguments() const {
+      return
+        {   // binary op: activation(acc) + C
+          {                     // unary op : activation(acc)
+            {},                     // leaf args : acc
+            activation              // unary args: activation
+          },                    // end unary op
+          {},                   // leaf args : C
+          {}                    // binary args : plus
+        };  // end binary op
+    }
+  };
+  // Ctor inheritance
+  using Impl::Impl;
+};
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 // D = activation(alpha * acc + beta * C), where beta and alpha can be vectors for each batch

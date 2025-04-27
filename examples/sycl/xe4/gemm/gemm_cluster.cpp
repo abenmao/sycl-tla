@@ -16,6 +16,7 @@ struct GEMM_TEST_CONFIG {
   static constexpr int StagesA = 3;
   static constexpr bool is_persistent = false;
   static constexpr auto activation_type = ActivationType::SiLu;
+  static constexpr auto operationC_type = OperationCType::Mul;
   static constexpr cute::array<int, 4> ProblemShape_MNKL = {1024, 1024, 1024, 1};
 };
 
@@ -37,6 +38,7 @@ struct GEMM_COL_COL : public GEMM_TEST_CONFIG {
 
 struct GEMM_ROW_ROW_VOID_C : public GEMM_ROW_ROW {
   using ElementC = void;
+  static constexpr auto operationC_type = OperationCType::None;
 };
 
 struct BF8_GEMM_ROW_ROW_VOID_C : public GEMM_ROW_ROW_VOID_C {

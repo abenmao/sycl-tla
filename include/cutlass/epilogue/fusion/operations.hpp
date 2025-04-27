@@ -161,6 +161,19 @@ struct EltActMul : EltAct<ActivationFn_, ElementOutput_, ElementCompute_, RoundS
   static constexpr bool IsSourceSupported = true;
 };
 
+// D = activation(acc) + C
+template<
+  template <class> class ActivationFn_,
+  class ElementOutput_,
+  class ElementCompute_,
+  class ElementSource_ = ElementOutput_,
+  FloatRoundStyle RoundStyle_ = FloatRoundStyle::round_to_nearest
+>
+struct EltActAdd : EltAct<ActivationFn_, ElementOutput_, ElementCompute_, RoundStyle_> {
+  using ElementSource = ElementSource_;
+  static constexpr bool IsSourceSupported = true;
+};
+
 // D = softmax(top_k(alpha * acc + beta * C))
 template<
   int TopK,
