@@ -40,6 +40,10 @@ struct GEMM_ROW_ROW_VOID_C : public GEMM_ROW_ROW {
   using ElementC = void;
 };
 
+struct BATCH_GEMM_ROW_ROW : public GEMM_ROW_ROW {
+  static constexpr cute::array<int, 4> ProblemShape_MNKL = {1024, 1024, 1024, 4};
+};
+
 struct GEMM_ROW_ROW_ResidualAddC : public GEMM_ROW_ROW {
   static constexpr auto activation_type = ActivationType::None;
   static constexpr auto operationC_type = OperationCType::Add;
@@ -54,6 +58,6 @@ struct BF8_GEMM_ROW_ROW_VOID_C : public GEMM_ROW_ROW_VOID_C {
 
 int main()
 {
-  run_gemm<GEMM_ROW_ROW_ResidualAddC>();
+  run_gemm<GEMM_ROW_ROW>();
   return 0;
 }

@@ -287,55 +287,69 @@ void run_gemm()
     }
   };
 
-  auto post_op = [&](auto&& vec) {
-    std::vector<ElementD> result(vec.size());
+  auto ptr_A = A_s;
+  auto ptr_B = B_s;
+  auto ptr_C = C_s;
+  auto ptr_D = D_s;
+  auto [mat_m, mat_n, mat_k, mat_l] = problem_shape_mnkl;
 
-    constexpr auto one = ElementEpilogueCompute(1.0);
+  for (int mat_i = 0; mat_i < mat_l; ++mat_i) {
+    auto post_op = [&](auto&& vec) {
+      std::vector<ElementD> result(vec.size());
 
-    auto sigmod = [&](const auto &x) {
-      return one / (one + sycl::exp(-x));
-    };
+      constexpr auto one = ElementEpilogueCompute(1.0);
 
-    auto silu = [&](const auto &x) {
-      auto tmp = ElementEpilogueCompute(x);
-      return tmp * sigmod(tmp);
-    };
+      auto sigmod = [&](const auto &x) {
+        return one / (one + sycl::exp(-x));
+      };
 
-    for (int i = 0; i < vec.size(); ++i) {
-      if constexpr (cute::is_void_v<ElementC>) {
-        if (activation_type == ActivationType::None) {
-          result[i] = vec[i];
+      auto silu = [&](const auto &x) {
+        auto tmp = ElementEpilogueCompute(x);
+        return tmp * sigmod(tmp);
+      };
+
+      for (int i = 0; i < vec.size(); ++i) {
+        if constexpr (cute::is_void_v<ElementC>) {
+          if (activation_type == ActivationType::None) {
+            result[i] = vec[i];
+          } else {
+            result[i] = silu(vec[i]);
+          }
         } else {
-          result[i] = silu(vec[i]);
-        }
-      } else {
-        auto value = ElementEpilogueCompute(vec[i]);
-        auto valueC = ElementEpilogueCompute(C_s[i]);
+          auto value = ElementEpilogueCompute(vec[i]);
+          auto valueC = ElementEpilogueCompute(ptr_C[i]);
 
-        if (activation_type == ActivationType::SiLu) {
-          value = silu(value);
-        }
+          if (activation_type == ActivationType::SiLu) {
+            value = silu(value);
+          }
 
-        if (operationC_type == OperationCType::Mul) {
-          value *= valueC;
-        } else if (operationC_type == OperationCType::Add) {
-          value += valueC;
-        }
+          if (operationC_type == OperationCType::Mul) {
+            value *= valueC;
+          } else if (operationC_type == OperationCType::Add) {
+            value += valueC;
+          }
 
-        result[i] = ElementD(value);
+          result[i] = ElementD(value);
+        }
       }
+
+      return result;
+    };
+
+    uint32_t err_cnt = validate_gemm_result(ptr_A, ptr_B, ptr_D, mat_m, mat_n, mat_k, as_mem_layout(LayoutA{}), as_mem_layout(LayoutB{}), NoOp{}, post_op);
+    if (err_cnt > 0) {
+      std::cout << smem_info << std::endl;
+      std::cerr << "Test Failed at " << mat_i << "th batch, error count: " << err_cnt << std::endl;
+      exit(1);
     }
 
-    return result;
-  };
+    ptr_A += mat_m * mat_k;
+    ptr_B += mat_k * mat_n;
+    ptr_D += mat_m * mat_n;
 
-  auto [mat_m, mat_n, mat_k, _] = problem_shape_mnkl;
-  uint32_t err_cnt = validate_gemm_result(A_s, B_s, D_s, mat_m, mat_n, mat_k, as_mem_layout(LayoutA{}), as_mem_layout(LayoutB{}), NoOp{}, post_op);
-
-  if (err_cnt > 0) {
-    std::cout << smem_info << std::endl;
-    std::cerr << "Test Failed!" << std::endl;
-    exit(1);
+    if constexpr (!cute::is_void_v<ElementC>) {
+      ptr_C += mat_m * mat_n;;
+    }
   }
 
   std::cout << "Test Pass!" << std::endl;
