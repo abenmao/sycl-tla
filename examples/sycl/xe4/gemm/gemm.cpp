@@ -23,6 +23,11 @@ struct GEMM_TEST_CONFIG {
 struct GEMM_ROW_ROW : public GEMM_TEST_CONFIG {
 };
 
+struct GEMM_ROW_ROW_PERF : public GEMM_TEST_CONFIG {
+  using CtaNum_MN = Shape<_2, _2>;
+  static constexpr cute::array<int, 4> ProblemShape_MNKL = {2048, 2048, 4096, 1};
+};
+
 struct GEMM_COL_ROW : public GEMM_TEST_CONFIG {
   using LayoutA = cutlass::layout::ColumnMajor;
 };
