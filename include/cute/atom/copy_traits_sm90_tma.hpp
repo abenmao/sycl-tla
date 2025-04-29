@@ -45,7 +45,7 @@
 #include <cutlass/cuda_host_adapter.hpp>
 
 #if defined(SYCL_INTEL_XE4_TARGET)
-#include <cute/arch/copy_xe4_dma.hpp>
+#include <cute/atom/copy_traits_xe4_dma.hpp>
 #endif
 
 namespace cute
@@ -60,62 +60,6 @@ struct AuxTmaParams {
   using TmaSwizzle   = TmaSwizzle_;             // Tma swizzle, always Swizzle<B,M,S>
   static_assert(is_static<TmaSwizzle>::value);
 };
-
-#if defined(SYCL_INTEL_XE4_TARGET)
-template <class CopyOp>
-struct XE4_COPY_Unpack
-{
-  template <class... Args,
-            class TS, class SLayout,
-            class TD, class DLayout>
-  CUTE_HOST_DEVICE friend constexpr void
-  copy_unpack(Copy_Traits<CopyOp, Args...> const& traits,
-              Tensor<TS,SLayout>           const& src,
-              Tensor<TD,DLayout>                & dst)
-  {
-    constexpr auto isLoadOperation = !cute::is_base_of<xe4::DMA_STORE, CopyOp>::value;
-    constexpr auto isIm2ColOperation = cute::is_base_of<xe4::ASYNC_ROW_IM2COL, CopyOp>::value;
-
-    auto as_xe4_coord = [](auto const& t) {
-      auto flat_t = flatten_to_tuple(t);
-      constexpr size_t N = tuple_size<decltype(flat_t)>::value;
-      sycl::marray<int32_t, N> result;
-      for_each(make_seq<N>{}, [&] (auto i) { result[i] = get<i>(flat_t); });
-      return result;
-    };
-
-    if constexpr (isLoadOperation) {
-      auto dst_ptr = cute::raw_pointer_cast(dst.data());
-      if constexpr(isIm2ColOperation) {
-        auto src_coord = as_xe4_coord(src(Int<0>{}));
-        return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
-                                    traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
-                                    make_tuple(dst_ptr, src_coord), seq<0, 1>{});
-      } else {
-        auto src_coord = as_xe4_coord(src.data().coord_);
-        return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
-                                    traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
-                                    make_tuple(dst_ptr, src_coord), seq<0, 1>{});
-      }
-
-    } else {
-      auto src_ptr = cute::raw_pointer_cast(src.data());
-      if constexpr(isIm2ColOperation) {
-        auto dst_coord = as_xe4_coord(take<0,3>(dst(Int<0>{})));
-        return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
-                                    traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
-                                    make_tuple(src_ptr, dst_coord), seq<0, 1>{});
-      } else {
-        auto dst_coord = as_xe4_coord(dst.data().coord_);
-        return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
-                                    traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
-                                    make_tuple(src_ptr, dst_coord), seq<0, 1>{});
-      }
-
-    }
-  }
-};
-#endif
 
 // Utility for unpacking TMA_LOAD arguments into a CopyOp
 template <class CopyOp, class... Args>
