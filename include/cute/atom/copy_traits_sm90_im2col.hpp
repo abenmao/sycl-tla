@@ -62,9 +62,9 @@ make_async_row_copy_desc(GTensor const& gtensor)
   tdesc_ptr.bytes[3] = shape<2>(gtensor);
   tdesc_ptr.bytes[4] = shape<3>(gtensor);
 
-  tdesc_ptr.bytes[6] = stride<1>(gtensor) * sizeof(T);
-  tdesc_ptr.bytes[7] = stride<2>(gtensor) * sizeof(T);
-  tdesc_ptr.bytes[8] = stride<3>(gtensor) * sizeof(T);
+  tdesc_ptr.bytes[6] = stride<1>(gtensor);
+  tdesc_ptr.bytes[7] = stride<2>(gtensor);
+  tdesc_ptr.bytes[8] = stride<3>(gtensor);
 
   return tdesc_ptr;
 }

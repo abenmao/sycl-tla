@@ -105,7 +105,7 @@ struct XE4_STSM
 struct ASYNC_ROW_IM2COL {};
 
 template <typename T>
-inline uint32_t get_copy_size(const int32_t coord, const uint32_t shape, uint32_t width_2d) {
+inline uint32_t get_copy_size(const uint32_t coord, const uint32_t shape, uint32_t width_2d) {
     uint32_t left_size = (shape - coord) * sizeof(T);
     uint32_t copy_size = left_size < width_2d ? left_size : width_2d;
     return copy_size;
@@ -120,20 +120,18 @@ struct ASYNC_ROW_LOAD_IM2COL_4D : public DMA_LOAD, public ASYNC_ROW_IM2COL
                               TS const* slm_ptr,
                               int32_t crd_c, int32_t crd_w, int32_t crd_h, int32_t crd_n, int32_t crd_s, int32_t crd_r)
   {
-    constexpr uint32_t slm_stride = NumBytesPerCopy / sizeof(TG);
     TG* gmem_address = reinterpret_cast<TG*>(tma_desc->bytes[0]);
-    TS const* slm_inst_ptr = slm_ptr - get_lane_id() * slm_stride;
     int32_t crd1 = crd_w + crd_s;
     int32_t crd2 = crd_h + crd_r;
-    bool is_coord_valid = (crd1 >= 0) & (crd1 < tma_desc->bytes[2]);
-    is_coord_valid = is_coord_valid & (crd2 >= 0) & (crd2 < tma_desc->bytes[3]);
-    is_coord_valid = is_coord_valid & (crd_n >= 0) & (crd_n < tma_desc->bytes[4]);
 
-    uint32_t offset = crd_c * sizeof(TG) + crd1 * tma_desc->bytes[6] + crd2 * tma_desc->bytes[7] + crd_n * tma_desc->bytes[8];
-    offset = is_coord_valid ? offset : 0;
+    bool is_batch_coord_valid = (crd_n < tma_desc->bytes[4]);
+    bool is_coord_valid1 = (crd1 >= 0) && (crd1 < tma_desc->bytes[2]);
+    bool is_coord_valid2 = (crd2 >= 0) && (crd2 < tma_desc->bytes[3]);
+    bool is_coord_valid = is_batch_coord_valid && is_coord_valid1 && is_coord_valid2;
+    uint64_t offset = crd_c + crd1 * tma_desc->bytes[6] + crd2 * tma_desc->bytes[7] + crd_n * tma_desc->bytes[8];
     uint32_t copy_size = is_coord_valid ? get_copy_size<TG>(crd_c, tma_desc->bytes[1], NumBytesPerCopy) : 0;
-    uint64_t offset_a64 = reinterpret_cast<uint64_t>(gmem_address + offset / sizeof(TG));
-    row_copy_tiled_a64_load<cm_type, NumBytesPerCopy, TG>(slm_inst_ptr, offset_a64, copy_size, abar_ptr);
+    uint64_t offset_a64 = uint64_t(gmem_address) + offset * sizeof(TG);
+    row_copy_tiled_a64_load<cm_type, NumBytesPerCopy, TG>(slm_space_cast(slm_ptr), offset_a64, copy_size, abar_ptr);
   }
 };
 
@@ -163,18 +161,16 @@ struct XE4_ASYNC_ROW_STORE_IM2COL_4D : public DMA_STORE, public ASYNC_ROW_IM2COL
   copy(Im2ColTmaDescriptor<TG, NumBytesPerCopy> const* tma_desc, uint64_t const* abar_ptr, TS const* slm_ptr,
                               int32_t crd_c, int32_t crd_w, int32_t crd_h, int32_t crd_n)
   {
-    constexpr uint32_t slm_stride = NumBytesPerCopy / sizeof(TG);
     TG* gmem_address = reinterpret_cast<TG*>(tma_desc->bytes[0]);
-    TS const* slm_inst_ptr = slm_ptr - get_lane_id() * slm_stride;
-    bool is_coord_valid = (crd_w >= 0) & (crd_w < tma_desc->bytes[2]);
-    is_coord_valid = is_coord_valid & (crd_h >= 0) & (crd_h < tma_desc->bytes[3]);
-    is_coord_valid = is_coord_valid & (crd_n >= 0) & (crd_n < tma_desc->bytes[4]);
+    bool is_batch_coord_valid = (crd_n < tma_desc->bytes[4]);
+    bool is_coord_valid1 = (crd_w >= 0) && (crd_w < tma_desc->bytes[2]);
+    bool is_coord_valid2 = (crd_h >= 0) && (crd_h < tma_desc->bytes[3]);
+    bool is_coord_valid = is_batch_coord_valid && is_coord_valid1 && is_coord_valid2;
 
-    uint32_t offset = crd_c * sizeof(TG) + crd_w * tma_desc->bytes[6] + crd_h * tma_desc->bytes[7] + crd_n * tma_desc->bytes[8];
-    offset = is_coord_valid ? offset : 0;
+    uint64_t offset = crd_c + crd_w * tma_desc->bytes[6] + crd_h * tma_desc->bytes[7] + crd_n * tma_desc->bytes[8];
     uint32_t copy_size = is_coord_valid ? get_copy_size<TG>(crd_c, tma_desc->bytes[1], NumBytesPerCopy) : 0;
-    uint64_t offset_a64 = reinterpret_cast<uint64_t>(gmem_address + offset / sizeof(TG));
-    row_copy_tiled_a64_store<cm_type, NumBytesPerCopy, TG>(slm_inst_ptr, offset_a64, copy_size, abar_ptr);
+    uint64_t offset_a64 = uint64_t(gmem_address) + offset * sizeof(TG);
+    row_copy_tiled_a64_store<cm_type, NumBytesPerCopy, TG>(slm_space_cast(slm_ptr), offset_a64, copy_size, abar_ptr);
   }
 };
 

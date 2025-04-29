@@ -212,8 +212,8 @@ int main(){
     conv2d::problem_shape_t performance_nhw_no_multi_wgm {{256, 28, 28, 4}, {256, 3, 3, 512}, {1, 1}, {1, 1}, {1, 1}, {1, 1}};
     run_test<CONV2D_PERF_NHW_NO_MULTI_WGM, Int<256>, Int<512>, Int<128>>(performance_nhw_no_multi_wgm);
 #elif defined(TEST_PERF_NHW_NO_MULTI_WGM_FILTER1x1)
-    conv2d::problem_shape_t performance_nhw_no_multi_wgm {{256, 28, 28, 4}, {256, 1, 1, 512}, {0, 0}, {0, 0}, {1, 1}, {1, 1}};
-    run_test<CONV2D_PERF_NHW_NO_MULTI_WGM_FILTER1x1, Int<256>, Int<512>, Int<128>>(performance_nhw_no_multi_wgm);
+    conv2d::problem_shape_t performance_nhw_no_multi_wgm_filter1x1 {{256, 28, 28, 4}, {256, 1, 1, 512}, {0, 0}, {0, 0}, {1, 1}, {1, 1}};
+    run_test<CONV2D_PERF_NHW_NO_MULTI_WGM_FILTER1x1, Int<256>, Int<512>, Int<128>>(performance_nhw_no_multi_wgm_filter1x1);
 #elif defined(TEST_PERF_UNET0)
     conv2d::problem_shape_t performance_unet0 {{128, 256, 256, 1}, {128, 3, 3, 128}, {1, 1}, {1, 1}, {1, 1}, {1, 1}};
     run_test<CONV2D_PERF_UNET0, Int<256>, Int<128>, Int<128>>(performance_unet0);

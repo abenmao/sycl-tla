@@ -299,7 +299,7 @@ public:
     auto sB = make_tensor(shared_tensors.smem_B.data(), SmemLayoutB {});
 
     auto thr_load_a = mainloop_params.tma_load_a.get_slice(thread_idx);
-    auto block_load_b = mainloop_params.tma_load_b.get_slice(get_wgid<0>());
+    auto block_load_b = mainloop_params.tma_load_b.get_slice(0);
 
     auto [gA_mk, gB_nk] = load_inputs;
 
