@@ -23,7 +23,7 @@
         "environment": {
           "ONEAPI_ROOT": "/opt/intel/oneapi",
           "TBB_ROOT": "$env{ONEAPI_ROOT}/tbb/latest",
-          "MKL_ROOT": "$env{ONEAPI_ROOT}/mkl/latest",
+          "MKLROOT": "$env{ONEAPI_ROOT}/mkl/latest",
           "DNNL_ROOT": "$env{ONEAPI_ROOT}/dnnl/latest",
           "IntelSYCL_DIR": "$env{DPCPP_ROOT}/lib/cmake",
           "PATH": "$env{IGC20_ROOT}/bin:$penv{PATH}",
