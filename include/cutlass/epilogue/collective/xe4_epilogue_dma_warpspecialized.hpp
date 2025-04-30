@@ -7,7 +7,7 @@
 #include "cutlass/cutlass.h"
 #include "cutlass/epilogue/thread/xe4_detail.hpp"
 #include "cutlass/pipeline/pipeline.hpp"
-#include "cutlass/epilogue/fusion/sm90_callbacks_tma_warpspecialized.hpp"
+#include "cutlass/epilogue/fusion/xe4_callbacks_tma_warpspecialized.hpp"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 

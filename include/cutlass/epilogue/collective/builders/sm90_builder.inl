@@ -44,7 +44,7 @@
 #include "cutlass/epilogue/thread/linear_combination_generic.h"
 #include "cutlass/epilogue/thread/linear_combination_bias_elementwise.h"
 #include "cutlass/epilogue/fusion/callbacks.hpp"
-#include "cutlass/epilogue/fusion/sm90_callbacks_tma_warpspecialized.hpp"
+#include "cutlass/epilogue/fusion/xe4_callbacks_tma_warpspecialized.hpp"
 
 #if defined(__CUDACC_RTC__)
 #include <cuda/std/type_traits>

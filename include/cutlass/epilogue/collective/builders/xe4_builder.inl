@@ -51,20 +51,20 @@ namespace cutlass::epilogue::collective {
 namespace detail {
 
 // Selects the largest vectorized smem store atom available
-template <int NumElementsPerThread, class ElementD>
+template <int EpilogueWarpTileN, class ElementD>
 constexpr auto
 xe4_get_smem_store_op() {
   constexpr int CoreMatrixRowSize = 32;  // 32B
-  constexpr int VS = cute::min(CoreMatrixRowSize/sizeof(ElementD), NumElementsPerThread);
+  constexpr int VS = cute::min(CoreMatrixRowSize/sizeof(ElementD), EpilogueWarpTileN);
   return cute::xe4::XE4_STSM<VS, ElementD, ElementD>{};
 }
 
 // Selects the largest vectorized smem load atom available
-template <int NumElementsPerThread, class ElementD>
+template <int EpilogueWarpTileN, class ElementD>
 constexpr auto
 xe4_get_smem_load_op() {
   constexpr int CoreMatrixRowSize = 32;  // 32B
-  constexpr int VS = cute::min(CoreMatrixRowSize/sizeof(ElementD), NumElementsPerThread);
+  constexpr int VS = cute::min(CoreMatrixRowSize/sizeof(ElementD), EpilogueWarpTileN);
   return cute::xe4::XE4_LDSM<VS, ElementD, ElementD>{};
 }
 
@@ -94,7 +94,7 @@ private:
   static constexpr bool DelayTmaStore = false;
   static constexpr int NumControlWarps = 4;
   static constexpr int NumEpilogueWarps = 16;
-  static constexpr int NumElementsPerThread = 32;
+  static constexpr int EpilogueWarpTileN = 32;
   static constexpr int FragmentSize = 32 / sizeof(ElementD);
 
   static constexpr bool DisableSource = cute::is_void_v<ElementC_>;
@@ -167,11 +167,11 @@ public:
       FusionCallbacks,
       CopyOpG2S,
       SmemLayoutAtomC,
-      decltype(xe4_get_smem_load_op<NumElementsPerThread, ElementD>()),
-      decltype(xe4_get_smem_load_op<NumElementsPerThread, ElementImm>()),
+      decltype(xe4_get_smem_load_op<EpilogueWarpTileN, ElementD>()),
+      decltype(xe4_get_smem_load_op<EpilogueWarpTileN, ElementImm>()),
       CopyOpS2G,
       SmemLayoutAtomD,
-      decltype(xe4_get_smem_store_op<NumElementsPerThread, ElementD>()),
+      decltype(xe4_get_smem_store_op<EpilogueWarpTileN, ElementD>()),
       void
     >;
 };

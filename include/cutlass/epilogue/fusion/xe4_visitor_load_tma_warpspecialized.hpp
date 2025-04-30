@@ -85,9 +85,6 @@ struct Xe4RowBroadcast {
   static_assert(is_static_v<decltype(take<0,2>(StrideMNL{}))> || IsDynamicBroadcast); // batch stride can be dynamic or static
   static_assert(take<0,2>(StrideMNL{}) == Stride<_0,_1>{} || IsDynamicBroadcast);
 
-  static constexpr int NumEpilogueWarps = 16;
-  static constexpr int NumElementsPerThread = 32;
-
   struct SharedStorage {
     array_aligned<ElementInput, CtaTileN> smem;
   };
