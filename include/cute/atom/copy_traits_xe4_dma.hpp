@@ -79,6 +79,29 @@ struct XE4_SLM_COPY_Unpack
   }
 };
 
+template <class CopyOp>
+struct XE4_ASYNC_LINEAR_COPY_Unpack
+{
+  template <class... Args,
+            class TS, class SLayout,
+            class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits<CopyOp, Args...> const& traits,
+              Tensor<TS,SLayout>           const& src,
+              Tensor<TD,DLayout>                & dst)
+  {
+    static_assert(is_gmem<TS>::value, "ASYNC_LINEAR_LOAD requires the source be global memory.");
+    static_assert(is_smem<TD>::value, "ASYNC_LINEAR_LOAD requires the destination be shared memory.");
+
+    auto src_ptr = cute::raw_pointer_cast(src.data());
+    auto dst_ptr = cute::raw_pointer_cast(dst.data());
+
+    return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
+      traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
+      make_tuple(src_ptr, dst_ptr), seq<0, 1>{});
+  }
+};
+
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////// ASYNC_TENSOR_LOAD / ASYNC_TENSOR_STORE ///////////////////////////////////////
@@ -238,6 +261,49 @@ struct Copy_Traits<Xe4CopyOp<xe4::ASYNC_TENSOR_LOAD_MULTICAST<cm_type>>, NumBits
   copy_unpack(Copy_Traits        const& traits,
               Tensor<TS,SLayout> const& src,
               Tensor<TD,DLayout>      & dst) = delete;
+};
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////// ASYNC_LINEAR_LOAD ////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <typename T, size_t N>
+struct Copy_Traits<xe4::ASYNC_LINEAR_LOAD<T, N>>
+{
+  using ThrID     = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1, Int<N*sizeof_bits_v<T>>>>;
+  using DstLayout = SrcLayout;
+  using RefLayout = SrcLayout;
+
+  template<class ABarrier>
+  CUTE_HOST_DEVICE constexpr
+  auto with(ABarrier const* abar_ptr, uint32_t copy_size, [[maybe_unused]] uint32_t const& multicast_mask = 0) const {
+    using Wrapper = Xe4CopyOpWrapper<xe4::ASYNC_LINEAR_LOAD<T, N>>;
+    auto opargs = make_tuple(abar_ptr, copy_size);
+    return Copy_Traits<Wrapper, decltype(opargs)>{opargs};
+  }
+
+  // Don't try to execute a copy with XE4_TMA_LOAD before calling .with()
+  template <class TS, class SLayout,
+            class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits        const& traits,
+              Tensor<TS,SLayout> const& src,
+              Tensor<TD,DLayout>      & dst) = delete;
+};
+
+template <class OpArgsTuple, class T, size_t N>
+struct Copy_Traits<Xe4CopyOpWrapper<xe4::ASYNC_LINEAR_LOAD<T, N>>, OpArgsTuple> : XE4_ASYNC_LINEAR_COPY_Unpack<Xe4CopyOpWrapper<xe4::ASYNC_LINEAR_LOAD<T, N>>>
+{
+  using ThrID     = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1, Int<N*sizeof_bits_v<T>>>>;
+  using DstLayout = SrcLayout;
+  using RefLayout = SrcLayout;
+
+  OpArgsTuple const opargs_;
+
+  Copy_Traits(OpArgsTuple const& opargs) : opargs_(opargs) {}
 };
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

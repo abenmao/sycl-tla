@@ -180,6 +180,7 @@ public:
       using CollectiveStorage = cute::conditional_t<not is_source_supported, CollectiveStorageWithoutC,
                                   cute::conditional_t<ReuseSmemC, CollectiveStorageReuseC, CollectiveStorageWithC>>;
       CollectiveStorage collective;
+      typename FusionCallbacks::SharedStorage thread;
     };
   };
 
@@ -192,6 +193,7 @@ public:
 
   // Host side epilogue arguments
   struct Arguments {
+    typename FusionCallbacks::Arguments thread{};
     ElementC const* ptr_C = nullptr;
     StrideC dC{};
     ElementD* ptr_D = nullptr;
@@ -278,10 +280,8 @@ public:
 
     typename Params::TMA_D tma_store_d = get_tma_store_d(problem_shape_mnl, args);
 
-    auto callback_args = typename FusionCallbacks::Arguments{};
-
     return {
-      FusionCallbacks::to_underlying_arguments(problem_shape, callback_args, nullptr),
+      FusionCallbacks::to_underlying_arguments(problem_shape, args.thread, nullptr),
       tma_load_c,
       tma_store_d
     };
@@ -306,7 +306,7 @@ public:
     WaveOrderBarrier& wave_order_barrier_,
     TensorDescTuple tdesc_tuple)
       : params(params_)
-      , fusion_callbacks(params_.thread, {})
+      , fusion_callbacks(params_.thread, shared_tensors.thread)
       , wave_order_barrier(wave_order_barrier_) {
     auto [tensor_desc_c, tensor_desc_d] = tdesc_tuple;
     params.tma_load_c.cache_.set_tensor_desc(tensor_desc_c);
@@ -428,7 +428,7 @@ public:
         }
 
         // Loop fusion callback entry point
-        // pld_callbacks.step(tma_barrier, epi_m, epi_n, load_pipe_producer_state.count(), lane_predicate);
+        pld_callbacks.step(tma_barrier, epi_m, epi_n, load_pipe_producer_state.count(), lane_predicate);
 
         // Commit TMA loads for this stage and release the lock
         load_pipeline.producer_commit(load_pipe_producer_state);

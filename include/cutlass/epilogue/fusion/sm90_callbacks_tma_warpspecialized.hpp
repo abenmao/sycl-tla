@@ -48,6 +48,8 @@
 
 #include "cutlass/epilogue/fusion/sm90_visitor_topk_softmax.hpp"
 
+#include "cutlass/epilogue/fusion/xe4_visitor_load_tma_warpspecialized.hpp"
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass::epilogue::fusion {
@@ -519,6 +521,69 @@ struct FusionCallbacks<
         };  // end binary op
     }
   };
+  // Ctor inheritance
+  using Impl::Impl;
+};
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////
+
+// D = acc + per-row bias
+template<
+  class CtaTileShapeMNK,
+  class ElementOutput,
+  class ElementCompute,
+  class ElementBias = ElementOutput,
+  int AlignmentBias = 128 / sizeof_bits_v<ElementBias>,
+  FloatRoundStyle RoundStyle = FloatRoundStyle::round_to_nearest
+>
+using Xe4PerColBias =
+  Sm90EVT<Sm90Compute<plus, ElementOutput, ElementCompute, RoundStyle>, // acc + bias
+    Sm90AccFetch, // acc
+    Xe4RowBroadcast<0, CtaTileShapeMNK, ElementBias, ElementCompute, Stride<_0,_1,int64_t>, AlignmentBias> // bias
+  >;
+
+template <
+  int StagesC,
+  int StagesD,
+  int FragmentSize,
+  bool ReuseSmemC,
+  bool DelayTmaStore,
+  class ElementOutput,
+  class ElementCompute,
+  class ElementBias,
+  int AlignmentBias,
+  FloatRoundStyle RoundStyle,
+  class CtaTileShapeMNK,
+  class EpilogueTile
+>
+struct FusionCallbacks<
+    epilogue::Sm90TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
+    fusion::PerColBias<ElementOutput, ElementCompute, ElementBias, AlignmentBias, RoundStyle>,
+    CtaTileShapeMNK,
+    EpilogueTile
+> : Xe4PerColBias<
+      CtaTileShapeMNK, ElementOutput, ElementCompute, ElementBias, AlignmentBias, RoundStyle> {
+  using Impl = Xe4PerColBias<
+    CtaTileShapeMNK, ElementOutput, ElementCompute, ElementBias, AlignmentBias, RoundStyle>;
+  using Operation = fusion::PerColBias<
+    ElementOutput, ElementCompute, ElementBias, AlignmentBias, RoundStyle>;
+
+  struct Arguments {
+    using StrideBias = Stride<_0,_1,int64_t>;
+    ElementBias const* bias_ptr = nullptr;
+    StrideBias dBias = {};
+
+    operator typename Impl::Arguments() const {
+      return
+        {     // binary op : acc + bias
+          {},                     // leaf args : acc
+          {bias_ptr, ElementBias(0), dBias}, // leaf args : bias
+          {} // binary args : plus
+        };   // end binary op
+    }
+  };
+
   // Ctor inheritance
   using Impl::Impl;
 };

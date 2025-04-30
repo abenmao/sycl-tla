@@ -174,6 +174,23 @@ struct EltActAdd : EltAct<ActivationFn_, ElementOutput_, ElementCompute_, RoundS
   static constexpr bool IsSourceSupported = true;
 };
 
+// D = acc + per-row bias
+template<
+  class ElementOutput_,
+  class ElementCompute_,
+  class ElementBias_ = ElementOutput_,
+  int AlignmentBias_ = 128 / cute::sizeof_bits_v<ElementBias_>,
+  FloatRoundStyle RoundStyle_ = FloatRoundStyle::round_to_nearest
+>
+struct PerColBias : FusionOperation {
+  using ElementOutput = ElementOutput_;
+  using ElementCompute = ElementCompute_;
+  using ElementBias = ElementBias_;
+  static constexpr auto RoundStyle = RoundStyle_;
+  static constexpr int AlignmentBias = AlignmentBias_;
+  static constexpr bool IsPerColBiasSupported = true;
+};
+
 // D = softmax(top_k(alpha * acc + beta * C))
 template<
   int TopK,

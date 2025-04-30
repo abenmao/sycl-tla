@@ -23,6 +23,13 @@ struct GEMM_TEST_CONFIG {
 struct GEMM_ROW_ROW : public GEMM_TEST_CONFIG {
 };
 
+struct GEMM_ROW_ROW_BiasAdd : public GEMM_ROW_ROW {
+  using ElementC = void;
+  using CtaNum_MN = Shape<_1, _1>;
+  static constexpr auto activation_type = ActivationType::None;
+  static constexpr auto operationC_type = OperationCType::BiasAdd;
+};
+
 struct GEMM_ROW_ROW_PERF : public GEMM_TEST_CONFIG {
   using CtaNum_MN = Shape<_2, _2>;
   static constexpr cute::array<int, 4> ProblemShape_MNKL = {2048, 2048, 4096, 1};
@@ -63,6 +70,6 @@ struct BF8_GEMM_ROW_ROW_VOID_C : public GEMM_ROW_ROW_VOID_C {
 
 int main()
 {
-  run_gemm<GEMM_ROW_ROW>();
+  run_gemm<GEMM_ROW_ROW_BiasAdd>();
   return 0;
 }

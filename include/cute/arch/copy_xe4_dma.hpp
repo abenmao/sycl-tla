@@ -66,6 +66,22 @@ struct ASYNC_TENSOR_LOAD_MULTICAST : public DMA_LOAD, public DMA_MULTICAST
   }
 };
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// ASYNC_LINEAR_LOAD: Initiates a async linear copy from global memory to shared memory
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <typename T, size_t N>
+struct ASYNC_LINEAR_LOAD : public DMA_LOAD
+{
+  using SRegisters = T[N];
+  using DRegisters = T[N];
+
+  CUTE_DEVICE static void
+  copy(uint64_t const* abar_ptr, uint32_t copy_size, const T* gmem_ptr, T* slm_ptr)
+  {
+    async_linear_load(slm_space_cast(slm_ptr), gmem_ptr, copy_size, abar_ptr);
+  }
+};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 /// XE4_LDSM: Initiates a slm load from shared memory to register

@@ -18,6 +18,7 @@ enum class ActivationType {
 enum class OperationCType {
   Mul,
   Add,
+  BiasAdd,
   None
 };
 
@@ -58,6 +59,11 @@ struct EpilogueOperationSelector<ActivationType::None, OperationCType::Mul, Elem
 template <class ElementOutput, class ElementCompute>
 struct EpilogueOperationSelector<ActivationType::None, OperationCType::Add, ElementOutput, ElementCompute> {
   using type = cutlass::epilogue::fusion::EltActAdd<cutlass::epilogue::thread::Identity, ElementOutput, ElementCompute, immediate_type<ElementOutput>>;
+};
+
+template <class ElementOutput, class ElementCompute>
+struct EpilogueOperationSelector<ActivationType::None, OperationCType::BiasAdd, ElementOutput, ElementCompute> {
+  using type = cutlass::epilogue::fusion::PerColBias<ElementOutput, ElementCompute, float>;
 };
 
 template <class ElementOutput, class ElementCompute>
@@ -155,10 +161,11 @@ void run_gemm()
   constexpr auto activation_type = Config::activation_type;
   constexpr auto operationC_type = Config::operationC_type;
 
-  if constexpr (cute::is_void_v<ElementC> && operationC_type != OperationCType::None) {
-    static_assert(false, "OperationC is not supported with void C");
+  if constexpr (cute::is_void_v<ElementC> && operationC_type < OperationCType::BiasAdd) {
+    static_assert(sizeof(cute::C<operationC_type>) < 0, "OperationC is not supported with void C");
   }
 
+  using ElementBias = float;
   using ElementEpilogueCompute = float;
   using EpilogueScheduleType = cutlass::epilogue::collective::EpilogueScheduleAuto;
   using EpilogueOperation = select_epilogue_operation<activation_type, operationC_type, ElementD, ElementEpilogueCompute>;
@@ -239,6 +246,14 @@ void run_gemm()
   auto D_s = malloc_shared<ElementD>(sizeC, q);
   std::fill_n(D_s, sizeC, ElementD(0));
 
+  using ElementBias = float;
+  ElementBias* Bias_s = nullptr;
+  uint32_t sizeBias = size(select<1,3>(problem_shape_mnkl));
+  if constexpr (operationC_type == OperationCType::BiasAdd) {
+    Bias_s = malloc_shared<ElementBias>(sizeBias, q);
+    std::generate_n(Bias_s, sizeBias, [=]() { return static_cast<float>(rand()) / static_cast<float>(RAND_MAX); });
+  }
+
   auto num_groups = ceil_div(problem_shape_mnkl, TileShape {});
   range<3> local_range(1, NumControlWarps + NumEpilogueWarps, cutlass::NumThreadsPerWarp);
   range<3> group_range(1, get<0>(num_groups), get<1>(num_groups));
@@ -262,6 +277,9 @@ void run_gemm()
   auto stride_C = cutlass::make_cute_packed_stride(StrideC{}, select<0,1,3>(problem_shape_mnkl));
   auto stride_D = cutlass::make_cute_packed_stride(StrideD{}, select<0,1,3>(problem_shape_mnkl));
 
+  auto [mat_m, mat_n, mat_k, mat_l] = problem_shape_mnkl;
+  auto stride_Bias = make_stride(_0{}, _1{} , static_cast<int64_t>(mat_n));
+
   auto smem_info = get_shared_memory_info<GemmKernel>();
   std::cout << smem_info << std::endl;
 
@@ -269,7 +287,7 @@ void run_gemm()
     auto args = typename Gemm::GemmKernel::Arguments {
       problem_shape_mnkl,
       { A_s, stride_A, B_s, stride_B },
-      { C_s, stride_C, D_s, stride_D }
+      { {Bias_s, stride_Bias}, C_s, stride_C, D_s, stride_D }
     };
 
     GemmKernel kernel;
@@ -291,7 +309,7 @@ void run_gemm()
   auto ptr_B = B_s;
   auto ptr_C = C_s;
   auto ptr_D = D_s;
-  auto [mat_m, mat_n, mat_k, mat_l] = problem_shape_mnkl;
+  auto ptr_Bias = Bias_s;
 
   for (int mat_i = 0; mat_i < mat_l; ++mat_i) {
     auto post_op = [&](auto&& vec) {
@@ -309,11 +327,15 @@ void run_gemm()
       };
 
       for (int i = 0; i < vec.size(); ++i) {
+        auto value = ElementEpilogueCompute(vec[i]);
+
+        if (activation_type == ActivationType::SiLu) {
+          value = silu(value);
+        }
+
         if constexpr (cute::is_void_v<ElementC>) {
-          if (activation_type == ActivationType::None) {
-            result[i] = vec[i];
-          } else {
-            result[i] = silu(vec[i]);
+          if (operationC_type == OperationCType::BiasAdd) {
+            value += ptr_Bias[i%get<1>(problem_shape_mnkl)];
           }
         } else {
           auto value = ElementEpilogueCompute(vec[i]);
@@ -327,10 +349,12 @@ void run_gemm()
             value *= valueC;
           } else if (operationC_type == OperationCType::Add) {
             value += valueC;
+          } else if (operationC_type == OperationCType::BiasAdd) {
+            static_assert(false, "Not implemented for bias_add yet");
           }
-
-          result[i] = ElementD(value);
         }
+
+        result[i] = ElementD(value);
       }
 
       return result;
@@ -349,6 +373,9 @@ void run_gemm()
 
     if constexpr (!cute::is_void_v<ElementC>) {
       ptr_C += mat_m * mat_n;;
+    }
+    if constexpr (operationC_type == OperationCType::BiasAdd) {
+      ptr_Bias += mat_n;
     }
   }
 
