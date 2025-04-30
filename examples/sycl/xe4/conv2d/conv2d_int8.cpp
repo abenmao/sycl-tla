@@ -29,6 +29,23 @@ class CONV2D_PERF_NHW_NO_MULTI_WGM_FILTER1x1;
 class CONV2D_PERF_UNET0;
 class CONV2D_PERF_UNET1;
 
+template <class IntT>
+CUTLASS_HOST_DEVICE
+cute::Stride<cute::Stride<IntT, IntT, IntT>, cute::Int<1>>
+make_cute_packed_stride(
+    cute::Stride<cute::Stride<IntT, IntT, IntT>, cute::Int<1>> s,
+    cute::array<IntT, 4> stride_nhwc,
+    cutlass::conv::Operator ConvOp) {
+  static_assert(std::is_integral_v<IntT>,
+    "Stride must have an integral type so it can be set dynamically. Static strides not supported.");
+  assert(stride_nhwc[3] == 1);
+  auto s_copy = s;
+  cute::for_each(cute::make_seq<3>{}, [&](auto i) {
+    cute::get<0,i>(s_copy) = stride_nhwc[2-i];
+  });
+  return s_copy;
+}
+
 template<typename test, class wgM, class wgN, class wgK>
 int run_test(const conv2d::problem_shape_t &problem_shape)
 {
@@ -73,7 +90,6 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
     static_assert(bM % LANESIZE == 0);
     using TileShapeMNK = Shape<Int<bM>, Int<bN>, Shape<Int<bK>>>;
     using ClusterShapeMNK = Shape<_1, _1, _1>;
-    using SmemLayoutC = decltype(make_layout(make_shape(bM, bN), make_stride(bN, Int<1>{})));
 
     uint32_t sizeA = C * W * H * N;
     uint32_t sizeB = C * S * R * K;
@@ -121,43 +137,61 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
         cutlass::conv::collective::StageCount<static_cast<int>(Stages)>,
         cutlass::conv::collective::KernelScheduleAuto
     >::CollectiveOp;
-    using CollectiveEpilogue = EpilogueConv<
-        cutlass::conv::Operator::kFprop,
-        CollectiveMainloop::DispatchPolicy::NumSpatialDimensions,
-        SmemLayoutC,
-        TileShapeMNK,
-        ElementOut>;
     using ProblemShape = cutlass::conv::ConvProblemShape<
-        cutlass::conv::Operator::kFprop,
-        CollectiveMainloop::DispatchPolicy::NumSpatialDimensions>;
+                                    cutlass::conv::Operator::kFprop,
+                                    CollectiveMainloop::DispatchPolicy::NumSpatialDimensions>;
+    ProblemShape cutlass_problem_shape {
+        cutlass::conv::Mode::kCrossCorrelation,
+        {static_cast<int>(N), static_cast<int>(H), static_cast<int>(W), static_cast<int>(C)},   // nhwc
+        {static_cast<int>(K), static_cast<int>(R), static_cast<int>(S), static_cast<int>(C)},   // krsc
+        {static_cast<int>(padding_top), static_cast<int>(padding_left)}, // padding lower (pad_top, pad_left)
+        {static_cast<int>(padding_bottom), static_cast<int>(padding_right)},   // padding upper (pad_bottom, pad_right)
+        {static_cast<int>(stride_h), static_cast<int>(stride_w)},           // stride (stride_h, stride_w)
+        {static_cast<int>(dilation_h), static_cast<int>(dilation_w)},       // dilation (dilation_h, dilation_w)
+        1   // group
+    };
+
+    static constexpr int StagesC = 1;
+    static constexpr int StagesD = 1;
+    static constexpr bool ReuseSmemC = false;
+    static constexpr bool DelayTmaStore = false;
+    static constexpr int NumControlWarps = 4;
+    static constexpr int NumEpilogueWarps = 16;
+    static constexpr int NumElementsPerThread = 32;
+    static constexpr int FragmentSize = 32 / sizeof(ElementOut);
+
+    using TileShape_MN = decltype(select<0,1>(TileShapeMNK{}));
+    using SmemLayoutAtomD = decltype(make_ordered_layout(TileShape_MN{}, Step<_1, _0>{}));
+    using CollectiveEpilogue = EpilogueConv<
+        StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore, NumControlWarps, NumEpilogueWarps,
+        TileShapeMNK,
+        void, void, void,
+        ElementOut, 
+        cutlass::detail::TagToStrideC_t<cutlass::layout::TensorNHWC>,
+        void, void, void, void, void,
+        xe4::ASYNC_ROW_STORE_IM2COL<slm_matrix_type::type1>,
+        SmemLayoutAtomD, 
+        void, void
+    >;
+
+    using StrideC = decltype(cute::Stride<cute::Stride<int64_t, int64_t, int64_t>,cute::Int<1>>{});
+    auto stride_D = append<3>(make_cute_packed_stride(StrideC{}, cutlass_problem_shape.stride_C, cutlass::conv::Operator::kFprop), _0{});
+
     using ConvKernel = cutlass::conv::kernel::Xe4ConvUniversal<
         ProblemShape,
         CollectiveMainloop,
         CollectiveEpilogue,
         void>;
-
     q.parallel_for<test>(Range, [=](nd_item<3> item) {
-        ProblemShape cutlass_problem_shape {
-            cutlass::conv::Mode::kCrossCorrelation,
-            {static_cast<int>(N), static_cast<int>(H), static_cast<int>(W), static_cast<int>(C)},   // nhwc
-            {static_cast<int>(K), static_cast<int>(R), static_cast<int>(S), static_cast<int>(C)},   // krsc
-            {static_cast<int>(padding_top), static_cast<int>(padding_left)}, // padding lower (pad_top, pad_left)
-            {static_cast<int>(padding_bottom), static_cast<int>(padding_right)},   // padding upper (pad_bottom, pad_right)
-            {static_cast<int>(stride_h), static_cast<int>(stride_w)},           // stride (stride_h, stride_w)
-            {static_cast<int>(dilation_h), static_cast<int>(dilation_w)},       // dilation (dilation_h, dilation_w)
-            1   // group
-        };
-
         auto args = typename ConvKernel::Arguments {
-            {SubGroupSize, MmaSubgroupNum, SchedSubgroupNum, LoadSubgroupNum, StoreSubgroupNum, NumControlSubGroup, NumPostOpSubGroup},
             cutlass_problem_shape,
             {A_shared, B_shared},
-            {C_shared}
+            {C_shared, stride_D}
         };
 
         ConvKernel kernel;
         auto params = kernel.to_underlying_arguments(args, nullptr);
-        kernel(params, item);
+        kernel(params);
     }).wait();
 
     uint32_t err_cnt = validate_conv2d_result_by_onednn<int8_t, int8_t, int32_t, int32_t>(A_shared, B_shared, C_shared, problem_shape);

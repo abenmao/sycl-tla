@@ -145,6 +145,14 @@ private:
 
   using SmemLayoutAtomC = decltype(make_ordered_layout(EpilogueTile{}, Step<_1, _0>{}));
   using SmemLayoutAtomD = decltype(make_ordered_layout(TileShape_MN{}, Step<_1, _0>{}));
+  using CopyOpS2G = cute::conditional_t<detail::is_im2col_mode<GmemLayoutTagD>,
+      xe4::ASYNC_ROW_STORE_IM2COL<slm_matrix_type::type1>,
+      xe4::ASYNC_TENSOR_STORE<slm_matrix_type::type1>
+    >;
+  using CopyOpG2S = cute::conditional_t<detail::is_im2col_mode<GmemLayoutTagC>,
+      xe4::ASYNC_ROW_LOAD_IM2COL<slm_matrix_type::type1>,
+      xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1>
+    >;
 
 public:
   using CollectiveOp =
@@ -157,11 +165,11 @@ public:
       ElementD,
       GmemStrideTypeD,
       FusionCallbacks,
-      xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1>,
+      CopyOpG2S,
       SmemLayoutAtomC,
       decltype(xe4_get_smem_load_op<NumElementsPerThread, ElementD>()),
       decltype(xe4_get_smem_load_op<NumElementsPerThread, ElementImm>()),
-      xe4::ASYNC_TENSOR_STORE<slm_matrix_type::type1>,
+      CopyOpS2G,
       SmemLayoutAtomD,
       decltype(xe4_get_smem_store_op<NumElementsPerThread, ElementD>()),
       void

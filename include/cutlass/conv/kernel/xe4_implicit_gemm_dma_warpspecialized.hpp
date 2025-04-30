@@ -57,18 +57,20 @@ public:
 
   // Epilogue derived types
   using CollectiveEpilogue = CollectiveEpilogue_;
+  using ElementD = typename CollectiveEpilogue::ElementD;
   using EpilogueArguments = typename CollectiveEpilogue::Arguments;
   using EpilogueParams = typename CollectiveEpilogue::Params;
-  using ElementD = typename CollectiveEpilogue::ElementD;
 
+  using CtaShape_MNK = typename CollectiveMainloop::TileShape;
   using TileSchedulerTag = TileScheduler_;
   using TileScheduler = typename cutlass::gemm::kernel::detail::TileSchedulerSelector<
     TileSchedulerTag, ArchTag, TileShape, ClusterShape, SchedulerPipelineStageCount>::Scheduler;
   static constexpr bool IsSchedDynamicPersistent = TileScheduler::IsDynamicPersistent;
 
   using MainloopPipeline = typename CollectiveMainloop::MainloopPipeline;
-  using EpilogueStorePipeline = typename CollectiveEpilogue::EpilogueStorePipeline;
   using MainloopPipelineState = typename CollectiveMainloop::PipelineState;
+
+  using EpiStorePipeline = typename CollectiveEpilogue::StorePipeline;
   using EpilogueStorePipelineState = typename CollectiveEpilogue::StorePipelineState;
 
   using CLCPipeline = cutlass::PipelineTmaAsync<SchedulerPipelineStageCount>;
@@ -94,8 +96,7 @@ public:
 
     struct PipelineStorage {
       using MainloopPipelineStorage = typename MainloopPipeline::SharedStorage;
-      using EpiStorePipelineStorage = typename EpilogueStorePipeline::SharedStorage;
-
+      using EpiStorePipelineStorage = typename EpiStorePipeline::SharedStorage;
       MainloopPipelineStorage mainloop;
       EpiStorePipelineStorage epi_store;
       CLCPipelineStorage clc;
@@ -106,19 +107,8 @@ public:
   static constexpr int SharedStorageSize = sizeof(SharedStorage);
   static constexpr int PipelineStorageSize = sizeof(typename SharedStorage::PipelineStorage);
 
-  struct GroupInfo {
-    uint32_t subgroup_size = 0;
-    uint32_t mma_subgroup_num = 0;
-    uint32_t sched_subgroup_num = 0;
-    uint32_t load_subgroup_num = 0;
-    uint32_t store_subgroup_num = 0;
-    uint32_t mainloop_subgroup_num = 0;
-    uint32_t epilogue_subgroup_num = 0;
-  };
-
   // Device side arguments
   struct Arguments {
-    GroupInfo group_info;
     ProblemShape problem_shape;
     MainloopArguments mainloop;
     EpilogueArguments epilogue;
@@ -126,7 +116,6 @@ public:
 
   // Kernel entry point API
   struct Params {
-    GroupInfo group_info;
     ProblemShape problem_shape;
     MainloopParams mainloop;
     EpilogueParams epilogue;
@@ -136,7 +125,7 @@ public:
     MMA          = 0,
     Sched        = 1,
     MainloopLoad = 2,
-    EpilogueStore = 3,
+    EpilogueLoad = 3,
     Epilogue     = 4
   };
 
@@ -144,58 +133,49 @@ public:
     uint32_t mma       = false;
     uint32_t sched     = false;
     uint32_t main_load = false;
-    uint32_t epi_store  = false;
+    uint32_t epi_load  = false;
     uint32_t epilogue  = false;
   };
 
   CUTLASS_DEVICE
   static Params
   to_underlying_arguments(Arguments const& args, void* workspace) {
-    auto tdesc_b = allocate_tdesc<0>();
-
-    CollectiveMainloop collective_mainloop;
-    auto conv_problem_shape = collective_mainloop.get_problem_shape_MNKL(args.problem_shape);
-    auto problem_shape = replace<3>(conv_problem_shape, 1);
-
     return {
-      args.group_info,
       args.problem_shape,
-      CollectiveMainloop::to_underlying_arguments(args.problem_shape, tdesc_b, args.mainloop, workspace),
+      CollectiveMainloop::to_underlying_arguments(args.problem_shape, args.mainloop, workspace),
       CollectiveEpilogue::to_underlying_arguments(args.problem_shape, args.epilogue, workspace)
     };
   }
 
   CUTLASS_DEVICE
   void
-  operator()(Params const& params, sycl::nd_item<3> item) {
-    auto& group_info = params.group_info;
+  operator()(Params const& params) {
+    auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
     auto& problem_shape = params.problem_shape;
 
+    static constexpr uint32_t NumControlWarps  = CollectiveEpilogue::NumControlWarps;
+    static constexpr uint32_t NumEpilogueWarps = CollectiveEpilogue::NumEpilogueWarps;
     // Warp specialization thread count per threadblock
-    uint32_t SubGroupSize            = group_info.subgroup_size;
-    uint32_t NumSchedThreads         = group_info.sched_subgroup_num * SubGroupSize;
-    uint32_t NumMMAThreads           = group_info.mma_subgroup_num * SubGroupSize;
-    uint32_t NumMainloopLoadThreads  = group_info.load_subgroup_num * SubGroupSize;
-    uint32_t NumEpilogueStoreThreads = group_info.store_subgroup_num * SubGroupSize;
-    uint32_t NumEpilogueThreads      = group_info.epilogue_subgroup_num * SubGroupSize;
+    uint32_t NumSchedThreads         = NumThreadsPerWarp;
+    uint32_t NumMMAThreads           = NumThreadsPerWarp;
+    uint32_t NumMainloopLoadThreads  = NumThreadsPerWarp;
+    uint32_t NumEpilogueStoreThreads = NumThreadsPerWarp;
+    uint32_t NumEpilogueThreads      = NumEpilogueWarps * NumThreadsPerWarp;
+
+    uint32_t local_id = item.get_local_linear_id();
+    uint32_t warp_idx = get_sg_id();
+    WarpCategory warp_category = warp_idx < static_cast<int>(WarpCategory::Epilogue) ? WarpCategory(warp_idx)
+                                                                                     : WarpCategory::Epilogue;
+    bool lane_predicate = cute::elect_one_sync();
+    auto cluster_shape = ClusterShape{};
 
     auto ptr = alloc_slm_buffer<uint8_t, SharedStorageSize>(item.get_group());
     auto& shared_tensors = *reinterpret_cast<typename SharedStorage::TensorStorage*>(ptr);
 
-    uint32_t local_id = item.get_local_linear_id();
-    uint32_t warp_idx = get_sg_id();
-    WarpCategory warp_category;
-    if (local_id == 0) {
-      warp_category = WarpCategory::MMA;
-    } else if (warp_idx < static_cast<int>(WarpCategory::Epilogue))
-    {
-      warp_category = WarpCategory(warp_idx);
-    } else {
-      warp_category = WarpCategory::Epilogue;
-    }
+    auto tdesc_b = allocate_tdesc<0>();
 
-    auto cluster_shape = ClusterShape{};
-    bool lane_predicate = cute::elect_one_sync();
+    auto abar_base = allocate_abar_bytes<0, PipelineStorageSize>();
+    auto& shared_pipelines = *reinterpret_cast<typename SharedStorage::PipelineStorage*>(abar_base);
 
     // Do we load source tensor C or other aux inputs
     bool is_epi_load_needed = false;
@@ -204,12 +184,9 @@ public:
       (warp_category == WarpCategory::MMA),                                 // mma
       (warp_category == WarpCategory::Sched) && is_first_cta_in_cluster,    // sched
       (warp_category == WarpCategory::MainloopLoad),                        // main_load
-      (warp_category == WarpCategory::EpilogueStore),                       // epi_store
+      (warp_category == WarpCategory::EpilogueLoad),                        // epi_load
       (warp_category == WarpCategory::Epilogue)                             // epilogue
     };
-
-    auto abar_base = allocate_abar_bytes<0, PipelineStorageSize>();
-    auto& shared_pipelines = *reinterpret_cast<typename SharedStorage::PipelineStorage*>(abar_base);
 
     typename MainloopPipeline::Params mainloop_pipeline_params;
     if (WarpCategory::MainloopLoad == warp_category) {
@@ -222,25 +199,22 @@ public:
     mainloop_pipeline_params.transaction_bytes = CollectiveMainloop::TmaTransactionBytes;
     mainloop_pipeline_params.num_producers = 1;
     mainloop_pipeline_params.num_consumers = 1;
-    mainloop_pipeline_params.initializing_warp = 0;
+    mainloop_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::MainloopLoad);
     MainloopPipeline mainloop_pipeline(shared_pipelines.mainloop, mainloop_pipeline_params, cluster_shape, true_type{}, false_type{});
 
-    typename EpilogueStorePipeline::Params epilogue_store_pipeline_params;
+    typename EpiStorePipeline::Params epilogue_store_pipeline_params;
     if (WarpCategory::MMA == warp_category) {
-      epilogue_store_pipeline_params.role = EpilogueStorePipeline::ThreadCategory::Producer;
+      epilogue_store_pipeline_params.role = EpiStorePipeline::ThreadCategory::Producer;
     }
-    if (WarpCategory::EpilogueStore == warp_category) {
-      epilogue_store_pipeline_params.role = EpilogueStorePipeline::ThreadCategory::Consumer;
+    if (WarpCategory::EpilogueLoad == warp_category) {
+      epilogue_store_pipeline_params.role = EpiStorePipeline::ThreadCategory::Consumer;
     }
     epilogue_store_pipeline_params.is_leader = lane_predicate && is_participant.mma;
     epilogue_store_pipeline_params.transaction_bytes = 1;
     epilogue_store_pipeline_params.num_producers = 1;
     epilogue_store_pipeline_params.num_consumers = 1;
-    epilogue_store_pipeline_params.initializing_warp = 1;
-    EpilogueStorePipeline epilogue_store_pipeline(shared_pipelines.epi_store, epilogue_store_pipeline_params, cluster_shape, true_type{}, false_type{});
-
-    CollectiveMainloop collective_mainloop;
-    CollectiveEpilogue collective_epilogue;
+    epilogue_store_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::MMA);
+    EpiStorePipeline epilogue_store_pipeline(shared_pipelines.epi_store, epilogue_store_pipeline_params, cluster_shape, true_type{}, false_type{});
 
     // CLC pipeline
     typename CLCPipeline::Params clc_pipeline_params;
@@ -252,14 +226,14 @@ public:
     // CLC throttle pipeline
     typename CLCThrottlePipeline::Params clc_throttle_pipeline_params;
     clc_throttle_pipeline_params.initializing_warp = 3;
-    clc_throttle_pipeline_params.num_producers = group_info.subgroup_size;
-    clc_throttle_pipeline_params.num_consumers = group_info.subgroup_size;
+    clc_throttle_pipeline_params.num_producers = NumThreadsPerWarp;
+    clc_throttle_pipeline_params.num_consumers = NumThreadsPerWarp;
     CLCThrottlePipeline clc_throttle_pipeline(shared_pipelines.clc_throttle, clc_throttle_pipeline_params, cluster_shape, true_type{}, false_type{});
 
     MainloopPipelineState mainloop_pipe_consumer_state;
     EpilogueStorePipelineState epilogue_pipe_store_consumer_state;
     auto mainloop_pipe_producer_state = cutlass::make_producer_start_state<MainloopPipeline>();
-    auto epilogue_pipe_store_producer_state = cutlass::make_producer_start_state<EpilogueStorePipeline>();
+    auto epilogue_pipe_store_producer_state = cutlass::make_producer_start_state<EpiStorePipeline>();
 
     auto clc_pipe_throttle_producer_state = cutlass::make_producer_start_state<CLCThrottlePipeline>();
     auto clc_pipe_throttle_consumer_state = CLCThrottlePipelineState{};
@@ -281,9 +255,11 @@ public:
     auto accumulator = make_tensor(reinterpret_cast<ElementAccumulator*>(shared_tensors.smem_Acc.data()), SmemLayoutAcc {});
     auto dst = make_tensor(reinterpret_cast<ElementD*>(shared_tensors.epilogue.smem_D.data()), SmemLayoutDst {});
 
-    auto conv_problem_shape = collective_mainloop.get_problem_shape_MNKL(problem_shape);
+    CollectiveMainloop collective_mainloop;
+    CollectiveEpilogue collective_epilogue(params.epilogue, shared_tensors.epilogue);
 
-    auto load_inputs = collective_mainloop.load_init(conv_problem_shape, params.mainloop);
+    auto conv_problem_shape = collective_mainloop.get_problem_shape_MNKL(problem_shape);
+    auto load_inputs = collective_mainloop.load_init(conv_problem_shape, params.mainloop, tdesc_b);
     auto [gA_mk, gB_nk] = load_inputs;
     auto k_tile_iter = cute::make_coord_iterator(shape<3>(gA_mk));
     auto k_tile_count = size<3>(gA_mk);
@@ -302,7 +278,7 @@ public:
         n_coord = idx2crd(n_coord, shape<2>(gB_nk), compact_col_major(shape<2>(gB_nk)));
         auto blk_coord = make_tuple(m_coord, n_coord);
 
-        auto work_id = local_id - (group_info.mma_subgroup_num + group_info.sched_subgroup_num) * group_info.subgroup_size;
+        auto work_id = local_id - NumMMAThreads - NumSchedThreads;
         mainloop_pipe_producer_state = collective_mainloop.load(params.mainloop, mainloop_pipeline, mainloop_pipe_producer_state,
           load_inputs, blk_coord, k_tile_iter, k_tile_count, work_id,
           shared_tensors.mainloop);
@@ -322,18 +298,15 @@ public:
         ++epilogue_pipe_store_producer_state;
         work_tile_info = next_work_tile_info;
       } while (work_tile_info.is_valid());
-    } else if (is_participant.epi_store)  {
-      uint32_t work_id = local_id - (group_info.mma_subgroup_num + group_info.sched_subgroup_num + group_info.load_subgroup_num) * group_info.subgroup_size;
+    } else if (is_participant.epi_load)  {
       do {
-        auto [m_coord, n_coord, _, l_coord] = scheduler.work_tile_to_cta_coord(work_tile_info);
-        auto blk_coord = make_coord(m_coord, n_coord);
-        collective_epilogue.store(params.epilogue, epilogue_store_pipeline,
-          epilogue_pipe_store_consumer_state, conv_problem_shape, blk_coord, work_id,
+        auto blk_coord = scheduler.work_tile_to_cta_coord(work_tile_info);
+        auto store_cons_state_next = collective_epilogue.store(epilogue_store_pipeline,
+          epilogue_pipe_store_consumer_state, conv_problem_shape, CtaShape_MNK{}, blk_coord,
           shared_tensors.epilogue);
 
+        epilogue_pipe_store_consumer_state = store_cons_state_next;
         auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
-
-        ++epilogue_pipe_store_consumer_state;
         work_tile_info = next_work_tile_info;
       } while (work_tile_info.is_valid());
     }

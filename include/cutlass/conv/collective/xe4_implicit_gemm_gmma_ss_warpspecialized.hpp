@@ -230,9 +230,9 @@ public:
   //  Methods
   //
   // Lowers the host side user facing arguments to the kernel facing lauch params
-  template<class TensorDesc>
+  template<class ProblemShape>
   static constexpr Params
-  to_underlying_arguments(ProblemShape const& problem_shape, TensorDesc tensor_desc, Arguments const& args, void* workspace) {
+  to_underlying_arguments(ProblemShape const& problem_shape, Arguments const& args, void* workspace) {
     // from the flat problem shape arrays of ConvProblemShape<ConvOp, N>, create a rank-3 MNK problem shape tuple
     // tma desc creation depends on the original untransformed domain.
 
@@ -250,8 +250,7 @@ public:
 
     auto tma_load_a = get_tma_load_a_instance(tensor_a, problem_shape);
     auto tma_load_b = get_tma_load_b_instance(tensor_b, problem_shape);
-    tma_load_b.cache_.set_tensor_desc(tensor_desc);
-
+    
     return {
       tma_load_a,
       tma_load_b,
@@ -259,13 +258,15 @@ public:
     };
   }
 
-  template <class ProblemShapeMNKL>
+  template <class ProblemShapeMNKL, class TensorDesc>
   CUTLASS_DEVICE auto
-  load_init(ProblemShapeMNKL const& problem_shape_MNKL, Params const& mainloop_params){
+  load_init(ProblemShapeMNKL const& problem_shape_MNKL, Params const& mainloop_params, TensorDesc const& tensor_desc){
     using X = Underscore;
     // Separate out problem shape for convenience
     auto [M, N, K, L] = problem_shape_MNKL;
 
+    mainloop_params.tma_load_b.cache_.set_tensor_desc(tensor_desc);
+    
     // TMA requires special handling of strides to deal with coord codomain mapping
     // Represent the full tensors -- get these from TMA
     Tensor mA_mk = mainloop_params.tma_load_a.get_tma_tensor(make_shape(M,K));                            // (m,k)

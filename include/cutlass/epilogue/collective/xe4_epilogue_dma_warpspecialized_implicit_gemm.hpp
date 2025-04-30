@@ -24,70 +24,82 @@ constexpr slm_matrix_type cm_typeD = slm_matrix_type::type1;
 /// Applies an element wise operation to all elements within the fragment
 /// and writes them out to destination storage.
 template <
-  conv::Operator ConvOp,
-  int NumSpatialDims,
-  class SmemLayoutD_,
-  class TileShape_,
-  class ElementD_
+  int StagesC_,
+  int StagesD_,
+  int FragmentSize_,
+  bool ReuseSmemC_,
+  bool DelayTmaStore_,
+  int NumControlWarps_,
+  int NumEpilogueWarps_,
+  class CtaTileShape_, // (CTA_M,CTA_N,CTA_K, optional: Tile_L)
+  class EpilogueTile_, // (EPI_TILE_M, EPI_TILE_N)
+  class ElementC_,
+  class StrideC_,
+  class ElementD_,
+  class StrideD_,
+  class FusionCallbacks_,
+  class CopyOpG2S_,
+  class SmemLayoutAtomC_,
+  class CopyOpS2R_,
+  class CopyOpS2RImm_,
+  class CopyOpS2G_,
+  class SmemLayoutAtomD_,
+  class CopyOpR2S_,
+  class CopyOpR2R_
 >
-class EpilogueConv {
+class EpilogueConv{
 public:
   using ElementD = ElementD_;
-  using TileShape = TileShape_;
-  using SmemLayoutD = SmemLayoutD_;
-  static_assert(is_static<TileShape>::value, "TileShape must be static.");
-  static_assert(is_static<SmemLayoutD>::value, "SmemLayoutD must be static.");
+  using CtaTileShape = CtaTileShape_;
+  using CopyOpS2G = CopyOpS2G_;
+  using SmemLayoutAtomD = SmemLayoutAtomD_;
+  using StrideD = StrideD_;
 
-  using EpilogueStorePipeline = cutlass::PipelineTmaAsync<1>;
-  using StorePipelineState = typename EpilogueStorePipeline::PipelineState;
+private:
+  using GmemElementD = ElementD;
+  constexpr static int StagesD = StagesD_;
 
-  using StrideC = decltype(cute::Stride<cute::Stride<int64_t, int64_t, int64_t>,cute::Int<1>>{});
-  static constexpr int NumTensorDimensions = NumSpatialDims + 2;
+  constexpr static bool is_im2col_D = cute::is_base_of_v<xe4::ASYNC_ROW_IM2COL, CopyOpS2G>;
+
+public:
+  using StorePipeline = cutlass::PipelineTmaAsync<StagesD>;
+  using StorePipelineState = typename StorePipeline::PipelineState;
+
+  static constexpr int NumControlWarps = 4;
+  static constexpr int NumEpilogueWarps = 0;
 
   struct SharedStorage
   {
     struct TensorStorage
     {
-      cute::array<ElementD, cute::cosize_v<SmemLayoutD>> smem_D;
+      cute::array<ElementD, cute::cosize_v<SmemLayoutAtomD>> smem_D;
     };
   };
 
   using TensorStorage = typename SharedStorage::TensorStorage;
 
   static constexpr uint32_t TmaTransactionBytes =
-    (size<0>(SmemLayoutD{}) * size<1>(SmemLayoutD{}) * static_cast<uint32_t>(sizeof(ElementD)));
+    (size<0>(SmemLayoutAtomD{}) * size<1>(SmemLayoutAtomD{}) * static_cast<uint32_t>(sizeof(ElementD)));
 
   // Host side epilogue arguments
   struct Arguments {
     ElementD const* ptr_D = nullptr;
+    StrideD dD{};
   };
 
   // Device side epilogue params
-  template <class TensorD>
+  template <class ProblemShapeMNL>
   static constexpr auto
-  get_tma_store_d_instance(TensorD const& tensor_d)
+  get_tma_store_d(ProblemShapeMNL const& problem_shape_mnl, Arguments const& args)
   {
-    using GmemTiledCopyD = cute::xe4::ASYNC_ROW_STORE_IM2COL<slm_matrix_type::type1>;
-
-    return make_tma_copy<GmemTiledCopyD>(GmemTiledCopyD{}, tensor_d,
-      make_layout(make_shape(shape<0>(TileShape{}), shape<1>(TileShape{})),
-                  make_stride(shape<1>(TileShape{}), Int<1>{})),
-      make_shape(shape<0>(TileShape{}), shape<1>(TileShape{})),
-      1
-    );
+    Tensor tensor_d = make_tensor(args.ptr_D, 
+                                  make_layout(problem_shape_mnl, args.dD));
+    return make_tma_copy<CopyOpS2G_>(CopyOpS2G_{}, tensor_d, SmemLayoutAtomD{}, take<0,2>(CtaTileShape{}), _1{});
   }
 
   struct Params
   {
-    static constexpr int RankT = NumSpatialDims + 2;
-    using TensorExtent  = cute::array<int, RankT>;
-    using _Submode = decltype(take<0, NumSpatialDims + 1>(TensorExtent{}));
-    using TensorShapeD = decltype(make_shape(_Submode{}, int(0)));
-
-    using TMA_D = decltype(get_tma_store_d_instance(
-      make_tensor(
-        static_cast<ElementD const*>(nullptr),
-        make_layout(TensorShapeD{}, StrideC{}))));
+    using TMA_D = decltype(get_tma_store_d(repeat_like(take<0,2>(StrideD_{}), int32_t(0)), Arguments{}));
 
     TMA_D tma_store_d;
     uint32_t tma_transaction_bytes = TmaTransactionBytes;
@@ -100,48 +112,65 @@ public:
   static constexpr Params
   to_underlying_arguments(ProblemShape const& problem_shape, Arguments const& args, void* workspace) {
     auto shape_D_orig = problem_shape.get_shape_C();
-    auto dD = make_cute_packed_stride(StrideC{}, problem_shape.stride_C, ConvOp);
-
-    Tensor tensor_d = make_tensor(args.ptr_D, make_layout(shape_D_orig, dD));
-
-    auto tma_store_d = get_tma_store_d_instance(tensor_d);
-
+    auto tma_store_d = get_tma_store_d(shape_D_orig, args);
     return {tma_store_d, TmaTransactionBytes};
   }
 
-  template<class ProblemShapeMNKL, class BlockCoord>
-  CUTLASS_DEVICE void
+    //
+  // Constructor and Data Members
+  //
+  template <class Params>
+  CUTLASS_DEVICE
+  EpilogueConv(
+    Params const& params_,
+    TensorStorage& shared_tensors)
+      : params(params_) {
+  }
+
+private:
+    Params const& params;
+
+public:
+  template<class ProblemShapeMNKL, class CtaCoordMNKL, class CtaTileMNK>
+  CUTLASS_DEVICE auto
   store(
-    Params const& epilogue_params,
-    EpilogueStorePipeline epilogue_store_pipeline,
-    StorePipelineState pipe_store_state,
+    StorePipeline store_pipeline,
+    StorePipelineState store_pipe_consumer_state,
     ProblemShapeMNKL const& problem_shape_MNKL,
-    BlockCoord const& blk_coord,
-    int thread_idx,
+    CtaTileMNK cta_tile_mnk,
+    CtaCoordMNKL const& cta_coord_mnkl,
     TensorStorage& shared_tensors)
   {
-    auto sD = make_tensor(shared_tensors.smem_D.data(), SmemLayoutD {});
+    auto sD = make_tensor(shared_tensors.smem_D.data(), SmemLayoutAtomD {});
 
     auto [M, N, K, L] = problem_shape_MNKL;
-    Tensor mD_mn = epilogue_params.tma_store_d.get_tma_tensor(make_shape(M,N));
+    auto [m_coord, n_coord, k_coord, l_coord] = cta_coord_mnkl;
 
-    auto [m_coord, n_coord] = blk_coord;
+    auto coord_shape =
+      conditional_return<is_im2col_D>(make_coord(m_coord, n_coord), make_coord(m_coord, n_coord, l_coord));
 
-    auto thr_store_d = epilogue_params.tma_store_d.get_slice(thread_idx);
-    Tensor gD_mn = local_tile(mD_mn, TileShape{}, make_coord(_,_,_), Step<_1, _1, X>{});
-    Tensor gD = gD_mn(_,_,m_coord,n_coord);
+    uint32_t local_id = sycl::ext::oneapi::this_work_item::get_nd_item<3>().get_local_linear_id();
+    uint32_t worker_id = local_id - NumControlWarps * NumThreadsPerWarp;
+    uint32_t thread_idx = local_id - 3 * NumThreadsPerWarp;
+
+    Tensor mD_mn = params.tma_store_d.get_tma_tensor(make_shape(M,N));
+    auto thr_store_d = params.tma_store_d.get_slice(thread_idx);
+    Tensor gD = local_tile(mD_mn, take<0,2>(cta_tile_mnk), coord_shape);
 
     Tensor tDsD = thr_store_d.partition_S(sD);
     Tensor tDgD = thr_store_d.partition_D(gD);
 
-    epilogue_store_pipeline.consumer_wait(pipe_store_state);
+    store_pipeline.consumer_try_wait(store_pipe_consumer_state);
     if(elect_one_sync()) {
-        epilogue_store_pipeline.consumer_commit(pipe_store_state, epilogue_params.tma_transaction_bytes);
+        store_pipeline.consumer_commit(store_pipe_consumer_state, params.tma_transaction_bytes);
     }
 
-    auto abar_store = epilogue_store_pipeline.consumer_get_barrier(pipe_store_state);
-    copy(epilogue_params.tma_store_d.with(abar_store), tDsD, tDgD);
-    epilogue_store_pipeline.producer_try_acquire(pipe_store_state);
+    auto abar_store = store_pipeline.consumer_get_barrier(store_pipe_consumer_state);
+    copy(params.tma_store_d.with(abar_store), tDsD, tDgD);
+    store_pipeline.producer_try_acquire(store_pipe_consumer_state);
+    ++store_pipe_consumer_state;
+
+    return store_pipe_consumer_state;
   }
 };
 
