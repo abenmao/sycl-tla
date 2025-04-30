@@ -284,10 +284,20 @@ void run_gemm()
   std::cout << smem_info << std::endl;
 
   q.parallel_for<Config>(Range, [=](nd_item<3> item) {
+    using FusionCallbacks = typename CollectiveEpilogue::FusionCallbacks;
+
+    auto callbacks_args = [&]() {
+      if constexpr (operationC_type == OperationCType::BiasAdd) {
+        return typename FusionCallbacks::Arguments { Bias_s, stride_Bias };
+      } else {
+        return typename FusionCallbacks::Arguments {};
+      }
+    }();
+
     auto args = typename Gemm::GemmKernel::Arguments {
       problem_shape_mnkl,
       { A_s, stride_A, B_s, stride_B },
-      { {Bias_s, stride_Bias}, C_s, stride_C, D_s, stride_D }
+      { callbacks_args, C_s, stride_C, D_s, stride_D }
     };
 
     GemmKernel kernel;
