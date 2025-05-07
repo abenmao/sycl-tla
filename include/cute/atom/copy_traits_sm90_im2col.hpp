@@ -56,7 +56,7 @@ make_async_row_copy_desc(GTensor const& gtensor)
   using T = typename GTensor::value_type;
 
   Im2ColTmaDescriptor<T, NumBytesPerCopy> tdesc_ptr;
-  tdesc_ptr.bytes[0] = reinterpret_cast<uint64_t>(gtensor.data());
+  tdesc_ptr.bytes[0] = reinterpret_cast<uint64_t>(&gtensor.data()[0]);
   tdesc_ptr.bytes[1] = shape<0>(gtensor);
   tdesc_ptr.bytes[2] = shape<1>(gtensor);
   tdesc_ptr.bytes[3] = shape<2>(gtensor);

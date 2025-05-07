@@ -1064,6 +1064,7 @@ struct MainloopDeviceAgnostic {
 
 struct KernelImplicitTmaWarpSpecializedXe4 {
   static constexpr int SchedulerPipelineStageCount = 1;
+  static constexpr int AccumulatorPipelineStageCount = 1;
 };
 
 template<

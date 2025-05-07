@@ -124,12 +124,17 @@ struct CollectiveConv<
   static constexpr bool is_im2col_A = true;
   static constexpr bool is_im2col_B = false;
 
+  using SmemLayoutAcc = decltype(make_layout(take<0,2>(TileShape{}), GenRowMajor{}));
+
+  constexpr static size_t SmemAlignment = 512;
+
   struct SharedStorage
   {
     struct TensorStorage
     {
-      cute::array<ElementA, cute::cosize_v<SmemLayoutA>> smem_A;
-      cute::array<ElementB, cute::cosize_v<SmemLayoutB>> smem_B;
+      cute::array_aligned<ElementA, cute::cosize_v<SmemLayoutA>, SmemAlignment> smem_A;
+      cute::array_aligned<ElementB, cute::cosize_v<SmemLayoutB>, SmemAlignment> smem_B;
+      cute::array_aligned<ElementAccumulator, cute::cosize_v<SmemLayoutAcc>, SmemAlignment> smem_Acc;
     } tensors;
   };
   using TensorStorage = typename SharedStorage::TensorStorage;
@@ -139,6 +144,21 @@ struct CollectiveConv<
   static constexpr uint32_t SlmBytesB = size(take<0,2>(SmemLayoutB{}))
     * static_cast<uint32_t>(sizeof(ElementB));
   static constexpr uint32_t TmaTransactionBytes = SlmBytesA + SlmBytesB;
+
+  template<class FragmentA, class FragmentB, class FragmentC>
+  struct MmaParams {
+    TiledMma tiled_mma;
+    FragmentA tCrA;
+    FragmentB tCrB;
+    FragmentC tCrC;
+
+    CUTLASS_DEVICE
+    MmaParams (
+        TiledMma tiled_mma_,
+        FragmentA tCrA_, FragmentB tCrB_, FragmentC tCrC_)
+    : tiled_mma(tiled_mma_)
+    , tCrA(tCrA_), tCrB(tCrB_), tCrC(tCrC_) {}
+  };
 
   struct Arguments {
     ElementA const* ptr_A {nullptr};
@@ -279,6 +299,28 @@ public:
     return cute::make_tuple(gA_mk, gB_nk);
   }
 
+  /// Set up the data needed by this collective for mma compute.
+  CUTLASS_DEVICE auto
+  mma_init(TensorStorage& shared_tensors) const {
+    auto sA = make_tensor(shared_tensors.smem_A.data(), SmemLayoutA {});     // (BLK_M,BLK_K,PIPE) 
+    auto sB = make_tensor(shared_tensors.smem_B.data(), SmemLayoutB {});     // (BLK_N,BLK_K,PIPE)
+    auto sAcc = make_tensor(shared_tensors.smem_Acc.data(), SmemLayoutAcc{}); // (BLK_M,BLK_N)
+
+    // Allocate "fragments/descriptors" for A and B matrices
+    TiledMma tiled_mma;
+    auto thread_mma = tiled_mma.get_thread_slice(0);
+    auto tCsA = thread_mma.partition_fragment_A(sA);            // (MMA,MMA_M,MMA_K,PIPE)
+    auto tCsB = thread_mma.partition_fragment_B(sB);            // (MMA,MMA_N,MMA_K,PIPE)
+    auto tCsAcc = thread_mma.partition_fragment_C(sAcc);        // (MMA,MMA_M,MMA_N)
+
+    MmaParams<decltype(tCsA), decltype(tCsB), decltype(tCsAcc)> mma_params {
+      tiled_mma,
+      tCsA, tCsB, tCsAcc
+    };
+
+    return mma_params;
+  }
+
   /// Perform a collective-scoped matrix multiply-accumulate
   /// Producer Perspective
   template <
@@ -336,54 +378,51 @@ public:
     return smem_pipe_producer_state;
   }
 
-  template <class Pipeline, class PipelineState, class FinalPipeline, class FinalPipelineState,
-    class FrgTensorAcc, class FrgTensorC, class SlmPtr>
+  template <class Pipelines, class PipelineStates, class FrgTensorC, class MmaParams>
   CUTLASS_DEVICE auto
-  mma(Pipeline pipeline, PipelineState slm_pipe_read, FinalPipeline finalPipeline,
-    FinalPipelineState finalPipelineState, FrgTensorAcc& accumulator, FrgTensorC& sC,
-    int k_tile_count, SlmPtr slm_ptr) {
-    auto shared_tensors = reinterpret_cast<TensorStorage*>(slm_ptr);
-    auto sA = make_tensor(shared_tensors->smem_A.data(), SmemLayoutA {});
-    auto sB = make_tensor(shared_tensors->smem_B.data(), SmemLayoutB {});
+  mma(Pipelines pipelines, PipelineStates pipeline_states, FrgTensorC& tensor_c, MmaParams const& mma_inputs, int k_tile_count) {
+    
+    auto [mainloop_pipeline, store_pipeline, accumulator_pipeline] = pipelines;
+    auto [mainloop_pipe_consumer_state, store_pipe_producer_state, accumulator_pipe_producer_state] = pipeline_states;
+    auto [tiled_mma, tCsA, tCsB, tCsAcc] = mma_inputs;
 
-    TiledMma tiled_mma;
     auto thread_mma = tiled_mma.get_thread_slice(0);
-    auto tCrA = thread_mma.partition_fragment_A(sA);            // (MMA,MMA_M,MMA_K,PIPE)
-    auto tCrB = thread_mma.partition_fragment_B(sB);            // (MMA,MMA_N,MMA_K,PIPE)
-    auto accum = thread_mma.partition_fragment_C(accumulator);  // (MMA,MMA_M,MMA_N)
-    auto tCrC = thread_mma.partition_fragment_C(sC);            // (MMA,MMA_M,MMA_N)
+    auto tCsC = thread_mma.partition_fragment_C(tensor_c);            // (MMA,MMA_M,MMA_N)
 
     uint64_t mma_ctrl = 0x100;
 
     while (k_tile_count > 0) {
-      pipeline.consumer_wait(slm_pipe_read);
-      pipeline.consumer_commit(slm_pipe_read, 2);
+      mainloop_pipeline.consumer_wait(mainloop_pipe_consumer_state);
+      mainloop_pipeline.consumer_commit(mainloop_pipe_consumer_state, 2);
 
-      uint32_t abar_index = slm_pipe_read.index();
-      auto abar_cons = pipeline.consumer_get_barrier(slm_pipe_read);
+      uint32_t read_stage = mainloop_pipe_consumer_state.index();
+      auto abar_cons = mainloop_pipeline.consumer_get_barrier(mainloop_pipe_consumer_state);
 
       // Unroll the K mode manually so we can set mma_ctrl to 0
       CUTLASS_PRAGMA_UNROLL
-      for (int k_block = 0; k_block < size<2>(tCrA); ++k_block) {
-        bool is_last_iter = (k_tile_count == 1) && (k_block == size<2>(tCrA) - 1);
+      for (int k_block = 0; k_block < size<2>(tCsA); ++k_block) {
+        bool is_last_iter = (k_tile_count == 1) && (k_block == size<2>(tCsA) - 1);
 
         if (is_last_iter) {
-          finalPipeline.producer_acquire(finalPipelineState);
-          auto abar_store = finalPipeline.producer_get_barrier(finalPipelineState);
-          auto new_tiled_mma = tiled_mma.with(mma_ctrl, make_tuple(abar_store, abar_cons, abar_cons));
-          cute::gemm(new_tiled_mma, tCrC, tCrA(_,_,k_block,abar_index), tCrB(_,_,k_block,abar_index), accum);
+          store_pipeline.producer_try_acquire(store_pipe_producer_state);
+          accumulator_pipeline.producer_acquire(accumulator_pipe_producer_state);
+
+          int write_stage = accumulator_pipe_producer_state.index();
+          auto abar_cons_d = accumulator_pipeline.producer_get_barrier(accumulator_pipe_producer_state);
+          auto new_tiled_mma = tiled_mma.with(mma_ctrl, make_tuple(abar_cons_d, abar_cons, abar_cons));
+          cute::gemm(new_tiled_mma, tCsC(_,_,_,write_stage), tCsA(_,_,k_block,read_stage), tCsB(_,_,k_block,read_stage), tCsAcc);
         } else {
           auto new_tiled_mma = tiled_mma.with(mma_ctrl, make_tuple(abar_cons, abar_cons));
-          cute::gemm(new_tiled_mma, tCrA(_,_,k_block,abar_index), tCrB(_,_,k_block,abar_index), accum);
+          cute::gemm(new_tiled_mma, tCsA(_,_,k_block,read_stage), tCsB(_,_,k_block,read_stage), tCsAcc);
         }
         mma_ctrl = 0;
       }
 
       --k_tile_count;
-      ++slm_pipe_read;
+      ++mainloop_pipe_consumer_state;
     }
 
-    return slm_pipe_read;
+    return mainloop_pipe_consumer_state;
   }
 };
 } // namespace cutlass::conv::collective
