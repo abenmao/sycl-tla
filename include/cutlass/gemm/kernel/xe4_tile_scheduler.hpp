@@ -47,11 +47,14 @@ public:
     static_assert(cute::is_static<TileShape>::value);
 
     auto [cluster_size_m, cluster_size_n, _] = ClusterShape{};
-    auto problem_blocks_range = cute::ceil_div(flatten(problem_shape_mnkl), flatten(tile_shape));
+
+    auto problem_shape_mnl = cute::select<0, 1, 3>(problem_shape_mnkl);
+    auto tile_shape_mn = cute::select<0, 1>(tile_shape);
+    auto problem_blocks_range = cute::ceil_div(flatten(problem_shape_mnl), flatten(tile_shape_mn));
 
     auto problem_blocks_m = cute::round_up(cute::get<0>(problem_blocks_range), cluster_size_m);
     auto problem_blocks_n = cute::round_up(cute::get<1>(problem_blocks_range), cluster_size_n);
-    auto problem_blocks_shape = cute::make_shape(problem_blocks_m, problem_blocks_n, cute::get<3>(problem_blocks_range));
+    auto problem_blocks_shape = cute::make_shape(problem_blocks_m, problem_blocks_n, cute::get<2>(problem_blocks_range));
 
     return problem_blocks_shape;
   }
