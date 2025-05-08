@@ -283,26 +283,36 @@ void run_gemm()
   auto smem_info = get_shared_memory_info<GemmKernel>();
   std::cout << smem_info << std::endl;
 
+  using FusionCallbacks = typename CollectiveEpilogue::FusionCallbacks;
+
+  auto callbacks_args = [&]() {
+    if constexpr (operationC_type == OperationCType::BiasAdd) {
+      return typename FusionCallbacks::Arguments { Bias_s, stride_Bias };
+    } else {
+      return typename FusionCallbacks::Arguments {};
+    }
+  }();
+
+  auto args = typename Gemm::GemmKernel::Arguments {
+    problem_shape_mnkl,
+    { A_s, stride_A, B_s, stride_B },
+    { callbacks_args, C_s, stride_C, D_s, stride_D }
+  };
+
+  GemmKernel kernel;
+  auto params = kernel.to_underlying_arguments(args, nullptr);
+
   q.parallel_for<Config>(Range, [=](nd_item<3> item) {
-    using FusionCallbacks = typename CollectiveEpilogue::FusionCallbacks;
+    // WA: reset gmem ptr in the tiled copy objects, to fix xesim page fault error
+    auto params_workaround = params;
+    params_workaround.mainloop.tma_load_a.cache_.set_gmem_ptr(A_s);
+    params_workaround.mainloop.tma_load_b.cache_.set_gmem_ptr(B_s);
+    if constexpr (!cute::is_void_v<ElementC>) {
+      params_workaround.epilogue.tma_load_c.cache_.set_gmem_ptr(C_s);
+    }
+    params_workaround.epilogue.tma_store_d.cache_.set_gmem_ptr(D_s);
 
-    auto callbacks_args = [&]() {
-      if constexpr (operationC_type == OperationCType::BiasAdd) {
-        return typename FusionCallbacks::Arguments { Bias_s, stride_Bias };
-      } else {
-        return typename FusionCallbacks::Arguments {};
-      }
-    }();
-
-    auto args = typename Gemm::GemmKernel::Arguments {
-      problem_shape_mnkl,
-      { A_s, stride_A, B_s, stride_B },
-      { callbacks_args, C_s, stride_C, D_s, stride_D }
-    };
-
-    GemmKernel kernel;
-    auto params = kernel.to_underlying_arguments(args, nullptr);
-    kernel(params);
+    kernel(params_workaround);
    }).wait();
 
   auto as_mem_layout = [](auto layout) {

@@ -91,6 +91,12 @@ struct Xe4Im2ColCache {
     return make_tuple(&tensor_desc_, static_cast<Args&&>(args)...);
   }
 
+  template <typename GmemPtr>
+  CUTE_HOST_DEVICE constexpr
+  void set_gmem_ptr(const GmemPtr &gmem_ptr) {
+    tensor_desc_.bytes[0] = reinterpret_cast<uint64_t>(gmem_ptr);
+  }
+
   TensorDesc tensor_desc_;
   CoordTensor coord_tensor_;
 };

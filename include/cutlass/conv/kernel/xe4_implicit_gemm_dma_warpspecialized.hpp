@@ -185,7 +185,7 @@ public:
 
   CUTLASS_DEVICE
   void
-  operator()(Params const& params) {
+  operator()(Params const& params) const {
     auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
     auto& problem_shape = params.problem_shape;
 

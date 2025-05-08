@@ -124,6 +124,11 @@ struct Xe4DmaCache {
     : gmem_details_(gmem_details), aux_params_(aux_params), gmem_ptr_(gmem_ptr) {}
 
   CUTE_DEVICE void
+  set_gmem_ptr(GmemPtr gmem_ptr) {
+    gmem_ptr_ = gmem_ptr;
+  }
+
+  CUTE_DEVICE void
   set_tensor_desc(TmaDescriptor tensor_desc) const {
     constexpr int tma_dim = rank_v<typename AuxParams::TmaGmemBasis>;
     auto [gmem_shape, gmem_stride, roi_shape, element_stride] = gmem_details_;

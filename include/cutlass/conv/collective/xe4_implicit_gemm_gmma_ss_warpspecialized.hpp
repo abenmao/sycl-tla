@@ -182,7 +182,7 @@ private:
         problem_shape.dilation[NumSpatialDimensions-1-i];
     }
 
-    return make_im2col_tma_copy<GmemTiledCopyA>(GmemTiledCopyA{},
+    return make_im2col_tma_copy(GmemTiledCopyA{},
       tensor_a,
       make_layout(make_shape(size<0>(TileShape{}), size<2>(TileShape{})),
         make_stride(size<2>(TileShape{}), Int<1>{})),
@@ -202,7 +202,7 @@ private:
   template <class TensorB>
   static constexpr auto
   get_tma_load_b_instance(TensorB const& tensor_b, ProblemShape const& problem_shape) {
-    return make_tma_copy<GmemTiledCopyB>(GmemTiledCopyB{},
+    return make_tma_copy<ElementB>(GmemTiledCopyB{},
       tensor_b,
       LayoutSB{}(_, _, 0),
       make_shape(size<1>(TileShape{}), make_shape(size<2>(TileShape{}))),
