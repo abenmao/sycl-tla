@@ -1108,53 +1108,6 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
 #endif
 }
 
-template <class GmemDetails, class AuxParams, class GmemPtr>
-struct Xe4DmaCache {
-  template <typename CopyOp>
-  using OpUnpack = XE4_COPY_Unpack<CopyOp>;
-
-  Xe4DmaCache() = default;
-
-  Xe4DmaCache(GmemDetails const& gmem_details, AuxParams const& aux_params, GmemPtr gmem_ptr)
-    : gmem_details_(gmem_details), aux_params_(aux_params), gmem_ptr_(gmem_ptr) {}
-
-  CUTE_DEVICE void
-  set_tensor_desc(TmaDescriptor tensor_desc) const {
-    constexpr int tma_dim = rank_v<typename AuxParams::TmaGmemBasis>;
-    auto [gmem_shape, gmem_stride, roi_shape, element_stride] = gmem_details_;
-
-    tensordesc_fill_dim_size<tma_dim>(tensor_desc, gmem_shape);
-    tensordesc_fill_dim_stride<tma_dim>(tensor_desc, gmem_stride);
-    tensordesc_fill_roitensor_dim_size<tma_dim>(tensor_desc, roi_shape);
-    tensordesc_fill_element_stride<tma_dim>(tensor_desc, element_stride);
-
-    tdesc_ptr_ = tensor_desc;
-  }
-
-  CUTE_HOST_DEVICE constexpr
-  auto get_tensor_desc() const {
-    return tdesc_ptr_;
-  }
-
-  template <class GShape>
-  CUTE_HOST_DEVICE constexpr
-  auto get_tma_tensor(GShape const& g_shape) const {
-    static_assert(is_congruent<decltype(g_shape), decltype(aux_params_.g_stride_)>::value);
-    return make_counting_tensor(make_layout(g_shape, aux_params_.g_stride_));
-  }
-
-  template <typename... Args>
-  CUTE_HOST_DEVICE constexpr
-  auto make_args_tuple(Args&&... args) const {
-    return make_tuple(tdesc_ptr_, gmem_ptr_, static_cast<Args&&>(args)...);
-  }
-
-  GmemDetails gmem_details_;
-  AuxParams aux_params_;
-  GmemPtr gmem_ptr_ {nullptr};
-  mutable TmaDescriptor tdesc_ptr_ { nullptr };
-};
-
 template <class TmaInternalType,
           class CopyOp,
           class GEngine, class GLayout,
