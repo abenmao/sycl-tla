@@ -74,19 +74,16 @@ public:
 
   static constexpr bool IsSchedDynamicPersistent = TileScheduler::IsDynamicPersistent;
 
-  static constexpr uint32_t NumControlWarps  = CollectiveEpilogue::NumControlWarps;
-  static constexpr uint32_t NumEpilogueWarps = CollectiveEpilogue::NumEpilogueWarps;
-
   // Warp specialization thread count per threadblock
-  static constexpr uint32_t NumSchedThreads         = NumThreadsPerWarp; // 1 subgroup
-  static constexpr uint32_t NumMMAThreads           = NumThreadsPerWarp; // 1 subgroup
-  static constexpr uint32_t NumMainloopLoadThreads  = NumThreadsPerWarp; // 1 subgroup
-  static constexpr uint32_t NumEpilogueStoreThreads = NumThreadsPerWarp; // 1 subgroup
-  static constexpr uint32_t NumEpilogueThreads      = NumEpilogueWarps * NumThreadsPerWarp;
+  static constexpr uint32_t NumSchedThreads        = NumThreadsPerWarp; // 1 warp
+  static constexpr uint32_t NumMMAThreads          = NumThreadsPerWarp; // 1 warp
+  static constexpr uint32_t NumMainloopLoadThreads = NumThreadsPerWarp; // 1 warp
+  static constexpr uint32_t NumEpilogueLoadThreads = NumThreadsPerWarp; // 1 warp
+  static constexpr uint32_t NumEpilogueThreads     = CollectiveEpilogue::ThreadCount;
 
   static constexpr uint32_t MaxThreadsPerBlock = NumSchedThreads +
                                                  NumMainloopLoadThreads + NumMMAThreads +
-                                                 NumEpilogueStoreThreads + NumEpilogueThreads;
+                                                 NumEpilogueLoadThreads + NumEpilogueThreads;
   static constexpr uint32_t MinBlocksPerMultiprocessor = 1;
 
   // Pipeline and pipeline state types
@@ -255,7 +252,6 @@ public:
     if (WarpCategory::Epilogue == warp_category) {
       epi_load_pipeline_params.role = EpiLoadPipeline::ThreadCategory::Consumer;
     }
-    mainloop_pipeline_params.is_leader = lane_predicate && is_participant.epi_load;
     epi_load_pipeline_params.transaction_bytes = CollectiveEpilogue::TmaTransactionBytes;
     epi_load_pipeline_params.producer_arv_count = NumThreadsPerWarp;
     epi_load_pipeline_params.consumer_arv_count = NumEpilogueThreads;
@@ -299,7 +295,7 @@ public:
     }
     clc_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::Sched);
     clc_pipeline_params.num_producers = NumSchedThreads;
-    clc_pipeline_params.num_consumers = NumSchedThreads + NumMMAThreads + NumMainloopLoadThreads + NumEpilogueStoreThreads + NumEpilogueThreads;
+    clc_pipeline_params.num_consumers = NumSchedThreads + NumMMAThreads + NumMainloopLoadThreads + NumEpilogueLoadThreads + NumEpilogueThreads;
     CLCPipeline clc_pipeline(shared_pipelines.clc, clc_pipeline_params, cluster_shape, true_type{}, false_type{});
 
     // CLC throttle pipeline

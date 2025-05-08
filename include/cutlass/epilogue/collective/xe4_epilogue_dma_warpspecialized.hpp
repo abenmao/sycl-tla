@@ -92,6 +92,10 @@ public:
   using ThreadEpilogueOp = typename fusion::FusionCallbacksTraits<FusionCallbacks>::Operation;
   using GmemTiledCopyD = CopyOpS2G;
 
+  static constexpr int NumControlWarps = NumControlWarps_;
+  static constexpr int NumEpilogueWarps = NumEpilogueWarps_;
+  constexpr static int ThreadCount = NumEpilogueWarps * NumThreadsPerWarp;
+
   static_assert(!is_layout<EpilogueTile>::value && is_tuple<EpilogueTile>::value, "EpilogueTile must be a cute::Tile or cute::Shape");
   static_assert(rank(EpilogueTile{}) == 2, "EpilogueTile must be rank-2: [EPI_TILE_M, EPI_TILE_N]");
 
@@ -187,9 +191,6 @@ public:
   };
 
   using TensorStorage = typename SharedStorage::TensorStorage;
-
-  static constexpr int NumControlWarps = NumControlWarps_;
-  static constexpr int NumEpilogueWarps = NumEpilogueWarps_;
 
   static constexpr uint32_t TransactionBytesStore = sizeof(ElementD) * size(SmemLayoutD {});
 
