@@ -106,9 +106,6 @@ public:
   using CLCPipeline = cutlass::PipelineTmaAsync<SchedulerPipelineStageCount>;
   using CLCPipelineState = typename CLCPipeline::PipelineState;
 
-  using CLCThrottlePipeline = cutlass::PipelineTmaAsync<SchedulerPipelineStageCount>;
-  using CLCThrottlePipelineState = typename CLCThrottlePipeline::PipelineState;
-
   struct SharedStorage
   {
     struct TensorStorage
@@ -126,9 +123,8 @@ public:
       using EpiLoadPipelineStorage = typename EpiLoadPipeline::SharedStorage;
       using AccumulatorPipelineStorage = typename AccumulatorPipeline::SharedStorage;
       using EpiStorePipelineStorage = typename EpiStorePipeline::SharedStorage;
-      using EpiWaveOrderBarrierStorage = typename EpiWaveOrderBarrier::SharedStorage;  
+      using EpiWaveOrderBarrierStorage = typename EpiWaveOrderBarrier::SharedStorage;
       using CLCPipelineStorage = typename CLCPipeline::SharedStorage;
-      using CLCThrottlePipelineStorage = typename CLCThrottlePipeline::SharedStorage;
 
       MainloopPipelineStorage mainloop;
       EpiLoadPipelineStorage epi_load;
@@ -136,7 +132,6 @@ public:
       EpiStorePipelineStorage epi_store;
       EpiWaveOrderBarrierStorage epi_wave_order;
       CLCPipelineStorage clc;
-      CLCThrottlePipelineStorage clc_throttle;
     } pipelines;
   };
 
@@ -292,19 +287,6 @@ public:
     clc_pipeline_params.num_consumers = NumSchedThreads + NumMMAThreads + NumMainloopLoadThreads + NumEpilogueStoreThreads + NumEpilogueThreads;
     CLCPipeline clc_pipeline(shared_pipelines.clc, clc_pipeline_params, cluster_shape, true_type{}, false_type{});
 
-    // CLC throttle pipeline
-    typename CLCThrottlePipeline::Params clc_throttle_pipeline_params;
-    if (WarpCategory::MainloopLoad == warp_category) {
-      clc_throttle_pipeline_params.role = CLCThrottlePipeline::ThreadCategory::Producer;
-    }
-    if (WarpCategory::Sched == warp_category)  {
-      clc_throttle_pipeline_params.role = CLCThrottlePipeline::ThreadCategory::Consumer;
-    }
-    clc_throttle_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::Sched);
-    clc_throttle_pipeline_params.num_producers = NumThreadsPerWarp;
-    clc_throttle_pipeline_params.num_consumers = NumThreadsPerWarp;
-    CLCThrottlePipeline clc_throttle_pipeline(shared_pipelines.clc_throttle, clc_throttle_pipeline_params, cluster_shape, true_type{}, false_type{});
-
     auto mainloop_pipe_producer_state = cutlass::make_producer_start_state<MainloopPipeline>();
     auto mainloop_pipe_consumer_state = MainloopPipelineState{};
 
@@ -316,9 +298,6 @@ public:
 
     auto epi_store_pipe_producer_state = cutlass::make_producer_start_state<EpiStorePipeline>();
     auto epi_store_pipe_consumer_state = EpiStorePipelineState{};
-
-    auto clc_pipe_throttle_producer_state = cutlass::make_producer_start_state<CLCThrottlePipeline>();
-    auto clc_pipe_throttle_consumer_state = CLCThrottlePipelineState{};
 
     auto clc_pipe_producer_state = cutlass::make_producer_start_state<CLCPipeline>();
     auto clc_pipe_consumer_state = CLCPipelineState{};
@@ -373,7 +352,7 @@ public:
 
       do {
         mainloop_pipe_consumer_state = collective_mainloop.mma(
-          cute::make_tuple(mainloop_pipeline, epi_store_pipeline, accumulator_pipeline), 
+          cute::make_tuple(mainloop_pipeline, epi_store_pipeline, accumulator_pipeline),
           cute::make_tuple(mainloop_pipe_consumer_state, epi_store_pipe_producer_state, accumulator_pipe_producer_state),
           intermedia_tensor, mma_inputs, k_tile_count);
 
@@ -395,7 +374,7 @@ public:
         auto [load_state_next, store_cons_state_next] = collective_epilogue.template load<IsOverlappingAccum>(
           cute::make_tuple(epi_load_pipeline, epi_store_pipeline),
           cute::make_tuple(epi_load_pipe_producer_state, epi_store_pipe_consumer_state),
-          conv_problem_shape, 
+          conv_problem_shape,
           CtaShape_MNK{},
           cta_coord_mnkl,
           TileShape{},
@@ -413,7 +392,7 @@ public:
       } while (work_tile_info.is_valid());
 
       epi_store_pipeline.producer_try_acquire(prev_epi_store_consumer_state);
-    } 
+    }
     else if (is_participant.epilogue)  {
       do {
         auto cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);

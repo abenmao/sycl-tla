@@ -104,9 +104,6 @@ public:
   using CLCPipeline = cutlass::PipelineTmaAsync<SchedulerPipelineStageCount>;
   using CLCPipelineState = typename CLCPipeline::PipelineState;
 
-  using CLCThrottlePipeline = cutlass::PipelineTmaAsync<SchedulerPipelineStageCount>;
-  using CLCThrottlePipelineState = typename CLCThrottlePipeline::PipelineState;
-
   // Kernel level shared memory storage
   struct SharedStorage
   {
@@ -127,7 +124,6 @@ public:
       using EpiStorePipelineStorage = typename EpiStorePipeline::SharedStorage;
       using EpiWaveOrderBarrierStorage = typename EpiWaveOrderBarrier::SharedStorage;
       using CLCPipelineStorage = typename CLCPipeline::SharedStorage;
-      using CLCThrottlePipelineStorage = typename CLCThrottlePipeline::SharedStorage;
 
       MainloopPipelineStorage mainloop;
       EpiLoadPipelineStorage epi_load;
@@ -135,7 +131,6 @@ public:
       EpiStorePipelineStorage epi_store;
       EpiWaveOrderBarrierStorage epi_wave_order;
       CLCPipelineStorage clc;
-      CLCThrottlePipelineStorage clc_throttle;
     } pipelines;
   };
 
@@ -298,19 +293,6 @@ public:
     clc_pipeline_params.num_consumers = NumSchedThreads + NumMMAThreads + NumMainloopLoadThreads + NumEpilogueLoadThreads + NumEpilogueThreads;
     CLCPipeline clc_pipeline(shared_pipelines.clc, clc_pipeline_params, cluster_shape, true_type{}, false_type{});
 
-    // CLC throttle pipeline
-    typename CLCThrottlePipeline::Params clc_throttle_pipeline_params;
-    if (WarpCategory::MainloopLoad == warp_category) {
-      clc_throttle_pipeline_params.role = CLCThrottlePipeline::ThreadCategory::Producer;
-    }
-    if (WarpCategory::Sched == warp_category)  {
-      clc_throttle_pipeline_params.role = CLCThrottlePipeline::ThreadCategory::Consumer;
-    }
-    clc_throttle_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::Sched);
-    clc_throttle_pipeline_params.num_producers = NumThreadsPerWarp;
-    clc_throttle_pipeline_params.num_consumers = NumThreadsPerWarp;
-    CLCThrottlePipeline clc_throttle_pipeline(shared_pipelines.clc_throttle, clc_throttle_pipeline_params, cluster_shape, true_type{}, false_type{});
-
     auto mainloop_pipe_producer_state = cutlass::make_producer_start_state<MainloopPipeline>();
     auto mainloop_pipe_consumer_state = MainloopPipelineState{};
 
@@ -322,9 +304,6 @@ public:
 
     auto epi_store_pipe_producer_state = cutlass::make_producer_start_state<EpiStorePipeline>();
     auto epi_store_pipe_consumer_state = EpiStorePipelineState{};
-
-    auto clc_pipe_throttle_producer_state = cutlass::make_producer_start_state<CLCThrottlePipeline>();
-    auto clc_pipe_throttle_consumer_state = CLCThrottlePipelineState{};
 
     auto clc_pipe_producer_state = cutlass::make_producer_start_state<CLCPipeline>();
     auto clc_pipe_consumer_state = CLCPipelineState{};
@@ -360,20 +339,11 @@ public:
     auto work_tile_info = scheduler.initial_work_tile_info();
 
     if (is_participant.main_load) {
-      bool requires_clc_query = true;
       do {
         // Get the number of K tiles to compute for this work as well as the starting K tile offset of the work.
         auto k_tile_iter = scheduler.get_k_tile_iterator(work_tile_info, problem_shape_MNKL, CtaShape_MNK{});
         auto k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, CtaShape_MNK{});
         auto k_tile_prologue = min(MainloopPipeline::Stages, k_tile_count);
-
-        if constexpr (IsSchedDynamicPersistent) {
-          if (is_first_cta_in_cluster && requires_clc_query) {
-            clc_throttle_pipeline.producer_acquire(clc_pipe_throttle_producer_state);
-            clc_throttle_pipeline.producer_commit(clc_pipe_throttle_producer_state, 1);
-            ++clc_pipe_throttle_producer_state;
-          }
-        }
 
         auto cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);
 
@@ -394,28 +364,35 @@ public:
         }
 
         work_tile_info = next_work_tile_info;
-        requires_clc_query = increment_pipe;
       } while (work_tile_info.is_valid());
     } else if (is_participant.sched) {
-      bool requires_clc_query = true;
       if constexpr (IsSchedDynamicPersistent) {
+        // Whether a new CLC query must be performed.
+        // See comment below where this variable is updated for a description of
+        // why this variable is needed.
+        bool requires_clc_query = true;
+
         do {
           if (requires_clc_query) {
-            // Throttle CLC query to mitigate workload imbalance caused by skews among persistent workers.
-            clc_throttle_pipeline.consumer_wait(clc_pipe_throttle_consumer_state);
-            clc_throttle_pipeline.consumer_release(clc_pipe_throttle_consumer_state);
-            ++clc_pipe_throttle_consumer_state;
             // Query next clcID and update producer state
             clc_pipe_producer_state = scheduler.advance_to_next_work(clc_pipeline, clc_pipe_producer_state);
           }
 
           auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
+
+          // Only perform a new CLC query if we consumed a new CLC query result in
+          // `fetch_next_work`. An example of a case in which CLC `fetch_next_work` does
+          // not consume a new CLC query response is when processing stream-K units.
+          // The current stream-K scheduler uses single WorkTileInfo to track multiple
+          // (potentially-partial) tiles to be computed via stream-K. In this case,
+          // `fetch_next_work` simply performs in-place updates on the existing WorkTileInfo,
+          // rather than consuming a CLC query response.
+          requires_clc_query = increment_pipe;
           if (increment_pipe) {
             ++clc_pipe_consumer_state;
           }
 
           work_tile_info = next_work_tile_info;
-          requires_clc_query = increment_pipe;
         } while (work_tile_info.is_valid());
       }
     } else if (is_participant.mma) {
