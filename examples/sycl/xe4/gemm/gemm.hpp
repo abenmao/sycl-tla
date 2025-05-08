@@ -348,19 +348,14 @@ void run_gemm()
             value += ptr_Bias[i%get<1>(problem_shape_mnkl)];
           }
         } else {
-          auto value = ElementEpilogueCompute(vec[i]);
           auto valueC = ElementEpilogueCompute(ptr_C[i]);
-
-          if (activation_type == ActivationType::SiLu) {
-            value = silu(value);
-          }
 
           if (operationC_type == OperationCType::Mul) {
             value *= valueC;
           } else if (operationC_type == OperationCType::Add) {
             value += valueC;
           } else if (operationC_type == OperationCType::BiasAdd) {
-            static_assert(false, "Not implemented for bias_add yet");
+            assert(sizeof(C<operationC_type>) < 0);
           }
         }
 
