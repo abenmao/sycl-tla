@@ -170,9 +170,6 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
         params_workaround.mainloop.tma_load_b.cache_.set_gmem_ptr(B_shared);
         params_workaround.epilogue.tma_store_d.cache_.set_gmem_ptr(C_shared);
 
-        auto tdesc_b = allocate_tdesc<0>();
-        params_workaround.mainloop.tma_load_b.cache_.set_tensor_desc(tdesc_b);
-
         kernel(params_workaround);
     }).wait();
 
