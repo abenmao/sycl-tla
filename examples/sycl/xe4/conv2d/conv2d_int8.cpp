@@ -65,7 +65,7 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
     using ElementAct = int8_t;
     using ElementFlt = int8_t;
     using ElementAcc = int32_t;
-    using ElementOut = int32_t;
+    using ElementOut = int8_t;
 
     constexpr uint32_t Stages = 3;
 
@@ -81,14 +81,15 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
     uint32_t sizeC = Out_C * Out_W * Out_H * Out_N;
 
     auto A_shared = malloc_shared<ElementAct>(sizeA, q);
-    std::generate_n(A_shared, sizeA, [=]() { return random_float(); });
-    // std::iota(A_shared, A_shared + sizeA, 0);
+    std::generate_n(A_shared, sizeA, [=]() { return random_int<ElementAct>(0, 16); });
 
     auto B_shared = malloc_shared<ElementFlt>(sizeB, q);
-    std::generate_n(B_shared, sizeB, [=]() { return random_float(); });
+    std::generate_n(B_shared, sizeB, [=]() { return random_int<ElementFlt>(-3, 3); });
 
     auto C_shared = malloc_shared<ElementOut>(sizeC, q);
     std::fill_n(C_shared, sizeC, ElementOut(0));
+
+    float quant_scale = random_float();
 
     constexpr int NumControlWarps = 4;
     constexpr int NumEpilogueWarps = 16;
@@ -110,9 +111,9 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
     using CollectiveMainloop = typename cutlass::conv::collective::CollectiveBuilder<
         cutlass::arch::Xe4, cutlass::arch::OpClassTensorOp,
         cutlass::conv::Operator::kFprop,
-        ElementAct, cutlass::layout::TensorNHWC, 8,
-        ElementFlt, cutlass::layout::TensorNHWC, 8,
-        tuple<ElementAcc, ElementOut>,
+        ElementAct, cutlass::layout::TensorNHWC, 512,
+        ElementFlt, cutlass::layout::TensorNHWC, 512,
+        tuple<ElementAcc, ElementAcc>,
         TileShapeMNK, ClusterShapeMNK,
         cutlass::conv::collective::StageCount<static_cast<int>(Stages)>,
         cutlass::conv::collective::KernelScheduleAuto
@@ -140,7 +141,7 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
         void, cutlass::layout::TensorNHWC, 512,
         ElementOut, cutlass::layout::TensorNHWC, 512,
         cutlass::epilogue::collective::EpilogueScheduleAuto,
-        cutlass::epilogue::fusion::EltAct<cutlass::epilogue::thread::Identity, ElementOut, ElementOut>
+        cutlass::epilogue::fusion::ScaledAcc<ElementOut, float, float>
     >::CollectiveOp;
 
     using StrideC = decltype(cute::Stride<cute::Stride<int64_t, int64_t, int64_t>,cute::Int<1>>{});
@@ -153,7 +154,12 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
         void>;
     q.parallel_for<test>(Range, [=](nd_item<3> item) {
         using FusionCallbacks = typename CollectiveEpilogue::FusionCallbacks;
-        auto callbacks_args = typename FusionCallbacks::Arguments {};
+        auto callbacks_args = typename FusionCallbacks::Arguments {    // binary op : alpha * acc
+                                                                    {{float(1.0) / quant_scale}}, // leaf args : alpha
+                                                                    {},                     // leaf args : acc
+                                                                    {} // binary args : multiplies
+                                                                    };   // ;
+
         auto args = typename ConvKernel::Arguments {
             cutlass_problem_shape,
             {A_shared, B_shared},
@@ -165,7 +171,7 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
         kernel(params);
     }).wait();
 
-    uint32_t err_cnt = validate_conv2d_result_by_onednn<int8_t, int8_t, int32_t, int32_t>(A_shared, B_shared, C_shared, problem_shape);
+    uint32_t err_cnt = validate_conv2d_int8_result_by_onednn(A_shared, B_shared, C_shared, &quant_scale, problem_shape);
 
     int rtn = 0;
     if (err_cnt > 0)

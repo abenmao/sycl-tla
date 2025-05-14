@@ -106,7 +106,8 @@ private:
   using SmemElementC = typename cutlass::detail::get_unpacked_element_type<GmemElementC>::type;
 
   constexpr static bool is_fp_postop = is_floating_t<SmemElementD>::value && (sizeof_bits_v<SmemElementD> < 16);
-  using SmemElementImm = cute::conditional_t<is_fp_postop, bf16, SmemElementD>;
+  constexpr static bool is_int8_postop = is_integral<SmemElementD>::value && (sizeof_bits_v<SmemElementD> == 8);
+  using SmemElementImm = cute::conditional_t<is_fp_postop, bf16, cute::conditional_t<is_int8_postop, int32_t, SmemElementD>>;
 
   constexpr static int StagesC = StagesC_;
   constexpr static int StagesD = StagesD_;
@@ -298,10 +299,8 @@ public:
 
       typename Params::TMA_D tma_store_d = get_tma_store_d(problem_shape_mnl, args);
 
-      auto callback_args = typename FusionCallbacks::Arguments{};
-
       return {
-        FusionCallbacks::to_underlying_arguments(problem_shape, callback_args, nullptr),
+        FusionCallbacks::to_underlying_arguments(problem_shape, args.thread, nullptr),
         tma_load_c,
         tma_store_d
       };
@@ -315,10 +314,8 @@ public:
 
       typename Params::TMA_D tma_store_d = get_tma_store_d(problem_shape_mnl, args);
 
-      auto callback_args = typename FusionCallbacks::Arguments{};
-
       return {
-        FusionCallbacks::to_underlying_arguments(problem_shape, callback_args, nullptr),
+        FusionCallbacks::to_underlying_arguments(problem_shape, args.thread, nullptr),
         tma_load_c,
         tma_store_d
       };

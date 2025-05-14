@@ -104,7 +104,8 @@ private:
   using GmemStrideTypeD = cutlass::detail::TagToStrideC_t<GmemLayoutTagD>;
 
   constexpr static bool is_fp_postop = is_floating_t<ElementD>::value && (sizeof_bits_v<ElementD> < 16);
-  using ElementImm = cute::conditional_t<is_fp_postop, bf16, ElementD>;
+  constexpr static bool is_int8_postop = is_integral<ElementD>::value && (sizeof_bits_v<ElementD> == 8);
+  using ElementImm = cute::conditional_t<is_fp_postop, bf16, cute::conditional_t<is_int8_postop, int32_t, ElementD>>;
 
   using CtaTileShape_MNK = MmaTileShape_MNK;
   using TileShape_MN = decltype(select<0,1>(MmaTileShape_MNK{}));

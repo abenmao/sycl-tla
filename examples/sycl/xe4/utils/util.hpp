@@ -522,6 +522,26 @@ inline float random_float() {
 }
 
 template <typename T>
+inline T random_int(T lower, T upper) {
+  // Ensure lower <= upper
+  if (lower > upper) {
+    throw std::invalid_argument("random_int: lower bound must be less than or equal to upper bound.");
+  }
+
+  // Create a random number generator
+  std::random_device rd;
+  std::mt19937 gen(rd());
+
+  if constexpr (std::is_integral_v<T>) {
+    // Use uniform_int_distribution for integral types
+    std::uniform_int_distribution<T> dist(lower, upper);
+    return (dist(gen));
+  } else {
+    static_assert(sizeof(T) == 0, "random_int only supports integral types.");
+  }
+}
+
+template <typename T>
 struct data_pack_helper {
   static std::vector<uint8_t> pack(const std::vector<T> &data) {
     std::vector<uint8_t> packed_data(data.size() * sizeof(T));

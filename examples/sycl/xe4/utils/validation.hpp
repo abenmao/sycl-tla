@@ -18,6 +18,13 @@ struct tolerance_traits<uint8_t> {
 };
 
 template <>
+struct tolerance_traits<int8_t> {
+  static constexpr uint8_t abs_tolerance = 0;
+  static constexpr double rel_tolerance = 0;
+  static constexpr uint32_t ulp_tolerance = 0;
+};
+
+template <>
 struct tolerance_traits<uint16_t> {
   static constexpr uint16_t abs_tolerance = 0;
   static constexpr double rel_tolerance = 0;
