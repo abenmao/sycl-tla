@@ -42,12 +42,12 @@ function(generate_amma_header TARGET_NAME)
   add_custom_target(${TARGET_NAME} ALL DEPENDS ${AMMA_HEADER})
 endfunction()
 
-
 function(add_xe4_test TARGET_NAME SRCS)
   cutlass_example_add_executable(${TARGET_NAME} ${SRCS} ${ARGN})
   target_include_directories(${TARGET_NAME} PRIVATE ${INCLUDE_DIRS})
   target_compile_definitions(${TARGET_NAME} PRIVATE SYCL_INTEL_TARGET)
   target_link_libraries(${TARGET_NAME} PRIVATE -lur_loader)
+  set_tests_properties(ctest_examples_${TARGET_NAME} PROPERTIES FAIL_REGULAR_EXPRESSION "Test Failed")
 endfunction()
 
 add_subdirectory(gemm)

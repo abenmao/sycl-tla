@@ -48,7 +48,7 @@
         "name": "xe4",
         "configurePreset": "xe4",
         "execution": {
-          "jobs": 8,
+          "jobs": 1,
           "noTestsAction": "error",
           "stopOnFailure": false
         },
