@@ -31,13 +31,13 @@ set(TARGET_NAME xe4_gemm)
 add_xe4_test(${TARGET_NAME} gemm.cpp)
 target_compile_definitions(${TARGET_NAME} PRIVATE AMMA_GENERATED)
 target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_options(${TARGET_NAME} PUBLIC "-Xs;\"-xe-set-abarrier-arrive-lmc -disable-branch-fold\"")
+target_link_options(${TARGET_NAME} PUBLIC "-Xs;\"-xe-set-abarrier-arrive-lmc -disable-branch-fold -misched-prera-direction=topdown\"")
 
 set(GEMM_CLUSTER_TARGET xe4_gemm_cluster)
 add_xe4_test(${GEMM_CLUSTER_TARGET} gemm_cluster.cpp)
 target_compile_definitions(${GEMM_CLUSTER_TARGET} PRIVATE AMMA_GENERATED)
 target_include_directories(${GEMM_CLUSTER_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_options(${GEMM_CLUSTER_TARGET} PUBLIC "-Xs;\"-xe-set-abarrier-arrive-lmc -disable-branch-fold\"")
+target_link_options(${GEMM_CLUSTER_TARGET} PUBLIC "-Xs;\"-xe-set-abarrier-arrive-lmc -disable-branch-fold -misched-prera-direction=topdown\"")
 
 generate_amma_header(
   ${TARGET_NAME}_helper

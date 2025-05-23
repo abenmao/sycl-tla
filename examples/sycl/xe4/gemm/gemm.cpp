@@ -13,7 +13,7 @@ struct GEMM_TEST_CONFIG {
   using CtaNum_MN = Shape<_2, _1>;
   using ClusterShape_MNK = Shape<_1, _1, _1>;
 
-  static constexpr int StagesA = 3;
+  static constexpr int StagesA = 2;
   static constexpr bool is_persistent = false;
   static constexpr auto activation_type = ActivationType::SiLu;
   static constexpr auto operationC_type = OperationCType::Mul;
@@ -70,6 +70,6 @@ struct BF8_GEMM_ROW_ROW_VOID_C : public GEMM_ROW_ROW_VOID_C {
 
 int main()
 {
-  run_gemm<GEMM_ROW_ROW_BiasAdd>();
+  run_gemm<GEMM_ROW_ROW>();
   return 0;
 }

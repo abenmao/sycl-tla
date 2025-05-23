@@ -13,7 +13,7 @@ struct GEMM_TEST_CONFIG {
   using CtaNum_MN = Shape<_1, _1>;
   using ClusterShape_MNK = Shape<_2, _1, _1>;
 
-  static constexpr int StagesA = 3;
+  static constexpr int StagesA = 2;
   static constexpr bool is_persistent = false;
   static constexpr auto activation_type = ActivationType::SiLu;
   static constexpr auto operationC_type = OperationCType::Mul;
