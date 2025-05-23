@@ -16,11 +16,9 @@ using namespace cute::xe4;
 using namespace cutlass::conv::collective;
 using namespace cutlass::epilogue::collective;
 
-class DGRAD_WITH_PAD_WITH_DILATION;
-class DGRAD_PERFORMANCE_NORMAL;
-class DGRAD_PERFORMANCE_NHW_NO_MULTI_WGM;
-class DGRAD_PERFORMANCE_UNET0;
-class DGRAD_PERFORMANCE_UNET1;
+class WGRAD_WITH_PAD_WITH_STRIDE_WITH_DILATION;
+class WGRAD_PERFORMANCE_NORMAL;
+class WGRAD_PERFORMANCE_UNET;
 
 template<typename test, class wgM, class wgN, class wgK>
 int run_test(const conv2d::problem_shape_t &problem_shape)
@@ -30,9 +28,9 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
     std::cout << "Running on " << dev.get_info<info::device::name>() << "\n";
     auto ctxt = q.get_context();
 
-    // input:   (N, H, W, C)
-    // kernel:  (K, R, S, C)
-    // output:  (Out_N, Out_H, Out_W, Out_C)
+    // input:   (N, Out_H, Out_W, Out_C)
+    // kernel:  (N, H, W, C)
+    // output:  (Out_C, R, S, C)
     uint32_t N = problem_shape.get_in_batch();
     uint32_t H = problem_shape.get_in_height();
     uint32_t W = problem_shape.get_in_width();
@@ -64,17 +62,16 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
     auto bN = wgN{};
     auto bK = wgK{};
     static_assert(bM % LANESIZE == 0);
-    using TileShapeMNK = Shape<Int<bM>, Int<bN>, Shape<Int<bK>>>;
+    using TileShapeMNK = Shape<Int<bM>, Shape<Int<bN>>, Shape<Int<bK>>>;
     using ClusterShapeMNK = Shape<_1, _1, _1>;
 
-    // for dgrad, shapeA: NPQK, shapeB: CRSK, shapeC:NHWC
+    // for wgrad, shapeA: NPQK, shapeB: NHWC, shapeC:KRSC
     uint32_t sizeA = Out_C * Out_W * Out_H * Out_N;
-    uint32_t sizeB = K * S * R * C;
-    uint32_t sizeC = C * W * H * N;
+    uint32_t sizeB = C * W * H * N;
+    uint32_t sizeC = C * S * R * K;
 
     auto A_shared = malloc_shared<ElementAct>(sizeA, q);
     std::generate_n(A_shared, sizeA, [=]() { return random_float(); });
-    // std::iota(A_shared, A_shared + sizeA, 0);
 
     auto B_shared = malloc_shared<ElementFlt>(sizeB, q);
     std::generate_n(B_shared, sizeB, [=]() { return random_float(); });
@@ -85,15 +82,14 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
     constexpr int NumControlWarps = 4;
     constexpr int NumEpilogueWarps = 16;
     range<3> local_range(1, NumControlWarps + NumEpilogueWarps, cutlass::NumThreadsPerWarp);
-    // the shape of mat_m is NHW * RSK and mat_n is RSK * C
-    uint32_t mat_m = W * H * N;
-    uint32_t mat_n = C;
+    // the shape of mat_m is K * (NPQ) and mat_n is (NPQ) * (RSC)
+    uint32_t mat_m = Out_C;
     static constexpr bool is_persistent_mode = true;
     static constexpr uint32_t num_xecore_x = 1;
     static constexpr uint32_t num_xecore_y = 1;
     range<3> group_range(1, num_xecore_y, num_xecore_x);
     if (!is_persistent_mode) {
-        group_range = range<3>(1, ceil_div(mat_m, bM), ceil_div(mat_n, bN));
+        group_range = range<3>(1, ceil_div(mat_m, bM), R * S * ceil_div(C, bN));
     }
     std::cout << "IsPersistentMode: " << is_persistent_mode << std::endl;
     std::cout << "Group range: {" << group_range[0] << ", " << group_range[1] << ", "
@@ -102,7 +98,7 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
 
     using CollectiveMainloop = typename cutlass::conv::collective::CollectiveBuilder<
         cutlass::arch::Xe4, cutlass::arch::OpClassTensorOp,
-        cutlass::conv::Operator::kDgrad,
+        cutlass::conv::Operator::kWgrad,
         ElementAct, cutlass::layout::TensorNHWC, 8,
         ElementFlt, cutlass::layout::TensorNHWC, 8,
         tuple<ElementAcc, ElementOut>,
@@ -111,7 +107,7 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
         cutlass::conv::collective::KernelScheduleAuto
     >::CollectiveOp;
     using ProblemShape = cutlass::conv::ConvProblemShape<
-                                    cutlass::conv::Operator::kDgrad,
+                                    cutlass::conv::Operator::kWgrad,
                                     CollectiveMainloop::DispatchPolicy::NumSpatialDimensions>;
     ProblemShape cutlass_problem_shape {
         cutlass::conv::Mode::kCrossCorrelation,
@@ -130,14 +126,14 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
         TileShapeMNK, ClusterShapeMNK,
         cutlass::epilogue::collective::EpilogueTileAuto,
         ElementAcc, ElementAcc, 
-        void, cutlass::layout::TensorNHWC, 512,
-        ElementOut, cutlass::layout::TensorNHWC, 512,
+        void, cutlass::layout::TensorKCSR, 512,
+        ElementOut, cutlass::layout::TensorKCSR, 512,
         cutlass::epilogue::collective::EpilogueScheduleAuto,
         cutlass::epilogue::fusion::EltAct<cutlass::epilogue::thread::Identity, ElementOut, ElementOut>
     >::CollectiveOp;
 
-    using StrideC = cute::Stride<cute::Stride<int64_t, int64_t, int64_t>,cute::Int<1>>;
-    auto stride_D = append<3>(cutlass::make_cute_packed_stride(StrideC{}, cutlass_problem_shape.stride_C, cutlass::conv::Operator::kDgrad), _0{});
+    using StrideC = TagToStrideC<cutlass::layout::TensorKCSR>::type;
+    auto stride_D = cutlass::make_cute_packed_stride(StrideC{}, cutlass_problem_shape.shape_C, cutlass_problem_shape.stride_C, cutlass::conv::Operator::kWgrad);
     using ConvKernel = cutlass::conv::kernel::Xe4ConvUniversal<
         ProblemShape,
         CollectiveMainloop,
@@ -158,7 +154,7 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
         kernel(params);
     }).wait();
 
-    uint32_t err_cnt = validate_conv2d_result_by_dgrad_onednn(A_shared, B_shared, C_shared, problem_shape);
+    uint32_t err_cnt = validate_conv2d_result_by_wgrad_onednn(A_shared, B_shared, C_shared, problem_shape);
 
     int rtn = 0;
     if (err_cnt > 0)
@@ -176,21 +172,15 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
 }
 
 int main(){
-#if defined(TEST_WITH_PAD_WITH_DILATION)
-    conv2d::problem_shape_t with_pad_with_dilation {{512, 16, 16, 2}, {512, 5, 2, 256}, {1, 0}, {0, 1}, {1, 1}, {2, 3}};
-    run_test<DGRAD_WITH_PAD_WITH_DILATION, Int<256>, Int<512>, Int<128>>(with_pad_with_dilation);
+#if defined(TEST_WITH_PAD_WITH_STRIDE_WITH_DILATION)
+    conv2d::problem_shape_t with_pad_with_stride_with_dilation {{32, 15, 16, 2}, {32, 5, 2, 256}, {1, 0}, {0, 1}, {2, 3}, {2, 3}};
+    run_test<WGRAD_WITH_PAD_WITH_STRIDE_WITH_DILATION, Int<256>, Int<512>, Int<128>>(with_pad_with_stride_with_dilation);
 #elif defined(TEST_PERFORMANCE_NORMAL)
     conv2d::problem_shape_t performance_normal {{256, 16, 16, 4}, {256, 3, 3, 512}, {1, 1}, {1, 1}, {1, 1}, {1, 1}};
-    run_test<DGRAD_PERFORMANCE_NORMAL, Int<256>, Int<256>, Int<128>>(performance_normal);
-#elif defined(TEST_PERFORMANCE_NHW_NO_MULTI_WGM)
-    conv2d::problem_shape_t performance_nhw_no_multi_wgm {{256, 28, 28, 4}, {256, 3, 3, 512}, {1, 1}, {1, 1}, {1, 1}, {1, 1}};
-    run_test<DGRAD_PERFORMANCE_NHW_NO_MULTI_WGM, Int<256>, Int<256>, Int<128>>(performance_nhw_no_multi_wgm);
-#elif defined(TEST_PERFORMANCE_UNET0)
-    conv2d::problem_shape_t performance_unet0 {{128, 256, 256, 1}, {128, 3, 3, 128}, {1, 1}, {1, 1}, {1, 1}, {1, 1}};
-    run_test<DGRAD_PERFORMANCE_UNET0, Int<256>, Int<128>, Int<128>>(performance_unet0);
-#elif defined(TEST_PERFORMANCE_UNET1)
-    conv2d::problem_shape_t performance_unet1 {{512, 64, 64, 1}, {512, 3, 3, 512}, {1, 1}, {1, 1}, {1, 1}, {1, 1}};
-    run_test<DGRAD_PERFORMANCE_UNET1, Int<256>, Int<512>, Int<128>>(performance_unet1);
+    run_test<WGRAD_PERFORMANCE_NORMAL, Int<256>, Int<512>, Int<128>>(performance_normal);
+#elif defined(TEST_PERFORMANCE_UNET)
+    conv2d::problem_shape_t performance_unet {{128, 256, 256, 1}, {128, 3, 3, 128}, {1, 1}, {1, 1}, {1, 1}, {1, 1}};
+    run_test<WGRAD_PERFORMANCE_UNET, Int<128>, Int<512>, Int<128>>(performance_unet);
 #endif
 
     return 0;

@@ -144,7 +144,7 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
         cutlass::epilogue::fusion::EltAct<cutlass::epilogue::thread::Identity, ElementOut, ElementOut>
     >::CollectiveOp;
 
-    using StrideC = decltype(cute::Stride<cute::Stride<int64_t, int64_t, int64_t>,cute::Int<1>>{});
+    using StrideC = cute::Stride<cute::Stride<int64_t, int64_t, int64_t>,cute::Int<1>>;
     auto stride_D = append<3>(cutlass::make_cute_packed_stride(StrideC{}, cutlass_problem_shape.stride_C, cutlass::conv::Operator::kFprop), _0{});
 
     using ConvKernel = cutlass::conv::kernel::Xe4ConvUniversal<

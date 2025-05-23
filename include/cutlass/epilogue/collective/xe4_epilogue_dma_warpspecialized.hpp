@@ -291,7 +291,7 @@ public:
       Arguments const& args,
       [[maybe_unused]] void* workspace) {
     if constexpr (is_im2col_C || is_im2col_D) {
-      auto problem_shape_mnl = problem_shape.get_shape_C();
+      auto problem_shape_mnl = problem_shape;
       typename Params::TMA_C tma_load_c{};
       if constexpr (is_source_supported) {
         tma_load_c = get_tma_load_c(problem_shape_mnl, args);
@@ -333,17 +333,6 @@ public:
   //
   // Constructor and Data Members
   //
-  template <class Params>
-  CUTLASS_DEVICE
-  CollectiveEpilogue(
-    Params const& params_,
-    TensorStorage& shared_tensors,
-    WaveOrderBarrier& wave_order_barrier_)
-      : params(params_)
-      , fusion_callbacks(params_.thread, shared_tensors.thread)
-      , wave_order_barrier(wave_order_barrier_) {
-  }
-
   template <class Params, class TensorDescTuple>
   CUTLASS_DEVICE
   CollectiveEpilogue(
@@ -354,9 +343,11 @@ public:
       : params(params_)
       , fusion_callbacks(params_.thread, shared_tensors.thread)
       , wave_order_barrier(wave_order_barrier_) {
-    auto [tensor_desc_c, tensor_desc_d] = tdesc_tuple;
-    params.tma_load_c.cache_.set_tensor_desc(tensor_desc_c);
-    params.tma_store_d.cache_.set_tensor_desc(tensor_desc_d);
+    if constexpr (!is_im2col_C && !is_im2col_D) {
+       auto [tensor_desc_c, tensor_desc_d] = tdesc_tuple;
+       params.tma_load_c.cache_.set_tensor_desc(tensor_desc_c);
+       params.tma_store_d.cache_.set_tensor_desc(tensor_desc_d);
+    }
   }
 
 private:

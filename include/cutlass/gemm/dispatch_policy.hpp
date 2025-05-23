@@ -30,6 +30,7 @@
  **************************************************************************************************/
 #pragma once
 
+#include "cutlass/conv/convolution.h"
 #include "cutlass/arch/arch.h"
 #include "cutlass/gemm/gemm.h"
 
@@ -1092,7 +1093,7 @@ struct MainloopXe4DmaGmmaWarpSpecialized {
 };
 
 template<
-  class ConvOp_,
+  conv::Operator ConvOp_,
   int Stages_,
   int NumSpatialDimensions_,
   class ClusterShape_ = Shape<_1,_1,_1>,
@@ -1103,7 +1104,7 @@ struct MainloopXe4DmaGmmaWarpSpecializedImplicitGemm {
   static constexpr int Stages = Stages_;
   static constexpr int NumSpatialDimensions = NumSpatialDimensions_;
   static constexpr int PipelineAsyncMmaStages = PipelineAsyncMmaStages_;
-  using ConvOp = ConvOp_;
+  static constexpr conv::Operator ConvOp = ConvOp_;
   using ClusterShape = ClusterShape_;
   using ArchTag = arch::Xe4;
   using Schedule = KernelSchedule;

@@ -303,6 +303,8 @@ int validate_conv2d_int8_result_by_onednn(dtype_activate *tensor_x, dtype_filter
   get_conv2d_int8_gold_by_onednn<dtype_activate, dtype_filter>(tensor_x, tensor_w, gold_c.data(), dst_scales,
                                                                problem_shape);
 
+  // increase abs_diff to 1 to cope with different f2i and i2f rounding methods between CPU and GPU
+  tol.abs_tolerance = 1;
   logger_t<dtype_output> logger(tol);
   for (uint32_t i = 0; i < N * P * Q * K; i++) {
     dtype_output cpu = gold_c[i];

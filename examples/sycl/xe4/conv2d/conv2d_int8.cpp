@@ -137,7 +137,7 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
         cutlass::arch::Xe4, cutlass::arch::OpClassTensorOp,
         TileShapeMNK, ClusterShapeMNK,
         cutlass::epilogue::collective::EpilogueTileAuto,
-        ElementAcc, ElementAcc, 
+        ElementAcc, ElementAcc,
         void, cutlass::layout::TensorNHWC, 512,
         ElementOut, cutlass::layout::TensorNHWC, 512,
         cutlass::epilogue::collective::EpilogueScheduleAuto,
@@ -155,7 +155,7 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
     q.parallel_for<test>(Range, [=](nd_item<3> item) {
         using FusionCallbacks = typename CollectiveEpilogue::FusionCallbacks;
         auto callbacks_args = typename FusionCallbacks::Arguments {    // binary op : alpha * acc
-                                                                    {{float(1.0) / quant_scale}}, // leaf args : alpha
+                                                                    {float(1.0) / quant_scale}, // leaf args : alpha
                                                                     {},                     // leaf args : acc
                                                                     {} // binary args : multiplies
                                                                     };   // ;

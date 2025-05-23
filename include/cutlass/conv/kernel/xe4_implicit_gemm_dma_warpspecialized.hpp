@@ -179,7 +179,7 @@ public:
     return {
       args.problem_shape,
       CollectiveMainloop::to_underlying_arguments(args.problem_shape, args.mainloop, workspace),
-      CollectiveEpilogue::to_underlying_arguments(args.problem_shape, args.epilogue, workspace)
+      CollectiveEpilogue::to_underlying_arguments(args.problem_shape.get_shape_C(), args.epilogue, workspace)
     };
   }
 
@@ -201,6 +201,8 @@ public:
     auto& shared_tensors = *reinterpret_cast<typename SharedStorage::TensorStorage*>(ptr);
 
     auto tdesc_b = allocate_tdesc<0>();
+    auto tdesc_c = allocate_tdesc<1>();
+    auto tdesc_d = allocate_tdesc<2>();
 
     auto abar_base = allocate_abar_bytes<0, PipelineStorageSize>();
     auto& shared_pipelines = *reinterpret_cast<typename SharedStorage::PipelineStorage*>(abar_base);
@@ -314,7 +316,7 @@ public:
         Step<_2,_1>{}));
 
     CollectiveMainloop collective_mainloop;
-    CollectiveEpilogue collective_epilogue(params.epilogue, shared_tensors.epilogue, epi_wave_order_barrier);
+    CollectiveEpilogue collective_epilogue(params.epilogue, shared_tensors.epilogue, epi_wave_order_barrier, make_tuple(tdesc_c, tdesc_d));
 
     auto conv_problem_shape = collective_mainloop.get_problem_shape_MNKL(problem_shape);
     auto load_inputs = collective_mainloop.load_init(conv_problem_shape, params.mainloop, tdesc_b);
@@ -335,8 +337,8 @@ public:
     if (is_participant.main_load) {
       do {
         auto [m_coord, n_coord, _, l_coord] = scheduler.work_tile_to_cta_coord(work_tile_info);
-        n_coord = idx2crd(n_coord, shape<2>(gB_nk), compact_col_major(shape<2>(gB_nk)));
-        auto blk_coord = make_tuple(m_coord, n_coord);
+        auto n_coord_ = idx2crd(n_coord, shape<2>(gB_nk), compact_col_major(shape<2>(gB_nk)));
+        auto blk_coord = make_tuple(m_coord, n_coord_);
 
         auto work_id = local_id - NumMMAThreads - NumSchedThreads;
         mainloop_pipe_producer_state = collective_mainloop.load(params.mainloop, mainloop_pipeline, mainloop_pipe_producer_state,

@@ -503,7 +503,15 @@ make_im2col_tma_copy_desc(
 
 #if defined(SYCL_INTEL_XE4_TARGET)
   using T = typename EngineA::value_type;
-  constexpr int num_bytes_per_tma = decltype(shape<1>(smem_swizzle))::value * sizeof(T);
+  constexpr int num_bytes_per_tma =
+    []{
+        if constexpr (decltype(stride<0>(smem_swizzle))::value == 1) {
+            return decltype(shape<0>(smem_swizzle))::value * sizeof(T);
+        } else {
+            return decltype(shape<1>(smem_swizzle))::value * sizeof(T);
+        }
+    }();
+
   using Im2ColDesc = Im2ColTmaDescriptor<T, num_bytes_per_tma>;
   Im2ColDesc tma_desc = make_async_row_copy_desc<num_bytes_per_tma>(tensor_cwhdn);
 #else
@@ -819,10 +827,17 @@ make_tma_copy_im2col(CopyOp                       const& copy_op,
   // Construct the TiledCopy
   //
 #if defined(SYCL_INTEL_XE4_TARGET)
-  auto layout_t = make_layout(make_shape(Int<cutlass::NumThreadsPerWarp>{}, Int<1>{}));
-  auto layout_v = make_layout(make_shape(Int<1>{}, shape<1>(cta_v_map)));
-  
-  return make_tiled_copy(atom, layout_t, layout_v);
+  if constexpr (decltype(stride<0>(slayout))::value == 1) {
+    auto layout_t = make_layout(make_shape(Int<1>{}, Int<cutlass::NumThreadsPerWarp>{}));
+    auto layout_v = make_layout(make_shape(shape<0>(cta_v_map), Int<1>{}));
+
+    return make_tiled_copy(atom, layout_t, layout_v);
+  } else {
+    auto layout_t = make_layout(make_shape(Int<cutlass::NumThreadsPerWarp>{}, Int<1>{}));
+    auto layout_v = make_layout(make_shape(Int<1>{}, shape<1>(cta_v_map)));
+
+    return make_tiled_copy(atom, layout_t, layout_v);
+  }
 #else
   auto cta_tiler = product_each(shape(cta_v_map));
 

@@ -16,58 +16,8 @@ using namespace cute;
 using namespace cute::detail;
 using namespace cutlass::gemm;
 
-template <class ConvOp>
-constexpr auto
-Xe4_dispatch_policy_to_stride_A() {
-  if constexpr (ConvOp::value == conv::Operator::kFprop) {
-    return cute::Stride<cute::Stride<int64_t, int64_t, int64_t>, cute::Int<1>>{};
-  }
-  else if constexpr (ConvOp::value == conv::Operator::kWgrad) {
-    return cute::Stride<cute::Int<1>, int64_t>{};
-  }
-  else if constexpr (ConvOp::value == conv::Operator::kDgrad) {
-    return cute::Stride<cute::Stride<int64_t, int64_t, int64_t>, cute::Int<1>>{};
-  }
-  else {
-    static_assert("Unsupported ConvOp.");
-  }
-}
-
-template <class ConvOp>
-constexpr auto
-Xe4_dispatch_policy_to_stride_B() {
-  if constexpr (ConvOp::value == conv::Operator::kFprop) {
-    return cute::Stride<int64_t, cute::Stride<cute::Int<1>, int64_t, int64_t>>{};
-  }
-  else if constexpr (ConvOp::value == conv::Operator::kWgrad) {
-    return cute::Stride<cute::Int<1>, cute::Stride<int64_t, int64_t, int64_t>>{};
-  }
-  else if constexpr (ConvOp::value == conv::Operator::kDgrad) {
-    return cute::Stride<cute::Int<1>, cute::Stride<int64_t, int64_t, int64_t>>{};
-  }
-  else {
-    static_assert("Unsupported ConvOp.");
-  }
-}
-
-template <class ConvOp, class TileShape, int Stages>
-constexpr auto
-Xe4_dispatch_policy_to_layoutSB() {
-  if constexpr (ConvOp::value == conv::Operator::kFprop) {
-    return cute::Layout<cute::Shape<decltype(size<1>(TileShape{})), decltype(size<2>(TileShape{})), Int<Stages>>,
-                        cute::Stride<decltype(size<2>(TileShape{})), Int<1>, decltype(size<1>(TileShape{}) * size<2>(TileShape{}))>>{};
-  }
-  else if constexpr (ConvOp::value == conv::Operator::kDgrad) {
-    return cute::Layout<cute::Shape<decltype(size<1>(TileShape{})), decltype(size<2>(TileShape{})), Int<Stages>>,
-                        cute::Stride<Int<1>, decltype(size<1>(TileShape{})), decltype(size<1>(TileShape{}) * size<2>(TileShape{}))>>{};
-  }
-  else {
-    static_assert("Unsupported ConvOp.");
-  }
-}
-
 template <
-  class ConvOp_,
+  conv::Operator ConvOp,
   int Stages,
   int NumSpatialDims,
   class ClusterShape,
@@ -82,7 +32,7 @@ template <
 >
 struct CollectiveConv<
     MainloopXe4DmaGmmaWarpSpecializedImplicitGemm<
-    ConvOp_, Stages, NumSpatialDims, ClusterShape, KernelSchedule, PipelineAsyncMmaStages>,
+    ConvOp, Stages, NumSpatialDims, ClusterShape, KernelSchedule, PipelineAsyncMmaStages>,
     TileShape_,
     ElementA_,
     ElementB_,
@@ -96,14 +46,14 @@ struct CollectiveConv<
   // Type Aliases
   //
   using DispatchPolicy = MainloopXe4DmaGmmaWarpSpecializedImplicitGemm<
-    ConvOp_, Stages, NumSpatialDims, ClusterShape, KernelSchedule, PipelineAsyncMmaStages>;
+    ConvOp, Stages, NumSpatialDims, ClusterShape, KernelSchedule, PipelineAsyncMmaStages>;
   using TileShape = TileShape_;
   using ElementA = ElementA_;
   using ElementB = ElementB_;
   using TiledMma = TiledMma_;
   using GmemTiledCopyA = typename TileTraitsA_::GmemTiledCopy;
-  using SmemLayoutA = typename TileTraitsA_::SmemLayout;
   using GmemTiledCopyB = typename TileTraitsB_::GmemTiledCopy;
+  using SmemLayoutA = typename TileTraitsA_::SmemLayout;
   using SmemLayoutB = typename TileTraitsB_::SmemLayout;
   using ElementAccumulator = typename TiledMma::ValTypeC;
 
@@ -111,18 +61,16 @@ struct CollectiveConv<
   static constexpr int NumSpatialDimensions = DispatchPolicy::NumSpatialDimensions;
   static constexpr int NumTensorDimensions = NumSpatialDimensions + 2;
 
-  using StrideA = decltype(Xe4_dispatch_policy_to_stride_A<ConvOp_>());
-  using StrideB = decltype(Xe4_dispatch_policy_to_stride_B<ConvOp_>());
-  using LayoutSB = decltype(Xe4_dispatch_policy_to_layoutSB<ConvOp_, TileShape, Stages>());
+  using StrideA = decltype(detail::sm90_dispatch_policy_to_stride_A<DispatchPolicy>());
+  using StrideB = decltype(detail::sm90_dispatch_policy_to_stride_B<DispatchPolicy>());
 
   using MainloopPipeline = cutlass::PipelineTmaAsync<DispatchPolicy::Stages>;
   using PipelineState  = typename MainloopPipeline::PipelineState;
 
-  static constexpr auto ConvOp = ConvOp_::value;
   using ProblemShape = ConvProblemShape<ConvOp, NumSpatialDimensions>;
 
-  static constexpr bool is_im2col_A = true;
-  static constexpr bool is_im2col_B = false;
+  static constexpr bool is_im2col_A = detail::is_im2col_load<GmemTiledCopyA>::value;
+  static constexpr bool is_im2col_B = detail::is_im2col_load<GmemTiledCopyB>::value;
 
   using SmemLayoutAcc = decltype(make_layout(take<0,2>(TileShape{}), GenRowMajor{}));
 
@@ -169,45 +117,79 @@ private:
   template <class TensorA>
   static constexpr auto
   get_tma_load_a_instance(TensorA const& tensor_a, ProblemShape const& problem_shape) {
-    // compute the upper and lower corners based on the conv padding
-    auto lower_corner_whd = detail::compute_lower_corner_whd(problem_shape);
-    auto upper_corner_whd = detail::compute_upper_corner_whd(problem_shape);
-    auto lower_srt = detail::compute_lower_srt(problem_shape);
+    if constexpr (is_im2col_A) {
+      // compute the upper and lower corners based on the conv padding
+      auto lower_corner_whd = detail::compute_lower_corner_whd(problem_shape);
+      auto upper_corner_whd = detail::compute_upper_corner_whd(problem_shape);
+      auto lower_srt = detail::compute_lower_srt(problem_shape);
 
-    // The calculation of gbasis strides for dgrad kernel needs perform negate for dilation values.
-    cute::array<int32_t, NumSpatialDimensions> stride_srt{};
-    for (int i = 0; i < NumSpatialDimensions; ++i) {
-      stride_srt[i] = ConvOp == conv::Operator::kDgrad ?
-        -problem_shape.dilation[NumSpatialDimensions-1-i] :
-        problem_shape.dilation[NumSpatialDimensions-1-i];
+      // The calculation of gbasis strides for dgrad kernel needs perform negate for dilation values.
+      cute::array<int32_t, NumSpatialDimensions> stride_srt{};
+      for (int i = 0; i < NumSpatialDimensions; ++i) {
+        stride_srt[i] = ConvOp == conv::Operator::kDgrad ?
+          -problem_shape.dilation[NumSpatialDimensions-1-i] :
+          problem_shape.dilation[NumSpatialDimensions-1-i];
+      }
+
+      return make_im2col_tma_copy(
+        GmemTiledCopyA{},
+        tensor_a,
+        make_layout(make_shape(size<0>(TileShape{}), size<2>(TileShape{})),
+          make_stride(size<2>(TileShape{}), Int<1>{})),
+        make_shape(size<0>(TileShape{}), size<2>(TileShape{})),
+        size<1>(ClusterShape{}),
+        shape(lower_corner_whd),
+        shape(upper_corner_whd),
+        cute::reverse(shape(problem_shape.lower_padding)),
+        cute::reverse(shape(problem_shape.upper_padding)),
+        cute::reverse(shape(problem_shape.traversal_stride)),
+        shape(lower_srt),
+        shape(stride_srt));
     }
-
-    return make_im2col_tma_copy(GmemTiledCopyA{},
-      tensor_a,
-      make_layout(make_shape(size<0>(TileShape{}), size<2>(TileShape{})),
-        make_stride(size<2>(TileShape{}), Int<1>{})),
-      make_shape(size<0>(TileShape{}), size<2>(TileShape{})),
-      1,
-      shape(lower_corner_whd),
-      shape(upper_corner_whd),
-      cute::reverse(shape(problem_shape.lower_padding)),
-      cute::reverse(shape(problem_shape.upper_padding)),
-      cute::reverse(shape(problem_shape.traversal_stride)),
-      shape(lower_srt),
-      shape(stride_srt)
-    );
+    // TMA tiled mode for tensor A in wgrad kernel.
+    else {
+      return make_tma_copy<ElementA>(
+          GmemTiledCopyA{},
+          tensor_a,
+          SmemLayoutA{}(_,_,_0{}),
+          make_shape(shape<0>(TileShape{}), shape<2>(TileShape{})),
+          size<1>(ClusterShape{}));
+    }
   }
 
   // Get tma_load_b instantce.
   template <class TensorB>
   static constexpr auto
   get_tma_load_b_instance(TensorB const& tensor_b, ProblemShape const& problem_shape) {
-    return make_tma_copy<ElementB>(GmemTiledCopyB{},
-      tensor_b,
-      LayoutSB{}(_, _, 0),
-      make_shape(size<1>(TileShape{}), make_shape(size<2>(TileShape{}))),
-      _1{}
-    );
+    if constexpr (is_im2col_B) {
+      // compute the upper and lower corners based on the conv padding
+      auto lower_corner_whd = detail::compute_lower_corner_whd(problem_shape);
+      auto upper_corner_whd = detail::compute_upper_corner_whd(problem_shape);
+      auto lower_srt = detail::compute_lower_srt(problem_shape);
+
+      return make_im2col_tma_copy(
+          GmemTiledCopyB{},
+          tensor_b,
+          make_layout(make_shape(size<1>(TileShape{}), size<2>(TileShape{})),
+            make_stride(Int<1>{}, size<1>(TileShape{}))),
+          make_shape(size<1>(TileShape{}), size<2>(TileShape{})),
+          size<0>(ClusterShape{}),
+          shape(lower_corner_whd),
+          shape(upper_corner_whd),
+          cute::reverse(shape(problem_shape.lower_padding)),
+          cute::reverse(shape(problem_shape.upper_padding)),
+          cute::reverse(shape(problem_shape.traversal_stride)),
+          shape(lower_srt),
+          cute::reverse(shape(problem_shape.dilation)));
+    }
+    else {
+      return make_tma_copy<ElementB>(
+          GmemTiledCopyB{},
+          tensor_b,
+          SmemLayoutB{}(_,_,_0{}),
+          make_shape(shape<1>(TileShape{}), shape<2>(TileShape{})),
+          size<0>(ClusterShape{}));
+    }
   }
 
 public:
@@ -227,8 +209,15 @@ public:
   // Device side kernel params
   struct Params {
     using _Submode = decltype(take<0, NumTensorDimensions - 1>(typename ProblemShape::TensorExtent{}));
-    using TensorShapeA = decltype(make_shape(_Submode{}, int(0)));
-    using TensorShapeB = decltype(repeat_like(StrideB{}, int32_t(0)));
+    // Assumption: StrideA is congruent with Problem_MK
+    // Select TMA load type according to convolution operator.
+    using TensorShapeA = cute::conditional_t<ConvOp == conv::Operator::kWgrad,
+        decltype(repeat_like(StrideA{}, int32_t(0))),
+        decltype(make_shape(_Submode{}, int(0)))>;
+
+    using TensorShapeB = cute::conditional_t<ConvOp == conv::Operator::kWgrad,
+        decltype(make_shape(int(0), _Submode{})),
+        decltype(repeat_like(StrideB{}, int32_t(0)))>;
 
     using TMA_A = decltype(get_tma_load_a_instance(
       make_tensor(static_cast<ElementA const*>(nullptr), make_layout(TensorShapeA{}, StrideA{})),
@@ -285,7 +274,13 @@ public:
     // Separate out problem shape for convenience
     auto [M, N, K, L] = problem_shape_MNKL;
 
-    mainloop_params.tma_load_b.cache_.set_tensor_desc(tensor_desc);
+    if constexpr (!is_im2col_A) {
+      mainloop_params.tma_load_a.cache_.set_tensor_desc(tensor_desc);
+    }
+
+    if constexpr (!is_im2col_B) {
+      mainloop_params.tma_load_b.cache_.set_tensor_desc(tensor_desc);
+    }
     
     // TMA requires special handling of strides to deal with coord codomain mapping
     // Represent the full tensors -- get these from TMA
@@ -341,8 +336,17 @@ public:
     auto sA = make_tensor(shared_tensors.smem_A.data(), SmemLayoutA {});
     auto sB = make_tensor(shared_tensors.smem_B.data(), SmemLayoutB {});
 
-    auto thr_load_a = mainloop_params.tma_load_a.get_slice(thread_idx);
-    auto block_load_b = mainloop_params.tma_load_b.get_slice(0);
+    int slice_idx_A = 0, slice_idx_B = 0;
+    if constexpr (is_im2col_A) {
+      slice_idx_A = thread_idx;
+    }
+
+    if constexpr (is_im2col_B) {
+      slice_idx_B = thread_idx;
+    }
+
+    auto block_load_a = mainloop_params.tma_load_a.get_slice(slice_idx_A);
+    auto block_load_b = mainloop_params.tma_load_b.get_slice(slice_idx_B);
 
     auto [gA_mk, gB_nk] = load_inputs;
 
@@ -353,8 +357,8 @@ public:
     Tensor gB = gB_nk(_,_,n_coord,_);                                                     // (BLK_N,BLK_K,k)
 
     // Applies the mapping from block_tma_a
-    Tensor tAgA = thr_load_a.partition_S(gA);                                                 // (TMA,TMA_M,TMA_K,k)
-    Tensor tAsA = thr_load_a.partition_D(sA);                                              // (TMA,TMA_M,TMA_K,PIPE)
+    Tensor tAgA = block_load_a.partition_S(gA);                                                 // (TMA,TMA_M,TMA_K,k)
+    Tensor tAsA = block_load_a.partition_D(sA);                                              // (TMA,TMA_M,TMA_K,PIPE)
 
     Tensor tBgB = block_load_b.partition_S(gB);                                                 // (TMA,TMA_N,TMA_K,k)
     Tensor tBsB = block_load_b.partition_D(sB);                                              // (TMA,TMA_N,TMA_K,PIPE)
@@ -366,10 +370,20 @@ public:
       auto abar_prod = pipeline.producer_get_barrier(smem_pipe_producer_state);
 
       pipeline.producer_acquire(smem_pipe_producer_state);
-      copy(mainloop_params.tma_load_a.with(abar_prod), tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,write_stage));
+      if constexpr(is_im2col_A) {
+        copy(mainloop_params.tma_load_a.with(abar_prod), tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,write_stage));
+      } else {
+        if (elect_one_sync()) {
+          copy(mainloop_params.tma_load_a.with(abar_prod), tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,write_stage));
+        }
+      }
 
-      if (elect_one_sync()) {
+      if constexpr(is_im2col_B) {
         copy(mainloop_params.tma_load_b.with(abar_prod), tBgB(_,_,_,*k_tile_iter), tBsB(_,_,_,write_stage));
+      } else {
+        if (elect_one_sync()) {
+          copy(mainloop_params.tma_load_b.with(abar_prod), tBgB(_,_,_,*k_tile_iter), tBsB(_,_,_,write_stage));
+        }
       }
 
       ++k_tile_iter;

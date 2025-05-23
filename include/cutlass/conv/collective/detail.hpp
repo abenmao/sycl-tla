@@ -265,7 +265,9 @@ template <> struct is_im2col_load<cute::SM90_TMA_LOAD_IM2COL          > { static
 template <> struct is_im2col_load<cute::SM90_TMA_LOAD_IM2COL_MULTICAST> { static constexpr bool value = true; };
 template <> struct is_im2col_load<cute::SM100_TMA_2SM_LOAD_IM2COL          > { static constexpr bool value = true; }; 
 template <> struct is_im2col_load<cute::SM100_TMA_2SM_LOAD_IM2COL_MULTICAST> { static constexpr bool value = true; }; 
-
+#if defined(SYCL_INTEL_XE4_TARGET)
+template <auto cm_type> struct is_im2col_load<cute::xe4::ASYNC_ROW_LOAD_IM2COL<cm_type>         > { static constexpr bool value = true; };
+#endif
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 } // namespace cutlass::conv::collective::detail

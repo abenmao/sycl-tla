@@ -132,7 +132,7 @@ struct CollectiveBuilder<
   constexpr static int NumSpatialDimensions = cutlass::conv::collective::detail::gmem_layout_tags_to_spatial_dims<GmemLayoutA, GmemLayoutB>();
 
   using DispatchPolicy = MainloopXe4DmaGmmaWarpSpecializedImplicitGemm<
-    cute::C<ConvOp>, PipelineStages, NumSpatialDimensions, ClusterShape_MNK, KernelScheduleType, 1>;
+    ConvOp, PipelineStages, NumSpatialDimensions, ClusterShape_MNK, KernelScheduleType, 1>;
 
   using CollectiveOp = CollectiveConv<
     DispatchPolicy,
