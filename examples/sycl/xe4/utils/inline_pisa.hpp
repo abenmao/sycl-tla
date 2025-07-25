@@ -84,6 +84,32 @@ inline void abarrier_workgroup_arrive(abar_ptr_t abar_ptr, uint32_t arrive_cnt) 
 }
 
 template <typename abar_ptr_t = uint64_t *>
+inline void abarrier_workgroup_arrive_and_drop(abar_ptr_t abar_ptr, uint32_t arrive_cnt) {
+  uint64_t temp;
+  INLINE_PISA("fence.shared.workgroup;");
+  INLINE_PISA("abarrier.arrive_drop.abarrier_workgroup.release.64b %0, [%1], %2;"
+              : "=r"(temp)
+              : "r"(abar_ptr), "r"(arrive_cnt));
+}
+
+template <typename abar_ptr_t = uint64_t *>
+inline void abarrier_workgroup_arrive_drop_expect_tx(abar_ptr_t abar_ptr, uint32_t tx_cnt) {
+  uint64_t temp;
+  INLINE_PISA("fence.shared.workgroup;");
+  INLINE_PISA("abarrier.arrive_drop.expect_tx.abarrier_workgroup.release.64b %0, [%1], %2;"
+              : "=r"(temp)
+              : "r"(abar_ptr), "r"(tx_cnt));
+}
+
+template <typename abar_ptr_t = uint64_t *>
+inline void abarrier_workgroup_arrives(abar_ptr_t abar_ptr, uint32_t arrive_cnt) {
+  uint64_t temp;
+  INLINE_PISA("abarrier.arrive.abarrier_workgroup.release.64b %0, [%1], %2;"
+              : "=r"(temp)
+              : "r"(abar_ptr), "r"(arrive_cnt));
+}
+
+template <typename abar_ptr_t = uint64_t *>
 inline void abarrier_workgroup_arrive_expect_tx(abar_ptr_t abar_ptr, int32_t tx_cnt) {
   uint64_t temp;
   INLINE_PISA("abarrier.arrive.expect_tx.abarrier_workgroup.release.64b %0, [%1], %2;"
@@ -94,6 +120,33 @@ inline void abarrier_workgroup_arrive_expect_tx(abar_ptr_t abar_ptr, int32_t tx_
 template <typename abar_ptr_t = uint64_t *>
 inline void abarrier_workgroup_complete_tx(abar_ptr_t abar_ptr, int32_t tx_cnt) {
   INLINE_PISA("abarrier.complete_tx.abarrier_workgroup.relaxed.64b  [%0], %1;" ::"r"(abar_ptr), "r"(tx_cnt));
+}
+
+template <typename abar_ptr_t = uint64_t *>
+inline abar_ptr_t get_remote_abar_address(abar_ptr_t local_abar, uint32_t wg_rank) {
+  abar_ptr_t remote_abar;
+  INLINE_PISA("abarrier.getaddr.64b %0, %1, %2;" ::"=r"(remote_abar), "r"(local_abar), "r"(wg_rank));
+  return remote_abar;
+}
+
+template <typename abar_ptr_t = uint64_t *>
+inline void abarrier_cluster_arrive(abar_ptr_t abar_ptr, uint32_t arrive_cnt) {
+  INLINE_PISA("abarrier.arrive.abarrier_cluster.cluster.64b [%0], %1;" ::"r"(abar_ptr), "r"(arrive_cnt));
+}
+
+template <typename abar_ptr_t = uint64_t *>
+inline void abarrier_cluster_expect_tx(abar_ptr_t abar_ptr, int32_t tx_cnt) {
+  INLINE_PISA("abarrier.expect_tx.abarrier_cluster.relaxed.64b [%0], %1;" ::"r"(abar_ptr), "r"(tx_cnt));
+}
+
+template <typename abar_ptr_t = uint64_t *>
+inline void abarrier_cluster_complete_tx(abar_ptr_t abar_ptr, int32_t tx_cnt) {
+  INLINE_PISA("abarrier.complete_tx.abarrier_cluster.relaxed.64b  [%0], %1;" ::"r"(abar_ptr), "r"(tx_cnt));
+}
+
+template <typename abar_ptr_t = uint64_t *>
+inline void abarrier_cluster_arrive_expect_tx(abar_ptr_t abar_ptr, int32_t tx_cnt) {
+  INLINE_PISA("abarrier.arrive.expect_tx.abarrier_cluster.cluster.64b [%0], %1;" ::"r"(abar_ptr), "r"(tx_cnt));
 }
 
 template <typename abar_ptr_t = uint64_t *>
@@ -238,382 +291,156 @@ inline void tensordesc_fill_element_stride(tdesc_ptr_t tdesc_ptr, const strides_
   }
 }
 
-template <slm_matrix_type cm_type, size_t dim, typename dtype, typename slm_dtype, typename tdesc_t, typename abar_t>
-inline void async_tensor_load(tdesc_t tdesc, slm_dtype *slm_ptr, dtype *gmem_ptr,
+template <size_t dim, typename dtype, typename tdesc_t, typename abar_t, typename mat_desc_t>
+inline void async_tensor_load(tdesc_t tdesc, mat_desc_t mat_desc, dtype *gmem_ptr,
                               const sycl::marray<int32_t, dim> &coord, abar_t abar) {
   if constexpr (dim == 2) {
-    if constexpr (cm_type == slm_matrix_type::type1) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.2d.type1.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.2d.type1.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.2d.type1.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.2d.type1.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type2) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.2d.type2.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.2d.type2.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.2d.type2.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.2d.type2.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type3) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.2d.type3.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
+    if constexpr (sizeof_bits<dtype>() == 4) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_workgroup.global.2d.4b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 6) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_workgroup.global.2d.6b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 8 || sizeof(dtype) == 1) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_workgroup.global.2d.8b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 16) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_workgroup.global.2d.16b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 32) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_workgroup.global.2d.32b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 64) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_workgroup.global.2d.64b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
     } else {
-      static_assert(false, "Unsupported matrix type");
+      static_assert(false, "Unsupported data size");
     }
   } else if constexpr (dim == 3) {
-    if constexpr (cm_type == slm_matrix_type::type1) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.3d.type1.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.3d.type1.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.3d.type1.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.3d.type1.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type2) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.3d.type2.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.3d.type2.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.3d.type2.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.3d.type2.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type3) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.3d.type3.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
+    if constexpr (sizeof(dtype) == 1) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_workgroup.global.3d.8b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof(dtype) == 2) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_workgroup.global.3d.16b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof(dtype) == 4) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_workgroup.global.3d.32b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof(dtype) == 8) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_workgroup.global.3d.64b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
     } else {
-      static_assert(false, "Unsupported matrix type");
+      static_assert(false, "Unsupported data size");
     }
   } else if constexpr (dim == 4) {
-    if constexpr (cm_type == slm_matrix_type::type1) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.4d.type1.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.4d.type1.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.4d.type1.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.4d.type1.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type2) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.4d.type2.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.4d.type2.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.4d.type2.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.4d.type2.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type3) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_workgroup.global.4d.type3.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
+    if constexpr (sizeof(dtype) == 1) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_workgroup.global.4d.8b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof(dtype) == 2) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_workgroup.global.4d.16b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof(dtype) == 4) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_workgroup.global.4d.32b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof(dtype) == 8) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_workgroup.global.4d.64b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
     } else {
-      static_assert(false, "Unsupported matrix type");
+      static_assert(false, "Unsupported data size");
     }
   } else {
     static_assert(false, "Unsupported dim");
   }
 }
 
-template <slm_matrix_type cm_type, size_t dim, typename dtype, typename slm_dtype, typename tdesc_t, typename abar_t>
-inline void async_tensor_load(tdesc_t tdesc, slm_dtype *slm_ptr, dtype *gmem_ptr,
+template <size_t dim, typename dtype, typename tdesc_t, typename abar_t, typename mat_desc_t>
+inline void async_tensor_load(tdesc_t tdesc, mat_desc_t mat_desc, dtype *gmem_ptr,
                               const sycl::marray<int32_t, dim> &coord, abar_t abar, uint32_t wg_mask) {
   if constexpr (dim == 2) {
-    if constexpr (cm_type == slm_matrix_type::type1) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type1.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type1.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type1.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type1.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type2) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type2.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type2.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type2.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type2.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type3) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.2d.type3.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
+    if constexpr (sizeof_bits<dtype>() == 4) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_cluster.global.2d.4b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4, %5;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
+    } else if constexpr (sizeof_bits<dtype>() == 8) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_cluster.global.2d.8b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4, %5;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
+    } else if constexpr (sizeof_bits<dtype>() == 16) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_cluster.global.2d.16b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4, %5;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
+    } else if constexpr (sizeof_bits<dtype>() == 32) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_cluster.global.2d.32b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4, %5;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
+    } else if constexpr (sizeof_bits<dtype>() == 64) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_cluster.global.2d.64b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4, %5;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
     } else {
-      static_assert(false, "Unsupported matrix type");
-    }
-  } else if constexpr (dim == 3) {
-    if constexpr (cm_type == slm_matrix_type::type1) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.3d.type1.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.3d.type1.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.3d.type1.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.3d.type1.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type2) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.3d.type2.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.3d.type2.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.3d.type2.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.3d.type2.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type3) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.3d.type3.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else {
-      static_assert(false, "Unsupported matrix type");
+      static_assert(false, "Unsupported data size");
     }
   } else if constexpr (dim == 4) {
-    if constexpr (cm_type == slm_matrix_type::type1) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type1.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type1.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type1.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type1.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type2) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type2.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type2.16b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type2.32b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type2.64b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type3) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.shared_cluster.global.4d.type3.8b.uint.zero.L2c.L3c.abarrier [%0], [%1], [%2], [%3], "
-            "%4, %5;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
+    if constexpr (sizeof_bits<dtype>() == 4) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_cluster.global.4d.4b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4, %5;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
+    } else if constexpr (sizeof_bits<dtype>() == 8) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_cluster.global.4d.8b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4, %5;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
+    } else if constexpr (sizeof_bits<dtype>() == 16) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_cluster.global.4d.16b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4, %5;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
+    } else if constexpr (sizeof_bits<dtype>() == 32) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_cluster.global.4d.32b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4, %5;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
+    } else if constexpr (sizeof_bits<dtype>() == 64) {
+      INLINE_PISA(
+          "async_tensor_copy.shared_cluster.global.4d.64b.uint.zero.L2c.L3uc.abarrier %0, [%1], [%2], [%3], "
+          "%4, %5;" ::"r"(mat_desc),
+          "r"(gmem_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)), "r"(wg_mask));
     } else {
-      static_assert(false, "Unsupported matrix type");
+      static_assert(false, "Unsupported data size");
     }
   } else {
     static_assert(false, "Unsupported dim");
@@ -624,32 +451,32 @@ template <uint32_t dim, typename dtype, typename tdesc_ptr_t = uint64_t *>
 inline void async_tensor_prefetch(tdesc_ptr_t tdesc_ptr, dtype *gmem_ptr, const sycl::marray<int32_t, dim> &toff) {
   if constexpr (dim == 2) {
     if constexpr (sizeof(dtype) == 1) {
-      INLINE_PISA("async_tensor_prefetch.2d.8b.L2c.L3c.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
+      INLINE_PISA("async_tensor_prefetch.2d.8b.L2c.L3uc.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
                   "r"(as_vector_t(toff)));
     } else if constexpr (sizeof(dtype) == 2) {
-      INLINE_PISA("async_tensor_prefetch.2d.16b.L2c.L3c.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
+      INLINE_PISA("async_tensor_prefetch.2d.16b.L2c.L3uc.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
                   "r"(as_vector_t(toff)));
     } else if constexpr (sizeof(dtype) == 4) {
-      INLINE_PISA("async_tensor_prefetch.2d.32b.L2c.L3c.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
+      INLINE_PISA("async_tensor_prefetch.2d.32b.L2c.L3uc.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
                   "r"(as_vector_t(toff)));
     } else if constexpr (sizeof(dtype) == 8) {
-      INLINE_PISA("async_tensor_prefetch.2d.64b.L2c.L3c.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
+      INLINE_PISA("async_tensor_prefetch.2d.64b.L2c.L3uc.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
                   "r"(as_vector_t(toff)));
     } else {
       static_assert(false, "Unsupported data size");
     }
   } else if constexpr (dim == 4) {
     if constexpr (sizeof(dtype) == 1) {
-      INLINE_PISA("async_tensor_prefetch.4d.8b.L2c.L3c.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
+      INLINE_PISA("async_tensor_prefetch.4d.8b.L2c.L3uc.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
                   "r"(as_vector_t(toff)));
     } else if constexpr (sizeof(dtype) == 2) {
-      INLINE_PISA("async_tensor_prefetch.4d.16b.L2c.L3c.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
+      INLINE_PISA("async_tensor_prefetch.4d.16b.L2c.L3uc.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
                   "r"(as_vector_t(toff)));
     } else if constexpr (sizeof(dtype) == 4) {
-      INLINE_PISA("async_tensor_prefetch.4d.32b.L2c.L3c.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
+      INLINE_PISA("async_tensor_prefetch.4d.32b.L2c.L3uc.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
                   "r"(as_vector_t(toff)));
     } else if constexpr (sizeof(dtype) == 8) {
-      INLINE_PISA("async_tensor_prefetch.4d.64b.L2c.L3c.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
+      INLINE_PISA("async_tensor_prefetch.4d.64b.L2c.L3uc.global [%0], [%1], %2;" ::"r"(gmem_ptr), "r"(tdesc_ptr),
                   "r"(as_vector_t(toff)));
     } else {
       static_assert(false, "Unsupported data size");
@@ -659,355 +486,144 @@ inline void async_tensor_prefetch(tdesc_ptr_t tdesc_ptr, dtype *gmem_ptr, const 
   }
 }
 
-template <slm_matrix_type cm_type, size_t dim, typename dtype, typename slm_dtype, typename tdesc_t, typename abar_t>
-inline void async_tensor_store(tdesc_t tdesc, slm_dtype *slm_ptr, dtype *gmem_ptr,
+template <size_t dim, typename dtype, typename tdesc_t, typename abar_t, typename mat_desc_t>
+inline void async_tensor_store(tdesc_t tdesc, mat_desc_t mat_desc, dtype *gmem_ptr,
                                const sycl::marray<int32_t, dim> &coord, abar_t abar) {
   if constexpr (dim == 2) {
-    if constexpr (cm_type == slm_matrix_type::type1) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.2d.type1.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.2d.type1.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.2d.type1.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.2d.type1.64b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type2) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.2d.type2.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.2d.type2.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.2d.type2.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.2d.type2.64b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type3) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.2d.type3.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
+    if constexpr (sizeof_bits<dtype>() == 4) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.2d.4b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 6) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.2d.6b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 8) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.2d.8b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 16) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.2d.16b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 32) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.2d.32b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 64) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.2d.64b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
     } else {
-      static_assert(false, "Unsupported matrix type");
+      static_assert(false, "Unsupported data size");
     }
   } else if constexpr (dim == 3) {
-    if constexpr (cm_type == slm_matrix_type::type1) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.3d.type1.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.3d.type1.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.3d.type1.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.3d.type1.64b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type2) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.3d.type2.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.3d.type2.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.3d.type2.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.3d.type2.64b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type3) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.3d.type3.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
+    if constexpr (sizeof_bits<dtype>() == 4) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.3d.4b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 6) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.3d.6b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 8) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.3d.8b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 16) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.3d.16b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 32) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.3d.32b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 64) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.3d.64b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
     } else {
-      static_assert(false, "Unsupported matrix type");
+      static_assert(false, "Unsupported data size");
     }
   } else if constexpr (dim == 4) {
-    if constexpr (cm_type == slm_matrix_type::type1) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.4d.type1.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.4d.type1.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.4d.type1.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.4d.type1.64b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type2) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.4d.type2.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 2) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.4d.type2.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 4) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.4d.type2.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (sizeof(dtype) == 8) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.4d.type2.64b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type3) {
-      if constexpr (sizeof(dtype) == 1) {
-        INLINE_PISA(
-            "async_tensor_copy.global.shared_workgroup.4d.type3.8b.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
+    if constexpr (sizeof_bits<dtype>() == 4) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.4d.4b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 8) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.4d.8b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 16) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.4d.16b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 32) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.4d.32b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (sizeof_bits<dtype>() == 64) {
+      INLINE_PISA("async_tensor_copy.global.shared_workgroup.4d.64b.L2wb.L3uc.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+                      gmem_ptr),
+                  "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
     } else {
-      static_assert(false, "Unsupported matrix type");
+      static_assert(false, "Unsupported data size");
     }
   } else {
     static_assert(false, "Unsupported dim");
   }
 }
 
-template <slm_matrix_type cm_type, size_t dim, typename dtype, typename slm_dtype, typename tdesc_t, typename abar_t>
-inline void async_tensor_atomic_store(tdesc_t tdesc, slm_dtype *slm_ptr, dtype *gmem_ptr,
+template <size_t dim, typename dtype, typename tdesc_t, typename abar_t, typename mat_desc_t>
+inline void async_tensor_atomic_store(tdesc_t tdesc, mat_desc_t mat_desc, dtype *gmem_ptr,
                                       const sycl::marray<int32_t, dim> &coord, abar_t abar) {
   if constexpr (dim == 2) {
-    if constexpr (cm_type == slm_matrix_type::type1) {
-      if constexpr (std::is_same_v<dtype, fp16>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.2d.type1.add.hf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, bf16>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.2d.type1.add.bf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, float>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.2d.type1.add.f.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, double>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.2d.type1.add.df.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type2) {
-      if constexpr (std::is_same_v<dtype, fp16>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.2d.type2.add.hf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, bf16>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.2d.type2.add.bf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, float>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.2d.type2.add.f.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, double>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.2d.type2.add.df.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
+    if constexpr (std::is_same_v<dtype, fp16>) {
+      INLINE_PISA(
+          "async_tensor_fred.global.shared_workgroup.2d.add.hf.L2wb.L3wb.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+              gmem_ptr),
+          "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (std::is_same_v<dtype, bf16>) {
+      INLINE_PISA(
+          "async_tensor_fred.global.shared_workgroup.2d.add.bf.L2wb.L3wb.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+              gmem_ptr),
+          "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (std::is_same_v<dtype, float>) {
+      INLINE_PISA(
+          "async_tensor_fred.global.shared_workgroup.2d.add.f.L2wb.L3wb.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+              gmem_ptr),
+          "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (std::is_same_v<dtype, double>) {
+      INLINE_PISA(
+          "async_tensor_fred.global.shared_workgroup.2d.add.df.L2wb.L3wb.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+              gmem_ptr),
+          "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
     } else {
-      static_assert(false, "Unsupported matrix type");
-    }
-  } else if constexpr (dim == 3) {
-    if constexpr (cm_type == slm_matrix_type::type1) {
-      if constexpr (std::is_same_v<dtype, fp16>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.3d.type1.add.hf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, bf16>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.3d.type1.add.bf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, float>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.3d.type1.add.f.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, double>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.3d.type1.add.df.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type2) {
-      if constexpr (std::is_same_v<dtype, fp16>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.3d.type2.add.hf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, bf16>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.3d.type2.add.bf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, float>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.3d.type2.add.f.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, double>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.3d.type2.add.df.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else {
-      static_assert(false, "Unsupported matrix type");
+      static_assert(false, "Unsupported data size");
     }
   } else if constexpr (dim == 4) {
-    if constexpr (cm_type == slm_matrix_type::type1) {
-      if constexpr (std::is_same_v<dtype, fp16>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.4d.type1.add.hf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, bf16>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.4d.type1.add.bf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, float>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.4d.type1.add.f.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, double>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.4d.type1.add.df.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
-    } else if constexpr (cm_type == slm_matrix_type::type2) {
-      if constexpr (std::is_same_v<dtype, fp16>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.4d.type2.add.hf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, bf16>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.4d.type2.add.bf.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, float>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.4d.type2.add.f.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], %4;" ::
-                "r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else if constexpr (std::is_same_v<dtype, double>) {
-        INLINE_PISA(
-            "async_tensor_fred.global.shared_workgroup.4d.type2.add.df.L2wb.L3wb.abarrier [%0], [%1], [%2], [%3], "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
-      } else {
-        static_assert(false, "Unsupported data size");
-      }
+    if constexpr (std::is_same_v<dtype, fp16>) {
+      INLINE_PISA(
+          "async_tensor_fred.global.shared_workgroup.4d.add.hf.L2wb.L3wb.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+              gmem_ptr),
+          "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (std::is_same_v<dtype, bf16>) {
+      INLINE_PISA(
+          "async_tensor_fred.global.shared_workgroup.4d.add.bf.L2wb.L3wb.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+              gmem_ptr),
+          "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (std::is_same_v<dtype, float>) {
+      INLINE_PISA(
+          "async_tensor_fred.global.shared_workgroup.4d.add.f.L2wb.L3wb.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+              gmem_ptr),
+          "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
+    } else if constexpr (std::is_same_v<dtype, double>) {
+      INLINE_PISA(
+          "async_tensor_fred.global.shared_workgroup.4d.add.df.L2wb.L3wb.abarrier [%0], %1, [%2], [%3], %4;" ::"r"(
+              gmem_ptr),
+          "r"(mat_desc), "r"(abar), "r"(tdesc), "r"(as_vector_t(coord)));
     } else {
-      static_assert(false, "Unsupported matrix type");
+      static_assert(false, "Unsupported data size");
     }
   } else {
     static_assert(false, "Unsupported dim");
@@ -1065,113 +681,62 @@ inline void async_linear_prefetch(dtype *gmem_ptr, uint32_t size) {
 
 template <typename slm_dtype, typename dtype, typename abar_ptr_t = uint64_t *>
 inline void async_linear_load(slm_dtype *slm_ptr, dtype *gmem_ptr, uint32_t size, abar_ptr_t abar_ptr) {
-  INLINE_PISA("async_linear_copy.shared_workgroup.global.L2c.L3c.abarrier [%0], [%1], [%2], %3;" ::"r"(slm_ptr),
+  INLINE_PISA("async_linear_copy.shared_workgroup.global.L2c.L3uc.abarrier [%0], [%1], [%2], %3;" ::"r"(slm_ptr),
               "r"(gmem_ptr), "r"(abar_ptr), "r"(size));
 }
 
 template <typename slm_dtype, typename dtype, typename abar_ptr_t = uint64_t *>
 inline void async_linear_load(slm_dtype *slm_ptr, dtype *gmem_ptr, uint32_t size, abar_ptr_t abar_ptr,
                               uint32_t wg_mask) {
-  INLINE_PISA("async_linear_copy.shared_cluster.global.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, %4;" ::"r"(slm_ptr),
+  INLINE_PISA("async_linear_copy.shared_cluster.global.L2c.L3uc.abarrier [%0], [%1], [%2], %3, %4;" ::"r"(slm_ptr),
               "r"(gmem_ptr), "r"(abar_ptr), "r"(size), "r"(wg_mask));
 }
 
 template <typename slm_dtype, typename dtype, typename abar_ptr_t = uint64_t *>
 inline void async_linear_store(dtype *gmem_ptr, slm_dtype *slm_ptr, uint32_t size, abar_ptr_t abar_ptr) {
-  INLINE_PISA("async_linear_copy.global.shared_workgroup.L2wb.L3wb.abarrier [%0], [%1], [%2], %3;" ::"r"(gmem_ptr),
+  INLINE_PISA("async_linear_copy.global.shared_workgroup.L2wb.L3uc.abarrier [%0], [%1], [%2], %3;" ::"r"(gmem_ptr),
               "r"(slm_ptr), "r"(abar_ptr), "r"(size));
 }
 
-// async_row_copy gmem2slm linear
-template <uint32_t row_size, typename slm_dtype, typename dtype, typename abar_ptr_t = uint64_t *>
-inline void row_copy_linear_load(slm_dtype *slm_ptr, dtype *gmem_ptr, uint32_t offset, uint32_t size,
-                                 abar_ptr_t abar_ptr) {
-  if constexpr (std::is_same_v<dtype, float>) {
-    if constexpr (row_size == 32) {
-      INLINE_PISA(
-          "async_row_copy.shared_workgroup.global.32.linear.type1.a32s.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-          "[%2], %3, %4;" ::"r"(slm_ptr),
-          "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-    } else if constexpr (row_size == 512) {
-      INLINE_PISA(
-          "async_row_copy.shared_workgroup.global.512.linear.type1.a32s.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-          "[%2], %3, %4;" ::"r"(slm_ptr),
-          "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-    } else if constexpr (row_size == 1024) {
-      INLINE_PISA(
-          "async_row_copy.shared_workgroup.global.1024.linear.type1.a32s.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-          "[%2], %3, %4;" ::"r"(slm_ptr),
-          "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-    } else {
-      static_assert(false, "Unsupported row size");
-    }
-  } else if constexpr (std::is_same_v<dtype, bf16>) {
-    if constexpr (row_size == 32) {
-      INLINE_PISA(
-          "async_row_copy.shared_workgroup.global.32.linear.type1.a32s.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-          "[%2], %3, %4;" ::"r"(slm_ptr),
-          "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-    } else if constexpr (row_size == 512) {
-      INLINE_PISA(
-          "async_row_copy.shared_workgroup.global.512.linear.type1.a32s.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-          "[%2], %3, %4;" ::"r"(slm_ptr),
-          "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-    } else if constexpr (row_size == 1024) {
-      INLINE_PISA(
-          "async_row_copy.shared_workgroup.global.1024.linear.type1.a32s.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-          "[%2], %3, %4;" ::"r"(slm_ptr),
-          "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-    } else {
-      static_assert(false, "Unsupported row size");
-    }
-  } else {
-    static_assert(false, "Unsupported data type");
-  }
-}
+#define ROW_LOAD_LINEAR_A64(row_size, basic_dtype, data_bits) \
+  "async_row_copy.shared_workgroup.global.linear." #row_size ".a64." #data_bits "." #basic_dtype \
+  ".zero.L2c.L3uc.abarrier [%0], [%1], [%2], %3;"
 
-// async_row_copy gmem2slm linear for `ADDR_TYPE_SIZE == FLAT_A64`
 template <uint32_t row_size, typename dtype, typename slm_dtype, typename abar_ptr_t = uint64_t *>
 inline void row_copy_linear_a64_load(slm_dtype *slm_ptr, uint64_t offset, uint32_t size, abar_ptr_t abar_ptr) {
-  if constexpr (std::is_same_v<dtype, float>) {
+  if constexpr (sizeof_bits<dtype>() == 32) {
     if constexpr (row_size == 32) {
-      INLINE_PISA(
-          "async_row_copy.shared_workgroup.global.32.linear.type1.a64.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], [%2], "
-          "%3;" ::"r"(slm_ptr),
-          "r"(offset), "r"(abar_ptr), "r"(size));
+      INLINE_PISA(ROW_LOAD_LINEAR_A64(32, uint, 32b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr), "r"(size));
     } else if constexpr (row_size == 512) {
-      INLINE_PISA(
-          "async_row_copy.shared_workgroup.global.512.linear.type1.a64.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-          "[%2], %3;" ::"r"(slm_ptr),
-          "r"(offset), "r"(abar_ptr), "r"(size));
+      INLINE_PISA(ROW_LOAD_LINEAR_A64(512, uint, 32b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr), "r"(size));
     } else if constexpr (row_size == 1024) {
-      INLINE_PISA(
-          "async_row_copy.shared_workgroup.global.1024.linear.type1.a64.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-          "[%2], %3;" ::"r"(slm_ptr),
-          "r"(offset), "r"(abar_ptr), "r"(size));
+      INLINE_PISA(ROW_LOAD_LINEAR_A64(1024, uint, 32b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr), "r"(size));
     } else {
       static_assert(false, "Unsupported row size");
     }
-  } else if constexpr (std::is_same_v<dtype, bf16>) {
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
     if constexpr (row_size == 32) {
-      INLINE_PISA(
-          "async_row_copy.shared_workgroup.global.32.linear.type1.a64.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], [%2], "
-          "%3;" ::"r"(slm_ptr),
-          "r"(offset), "r"(abar_ptr), "r"(size));
+      INLINE_PISA(ROW_LOAD_LINEAR_A64(32, uint, 16b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr), "r"(size));
     } else if constexpr (row_size == 512) {
-      INLINE_PISA(
-          "async_row_copy.shared_workgroup.global.512.linear.type1.a64.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-          "[%2], %3;" ::"r"(slm_ptr),
-          "r"(offset), "r"(abar_ptr), "r"(size));
+      INLINE_PISA(ROW_LOAD_LINEAR_A64(512, uint, 16b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr), "r"(size));
     } else if constexpr (row_size == 1024) {
-      INLINE_PISA(
-          "async_row_copy.shared_workgroup.global.1024.linear.type1.a64.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-          "[%2], %3;" ::"r"(slm_ptr),
-          "r"(offset), "r"(abar_ptr), "r"(size));
+      INLINE_PISA(ROW_LOAD_LINEAR_A64(1024, uint, 16b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr), "r"(size));
     } else if constexpr (row_size == 2048) {
-      INLINE_PISA(
-          "async_row_copy.shared_workgroup.global.2048.linear.type1.a64.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-          "[%2], %3;" ::"r"(slm_ptr),
-          "r"(offset), "r"(abar_ptr), "r"(size));
+      INLINE_PISA(ROW_LOAD_LINEAR_A64(2048, uint, 16b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 6) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A64(32, uint, 6b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 96) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A64(96, uint, 6b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A64(512, uint, 6b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A64(1024, uint, 6b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A64(2048, uint, 6b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr), "r"(size));
     } else {
       static_assert(false, "Unsupported row size");
     }
@@ -1180,45 +745,31 @@ inline void row_copy_linear_a64_load(slm_dtype *slm_ptr, uint64_t offset, uint32
   }
 }
 
-// async_row_copy slm2gmem linear
-template <uint32_t row_size, typename slm_dtype, typename dtype, typename abar_ptr_t = uint64_t *>
-inline void row_copy_linear_store(slm_dtype *slm_ptr, dtype *gmem_ptr, uint32_t offset, uint32_t size,
-                                  abar_ptr_t abar_ptr) {
-  if constexpr (std::is_same_v<dtype, float>) {
+#define ROW_LOAD_LINEAR_NCS_A64(row_size, data_bits) \
+  "async_row_copy.shared_workgroup.global.ncs.linear." #row_size ".a64." #data_bits \
+  ".L2c.L3uc.abarrier [%0], [%1], [%2];"
+
+template <uint32_t row_size, typename dtype, typename slm_dtype, typename abar_ptr_t = uint64_t *>
+inline void row_copy_linear_a64_load(slm_dtype *slm_ptr, uint64_t offset, abar_ptr_t abar_ptr) {
+  if constexpr (sizeof_bits<dtype>() == 32) {
     if constexpr (row_size == 32) {
-      INLINE_PISA(
-          "async_row_copy.global.shared_workgroup.32.linear.type1.a32s.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], %3, "
-          "%4;" ::"r"(gmem_ptr),
-          "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+      INLINE_PISA(ROW_LOAD_LINEAR_NCS_A64(32, 32b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr));
     } else if constexpr (row_size == 512) {
-      INLINE_PISA(
-          "async_row_copy.global.shared_workgroup.512.linear.type1.a32s.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], %3, "
-          "%4;" ::"r"(gmem_ptr),
-          "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+      INLINE_PISA(ROW_LOAD_LINEAR_NCS_A64(512, 32b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr));
     } else if constexpr (row_size == 1024) {
-      INLINE_PISA(
-          "async_row_copy.global.shared_workgroup.1024.linear.type1.a32s.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], %3, "
-          "%4;" ::"r"(gmem_ptr),
-          "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+      INLINE_PISA(ROW_LOAD_LINEAR_NCS_A64(1024, 32b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr));
     } else {
       static_assert(false, "Unsupported row size");
     }
-  } else if constexpr (std::is_same_v<dtype, bf16>) {
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
     if constexpr (row_size == 32) {
-      INLINE_PISA(
-          "async_row_copy.global.shared_workgroup.32.linear.type1.a32s.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], %3, "
-          "%4;" ::"r"(gmem_ptr),
-          "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+      INLINE_PISA(ROW_LOAD_LINEAR_NCS_A64(32, 16b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr));
     } else if constexpr (row_size == 512) {
-      INLINE_PISA(
-          "async_row_copy.global.shared_workgroup.512.linear.type1.a32s.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], %3, "
-          "%4;" ::"r"(gmem_ptr),
-          "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+      INLINE_PISA(ROW_LOAD_LINEAR_NCS_A64(512, 16b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr));
     } else if constexpr (row_size == 1024) {
-      INLINE_PISA(
-          "async_row_copy.global.shared_workgroup.1024.linear.type1.a32s.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], %3, "
-          "%4;" ::"r"(gmem_ptr),
-          "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+      INLINE_PISA(ROW_LOAD_LINEAR_NCS_A64(1024, 16b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_LINEAR_NCS_A64(2048, 16b)::"r"(slm_ptr), "r"(offset), "r"(abar_ptr));
     } else {
       static_assert(false, "Unsupported row size");
     }
@@ -1227,44 +778,156 @@ inline void row_copy_linear_store(slm_dtype *slm_ptr, dtype *gmem_ptr, uint32_t 
   }
 }
 
-// async_row_copy slm2gmem linear for `ADDR_TYPE_SIZE == FLAT_A64`
+#define ROW_LOAD_LINEAR_A32S(row_size, basic_dtype, data_bits) \
+  "async_row_copy.shared_workgroup.global.linear." #row_size ".a32s." #data_bits "." #basic_dtype \
+  ".zero.L2c.L3uc.abarrier [%0], [%1], [%2], %3, %4;"
+
+template <uint32_t row_size, typename dtype, typename slm_dtype, typename abar_ptr_t = uint64_t *>
+inline void row_copy_linear_a32s_load(slm_dtype *slm_ptr, dtype *gmem_ptr, int32_t offset, uint32_t size,
+                                      abar_ptr_t abar_ptr) {
+  if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(32, uint, 32b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(512, uint, 32b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(1024, uint, 32b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(32, uint, 16b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(512, uint, 16b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(1024, uint, 16b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(2048, uint, 16b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 6) {
+    if constexpr (row_size == 24) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(24, uint, 6b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(32, uint, 6b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 96) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(96, uint, 6b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(512, uint, 6b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(1024, uint, 6b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(2048, uint, 6b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 64) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(32, uint, 64b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(256, uint, 64b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(512, uint, 64b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(1024, uint, 64b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_LINEAR_A32S(2048, uint, 64b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else {
+    static_assert(false, "Unsupported data type");
+  }
+}
+
+#define ROW_LOAD_LINEAR_NCS_A32S(row_size, data_bits) \
+  "async_row_copy.shared_workgroup.global.ncs.linear." #row_size ".a32s." #data_bits \
+  ".L2c.L3uc.abarrier [%0], [%1], [%2], %3;"
+
+template <uint32_t row_size, typename dtype, typename slm_dtype, typename abar_ptr_t = uint64_t *>
+inline void row_copy_linear_a32s_load(slm_dtype *slm_ptr, dtype *gmem_ptr, int32_t offset, abar_ptr_t abar_ptr) {
+  if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_LINEAR_NCS_A32S(32, 32b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_LINEAR_NCS_A32S(512, 32b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_LINEAR_NCS_A32S(1024, 32b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_LINEAR_NCS_A32S(32, 16b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_LINEAR_NCS_A32S(512, 16b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_LINEAR_NCS_A32S(1024, 16b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_LINEAR_NCS_A32S(2048, 16b)::"r"(slm_ptr), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else {
+    static_assert(false, "Unsupported data type");
+  }
+}
+
+#define ROW_STORE_LINEAR_A64(row_size, data_bits) \
+  "async_row_copy.global.shared_workgroup.linear." #row_size ".a64." #data_bits \
+  ".L2wb.L3uc.abarrier [%0], [%1], [%2], %3;"
+
 template <uint32_t row_size, typename dtype, typename slm_dtype, typename abar_ptr_t = uint64_t *>
 inline void row_copy_linear_a64_store(slm_dtype *slm_ptr, uint64_t offset, uint32_t size, abar_ptr_t abar_ptr) {
-  if constexpr (std::is_same_v<dtype, float>) {
+  if constexpr (sizeof_bits<dtype>() == 32) {
     if constexpr (row_size == 32) {
-      INLINE_PISA(
-          "async_row_copy.global.shared_workgroup.32.linear.type1.a64.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], %3;" ::
-              "r"(offset),
-          "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+      INLINE_PISA(ROW_STORE_LINEAR_A64(32, 32b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr), "r"(size));
     } else if constexpr (row_size == 512) {
-      INLINE_PISA(
-          "async_row_copy.global.shared_workgroup.512.linear.type1.a64.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], %3;" ::
-              "r"(offset),
-          "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+      INLINE_PISA(ROW_STORE_LINEAR_A64(512, 32b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr), "r"(size));
     } else if constexpr (row_size == 1024) {
-      INLINE_PISA(
-          "async_row_copy.global.shared_workgroup.1024.linear.type1.a64.32b.L2wb.L3wb.abarrier [%0], [%1], [%2], %3;" ::
-              "r"(offset),
-          "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+      INLINE_PISA(ROW_STORE_LINEAR_A64(1024, 32b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr), "r"(size));
     } else {
       static_assert(false, "Unsupported row size");
     }
-  } else if constexpr (std::is_same_v<dtype, bf16>) {
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
     if constexpr (row_size == 32) {
-      INLINE_PISA(
-          "async_row_copy.global.shared_workgroup.32.linear.type1.a64.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], %3;" ::
-              "r"(offset),
-          "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+      INLINE_PISA(ROW_STORE_LINEAR_A64(32, 16b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr), "r"(size));
     } else if constexpr (row_size == 512) {
-      INLINE_PISA(
-          "async_row_copy.global.shared_workgroup.512.linear.type1.a64.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], %3;" ::
-              "r"(offset),
-          "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+      INLINE_PISA(ROW_STORE_LINEAR_A64(512, 16b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr), "r"(size));
     } else if constexpr (row_size == 1024) {
-      INLINE_PISA(
-          "async_row_copy.global.shared_workgroup.1024.linear.type1.a64.16b.L2wb.L3wb.abarrier [%0], [%1], [%2], %3;" ::
-              "r"(offset),
-          "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+      INLINE_PISA(ROW_STORE_LINEAR_A64(1024, 16b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 6) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_LINEAR_A64(32, 6b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 96) {
+      INLINE_PISA(ROW_STORE_LINEAR_A64(96, 6b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_LINEAR_A64(512, 6b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_LINEAR_A64(1024, 6b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr), "r"(size));
     } else {
       static_assert(false, "Unsupported row size");
     }
@@ -1273,638 +936,1436 @@ inline void row_copy_linear_a64_store(slm_dtype *slm_ptr, uint64_t offset, uint3
   }
 }
 
-// async_row_copy gmem2slm tiled
-template <slm_matrix_type cm_type, uint32_t row_size, typename dtype, typename slm_dtype,
-          typename abar_ptr_t = uint64_t *>
-inline void row_copy_tiled_load(slm_dtype *slm_ptr, dtype *gmem_ptr, uint32_t offset, uint32_t size,
-                                abar_ptr_t abar_ptr) {
-  if constexpr (cm_type == slm_matrix_type::type1) {
-    if constexpr (std::is_same_v<dtype, float>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.32.tiled.type1.a32s.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3, %4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.512.tiled.type1.a32s.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3, %4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.1024.tiled.type1.a32s.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3, %4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, bf16>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.32.tiled.type1.a32s.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3, %4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 256) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.256.tiled.type1.a32s.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3, %4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.512.tiled.type1.a32s.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3, %4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.1024.tiled.type1.a32s.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3, %4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
+#define ROW_STORE_LINEAR_NCS_A64(row_size, data_bits) \
+  "async_row_copy.global.shared_workgroup.ncs.linear." #row_size ".a64." #data_bits \
+  ".L2wb.L3uc.abarrier [%0], [%1], [%2];"
+
+template <uint32_t row_size, typename dtype, typename slm_dtype, typename abar_ptr_t = uint64_t *>
+inline void row_copy_linear_a64_store(slm_dtype *slm_ptr, uint64_t offset, abar_ptr_t abar_ptr) {
+  if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_LINEAR_NCS_A64(32, 32b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_LINEAR_NCS_A64(512, 32b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_LINEAR_NCS_A64(1024, 32b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr));
     } else {
-      static_assert(false, "Unsupported data type");
+      static_assert(false, "Unsupported row size");
     }
-  } else if constexpr (cm_type == slm_matrix_type::type2) {
-    if constexpr (std::is_same_v<dtype, float>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.32.tiled.type2.a32s.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3, %4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.512.tiled.type2.a32s.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3, %4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.1024.tiled.type2.a32s.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3, %4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, bf16>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.32.tiled.type2.a32s.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3, %4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.512.tiled.type2.a32s.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3, %4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.1024.tiled.type2.a32s.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3, %4;" ::"r"(slm_ptr),
-            "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_LINEAR_NCS_A64(32, 16b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_LINEAR_NCS_A64(512, 16b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_LINEAR_NCS_A64(1024, 16b)::"r"(offset), "r"(slm_ptr), "r"(abar_ptr));
     } else {
-      static_assert(false, "Unsupported data type");
+      static_assert(false, "Unsupported row size");
     }
   } else {
-    static_assert(false, "Unsupported slm matrix type");
+    static_assert(false, "Unsupported data type");
   }
 }
 
-// async_row_copy gmem2slm tiled for `ADDR_TYPE_SIZE == FLAT_A64`
-template <slm_matrix_type cm_type, uint32_t row_size, typename dtype, typename slm_dtype,
-          typename abar_ptr_t = uint64_t *>
-inline void row_copy_tiled_a64_load(slm_dtype *slm_ptr, uint64_t offset, uint32_t size, abar_ptr_t abar_ptr) {
-  if constexpr (cm_type == slm_matrix_type::type1) {
-    if constexpr (std::is_same_v<dtype, float>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.32.tiled.type1.a64.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.512.tiled.type1.a64.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.1024.tiled.type1.a64.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, bf16>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.32.tiled.type1.a64.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 256) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.256.tiled.type1.a64.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.512.tiled.type1.a64.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.1024.tiled.type1.a64.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, fp16>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.32.tiled.type1.a64.16b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 256) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.256.tiled.type1.a64.16b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.512.tiled.type1.a64.16b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.1024.tiled.type1.a64.16b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, int8_t>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.32.tiled.type1.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 128) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.128.tiled.type1.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 256) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.256.tiled.type1.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.512.tiled.type1.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.1024.tiled.type1.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, int32_t>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.32.tiled.type1.a64.32b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 128) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.128.tiled.type1.a64.32b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 256) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.256.tiled.type1.a64.32b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.512.tiled.type1.a64.32b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.1024.tiled.type1.a64.32b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
+#define ROW_STORE_LINEAR_A32S(row_size, data_bits) \
+  "async_row_copy.global.shared_workgroup.linear." #row_size ".a32s." #data_bits \
+  ".L2wb.L3uc.abarrier [%0], [%1], [%2], %3, %4;"
+
+template <uint32_t row_size, typename dtype, typename slm_dtype, typename abar_ptr_t = uint64_t *>
+inline void row_copy_linear_a32s_store(slm_dtype *slm_ptr, dtype *gmem_ptr, int32_t offset, uint32_t size,
+                                       abar_ptr_t abar_ptr) {
+  if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_LINEAR_A32S(32, 32b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_LINEAR_A32S(512, 32b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_LINEAR_A32S(1024, 32b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
     } else {
-      static_assert(false, "Unsupported data type");
+      static_assert(false, "Unsupported row size");
     }
-  } else if constexpr (cm_type == slm_matrix_type::type2) {
-    if constexpr (std::is_same_v<dtype, float>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.32.tiled.type2.a64.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.512.tiled.type2.a64.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.1024.tiled.type2.a64.32b.fp.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, bf16>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.32.tiled.type2.a64.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.512.tiled.type2.a64.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.1024.tiled.type2.a64.16b.bf.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, fp16>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.32.tiled.type2.a64.16b.fp16.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.512.tiled.type2.a64.16b.fp16.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.1024.tiled.type2.a64.16b.fp16.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, int8_t>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.32.tiled.type2.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 128) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.128.tiled.type2.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 256) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.256.tiled.type2.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.512.tiled.type2.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.shared_workgroup.global.1024.tiled.type2.a64.8b.int.zero.L2uc.L3uc.abarrier [%0], [%1], "
-            "[%2], %3;" ::"r"(slm_ptr),
-            "r"(offset), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_LINEAR_A32S(32, 16b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_LINEAR_A32S(512, 16b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_LINEAR_A32S(1024, 16b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
     } else {
-      static_assert(false, "Unsupported data type");
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 6) {
+    if constexpr (row_size == 24) {
+      INLINE_PISA(ROW_STORE_LINEAR_A32S(24, 6b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_LINEAR_A32S(32, 6b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 96) {
+      INLINE_PISA(ROW_STORE_LINEAR_A32S(96, 6b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_LINEAR_A32S(512, 6b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_LINEAR_A32S(1024, 6b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
     }
   } else {
-    static_assert(false, "Unsupported slm matrix type");
+    static_assert(false, "Unsupported data type");
   }
 }
 
-// async_row_copy slm2gmem tiled
-template <slm_matrix_type cm_type, uint32_t row_size, typename dtype, typename slm_dtype,
-          typename abar_ptr_t = uint64_t *>
-inline void row_copy_tiled_store(slm_dtype *slm_ptr, dtype *gmem_ptr, uint32_t offset, uint32_t size,
-                                 abar_ptr_t abar_ptr) {
-  if constexpr (cm_type == slm_matrix_type::type1) {
-    if constexpr (std::is_same_v<dtype, float>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.32.tiled.type1.a32s.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.512.tiled.type1.a32s.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.1024.tiled.type1.a32s.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, bf16>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.32.tiled.type1.a32s.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 256) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.256.tiled.type1.a32s.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.512.tiled.type1.a32s.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.1024.tiled.type1.a32s.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, bf16>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.32.tiled.type1.a32s.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 256) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.256.tiled.type1.a32s.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.512.tiled.type1.a32s.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.1024.tiled.type1.a32s.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
+#define ROW_STORE_LINEAR_NCS_A32S(row_size, data_bits) \
+  "async_row_copy.global.shared_workgroup.ncs.linear." #row_size ".a32s." #data_bits \
+  ".L2wb.L3uc.abarrier [%0], [%1], [%2], %3;"
+
+template <uint32_t row_size, typename dtype, typename slm_dtype, typename abar_ptr_t = uint64_t *>
+inline void row_copy_linear_a32s_store(slm_dtype *slm_ptr, dtype *gmem_ptr, int32_t offset, abar_ptr_t abar_ptr) {
+  if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_LINEAR_NCS_A32S(32, 32b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_LINEAR_NCS_A32S(512, 32b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_LINEAR_NCS_A32S(1024, 32b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset));
     } else {
-      static_assert(false, "Unsupported data type");
+      static_assert(false, "Unsupported row size");
     }
-  } else if constexpr (cm_type == slm_matrix_type::type2) {
-    if constexpr (std::is_same_v<dtype, float>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.32.tiled.type2.a32s.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.512.tiled.type2.a32s.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.1024.tiled.type2.a32s.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, bf16>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.32.tiled.type2.a32s.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 256) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.256.tiled.type2.a32s.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.512.tiled.type2.a32s.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.1024.tiled.type2.a32s.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3, "
-            "%4;" ::"r"(gmem_ptr),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_LINEAR_NCS_A32S(32, 16b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_LINEAR_NCS_A32S(512, 16b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_LINEAR_NCS_A32S(1024, 16b)::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset));
     } else {
-      static_assert(false, "Unsupported data type");
+      static_assert(false, "Unsupported row size");
     }
   } else {
-    static_assert(false, "Unsupported slm matrix type");
+    static_assert(false, "Unsupported data type");
   }
 }
 
-// async_row_copy slm2gmem tiled for `ADDR_TYPE_SIZE == FLAT_A64`
-template <slm_matrix_type cm_type, uint32_t row_size, typename dtype, typename slm_dtype,
-          typename abar_ptr_t = uint64_t *>
-inline void row_copy_tiled_a64_store(slm_dtype *slm_ptr, uint64_t offset, uint32_t size, abar_ptr_t abar_ptr) {
-  if constexpr (cm_type == slm_matrix_type::type1) {
-    if constexpr (std::is_same_v<dtype, float>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.32.tiled.type1.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.512.tiled.type1.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.1024.tiled.type1.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], "
-            "%3;" ::"r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, bf16> || std::is_same_v<dtype, fp16>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.32.tiled.type1.a64.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 256) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.256.tiled.type1.a64.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.512.tiled.type1.a64.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.1024.tiled.type1.a64.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], "
-            "%3;" ::"r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, int32_t>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.32.tiled.type1.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 256) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.256.tiled.type1.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.512.tiled.type1.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.1024.tiled.type1.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], "
-            "%3;" ::"r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, int8_t>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.32.tiled.type1.a64.8b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 128) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.128.tiled.type1.a64.8b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 256) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.256.tiled.type1.a64.8b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.512.tiled.type1.a64.8b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.1024.tiled.type1.a64.8b.L2uc.L3uc.abarrier [%0], [%1], [%2], "
-            "%3;" ::"r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
+#define ROW_LOAD_TILED_A64(row_size, basic_dtype, data_bits) \
+  "async_row_copy.shared_workgroup.global.tiled." #row_size ".a64." #data_bits "." #basic_dtype \
+  ".zero.L2c.L3uc.abarrier %0, [%1], [%2], %3;"
+
+template <uint32_t row_size, typename dtype, typename matrix_desc_t, typename abar_ptr_t = uint64_t *>
+inline void row_copy_tiled_a64_load(matrix_desc_t mat_desc, uint64_t offset, uint32_t size, abar_ptr_t abar_ptr) {
+  if constexpr (sizeof_bits<dtype>() == 8) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(32, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(64, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(128, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(256, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(512, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(1024, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(1984, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(2048, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
     } else {
-      static_assert(false, "Unsupported data type");
+      static_assert(false, "Unsupported row size");
     }
-  } else if constexpr (cm_type == slm_matrix_type::type2) {
-    if constexpr (std::is_same_v<dtype, float>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.32.tiled.type2.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.512.tiled.type2.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.1024.tiled.type2.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], "
-            "%3;" ::"r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, bf16> || std::is_same_v<dtype, fp16>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.32.tiled.type2.a64.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 256) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.256.tiled.type2.a64.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.512.tiled.type2.a64.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.1024.tiled.type2.a64.16b.L2uc.L3uc.abarrier [%0], [%1], [%2], "
-            "%3;" ::"r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
-    } else if constexpr (std::is_same_v<dtype, int32_t>) {
-      if constexpr (row_size == 32) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.32.tiled.type2.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 256) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.256.tiled.type2.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 512) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.512.tiled.type2.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], %3;" ::
-                "r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else if constexpr (row_size == 1024) {
-        INLINE_PISA(
-            "async_row_copy.global.shared_workgroup.1024.tiled.type2.a64.32b.L2uc.L3uc.abarrier [%0], [%1], [%2], "
-            "%3;" ::"r"(offset),
-            "r"(slm_ptr), "r"(abar_ptr), "r"(size));
-      } else {
-        static_assert(false, "Unsupported row size");
-      }
+  } else if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(32, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(64, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(128, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(256, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(512, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(1024, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(1984, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(2048, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
     } else {
-      static_assert(false, "Unsupported data type");
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 64) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(32, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(64, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(128, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(256, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(512, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(1024, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(1984, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(2048, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(32, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(64, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(128, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(256, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(512, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(1024, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(1984, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(2048, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 6) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(32, uint, 6b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(64, uint, 6b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 96) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(96, uint, 6b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(128, uint, 6b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(256, uint, 6b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(512, uint, 6b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(1024, uint, 6b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(1984, uint, 6b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A64(2048, uint, 6b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size));
     }
   } else {
-    static_assert(false, "Unsupported slm matrix type");
+    static_assert(false, "Unsupported data type");
+  }
+}
+
+#define ROW_LOAD_TILED_NCS_A64(row_size, data_bits) \
+  "async_row_copy.shared_workgroup.global.ncs.tiled." #row_size ".a64." #data_bits \
+  ".L2c.L3uc.abarrier %0, [%1], " \
+  "[%2];"
+
+template <uint32_t row_size, typename dtype, typename matrix_desc_t, typename abar_ptr_t = uint64_t *>
+inline void row_copy_tiled_a64_load(matrix_desc_t mat_desc, uint64_t offset, abar_ptr_t abar_ptr) {
+  if constexpr (sizeof_bits<dtype>() == 8) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(32, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(64, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(128, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(256, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(512, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(1024, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(1984, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(2048, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(32, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(64, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(128, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(256, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(512, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(1024, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(1984, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(2048, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 64) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(32, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(64, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(128, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(256, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(512, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(1024, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(1984, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(2048, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(32, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(64, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(128, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(256, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(512, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(1024, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(1984, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64(2048, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else {
+    static_assert(false, "Unsupported data type");
+  }
+}
+
+#define ROW_LOAD_TILED_A32S(row_size, basic_dtype, data_bits) \
+  "async_row_copy.shared_workgroup.global.tiled." #row_size ".a32s." #data_bits "." #basic_dtype \
+  ".zero.L2c.L3uc.abarrier %0, [%1], [%2], %3, %4;"
+
+template <uint32_t row_size, typename dtype, typename matrix_desc_t, typename abar_ptr_t = uint64_t *>
+inline void row_copy_tiled_a32s_load(matrix_desc_t mat_desc, dtype *gmem_ptr, int32_t offset, uint32_t size,
+                                     abar_ptr_t abar_ptr) {
+  if constexpr (sizeof_bits<dtype>() == 8) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(32, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(64, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(128, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(256, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(512, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(1024, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(1984, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(2048, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(32, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(64, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(128, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(256, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(512, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(1024, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(1984, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(2048, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 64) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(32, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(64, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(128, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(256, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(512, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(1024, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(1984, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(2048, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(32, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(64, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(128, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(256, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(512, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(1024, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(1984, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(2048, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 6) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(32, uint, 6b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(64, uint, 6b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 96) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(96, uint, 6b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(128, uint, 6b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(256, uint, 6b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(512, uint, 6b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(1024, uint, 6b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(1984, uint, 6b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S(2048, uint, 6b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else {
+    static_assert(false, "Unsupported data type");
+  }
+}
+
+#define ROW_LOAD_TILED_NCS_A32S(row_size, data_bits) \
+  "async_row_copy.shared_workgroup.global.ncs.tiled." #row_size ".a32s." #data_bits \
+  ".L2c.L3uc.abarrier %0, [%1], [%2], %3;"
+
+template <uint32_t row_size, typename dtype, typename matrix_desc_t, typename abar_ptr_t = uint64_t *>
+inline void row_copy_tiled_a32s_load(matrix_desc_t mat_desc, dtype *gmem_ptr, int32_t offset, abar_ptr_t abar_ptr) {
+  if constexpr (sizeof_bits<dtype>() == 8) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(32, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(64, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(128, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(256, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(512, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(1024, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(1984, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(2048, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(32, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(64, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(128, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(256, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(512, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(1024, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(1984, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(2048, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 64) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(32, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(64, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(128, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(256, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(512, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(1024, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(1984, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(2048, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(32, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(64, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(128, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(256, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(512, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(1024, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(1984, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S(2048, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else {
+    static_assert(false, "Unsupported data type");
+  }
+}
+
+#define ROW_LOAD_TILED_A64_MULTICAST(row_size, basic_dtype, data_bits) \
+  "async_row_copy.shared_cluster.global.tiled." #row_size ".a64." #data_bits "." #basic_dtype \
+  ".zero.L2c.L3uc.abarrier %0, [%1], [%2], %3, %4;"
+
+template <uint32_t row_size, typename dtype, typename matrix_desc_t, typename abar_ptr_t = uint64_t *>
+inline void row_copy_tiled_a64_load(matrix_desc_t mat_desc, uint64_t offset, uint32_t size, abar_ptr_t abar_ptr,
+                                    uint32_t wg_mask) {
+  if constexpr (sizeof_bits<dtype>() == 8) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(32, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(64, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(128, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(256, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(512, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(1024, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(1984, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(2048, uint, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(32, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(64, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(128, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(256, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(512, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(1024, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(1984, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(2048, uint, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 64) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(32, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(64, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(128, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(256, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(512, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(1024, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(1984, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(2048, uint, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(32, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(64, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(128, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(256, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(512, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(1024, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(1984, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A64_MULTICAST(2048, uint, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(size),
+                  "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else {
+    static_assert(false, "Unsupported data type");
+  }
+}
+
+#define ROW_LOAD_TILED_NCS_A64_MULTICAST(row_size, data_bits) \
+  "async_row_copy.shared_cluster.global.ncs.tiled." #row_size ".a64." #data_bits \
+  ".L2c.L3uc.abarrier %0, [%1], [%2], %3;"
+
+template <uint32_t row_size, typename dtype, typename matrix_desc_t, typename abar_ptr_t = uint64_t *>
+inline void row_copy_tiled_a64_load(matrix_desc_t mat_desc, uint64_t offset, abar_ptr_t abar_ptr, uint32_t wg_mask) {
+  if constexpr (sizeof_bits<dtype>() == 8) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(32, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(64, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(128, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(256, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(512, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(1024, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(1984, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(2048, 8b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(32, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(64, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(128, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(256, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(512, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(1024, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(1984, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(2048, 32b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 64) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(32, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(64, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(128, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(256, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(512, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(1024, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(1984, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(2048, 64b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(32, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(64, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(128, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(256, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(512, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(1024, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(1984, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A64_MULTICAST(2048, 16b)::"r"(mat_desc), "r"(offset), "r"(abar_ptr), "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else {
+    static_assert(false, "Unsupported data type");
+  }
+}
+
+#define ROW_LOAD_TILED_A32S_MULTICAST(row_size, basic_dtype, data_bits) \
+  "async_row_copy.shared_cluster.global.tiled." #row_size ".a32s." #data_bits "." #basic_dtype \
+  ".zero.L2c.L3uc.abarrier %0, [%1], [%2], %3, %4, %5;"
+
+template <uint32_t row_size, typename dtype, typename matrix_desc_t, typename abar_ptr_t = uint64_t *>
+inline void row_copy_tiled_a32s_load(matrix_desc_t mat_desc, dtype *gmem_ptr, int32_t offset, uint32_t size,
+                                     abar_ptr_t abar_ptr, uint32_t wg_mask) {
+  if constexpr (sizeof_bits<dtype>() == 8) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(32, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(64, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(128, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(256, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(512, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(1024, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(1984, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(2048, uint, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(32, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(64, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(128, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(256, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(512, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(1024, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(1984, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(2048, uint, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 64) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(32, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(64, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(128, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(256, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(512, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(1024, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(1984, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(2048, uint, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(32, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(64, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(128, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(256, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(512, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(1024, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(1984, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_A32S_MULTICAST(2048, uint, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(size), "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else {
+    static_assert(false, "Unsupported data type");
+  }
+}
+
+#define ROW_LOAD_TILED_NCS_A32S_MULTICAST(row_size, data_bits) \
+  "async_row_copy.shared_cluster.global.ncs.tiled." #row_size ".a32s." #data_bits \
+  ".L2c.L3uc.abarrier %0, [%1], [%2], %3, %4;"
+
+template <uint32_t row_size, typename dtype, typename matrix_desc_t, typename abar_ptr_t = uint64_t *>
+inline void row_copy_tiled_a32s_load(matrix_desc_t mat_desc, dtype *gmem_ptr, int32_t offset, abar_ptr_t abar_ptr,
+                                     uint32_t wg_mask) {
+  if constexpr (sizeof_bits<dtype>() == 8) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(32, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(64, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(128, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(256, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(512, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(1024, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(1984, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(2048, 8b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(32, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(64, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(128, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(256, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(512, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(1024, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(1984, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(2048, 32b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 64) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(32, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(64, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(128, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(256, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(512, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(1024, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(1984, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(2048, 64b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(32, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(64, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(128, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(256, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(512, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset),
+                  "r"(wg_mask));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(1024, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(wg_mask));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(1984, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(wg_mask));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_LOAD_TILED_NCS_A32S_MULTICAST(2048, 16b)::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr),
+                  "r"(offset), "r"(wg_mask));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else {
+    static_assert(false, "Unsupported data type");
+  }
+}
+
+#define ROW_STORE_TILED_A64(row_size, data_bits) \
+  "async_row_copy.global.shared_workgroup.tiled." #row_size ".a64." #data_bits \
+  ".L2wb.L3uc.abarrier [%0], %1, [%2], " \
+  "%3;"
+
+template <uint32_t row_size, typename dtype, typename matrix_desc_t, typename abar_ptr_t = uint64_t *>
+inline void row_copy_tiled_a64_store(matrix_desc_t mat_desc, uint64_t offset, uint32_t size, abar_ptr_t abar_ptr) {
+  if constexpr (sizeof_bits<dtype>() == 8) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_A64(32, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_A64(64, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_A64(128, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_A64(256, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_A64(512, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_A64(1024, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_A64(1984, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_A64(2048, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_A64(32, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_A64(64, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_A64(128, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_A64(256, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_A64(512, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_A64(1024, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_A64(1984, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_A64(2048, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 64) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_A64(32, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_A64(64, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_A64(128, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_A64(256, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_A64(512, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_A64(1024, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_A64(1984, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_A64(2048, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_A64(32, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_A64(64, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_A64(128, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_A64(256, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_A64(512, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_A64(1024, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_A64(1984, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_A64(2048, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 6) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_A64(32, 6b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_A64(64, 6b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 96) {
+      INLINE_PISA(ROW_STORE_TILED_A64(96, 6b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_A64(128, 6b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_A64(256, 6b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_A64(512, 6b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_A64(1024, 6b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_A64(1984, 6b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_A64(2048, 6b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else {
+    static_assert(false, "Unsupported data type");
+  }
+}
+
+#define ROW_STORE_TILED_NCS_A64(row_size, data_bits) \
+  "async_row_copy.global.shared_workgroup.ncs.tiled." #row_size ".a64." #data_bits \
+  ".L2wb.L3uc.abarrier [%0], %1, " \
+  "[%2];"
+
+template <uint32_t row_size, typename dtype, typename matrix_desc_t, typename abar_ptr_t = uint64_t *>
+inline void row_copy_tiled_a64_store(matrix_desc_t mat_desc, uint64_t offset, abar_ptr_t abar_ptr) {
+  if constexpr (sizeof_bits<dtype>() == 8) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(32, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(64, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(128, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(256, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(512, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(1024, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(1984, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(2048, 8b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(32, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(64, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(128, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(256, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(512, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(1024, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(1984, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(2048, 32b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 64) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(32, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(64, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(128, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(256, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(512, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(1024, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(1984, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(2048, 64b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(32, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(64, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(128, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(256, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(512, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(1024, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(1984, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A64(2048, 16b)::"r"(offset), "r"(mat_desc), "r"(abar_ptr));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else {
+    static_assert(false, "Unsupported data type");
+  }
+}
+
+#define ROW_STORE_TILED_A32S(row_size, data_bits) \
+  "async_row_copy.global.shared_workgroup.tiled." #row_size ".a32s." #data_bits \
+  ".L2wb.L3uc.abarrier [%0], %1, [%2], " \
+  "%3, %4;"
+
+template <uint32_t row_size, typename dtype, typename matrix_desc_t, typename abar_ptr_t = uint64_t *>
+inline void row_copy_tiled_a32s_store(matrix_desc_t mat_desc, dtype *gmem_ptr, int32_t offset, uint32_t size,
+                                      abar_ptr_t abar_ptr) {
+  if constexpr (sizeof_bits<dtype>() == 8) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(32, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(64, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(128, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(256, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(512, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(1024, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(1984, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(2048, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(32, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(64, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(128, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(256, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(512, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(1024, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(1984, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(2048, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 64) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(32, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(64, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(128, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(256, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(512, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(1024, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(1984, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(2048, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(32, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(64, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(128, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(256, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(512, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(1024, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(1984, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(2048, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 6) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(32, 6b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(64, 6b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 96) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(96, 6b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(128, 6b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(256, 6b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(512, 6b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(1024, 6b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(1984, 6b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_A32S(2048, 6b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else {
+    static_assert(false, "Unsupported data type");
+  }
+}
+
+#define ROW_STORE_TILED_NCS_A32S(row_size, data_bits) \
+  "async_row_copy.global.shared_workgroup.ncs.tiled." #row_size ".a32s." #data_bits \
+  ".L2wb.L3uc.abarrier [%0], %1, [%2], " \
+  "%3;"
+
+template <uint32_t row_size, typename dtype, typename matrix_desc_t, typename abar_ptr_t = uint64_t *>
+inline void row_copy_tiled_a32s_store(matrix_desc_t mat_desc, dtype *gmem_ptr, int32_t offset, abar_ptr_t abar_ptr) {
+  if constexpr (sizeof_bits<dtype>() == 8) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(32, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(64, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(128, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(256, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(512, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(1024, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(1984, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(2048, 8b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 32) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(32, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(64, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(128, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(256, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(512, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(1024, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(1984, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(2048, 32b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 64) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(32, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(64, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(128, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(256, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(512, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(1024, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(1984, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(2048, 64b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else if constexpr (sizeof_bits<dtype>() == 16) {
+    if constexpr (row_size == 32) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(32, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 64) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(64, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 128) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(128, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 256) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(256, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 512) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(512, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1024) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(1024, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 1984) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(1984, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else if constexpr (row_size == 2048) {
+      INLINE_PISA(ROW_STORE_TILED_NCS_A32S(2048, 16b)::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset));
+    } else {
+      static_assert(false, "Unsupported row size");
+    }
+  } else {
+    static_assert(false, "Unsupported data type");
   }
 }
 
@@ -1949,6 +2410,24 @@ inline void copy_cvt_pack(dtype_packed *dst_packed_ptr, dtype_src *src_ptr) {
 #pragma unroll
   for (int i = 0; i < n_elem / packed_num; i++) {
     cvt_pack<dtype_dst>(dst_packed_ptr[i], src_ptr[packed_num * i], src_ptr[packed_num * i + 1]);
+  }
+}
+
+template <uint32_t n_elem, typename dtype_dst, typename dtype_src>
+inline void copy_cvt_pack(dtype_dst *dst_ptr, dtype_src *src_ptr) {
+  using dtype_packed = uint32_t;
+  constexpr uint32_t packed_num = sizeof(dtype_packed) / sizeof(dtype_dst);
+  static_assert(packed_num == 2);
+  static_assert(n_elem % packed_num == 0);
+  sycl::marray<dtype_packed, n_elem / packed_num> dst_packed_array;
+#pragma unroll
+  for (int i = 0; i < n_elem / packed_num; i++) {
+    cvt_pack<dtype_dst>(dst_packed_array[i], src_ptr[packed_num * i], src_ptr[packed_num * i + 1]);
+  }
+  sycl::marray<dtype_dst, n_elem> dst_array = sycl::bit_cast<sycl::marray<dtype_dst, n_elem>>(dst_packed_array);
+#pragma unroll
+  for (int i = 0; i < n_elem; i++) {
+    dst_ptr[i] = dst_array[i];
   }
 }
 
@@ -2186,6 +2665,39 @@ uint32_t cm_get_slm_offset(uint32_t idx_x, uint32_t idx_y) {
 
     auto slm_offset = slm_cm_base + bank_start_offset + within_bank_swizzle_offset;
     return slm_offset;
+  } else if constexpr (slm_mat_type == slm_matrix_type::type3) {
+    constexpr uint32_t cm_bytes_y = 8;
+    constexpr uint32_t cm_size_x = 32;
+    constexpr uint32_t cm_byte_size = 256;
+    constexpr uint32_t cm_size_y = cm_bytes_y / sizeof(dtype);
+    constexpr uint32_t num_cm_per_row = row_size / cm_size_x;
+
+    constexpr uint32_t bank_bytes = 64;
+    constexpr uint32_t swizzle_bytes = bank_bytes / 2;
+    constexpr uint32_t bank_num = 4;
+    constexpr uint32_t cols_per_bank = cm_size_x / bank_num;
+    constexpr uint32_t rows_per_sub_bank = bank_bytes / (cols_per_bank * sizeof(dtype));
+    constexpr uint32_t within_cm_stride = bank_bytes * bank_num;
+
+    uint32_t cm_idx_y = idx_y / cm_size_y;
+    uint32_t cm_idx_x = idx_x / cm_size_x;
+    auto slm_cm_base = cm_idx_y * num_cm_per_row * cm_byte_size + cm_idx_x * cm_byte_size;
+
+    uint32_t idx_y_within_cm = idx_y % cm_size_y;
+    uint32_t idx_x_within_cm = idx_x % cm_size_x;
+    uint32_t bank_id = idx_x_within_cm / cols_per_bank;
+    uint32_t sub_bank_id = idx_y_within_cm / rows_per_sub_bank;
+
+    uint32_t idx_x_within_sub_bank = idx_x_within_cm % cols_per_bank;
+    uint32_t idx_y_within_sub_bank = idx_y_within_cm % rows_per_sub_bank;
+
+    auto bank_start_offset = sub_bank_id * bank_bytes * bank_num + bank_id * bank_bytes;
+    auto within_bank_swizzle_offset = (idx_y_within_sub_bank * cols_per_bank * sizeof(dtype) +
+                                       idx_x_within_sub_bank * sizeof(dtype) + (cm_idx_x & 1u) * swizzle_bytes) %
+        bank_bytes;
+
+    auto slm_offset = slm_cm_base + bank_start_offset + within_bank_swizzle_offset;
+    return slm_offset;
   } else {
     static_assert(false, "Unsupported slm matrix type");
   }
@@ -2211,7 +2723,6 @@ inline void cm_vrow_load(dtype *data_ptr, const mat_desc_t &mat_desc, const sycl
   }
   constexpr uint32_t dbits_u32 = sizeof(uint32_t) * BITS_PER_BYTE;
   constexpr uint32_t vs_u32 = (dbits * vs + dbits_u32 - 1) / dbits_u32;
-  constexpr uint32_t vs_dst = vs_u32 * dbits_u32 / dbits;
   using vtype = vector_t<uint32_t, vs_u32>;
   vtype temp;
   if constexpr (dbits == 64) {
@@ -2302,13 +2813,51 @@ inline void cm_vrow_load(dtype *data_ptr, const mat_desc_t &mat_desc, const sycl
     } else {
       static_assert(false, "Unsupported vector size for 8-bit data");
     }
+  } else if constexpr (dbits == 4) {
+    if constexpr (vs == 1) {
+      INLINE_PISA("ld_matrix.vl1.vrow.4b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 2) {
+      INLINE_PISA("ld_matrix.vl2.vrow.4b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 4) {
+      INLINE_PISA("ld_matrix.vl4.vrow.4b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 8) {
+      INLINE_PISA("ld_matrix.vl8.vrow.4b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 16) {
+      INLINE_PISA("ld_matrix.vl16.vrow.4b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 32) {
+      INLINE_PISA("ld_matrix.vl32.vrow.4b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else {
+      static_assert(false, "Unsupported vector size for 4-bit data");
+    }
+
   } else {
     static_assert(false, "Unsupported data size");
   }
-  sycl::marray<dtype, vs_dst> dst = sycl::bit_cast<sycl::marray<dtype, vs_dst>>(temp);
+
+  constexpr uint32_t vs_u8 = (dbits * vs + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
+  // for sub-byte type, will cvt to uint8_t first.
+  using dtype_reg = std::conditional_t<(dbits < 8), uint8_t, dtype>;
+  // to make it u8/element aligned
+  constexpr uint32_t vs_dst = (dbits < 8) ? vs_u8 : vs;
+  // to make it u32 aligned
+  constexpr uint32_t vs_reg = vs_u32 * dbits_u32 / sizeof_bits<dtype_reg>();
+  sycl::marray<dtype_reg, vs_reg> dst = sycl::bit_cast<sycl::marray<dtype_reg, vs_reg>>(temp);
+  dtype_reg *data_reg_ptr = reinterpret_cast<dtype_reg *>(data_ptr);
 #pragma unroll
-  for (uint32_t i = 0; i < vs; i++) {
-    data_ptr[i] = dst[i];
+  for (uint32_t i = 0; i < vs_dst; i++) {
+    data_reg_ptr[i] = dst[i];
   }
 }
 
@@ -2323,12 +2872,19 @@ inline void cm_vrow_store(const mat_desc_t &mat_desc, dtype *data_ptr, const syc
   }
   constexpr uint32_t dbits_u32 = sizeof(uint32_t) * BITS_PER_BYTE;
   constexpr uint32_t vs_u32 = (dbits * vs + dbits_u32 - 1) / dbits_u32;
-  constexpr uint32_t vs_src = vs_u32 * dbits_u32 / dbits;
+  constexpr uint32_t vs_u8 = (dbits * vs + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
   using vtype = vector_t<uint32_t, vs_u32>;
-  sycl::marray<dtype, vs_src> src;
+  // for sub-byte type, will cvt to uint8_t first.
+  using dtype_reg = std::conditional_t<(dbits < 8), uint8_t, dtype>;
+  // to make it u8/element aligned
+  constexpr uint32_t vs_src = (dbits < 8) ? vs_u8 : vs;
+  // to make it u32 aligned
+  constexpr uint32_t vs_reg = vs_u32 * dbits_u32 / sizeof_bits<dtype_reg>();
+  dtype_reg *data_reg_ptr = reinterpret_cast<dtype_reg *>(data_ptr);
+  sycl::marray<dtype_reg, vs_reg> src;
 #pragma unroll
-  for (uint32_t i = 0; i < vs; i++) {
-    src[i] = data_ptr[i];
+  for (uint32_t i = 0; i < vs_src; i++) {
+    src[i] = data_reg_ptr[i];
   }
   if constexpr (dbits == 64) {
     if constexpr (vs == 1) {
@@ -2397,6 +2953,299 @@ inline void cm_vrow_store(const mat_desc_t &mat_desc, dtype *data_ptr, const syc
     } else if constexpr (vs == 32) {
       INLINE_PISA("st_matrix.vl32.vrow.8b %0, %1, %2;" ::"r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)),
                   "r"(sycl::bit_cast<vtype>(src)));
+    } else {
+      static_assert(false, "Unsupported vector size for 8-bit data");
+    }
+  } else if constexpr (dbits == 4) {
+    if constexpr (vs == 1) {
+      INLINE_PISA("st_matrix.vl1.vrow.4b %0, %1, %2;" ::"r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)),
+                  "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 2) {
+      INLINE_PISA("st_matrix.vl2.vrow.4b %0, %1, %2;" ::"r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)),
+                  "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 4) {
+      INLINE_PISA("st_matrix.vl4.vrow.4b %0, %1, %2;" ::"r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)),
+                  "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 8) {
+      INLINE_PISA("st_matrix.vl8.vrow.4b %0, %1, %2;" ::"r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)),
+                  "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 16) {
+      INLINE_PISA("st_matrix.vl16.vrow.4b %0, %1, %2;" ::"r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)),
+                  "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 32) {
+      INLINE_PISA("st_matrix.vl32.vrow.4b %0, %1, %2;" ::"r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)),
+                  "r"(sycl::bit_cast<vtype>(src)));
+    } else {
+      static_assert(false, "Unsupported vector size for 8-bit data");
+    }
+  } else {
+    static_assert(false, "Unsupported data size");
+  }
+}
+
+template <typename dtype, uint32_t vs, typename mat_desc_t = uint32_t>
+inline void cm_vrow_load_unordered(dtype *data_ptr, const mat_desc_t &mat_desc, const sycl::marray<uint16_t, 2> &pos) {
+  static_assert(((vs & (vs - 1)) == 0), "vs needs to be power of 2");
+  constexpr uint32_t dbits = sizeof_bits<dtype>();
+  if constexpr (dbits < 8) {
+    static_assert(vs <= 32, "for sub-byte type, the maximum vs is 32");
+  } else {
+    static_assert(vs * dbits <= 256, "the maximum bits per load is 256");
+  }
+  constexpr uint32_t dbits_u32 = sizeof(uint32_t) * BITS_PER_BYTE;
+  constexpr uint32_t vs_u32 = (dbits * vs + dbits_u32 - 1) / dbits_u32;
+  using vtype = vector_t<uint32_t, vs_u32>;
+  vtype temp;
+  if constexpr (dbits == 64) {
+    if constexpr (vs == 1) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl1.cooprow.64b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 2) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl2.cooprow.64b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 4) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl4.cooprow.64b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else {
+      static_assert(false, "Unsupported vector size for 64-bit data");
+    }
+  } else if constexpr (dbits == 32) {
+    if constexpr (vs == 1) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl1.cooprow.32b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 2) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl2.cooprow.32b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 4) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl4.cooprow.32b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 8) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl8.cooprow.32b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else {
+      static_assert(false, "Unsupported vector size for 32-bit data");
+    }
+  } else if constexpr (dbits == 16) {
+    if constexpr (vs == 1) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl1.cooprow.16b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 2) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl2.cooprow.16b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 4) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl4.cooprow.16b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 8) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl8.cooprow.16b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 16) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl16.cooprow.16b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else {
+      static_assert(false, "Unsupported vector size for 16-bit data");
+    }
+  } else if constexpr (dbits == 8) {
+    if constexpr (vs == 1) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl1.cooprow.8b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 2) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl2.cooprow.8b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 4) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl4.cooprow.8b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 8) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl8.cooprow.8b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 16) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl16.cooprow.8b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 32) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl32.cooprow.8b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else {
+      static_assert(false, "Unsupported vector size for 8-bit data");
+    }
+  } else if constexpr (dbits == 4) {
+    if constexpr (vs == 1) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl1.cooprow.4b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 2) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl2.cooprow.4b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 4) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl4.cooprow.4b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 8) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl8.cooprow.4b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 16) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl16.cooprow.4b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else if constexpr (vs == 32) {
+      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl32.cooprow.4b %0, %1, %2;"
+                  : "=r"(temp)
+                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    } else {
+      static_assert(false, "Unsupported vector size for 4-bit data");
+    }
+
+  } else {
+    static_assert(false, "Unsupported data size");
+  }
+
+  constexpr uint32_t vs_u8 = (dbits * vs + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
+  // for sub-byte type, will cvt to uint8_t first.
+  using dtype_reg = std::conditional_t<(dbits < 8), uint8_t, dtype>;
+  // to make it u8/element aligned
+  constexpr uint32_t vs_dst = (dbits < 8) ? vs_u8 : vs;
+  // to make it u32 aligned
+  constexpr uint32_t vs_reg = vs_u32 * dbits_u32 / sizeof_bits<dtype_reg>();
+  sycl::marray<dtype_reg, vs_reg> dst = sycl::bit_cast<sycl::marray<dtype_reg, vs_reg>>(temp);
+  dtype_reg *data_reg_ptr = reinterpret_cast<dtype_reg *>(data_ptr);
+#pragma unroll
+  for (uint32_t i = 0; i < vs_dst; i++) {
+    data_reg_ptr[i] = dst[i];
+  }
+}
+
+template <typename dtype, uint32_t vs, typename mat_desc_t = uint32_t>
+inline void cm_vrow_store_unordered(const mat_desc_t &mat_desc, dtype *data_ptr, const sycl::marray<uint16_t, 2> &pos) {
+  static_assert(((vs & (vs - 1)) == 0), "vs needs to be power of 2");
+  constexpr uint32_t dbits = sizeof_bits<dtype>();
+  if constexpr (dbits < 8) {
+    static_assert(vs <= 32, "for sub-byte type, the maximum vs is 32");
+  } else {
+    static_assert(vs * dbits <= 256, "the maximum bits per load is 256");
+  }
+  constexpr uint32_t dbits_u32 = sizeof(uint32_t) * BITS_PER_BYTE;
+  constexpr uint32_t vs_u32 = (dbits * vs + dbits_u32 - 1) / dbits_u32;
+  constexpr uint32_t vs_u8 = (dbits * vs + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
+  using vtype = vector_t<uint32_t, vs_u32>;
+  // for sub-byte type, will cvt to uint8_t first.
+  using dtype_reg = std::conditional_t<(dbits < 8), uint8_t, dtype>;
+  // to make it u8/element aligned
+  constexpr uint32_t vs_src = (dbits < 8) ? vs_u8 : vs;
+  // to make it u32 aligned
+  constexpr uint32_t vs_reg = vs_u32 * dbits_u32 / sizeof_bits<dtype_reg>();
+  dtype_reg *data_reg_ptr = reinterpret_cast<dtype_reg *>(data_ptr);
+  sycl::marray<dtype_reg, vs_reg> src;
+#pragma unroll
+  for (uint32_t i = 0; i < vs_src; i++) {
+    src[i] = data_reg_ptr[i];
+  }
+  if constexpr (dbits == 64) {
+    if constexpr (vs == 1) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl1.cooprow.64b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 2) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl2.cooprow.64b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 4) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl4.cooprow.64b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else {
+      static_assert(false, "Unsupported vector size for 64-bit data");
+    }
+  } else if constexpr (dbits == 32) {
+    if constexpr (vs == 1) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl1.cooprow.32b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 2) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl2.cooprow.32b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 4) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl4.cooprow.32b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 8) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl8.cooprow.32b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else {
+      static_assert(false, "Unsupported vector size for 32-bit data");
+    }
+  } else if constexpr (dbits == 16) {
+    if constexpr (vs == 1) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl1.cooprow.16b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 2) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl2.cooprow.16b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 4) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl4.cooprow.16b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 8) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl8.cooprow.16b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 16) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl16.cooprow.16b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else {
+      static_assert(false, "Unsupported vector size for 16-bit data");
+    }
+  } else if constexpr (dbits == 8) {
+    if constexpr (vs == 1) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl1.cooprow.8b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 2) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl2.cooprow.8b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 4) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl4.cooprow.8b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 8) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl8.cooprow.8b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 16) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl16.cooprow.8b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 32) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl32.cooprow.8b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else {
+      static_assert(false, "Unsupported vector size for 8-bit data");
+    }
+  } else if constexpr (dbits == 4) {
+    if constexpr (vs == 1) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl1.cooprow.4b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 2) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl2.cooprow.4b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 4) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl4.cooprow.4b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 8) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl8.cooprow.4b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 16) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl16.cooprow.4b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    } else if constexpr (vs == 32) {
+      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl32.cooprow.4b %0, %1, %2;" ::"r"(mat_desc),
+                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
     } else {
       static_assert(false, "Unsupported vector size for 8-bit data");
     }
@@ -2615,6 +3464,13 @@ inline dtype_reg packed_fmax(const dtype_reg &src0, const dtype_reg &src1) {
 }
 
 template <typename dtype_math, typename dtype_reg>
+inline dtype_reg packed_fcmp(const dtype_reg &src0, const dtype_reg &src1) {
+  dtype_reg ret;
+  INLINE_PISA("fcmp.gt.bfx2 %0, %1, %2;" : "=r"(ret) : "r"(src0), "r"(src1));
+  return ret;
+}
+
+template <typename dtype_math, typename dtype_reg>
 inline dtype_reg packed_fadd(const dtype_reg &src0, const dtype_reg &src1) {
   constexpr uint32_t packed_num = sizeof(dtype_reg) / sizeof(dtype_math);
   dtype_reg ret;
@@ -2689,6 +3545,28 @@ inline void u16_replicate(dtype_dst &dst, dtype_src &src) {
   constexpr uint32_t offset = 16;
   INLINE_PISA("zext.32b.16b %0, %1;" : "=r"(dst) : "r"(src));
   INLINE_PISA("bfi.32b %0, %1, %2, %3, %4;" : "=r"(dst) : "r"(dst), "r"(dst), "r"(width), "r"(offset));
+}
+
+template <typename dtype_dst, typename dtype_src>
+inline void u16_extract(dtype_dst &dst, dtype_src &src) {
+  static_assert(sizeof(dtype_src) == 4);
+  static_assert(sizeof(dtype_dst) == 2);
+  constexpr uint32_t width = 16;
+  constexpr uint32_t offset = 0;
+  vector_t<uint16_t, 2> dst_tmp;
+  INLINE_PISA("mov.32b %0.xy, %1;" : "=r"(dst_tmp) : "r"(src));
+  INLINE_PISA("mov.16b %0, %1.x;" : "=r"(dst) : "r"(dst_tmp));
+}
+
+template <typename dtype = uint32_t>
+inline dtype rol(const dtype &src, uint32_t shift) {
+  dtype ret;
+  if constexpr (sizeof(dtype) == 4) {
+    INLINE_PISA("shf.l.32b %0, %1, %1, %2;" : "=r"(ret) : "r"(src), "r"(shift));
+  } else {
+    static_assert(sizeof(dtype) == 0, "unsupported dtype");
+  }
+  return ret;
 }
 
 template <typename dtype_math, uint32_t N_math, typename dtype_reg>
@@ -2913,6 +3791,132 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
     src[i] = src_ptr[i];
   }
   vtype_dst vdst;
+  if constexpr (std::is_same_v<dtype_src, float>) {
+    if constexpr (std::is_same_v<dtype_dst, bf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvd.e5m2.f32.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvd.e5m2.f32.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvd.e5m2.f32.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvd.e5m2.f32.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvd.e4m3.f32.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvd.e4m3.f32.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, fp4_e2m1>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvd.e2m1.f32.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvd.e2m1.f32.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, fp16>) {
+    if constexpr (std::is_same_v<dtype_dst, bf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvd.e5m2.f16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvd.e5m2.f16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvd.e5m2.f16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvd.e5m2.f16.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvd.e4m3.f16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvd.e4m3.f16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, fp4_e2m1>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvd.e2m1.f16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvd.e2m1.f16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, bf16>) {
+    if constexpr (std::is_same_v<dtype_dst, bf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvd.e5m2.bf16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvd.e5m2.bf16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvd.e5m2.bf16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvd.e4m3.bf16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvd.e4m3.bf16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvd.e4m3.bf16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, fp4_e2m1>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvd.e2m1.bf16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvd.e2m1.bf16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else {
+    static_assert(sizeof(dtype_src) == 0, "unsupported dtype_src");
+  }
+  sycl::marray<dtype_reg, N_dst> dst = sycl::bit_cast<sycl::marray<dtype_reg, N_dst>>(vdst);
+#pragma unroll
+  for (int i = 0; i < N_dst; i++) {
+    dst_ptr[i] = dst[i];
+  }
+}
+
+template <typename dtype_dst, typename dtype_src, uint32_t N>
+inline void gtp_tcvd(dtype_dst *dst_ptr, const dtype_src *src_ptr) {
+  constexpr uint32_t dbits_u32 = sizeof(uint32_t) * BITS_PER_BYTE;
+  constexpr uint32_t dbits_src = ::sizeof_bits<dtype_src>();
+  constexpr uint32_t dbits_dst = ::sizeof_bits<dtype_dst>();
+
+  constexpr uint32_t N_u32_src = (N * dbits_src + dbits_u32 - 1) / dbits_u32;
+  constexpr uint32_t N_u32_dst = (N * dbits_dst + dbits_u32 - 1) / dbits_u32;
+  // could bigger than N
+  constexpr uint32_t N_src = N_u32_src * dbits_u32 / dbits_src;
+
+  sycl::marray<dtype_src, N_src> src;
+
+  using vtype_src = vector_t<uint32_t, N_u32_src>;
+  using vtype_dst = vector_t<uint32_t, N_u32_dst>;
+#pragma unroll
+  for (int i = 0; i < N; i++) {
+    src[i] = src_ptr[i];
+  }
+  vtype_dst vdst;
   if constexpr (std::is_same_v<dtype_src, fp16>) {
     if constexpr (std::is_same_v<dtype_dst, bf8>) {
       if constexpr (N == 32) {
@@ -2934,11 +3938,11 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
-    } else if constexpr (std::is_same_v<dtype_dst, fp4_e3m0>) {
+    } else if constexpr (std::is_same_v<dtype_dst, fp4_e2m1>) {
       if constexpr (N == 32) {
-        INLINE_PISA("tcvd.e3m0.f16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+        INLINE_PISA("tcvd.e2m1.f16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 16) {
-        INLINE_PISA("tcvd.e3m0.f16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+        INLINE_PISA("tcvd.e2m1.f16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -2964,11 +3968,34 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
-    } else if constexpr (std::is_same_v<dtype_dst, fp4_e3m0>) {
+    } else if constexpr (std::is_same_v<dtype_dst, fp4_e2m1>) {
       if constexpr (N == 32) {
-        INLINE_PISA("tcvd.e3m0.bf16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+        INLINE_PISA("tcvd.e2m1.bf16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 16) {
-        INLINE_PISA("tcvd.e3m0.bf16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+        INLINE_PISA("tcvd.e2m1.bf16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst,
+                                        mxint8>) { // todo: compiler has not supported tcvdmx without mxeb/...
+      e8m0 scale(1.0f);
+      uint32_t v = scale.data;
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.s8.bf16.m32n32.mxeb %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(v));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.s8.bf16.m32n16.mxeb %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(v));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, int8_t>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvd.s8.bf16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvd.s8.bf16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -2978,10 +4005,19 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
   } else {
     static_assert(sizeof(dtype_src) == 0, "unsupported dtype_src");
   }
-  sycl::marray<dtype_reg, N_dst> dst = sycl::bit_cast<sycl::marray<dtype_reg, N_dst>>(vdst);
+
+  constexpr uint32_t N_u8_dst = (N * dbits_dst + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
+  // for sub-byte type, will cvt to uint8_t first.
+  using dtype_reg = std::conditional_t<(dbits_dst < 8), uint8_t, dtype_dst>;
+  // to make it u8/element aligned
+  constexpr uint32_t N_dst = (dbits_dst < 8) ? N_u8_dst : N;
+  // to make it u32 aligned
+  constexpr uint32_t N_reg = N_u32_dst * dbits_u32 / sizeof_bits<dtype_reg>();
+  sycl::marray<dtype_reg, N_reg> dst = sycl::bit_cast<sycl::marray<dtype_reg, N_reg>>(vdst);
+  dtype_reg *dst_reg_ptr = reinterpret_cast<dtype_reg *>(dst_ptr);
 #pragma unroll
-  for (int i = 0; i < N_dst; i++) {
-    dst_ptr[i] = dst[i];
+  for (uint32_t i = 0; i < N_dst; i++) {
+    dst_reg_ptr[i] = dst[i];
   }
 }
 
@@ -3013,13 +4049,13 @@ inline void gtp_tcvdmx(dtype_reg *dst_ptr, const dtype_reg *src_ptr, const uint8
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
-    } else if constexpr (std::is_same_v<dtype_dst, fp4_e3m0>) {
+    } else if constexpr (std::is_same_v<dtype_dst, fp4_e2m1>) {
       if constexpr (N == 32) {
-        INLINE_PISA("tcvdmx.e3m0.f16.m32n32.mxnd %0, %1, %2;"
+        INLINE_PISA("tcvdmx.e2m1.f16.m32n32.mxnd %0, %1, %2;"
                     : "=r"(vdst)
                     : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
       } else if constexpr (N == 16) {
-        INLINE_PISA("tcvdmx.e3m0.f16.m32n16.mxnd %0, %1, %2;"
+        INLINE_PISA("tcvdmx.e2m1.f16.m32n16.mxnd %0, %1, %2;"
                     : "=r"(vdst)
                     : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
       } else {
@@ -3041,13 +4077,13 @@ inline void gtp_tcvdmx(dtype_reg *dst_ptr, const dtype_reg *src_ptr, const uint8
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
-    } else if constexpr (std::is_same_v<dtype_dst, fp4_e3m0>) {
+    } else if constexpr (std::is_same_v<dtype_dst, fp4_e2m1>) {
       if constexpr (N == 32) {
-        INLINE_PISA("tcvdmx.e3m0.bf16.m32n32.mxnd %0, %1, %2;"
+        INLINE_PISA("tcvdmx.e2m1.bf16.m32n32.mxnd %0, %1, %2;"
                     : "=r"(vdst)
                     : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
       } else if constexpr (N == 16) {
-        INLINE_PISA("tcvdmx.e3m0.bf16.m32n16.mxnd %0, %1, %2;"
+        INLINE_PISA("tcvdmx.e2m1.bf16.m32n16.mxnd %0, %1, %2;"
                     : "=r"(vdst)
                     : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
       } else {
@@ -3089,6 +4125,14 @@ inline void gtp_tcvd_xch(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvd.e4m3.f16.m32n32.xch %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvd.e4m3.f16.m32n16.xch %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
     } else {
       static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
     }
@@ -3098,6 +4142,14 @@ inline void gtp_tcvd_xch(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
         INLINE_PISA("tcvd.e5m2.bf16.m32n32.xch %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvd.e5m2.bf16.m32n16.xch %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvd.e4m3.bf16.m32n32.xch %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvd.e4m3.bf16.m32n16.xch %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -3278,7 +4330,7 @@ inline void tcvdmx_rne(dstType *dst, srcType *src, metaType *meta) {
 
 struct matrix_desc_t {
   template <typename slm_dtype>
-  matrix_desc_t(slm_dtype *slm_ptr, uint32_t matrix_stride, slm_matrix_type cm_type) {
+  inline matrix_desc_t(slm_dtype *slm_ptr, uint32_t matrix_stride, slm_matrix_type cm_type) {
     constexpr uint32_t base_width = 12;
     constexpr uint32_t base_offset = 0;
     constexpr uint32_t matrix_stride_width = 11;
@@ -3297,10 +4349,46 @@ struct matrix_desc_t {
                 : "r"(data), "r"(uint32_t(cm_type)), "r"(cm_type_width), "r"(cm_type_offset));
   }
 
-  matrix_desc_t(uint32_t data_) : data(data_) {}
+  inline matrix_desc_t(uint32_t data_) : data(data_) {}
 
-  uint32_t inline get() { return data; }
+  inline matrix_desc_t(const matrix_desc_t &desc) : data(desc.get()) {}
+
+  inline const uint32_t get() const { return data; }
+
+  inline matrix_desc_t operator+(uint32_t offset) const { return matrix_desc_t(data + (offset >> 9)); }
+
+  inline matrix_desc_t &operator+=(uint32_t offset) {
+    this->data += (offset >> 9);
+    return *this;
+  }
 
   private:
   uint32_t data;
 };
+
+template <typename dtype_dst, typename dtype_src, uint32_t row_elem_per_wi>
+inline void fp_tile_cvt(dtype_dst *dst_ptr, dtype_src *src_ptr) {
+  constexpr uint32_t dbits_src = sizeof_bits<dtype_src>();
+  constexpr uint32_t dbits_dst = sizeof_bits<dtype_dst>();
+  constexpr uint32_t is_require_imm = (dbits_src > 16) && (dbits_dst < 16);
+  using dtypeImm = typename std::conditional<is_require_imm, bf16, dtype_src>::type;
+
+  constexpr uint32_t tp_size = (row_elem_per_wi <= 32) ? row_elem_per_wi : 32;
+  dtypeImm arrary_imm[row_elem_per_wi];
+#pragma unroll
+  for (int k = 0; k < row_elem_per_wi; k += tp_size) {
+    if constexpr (is_require_imm) {
+      copy_cvt_pack<tp_size>(arrary_imm + k, src_ptr + k);
+    } else {
+      copy_cvt<tp_size>(arrary_imm + k, src_ptr + k);
+    }
+  }
+#pragma unroll
+  for (int k = 0; k < row_elem_per_wi; k += tp_size) {
+    if constexpr (dbits_dst < 16) {
+      gtp_tcvd<dtype_dst, dtypeImm, tp_size>(dst_ptr + k, arrary_imm + k);
+    } else {
+      copy_cvt_pack<tp_size>(dst_ptr + k, arrary_imm + k);
+    }
+  }
+}

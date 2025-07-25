@@ -15,14 +15,15 @@ struct DMA_LOAD {};
 struct DMA_STORE {};
 struct DMA_MULTICAST {};
 
-template <slm_matrix_type cm_type>
+template <slm_matrix_type cm_type, uint32_t stride>
 struct ASYNC_TENSOR_LOAD : public DMA_LOAD
 {
   template<class TS, class TD, class Coord>
   CUTE_HOST_DEVICE static void
   copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, TD* slm_ptr, Coord const& coord)
   {
-    async_tensor_load<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, coord, abar_ptr);
+    matrix_desc_t mat_desc(slm_space_cast(slm_ptr), stride, cm_type);
+    async_tensor_load(tdesc_ptr, mat_desc.get(), gmem_ptr, coord, abar_ptr);
   }
 
   template<class DimIdx, class TS, class TD, class Coord>
@@ -39,14 +40,15 @@ struct ASYNC_TENSOR_LOAD : public DMA_LOAD
 /// ASYNC_TENSOR_STORE : Initiates a async tensor copy from shared memory to global memory
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <slm_matrix_type cm_type>
+template <slm_matrix_type cm_type, uint32_t stride>
 struct ASYNC_TENSOR_STORE : public DMA_STORE
 {
   template<class TS, class TD, class Coord>
   CUTE_HOST_DEVICE static void
   copy(uint64_t const* tdesc_ptr, TS gmem_ptr, uint64_t const* abar_ptr, TD* slm_ptr, Coord const& coord)
   {
-    async_tensor_store<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, coord, abar_ptr);
+    matrix_desc_t mat_desc(slm_space_cast(slm_ptr), stride, cm_type);
+    async_tensor_store(tdesc_ptr, mat_desc.get(), gmem_ptr, coord, abar_ptr);
   }
 };
 
@@ -62,7 +64,7 @@ struct ASYNC_TENSOR_LOAD_MULTICAST : public DMA_LOAD, public DMA_MULTICAST
   CUTE_HOST_DEVICE static void
   copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, uint32_t multicast_mask, TD* slm_ptr, Coord const& coord)
   {
-    async_tensor_load<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, coord, abar_ptr, multicast_mask);
+    // async_tensor_load<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, coord, abar_ptr, multicast_mask);
   }
 };
 
@@ -79,7 +81,7 @@ struct ASYNC_LINEAR_LOAD : public DMA_LOAD
   CUTE_DEVICE static void
   copy(uint64_t const* abar_ptr, uint32_t copy_size, const T* gmem_ptr, T* slm_ptr)
   {
-    async_linear_load(slm_space_cast(slm_ptr), gmem_ptr, copy_size, abar_ptr);
+    // async_linear_load(slm_space_cast(slm_ptr), gmem_ptr, copy_size, abar_ptr);
   }
 };
 

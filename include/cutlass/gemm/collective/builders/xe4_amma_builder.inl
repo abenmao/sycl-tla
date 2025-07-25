@@ -99,17 +99,23 @@ struct CollectiveBuilder<
   static constexpr slm_matrix_type cmTypeA =
     cutlass::gemm::detail::is_mn_major_A<GmemLayoutATag>() ? slm_matrix_type::type2 : slm_matrix_type::type1;
 
+  static constexpr uint32_t cmStrideA = 
+    cutlass::gemm::detail::is_mn_major_A<GmemLayoutATag>() ? size<0>(TileShape_MNK{}) : size<2>(TileShape_MNK{});
+
+  static constexpr uint32_t cmStrideB = 
+    cutlass::gemm::detail::is_mn_major_B<GmemLayoutBTag>() ? size<1>(TileShape_MNK{}) : size<2>(TileShape_MNK{});
+
   using GmemTiledCopyA =
     cute::conditional_t<
       size(ClusterShape_MNK{}) == 1,
-      cute::xe4::ASYNC_TENSOR_LOAD<cmTypeA>,
+      cute::xe4::ASYNC_TENSOR_LOAD<cmTypeA, cmStrideA>,
       cute::xe4::ASYNC_TENSOR_LOAD_MULTICAST<cmTypeA>
     >;
 
   using GmemTiledCopyB =
     cute::conditional_t<
       size(ClusterShape_MNK{}) == 1,
-      cute::xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1>,
+      cute::xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1, cmStrideB>,
       cute::xe4::ASYNC_TENSOR_LOAD_MULTICAST<slm_matrix_type::type1>
     >;
 

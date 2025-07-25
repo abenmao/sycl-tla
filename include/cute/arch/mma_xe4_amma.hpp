@@ -6,7 +6,7 @@
 namespace cute {
 
 namespace xe4 {
-  using MatDesc = uint32_t;
+  using MatDesc = matrix_desc_t;
   using Abarrier = uint64_t*;
 }
 

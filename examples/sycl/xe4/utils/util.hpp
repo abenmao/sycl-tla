@@ -14,6 +14,8 @@ static constexpr uint32_t BITS_PER_BYTE = 8;
 #define INLINE_PISA(...)
 #endif
 
+#define ALWAYS_INLINE __attribute__((always_inline))
+
 #ifdef __SYCL_DEVICE_ONLY__
 template <class T, int N>
 using vector_t = typename std::conditional_t<N == 1, T, T __attribute__((ext_vector_type(N)))>;
@@ -62,6 +64,8 @@ enum class data_type : uint8_t {
   i32 = 5,
   u64 = 6,
   i64 = 7,
+  fp6_e3m2 = 8,
+  fp6_e2m3 = 9,
   bf8 = 16,
   hf8 = 17,
   bf16 = 18,
@@ -188,38 +192,50 @@ constexpr uint32_t size_of() {
 
 template <typename dtype>
 constexpr uint32_t sizeof_bits() {
-  if constexpr (std::is_same_v<dtype, fp4_e3m0>) {
+  if constexpr (std::is_same_v<dtype, int2_t>) {
+    return 2;
+  } else if constexpr (std::is_same_v<dtype, fp2_e1m0>) {
+    return 2;
+  } else if constexpr (std::is_same_v<dtype, int4_t>) {
     return 4;
-  } else if constexpr (std::is_same_v<dtype, e8m0> || std::is_same_v<dtype, hf8> || std::is_same_v<dtype, bf8> ||
-                       std::is_same_v<dtype, int8_t>) {
+  } else if constexpr (std::is_same_v<dtype, fp4_e2m1>) {
+    return 4;
+  } else if constexpr (std::is_same_v<dtype, fp6_e3m2>) {
+    return 6;
+  } else if constexpr (std::is_same_v<dtype, fp6_e2m3>) {
+    return 6;
+  } else if constexpr (sizeof(dtype) == 1) {
     return 8;
-  } else if constexpr (std::is_same_v<dtype, fp16> || std::is_same_v<dtype, bf16>) {
+  } else if constexpr (sizeof(dtype) == 2) {
     return 16;
-  } else if constexpr (std::is_same_v<dtype, float> || std::is_same_v<dtype, int32_t>) {
+  } else if constexpr (sizeof(dtype) == 4) {
     return 32;
+  } else if constexpr (sizeof(dtype) == 8) {
+    return 64;
   } else {
     static_assert(false, "Unsupported data type");
   }
 }
 
-template <slm_matrix_type cm_type, data_type dtype>
+template <slm_matrix_type cm_type, typename dtype>
 constexpr cm_size_t get_core_matrix_size() {
+  constexpr uint32_t dsize_in_bits = sizeof_bits<dtype>();
   if constexpr (cm_type == slm_matrix_type::type1) {
     return cm_size_t::cm_32x32B;
   } else if constexpr (cm_type == slm_matrix_type::type2) {
-    if constexpr (size_of<dtype>() == 1) {
+    if constexpr (dsize_in_bits == 6 || dsize_in_bits == 8) {
       return cm_size_t::cm_32x32B;
-    } else if constexpr (size_of<dtype>() == 2) {
+    } else if constexpr (dsize_in_bits == 16) {
       return cm_size_t::cm_16x64B;
-    } else if constexpr (size_of<dtype>() == 4) {
+    } else if constexpr (dsize_in_bits == 32) {
       return cm_size_t::cm_8x128B;
-    } else if constexpr (size_of<dtype>() == 8) {
+    } else if constexpr (dsize_in_bits == 64) {
       return cm_size_t::cm_4x256B;
     } else {
       static_assert(false, "Supports up to 64-bit.");
     }
   } else if constexpr (cm_type == slm_matrix_type::type3) {
-    if constexpr (size_of<dtype>() == 1) {
+    if constexpr (dsize_in_bits == 8) {
       return cm_size_t::cm_8x32B;
     } else {
       static_assert(false, "Only support 8-bit.");
@@ -274,7 +290,7 @@ struct is_floating_t {
 };
 
 template <>
-struct is_floating_t<fp4_e3m0> {
+struct is_floating_t<fp4_e2m1> {
   static constexpr bool value = true;
 };
 
@@ -348,6 +364,7 @@ template <int Size>
 using get_uint_type_t = typename get_uint_type<Size>::type;
 
 enum class mem_layout : uint8_t { row_major = 0, col_major = 1 };
+enum class PassType : uint8_t { FWD = 0, BWD = 1 };
 enum class sparsity_repr_t : uint8_t { A4xB2 = 0 };
 
 template <class T>
@@ -409,14 +426,23 @@ sycl::vec<uint32_t, 2> get_cm_size(slm_matrix_type cm_type) {
   return sycl::vec<uint32_t, 2> {leading_size, secondary_size};
 }
 
+template <uint32_t dim>
+uint32_t calculate_total_size(const sycl::vec<uint32_t, dim> &shape) {
+  uint32_t size = 1;
+  for (uint32_t i = 0; i < dim; i++) {
+    size *= shape[i];
+  }
+  return size;
+}
+
 template <typename T, uint32_t Dim, typename DstT = uint64_t>
 inline sycl::vec<DstT, Dim - 1> get_stride_from_shape(const sycl::vec<uint32_t, Dim> &shape) {
   sycl::vec<DstT, Dim - 1> res;
-  DstT accumulted = sizeof(T);
+  static constexpr uint32_t d8_in_bits = 8;
+  res[0] = shape[0] * sizeof_bits<T>() / d8_in_bits;
 #pragma unroll
-  for (uint32_t i = 0; i < Dim - 1; i++) {
-    accumulted *= shape[i];
-    res[i] = accumulted;
+  for (uint32_t i = 1; i < Dim - 1; i++) {
+    res[i] = res[i - 1] * shape[i];
   }
   return res;
 }
@@ -451,25 +477,20 @@ inline uint32_t generate_predicate_mask(uint32_t num) {
 template <typename dtype>
 inline uint32_t get_offset(const sycl::marray<int32_t, 2> &gmem_coord, const sycl::vec<uint32_t, 2> &gmem_size,
                            const sycl::vec<uint64_t, 1> &gmem_stride) {
+  uint32_t dsize_in_bits = sizeof_bits<dtype>();
+  static constexpr uint32_t d8_in_bits = 8;
   bool is_valid_coord = is_within_boundary<2>(gmem_coord, gmem_size);
-  uint32_t offset = is_valid_coord ? gmem_coord[1] * gmem_stride[0] + gmem_coord[0] * sizeof(dtype) : 0;
+  uint32_t offset = is_valid_coord ? gmem_coord[1] * gmem_stride[0] + gmem_coord[0] * dsize_in_bits / d8_in_bits : 0;
   return offset;
-}
-
-template <typename dtype>
-inline uint64_t get_offset_a64(dtype *ptr, const sycl::marray<int32_t, 2> &gmem_coord,
-                               const sycl::vec<uint32_t, 2> &gmem_size, const sycl::vec<uint64_t, 1> &gmem_stride) {
-  bool is_valid_coord = is_within_boundary<2>(gmem_coord, gmem_size);
-  uint32_t offset = is_valid_coord ? gmem_coord[1] * gmem_stride[0] + gmem_coord[0] * sizeof(dtype) : 0;
-  uint32_t dtype_offset = offset / sizeof(dtype);
-  return reinterpret_cast<uint64_t>(ptr + dtype_offset);
 }
 
 template <typename dtype>
 inline uint32_t get_copy_size(const sycl::marray<int32_t, 2> &gmem_coord, const sycl::vec<uint32_t, 2> &gmem_size,
                               uint32_t width_2d) {
+  uint32_t dsize_in_bits = sizeof_bits<dtype>();
+  static constexpr uint32_t d8_in_bits = 8;
   bool is_valid_coord = is_within_boundary<2>(gmem_coord, gmem_size);
-  uint32_t copy_size = is_valid_coord ? (gmem_size[0] - gmem_coord[0]) * sizeof(dtype) : 0;
+  uint32_t copy_size = is_valid_coord ? (gmem_size[0] - gmem_coord[0]) * dsize_in_bits / d8_in_bits : 0;
   copy_size = copy_size < width_2d ? copy_size : width_2d;
   return copy_size;
 }
@@ -508,17 +529,57 @@ inline uint8_t random_sparsity() {
   return ret;
 }
 
-inline float random_float() {
-  double mean = 0.0;
-  double stddev = 1.0;
+inline float random_float(float lower = -0.5, float upper = 0.5) {
+  // Ensure lower <= upper
+  if (lower > upper) {
+    throw std::invalid_argument("random_int: lower bound must be less than or equal to upper bound.");
+  }
 
   // Create a random number generator
   std::random_device rd; // Will be used to obtain a seed for the random number engine
   std::mt19937 gen(rd()); // Standard mersenne_twister_engine seeded with rd()
 
-  // Create a normal distribution with the specified mean and standard deviation
-  std::normal_distribution<> d(mean, stddev);
+  std::uniform_real_distribution<> d(lower, upper);
   return d(gen);
+}
+
+template <typename T>
+struct data_pack_helper {
+  static std::vector<uint8_t> pack(const std::vector<T> &data) {
+    std::vector<uint8_t> packed_data(data.size() * sizeof(T));
+    std::memcpy(packed_data.data(), data.data(), data.size() * sizeof(T));
+    return packed_data;
+  }
+
+  static std::vector<T> unpack(const std::vector<uint8_t> &buffer) {
+    std::vector<T> unpacked_data(buffer.size() / sizeof(T));
+    std::memcpy(unpacked_data.data(), buffer.data(), buffer.size());
+    return unpacked_data;
+  }
+};
+
+inline std::vector<uint8_t> unpack_fp6_data(const std::vector<uint8_t> &input) {
+  size_t totalBits = input.size() * 8;
+  size_t bitIndex = 0;
+  size_t inputCount = 0;
+  size_t u16BitIndex = 0;
+  uint16_t u16Temp = 0;
+  std::vector<uint8_t> ret;
+
+  while (bitIndex < totalBits) {
+    if (u16BitIndex < 6) {
+      u16Temp |= input[inputCount] << u16BitIndex;
+      u16BitIndex += 8;
+      inputCount++;
+    }
+    uint8_t temp = u16Temp & 0x3f;
+    temp = temp << 2; // 00 on lsb
+    ret.push_back(temp);
+    u16Temp = u16Temp >> 6;
+    u16BitIndex -= 6;
+    bitIndex += 6;
+  }
+  return ret;
 }
 
 template <typename T>
@@ -542,19 +603,47 @@ inline T random_int(T lower, T upper) {
 }
 
 template <typename T>
-struct data_pack_helper {
+struct data_pack_helper_special {
   static std::vector<uint8_t> pack(const std::vector<T> &data) {
-    std::vector<uint8_t> packed_data(data.size() * sizeof(T));
-    std::memcpy(packed_data.data(), data.data(), data.size() * sizeof(T));
+    uint32_t size_bits = sizeof_bits<T>();
+    assert(data.size() * size_bits % 8u == 0 && "The input data cannot completely fill the buffer.");
+    std::vector<uint8_t> packed_data(data.size() * size_bits / 8u);
+    uint32_t elem_per_byte = 8u / size_bits;
+    for (uint32_t i = 0; i < data.size(); i += elem_per_byte) {
+      uint8_t val = 0;
+      for (uint32_t j = 0; j < elem_per_byte; j++) {
+        uint8_t tmp = (uint8_t)data[i + j].value();
+        tmp &= (1 << size_bits) - 1;
+        val |= (tmp << (j * size_bits));
+      }
+      packed_data[i / elem_per_byte] = val;
+    }
+
     return packed_data;
   }
 
   static std::vector<T> unpack(const std::vector<uint8_t> &buffer) {
-    std::vector<T> unpacked_data(buffer.size() / sizeof(T));
-    std::memcpy(unpacked_data.data(), buffer.data(), buffer.size());
+    uint32_t size_bits = sizeof_bits<T>();
+    std::vector<T> unpacked_data(buffer.size() * 8u / size_bits);
+    uint32_t elems_per_byte = 8u / size_bits;
+    for (uint32_t i = 0; i < buffer.size(); i++) {
+      uint32_t buf_elem = buffer[i];
+      for (uint32_t j = 0; j < elems_per_byte; j++) {
+        uint32_t tmp = buf_elem & ((1u << size_bits) - 1);
+        unpacked_data[i * elems_per_byte + j] = T(tmp);
+        buf_elem >>= size_bits;
+      }
+    }
+
     return unpacked_data;
   }
 };
+
+template <>
+struct data_pack_helper<int2_t> : public data_pack_helper_special<int2_t> {};
+
+template <>
+struct data_pack_helper<int4_t> : public data_pack_helper_special<int4_t> {};
 
 template <typename T>
 std::vector<uint8_t> pack_data(std::vector<T> &data) {
@@ -564,6 +653,42 @@ std::vector<uint8_t> pack_data(std::vector<T> &data) {
 template <typename T>
 std::vector<T> unpack_data(std::vector<uint8_t> &buffer) {
   return data_pack_helper<T>::unpack(buffer);
+}
+
+// each workitem load n_elem data
+template <typename dtype_st, typename dtype_ld, uint32_t n_elem>
+struct postop_tiling_helper {
+  private:
+  static constexpr uint32_t type1_cm_byte_x = 32;
+  static constexpr uint32_t u4_type1_cm_num_x = 32;
+  static constexpr uint32_t dbits_ld = sizeof_bits<dtype_ld>();
+  static constexpr uint32_t dbits_st = sizeof_bits<dtype_st>();
+  static constexpr uint32_t max_vs_ld =
+      (dbits_ld == 4) ? u4_type1_cm_num_x : type1_cm_byte_x * BITS_PER_BYTE / dbits_ld;
+  static constexpr uint32_t max_vs_st =
+      (dbits_st == 4) ? u4_type1_cm_num_x : type1_cm_byte_x * BITS_PER_BYTE / dbits_st;
+
+  public:
+  using dtype_packed = uint32_t;
+  static constexpr uint32_t vs_ld = (n_elem > max_vs_ld) ? max_vs_ld : n_elem;
+  static constexpr uint32_t vs_st = (n_elem > max_vs_st) ? max_vs_st : n_elem;
+  static_assert((n_elem % vs_ld) == 0);
+  static_assert((n_elem % vs_st) == 0);
+  static constexpr uint32_t num_ld_unroll = n_elem / vs_ld;
+  static constexpr uint32_t num_st_unroll = n_elem / vs_st;
+
+  static constexpr uint32_t packed_num_ld = sizeof(dtype_packed) * BITS_PER_BYTE / dbits_ld;
+  static constexpr uint32_t packed_num_st = sizeof(dtype_packed) * BITS_PER_BYTE / dbits_st;
+  static constexpr uint32_t packed_vs_ld = vs_ld / packed_num_ld;
+  static constexpr uint32_t packed_vs_st = vs_st / packed_num_st;
+  static constexpr uint32_t packed_n_elem_ld = n_elem / packed_num_ld;
+  static constexpr uint32_t packed_n_elem_st = n_elem / packed_num_st;
+};
+
+template <uint32_t stage>
+void inline update_pipeline(uint32_t &cyclic_i, uint32_t &wait_phase) {
+  wait_phase = (cyclic_i == stage - 1) ? (wait_phase ^ 1) : wait_phase;
+  cyclic_i = (cyclic_i == stage - 1) ? 0 : cyclic_i + 1;
 }
 
 namespace conv2d {

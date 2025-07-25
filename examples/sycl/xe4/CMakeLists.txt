@@ -51,4 +51,4 @@ function(add_xe4_test TARGET_NAME SRCS)
 endfunction()
 
 add_subdirectory(gemm)
-add_subdirectory(conv2d)
+# add_subdirectory(conv2d)

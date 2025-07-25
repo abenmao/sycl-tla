@@ -43,7 +43,6 @@ struct XE4_COPY_Unpack
                                     traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
                                     make_tuple(dst_ptr, src_coord), seq<0, 1>{});
       }
-
     } else {
       auto src_ptr = cute::raw_pointer_cast(src.data());
       if constexpr(isIm2ColOperation) {

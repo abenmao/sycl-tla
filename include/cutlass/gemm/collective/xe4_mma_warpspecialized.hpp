@@ -355,6 +355,11 @@ struct CollectiveMma<
     auto [tBgB_nkl, tBsB] = tma_partition(*observed_tma_load_b_,
                                       get<1>(cta_coord_vmnk), make_layout(size<1>(cta_layout_vmnk)),
                                       group_modes<0,3>(sB), group_modes<0,3>(tCgB_nkl));
+    
+    Tensor rA = TiledMma::make_fragment_A(sA);
+    Tensor rB = TiledMma::make_fragment_B(sB);
+    Tensor tArA = Tensor{rA.engine(), tAsA.layout()};
+    Tensor tBrB = Tensor{rB.engine(), tBsB.layout()};
 
     LoadParams load_params {
       shape<3>(gA_mkl),                      // for scheduler

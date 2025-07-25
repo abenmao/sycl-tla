@@ -438,7 +438,7 @@ public:
     auto ptr_sD = shared_tensors.collective.smem_D.begin();
     auto sC_epi = make_slm_tensor<SmemElementC>(ptr_sC, SmemLayoutC{});   // (EPI_TILE_M,EPI_TILE_N,PIPE_C)
     auto sD_epi = make_slm_tensor<SmemElementD>(ptr_sD, SmemLayoutD{});   // (CTA_M,CTA_N,PIPE_D)
-
+    
     // Prepare the thread(b)lock's (G)mem to (S)mem TMA tiled copy (bGS_)
     ThrCopy thrblk_g2s = params.tma_load_c.get_slice(thread_idx);
     Tensor bGS_gC = thrblk_g2s.partition_S(gC_epi);                                    // (TMA,TMA_M,TMA_N,EPI_M,EPI_N)

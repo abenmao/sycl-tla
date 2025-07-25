@@ -9,17 +9,17 @@ template <typename T = void>
 struct MatDescIterator
 {
   using underlying_type = T;
-  using reference       = MatDesc;
-  using element_type    = MatDesc;
-  using value_type      = MatDesc;
+  using reference       = uint32_t;
+  using element_type    = uint32_t;
+  using value_type      = uint32_t;
 
   MatDesc desc_;
 
-  constexpr MatDescIterator(MatDesc desc): desc_(desc) {}
+  MatDescIterator(MatDesc const& desc): desc_(desc) {}
 
   // Dereference returns the MatDesc
   CUTE_HOST_DEVICE constexpr
-  reference operator*() const { return desc_; }
+  reference operator*() const { return desc_.get(); }
 
   // Advance and return a new MatDesc
   template <class Index>
@@ -31,34 +31,34 @@ struct MatDescIterator
   CUTE_HOST_DEVICE constexpr
   MatDescIterator operator+(Index const& offset) const
   {
-    return { MatDesc{desc_ + (MatDesc(offset) >> 9)} };
+    return { MatDesc{desc_ + uint32_t(offset)} };
   }
 
   CUTE_HOST_DEVICE friend void
-  print(MatDescIterator const& iter) { printf("xe4::MatDescIterator(%p)", iter.desc_); }
+  print(MatDescIterator const& iter) { printf("xe4::MatDescIterator(%p)", *iter); }
 };
 
 template <bool cm_major_x, class SEngine, class SLayout>
-CUTE_HOST_DEVICE constexpr
+CUTE_HOST_DEVICE
 auto make_matrix_desc(Tensor<SEngine, SLayout> const& sTensor) {
   using Stride = decltype(stride(SLayout{}));
   using Element = typename SEngine::element_type;
 
   constexpr int non_leading_dim = cutlass::gemm::detail::is_mn_major<Stride>() ? 1 : 0;
-  constexpr uint32_t cm_size = cm_major_x ? 32 / sizeof(Element) : 32;
-  constexpr uint32_t cm_stride = size<non_leading_dim>(Stride{}) / cm_size;
+  constexpr uint32_t matrix_stride = size<non_leading_dim>(Stride{});
+  constexpr slm_matrix_type cm_type = cm_major_x ? slm_matrix_type::type1 : slm_matrix_type::type2;
 
-  MatDesc mat_desc = reinterpret_cast<uint64_t>(slm_space_cast(raw_pointer_cast(sTensor.data()))) >> 9;
-  mat_desc |= (cm_stride << 16);
+  auto slm_ptr = slm_space_cast(raw_pointer_cast(sTensor.data()));
+  matrix_desc_t mat_desc(slm_ptr, matrix_stride, cm_type);
 
   return MatDescIterator<Element>{mat_desc};
 }
 
 template <class T, class U>
 CUTE_HOST_DEVICE constexpr
-MatDesc
+uint32_t
 raw_pointer_cast(MatDescIterator<U> const& ptr) {
-  return ptr.desc_;
+  return *ptr;
 }
 
 template <bool cm_major_x>
