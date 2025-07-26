@@ -57,14 +57,15 @@ struct ASYNC_TENSOR_STORE : public DMA_STORE
 /// ASYNC_TENSOR_LOAD_MULTICAST: Initiates a async tensor copy from global memory to shared memory
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <slm_matrix_type cm_type>
+template <slm_matrix_type cm_type, uint32_t stride>
 struct ASYNC_TENSOR_LOAD_MULTICAST : public DMA_LOAD, public DMA_MULTICAST
 {
   template<class TS, class TD, class Coord>
   CUTE_HOST_DEVICE static void
   copy(uint64_t const* tdesc_ptr, TS* gmem_ptr, uint64_t const* abar_ptr, uint32_t multicast_mask, TD* slm_ptr, Coord const& coord)
   {
-    // async_tensor_load<cm_type>(tdesc_ptr, slm_space_cast(slm_ptr), gmem_ptr, coord, abar_ptr, multicast_mask);
+    matrix_desc_t mat_desc(slm_space_cast(slm_ptr), stride, cm_type);
+    async_tensor_load(tdesc_ptr, mat_desc.get(), gmem_ptr, coord, abar_ptr, multicast_mask);
   }
 };
 
@@ -81,7 +82,7 @@ struct ASYNC_LINEAR_LOAD : public DMA_LOAD
   CUTE_DEVICE static void
   copy(uint64_t const* abar_ptr, uint32_t copy_size, const T* gmem_ptr, T* slm_ptr)
   {
-    // async_linear_load(slm_space_cast(slm_ptr), gmem_ptr, copy_size, abar_ptr);
+    async_linear_load(slm_space_cast(slm_ptr), gmem_ptr, copy_size, abar_ptr);
   }
 };
 

@@ -109,14 +109,14 @@ struct CollectiveBuilder<
     cute::conditional_t<
       size(ClusterShape_MNK{}) == 1,
       cute::xe4::ASYNC_TENSOR_LOAD<cmTypeA, cmStrideA>,
-      cute::xe4::ASYNC_TENSOR_LOAD_MULTICAST<cmTypeA>
+      cute::xe4::ASYNC_TENSOR_LOAD_MULTICAST<cmTypeA, cmStrideA>
     >;
 
   using GmemTiledCopyB =
     cute::conditional_t<
       size(ClusterShape_MNK{}) == 1,
       cute::xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1, cmStrideB>,
-      cute::xe4::ASYNC_TENSOR_LOAD_MULTICAST<slm_matrix_type::type1>
+      cute::xe4::ASYNC_TENSOR_LOAD_MULTICAST<slm_matrix_type::type1, cmStrideB>
     >;
 
   using SmemLayoutAtomA =

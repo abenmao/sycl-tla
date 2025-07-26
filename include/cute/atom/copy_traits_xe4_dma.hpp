@@ -231,8 +231,8 @@ struct Copy_Traits<Xe4CopyOpWrapper<CopyOperation>, NumBitsPerTMA, OpArgsTuple, 
 ///////////////////////////// ASYNC_TENSOR_LOAD_MULTICAST / ASYNC_TENSOR_STORE_MULTICAST /////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <slm_matrix_type cm_type, class NumBitsPerTMA, class DmaCache>
-struct Copy_Traits<Xe4CopyOp<xe4::ASYNC_TENSOR_LOAD_MULTICAST<cm_type>>, NumBitsPerTMA, DmaCache>
+template <slm_matrix_type cm_type, uint32_t stride, class NumBitsPerTMA, class DmaCache>
+struct Copy_Traits<Xe4CopyOp<xe4::ASYNC_TENSOR_LOAD_MULTICAST<cm_type, stride>>, NumBitsPerTMA, DmaCache>
 {
   using ThrID     = Layout<_1>;
   using SrcLayout = Layout<Shape<_1, NumBitsPerTMA>>;
@@ -244,7 +244,7 @@ struct Copy_Traits<Xe4CopyOp<xe4::ASYNC_TENSOR_LOAD_MULTICAST<cm_type>>, NumBits
   template<class ABarrier>
   CUTE_HOST_DEVICE constexpr
   auto with(ABarrier const* abar_ptr, uint32_t const& multicast_mask) const {
-    using CopyOperation = xe4::ASYNC_TENSOR_LOAD_MULTICAST<cm_type>;
+    using CopyOperation = xe4::ASYNC_TENSOR_LOAD_MULTICAST<cm_type, stride>;
     using Wrapper = Xe4CopyOpWrapper<CopyOperation>;
     using OpUnpack = typename DmaCache::template OpUnpack<Wrapper>;
 
