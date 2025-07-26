@@ -147,11 +147,11 @@ private:
   using SmemLayoutAtomC = decltype(make_ordered_layout(EpilogueTile{}, Step<_1, _0>{}));
   using SmemLayoutAtomD = decltype(make_ordered_layout(TileShape_MN{}, Step<_1, _0>{}));
   using CopyOpS2G = cute::conditional_t<detail::is_im2col_mode<GmemLayoutTagD>,
-      xe4::ASYNC_ROW_STORE_IM2COL<slm_matrix_type::type1>,
+      xe4::ASYNC_ROW_STORE_IM2COL<slm_matrix_type::type1, size<1>(CtaTileShape_MNK{})>,
       xe4::ASYNC_TENSOR_STORE<slm_matrix_type::type1, size<1>(CtaTileShape_MNK{})>
     >;
   using CopyOpG2S = cute::conditional_t<detail::is_im2col_mode<GmemLayoutTagC>,
-      xe4::ASYNC_ROW_LOAD_IM2COL<slm_matrix_type::type1>,
+      xe4::ASYNC_ROW_LOAD_IM2COL<slm_matrix_type::type1, size<1>(CtaTileShape_MNK{})>,
       xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1, size<1>(CtaTileShape_MNK{})>
     >;
 

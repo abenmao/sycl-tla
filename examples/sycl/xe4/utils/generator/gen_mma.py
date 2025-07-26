@@ -20,16 +20,39 @@ def SubstituteTemplate(template, values):
     return text
 
 
+def as_pisa_type(dtype):
+    converted_types = {
+        "mxint8": "s8",
+        "fp4ue8m0k32": "e2m1",
+        "fp4ue8m0k16": "e2m1",
+        "fp4ue5m3k32": "e2m1",
+        "fp4ue5m3k16": "e2m1",
+        "fp4ue4m3k16": "e2m1",
+    }
+
+    if dtype in converted_types:
+        return converted_types[dtype]
+    else:
+        return dtype
+
+
 def as_sycl_type(dtype):
     converted_types = {
         "f32": "float",
         "f16": "fp16",
         "s32": "int32_t",
         "s8": "int8_t",
-        "e3m0": "fp4_e3m0",
+        "e2m1": "fp4_e2m1",
+        "e3m2": "fp6_e3m2",
+        "s4": "int4_t",
+        "fp4ue8m0k32": "fp4_ue8m0k32",
+        "fp4ue8m0k16": "fp4_ue8m0k16",
+        "fp4ue5m3k32": "fp4_ue5m3k32",
+        "fp4ue5m3k16": "fp4_ue5m3k16",
+        "fp4ue4m3k16": "fp4_ue4m3k16",
     }
 
-    unchanged_types = ["bf16", "bf8", "hf8"]
+    unchanged_types = ["bf16", "bf8", "hf8", "mxint8"]
 
     if dtype in converted_types:
         return converted_types[dtype]
@@ -40,8 +63,7 @@ def as_sycl_type(dtype):
 
 
 def repr_layout(layout, is_a):
-    id_ = "a" if is_a else "b"
-    return "" if layout == "row_major" else f".{id_}t"
+    return "" if layout == "row_major" else f".am" if is_a else f".bk"
 
 
 class ProfileRegular:
@@ -474,6 +496,328 @@ inline void async_gmma_handler(mat_desc_t mat_desc_d, mat_desc_t mat_desc_c, mat
     return async_gmma<TD, TC, TA, TB, M, N, K, layout_a, layout_b>(mat_desc_d, mat_desc_c, mat_desc_a, mat_desc_b, ctrl, abar_d, abar_a, mask_a, abar_b, mask_b);
   }
 }
+
+template <typename dtype_c, typename dtype_acc, typename dtype_a, typename dtype_b, uint32_t wg_m, uint32_t wg_n,
+          uint32_t wg_k, uint32_t mma_m, uint32_t mma_k, mem_layout layout_a, mem_layout layout_b, bool is_sparsity,
+          bool is_scale_a, bool is_scale_b, sparsity_repr_t sparse_repr>
+constexpr std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
+                     uint32_t>
+checkout_per_loop_stride() {
+  auto round_up = [](const auto a, const auto b) { return (a + b - 1) / b * b; };
+
+  constexpr bool is_trans_a = (layout_a == mem_layout::col_major);
+  constexpr bool is_trans_b = (layout_b == mem_layout::col_major);
+  constexpr uint32_t sparse_ratio = is_sparsity ? get_sparsity_ratio(sparse_repr) : 1;
+
+  constexpr uint32_t rep_k = wg_k / mma_k;
+  static_assert(wg_k % mma_k == 0, "wg_k must be times of mma_k");
+  static_assert(is_valid_mma_k<dtype_a, dtype_b, mma_k>(), "mma_k should be valid for the given dtype_a and dtype_b");
+
+  constexpr uint32_t rep_m = wg_m / mma_m;
+  static_assert(wg_m % mma_m == 0, "wg_m must be times of mma_m");
+  static_assert(is_valid_mma_m<mma_m>(), "mma_m should be valid");
+  if constexpr (rep_m > 1) {
+    static_assert(mma_m % TYPE3_CM_ALIGN_X == 0, "mma_m should be aligned to TYPE3_CM_ALIGN_X for metaA load consideration");
+  }
+
+  constexpr uint32_t mx_scale_elem_num_a = 32;
+  constexpr uint32_t mx_scale_elem_num_b = 32 / sparse_ratio;
+
+  constexpr uint32_t mma_k_a = mma_k * sparse_ratio;
+  constexpr uint32_t mma_k_b = mma_k;
+  constexpr uint32_t wg_k_a = wg_k * sparse_ratio;
+  constexpr uint32_t wg_k_b = wg_k;
+
+  constexpr uint32_t slm_stride_a_m = (is_trans_a ? TYPE1_CM_ELEM_Y * mma_m * sizeof_bits<dtype_a>() / BITS_PER_BYTE
+                                                  : wg_k_a * mma_m * sizeof_bits<dtype_a>() / BITS_PER_BYTE);
+  constexpr uint32_t slm_stride_a_k = (is_trans_a ? mma_k_a * wg_m * sizeof_bits<dtype_a>() / BITS_PER_BYTE
+                                                  : TYPE1_CM_ELEM_Y * mma_k_a * sizeof_bits<dtype_a>() / BITS_PER_BYTE);
+
+  constexpr uint32_t slm_stride_b_k = (is_trans_b ? TYPE1_CM_ELEM_Y * mma_k_b * sizeof_bits<dtype_b>() / BITS_PER_BYTE
+                                                  : mma_k_b * wg_n * sizeof_bits<dtype_b>() / BITS_PER_BYTE);
+  constexpr uint32_t slm_stride_acc_m = mma_m * wg_n * sizeof_bits<dtype_acc>() / BITS_PER_BYTE;
+  constexpr uint32_t slm_stride_c_m = mma_m * wg_n * sizeof_bits<dtype_c>() / BITS_PER_BYTE;
+
+  if constexpr (rep_k > 1) {
+    static_assert(slm_stride_a_k >= SLM_BASE_BYTES_ALIGN && slm_stride_a_k % SLM_BASE_BYTES_ALIGN == 0,
+                  "slm_stride_a_k must be aligned to SLM_BASE_BYTES_ALIGN");
+    static_assert(slm_stride_a_m >= SLM_BASE_BYTES_ALIGN && slm_stride_a_m % SLM_BASE_BYTES_ALIGN == 0,
+                  "slm_stride_a_m must be aligned to SLM_BASE_BYTES_ALIGN");
+    static_assert(slm_stride_b_k >= SLM_BASE_BYTES_ALIGN && slm_stride_b_k % SLM_BASE_BYTES_ALIGN == 0,
+                  "slm_stride_b_k must be aligned to SLM_BASE_BYTES_ALIGN");
+    static_assert(slm_stride_acc_m >= SLM_BASE_BYTES_ALIGN && slm_stride_acc_m % SLM_BASE_BYTES_ALIGN == 0,
+                  "slm_stride_acc_m must be aligned to SLM_BASE_BYTES_ALIGN");
+    static_assert(slm_stride_c_m >= SLM_BASE_BYTES_ALIGN && slm_stride_c_m % SLM_BASE_BYTES_ALIGN == 0,
+                  "slm_stride_c_m must be aligned to SLM_BASE_BYTES_ALIGN");
+  }
+
+  constexpr uint32_t padding_sparse_k = round_up(mma_k * sparse_ratio / BITS_PER_BYTE, TYPE2_CM_BYTE_Y);
+
+  constexpr uint32_t padding_meta_k_a = round_up(mma_k * sparse_ratio / mx_scale_elem_num_a, TYPE3_CM_SIZE_Y);
+  constexpr uint32_t padding_meta_k_b = round_up(mma_k / mx_scale_elem_num_b, TYPE3_CM_SIZE_Y);
+  constexpr uint32_t padding_meta_n = round_up(wg_n, TYPE3_CM_ALIGN_X);
+  constexpr uint32_t padding_meta_m = round_up(wg_m, TYPE3_CM_ALIGN_X);
+
+  constexpr uint32_t slm_stride_meta_a_m = is_scale_a ? TYPE3_CM_SIZE_Y * mma_m : 0; // sizeof(meta_type) always 1B
+  constexpr uint32_t slm_stride_meta_a_k = is_scale_a ? padding_meta_k_a * padding_meta_m : 0;
+
+  constexpr uint32_t slm_stride_meta_b =
+      is_scale_b ? padding_meta_k_b * padding_meta_n : 0; // sizeof(meta_type) always 1B
+  constexpr uint32_t slm_stride_sparse = is_sparsity ? padding_sparse_k * wg_n : 0; // sizeof(sparse_type) always 1B
+
+  constexpr uint32_t rounded_slm_stride_meta_a_m = round_up(slm_stride_meta_a_m, SLM_BASE_BYTES_ALIGN);
+  constexpr uint32_t rounded_slm_stride_meta_a_k = round_up(slm_stride_meta_a_k, SLM_BASE_BYTES_ALIGN);
+  constexpr uint32_t rounded_slm_stride_meta_b = round_up(slm_stride_meta_b, SLM_BASE_BYTES_ALIGN);
+  constexpr uint32_t rounded_slm_stride_sparse = round_up(slm_stride_sparse, SLM_BASE_BYTES_ALIGN);
+
+  auto shifted_slm_stride_c_m = slm_stride_c_m >> SLM_BASE_ADDR_OFFSET;
+  auto shifted_slm_stride_acc_m = slm_stride_acc_m >> SLM_BASE_ADDR_OFFSET;
+  auto shifted_slm_stride_a_m = slm_stride_a_m >> SLM_BASE_ADDR_OFFSET;
+  auto shifted_slm_stride_a_k = slm_stride_a_k >> SLM_BASE_ADDR_OFFSET;
+  auto shifted_slm_stride_b_k = slm_stride_b_k >> SLM_BASE_ADDR_OFFSET;
+  auto shifted_slm_stride_meta_a_m = rounded_slm_stride_meta_a_m >> SLM_BASE_ADDR_OFFSET;
+  auto shifted_slm_stride_meta_a_k = rounded_slm_stride_meta_a_k >> SLM_BASE_ADDR_OFFSET;
+  auto shifted_slm_stride_meta_b = rounded_slm_stride_meta_b >> SLM_BASE_ADDR_OFFSET;
+  auto shifted_slm_stride_sparse = rounded_slm_stride_sparse >> SLM_BASE_ADDR_OFFSET;
+
+  return std::make_tuple(rep_m, rep_k, shifted_slm_stride_c_m, shifted_slm_stride_acc_m, shifted_slm_stride_a_m,
+                         shifted_slm_stride_a_k, shifted_slm_stride_b_k, shifted_slm_stride_meta_a_m,
+                         shifted_slm_stride_meta_a_k, shifted_slm_stride_meta_b, shifted_slm_stride_sparse);
+}
+
+// multi-mk non-cluster gmma entry; abar_a/abar_b
+template <typename dtype_c, typename dtype_acc, typename dtype_a, typename dtype_b, uint32_t wg_m, uint32_t wg_n,
+          uint32_t wg_k, uint32_t mma_m, uint32_t mma_k, bool is_sparsity = false, bool is_scale_a = false,
+          bool is_scale_b = false, mem_layout layout_a = mem_layout::row_major,
+          mem_layout layout_b = mem_layout::row_major, sparsity_repr_t sparse_repr = sparsity_repr_t::A4xB2,
+          typename abar_ptr_t = uint64_t *, typename matrix_desc_t = uint32_t, typename ctrl_t = uint64_t>
+ALWAYS_INLINE void multi_mk_gmma(matrix_desc_t mat_desc_c, matrix_desc_t mat_desc_acc, matrix_desc_t mat_desc_a,
+                                 matrix_desc_t mat_desc_b, matrix_desc_t sparse_desc, matrix_desc_t meta_desc_a,
+                                 matrix_desc_t meta_desc_b, ctrl_t mma_ctrl, abar_ptr_t abar_a, abar_ptr_t abar_b) {
+  constexpr auto result_tuple =
+      checkout_per_loop_stride<dtype_c, dtype_acc, dtype_a, dtype_b, wg_m, wg_n, wg_k, mma_m, mma_k, layout_a, layout_b,
+                               is_sparsity, is_scale_a, is_scale_b, sparse_repr>();
+  constexpr uint32_t rep_m = std::get<0>(result_tuple);
+  constexpr uint32_t rep_k = std::get<1>(result_tuple);
+  constexpr uint32_t slm_stride_c_m = std::get<2>(result_tuple);
+  constexpr uint32_t slm_stride_acc_m = std::get<3>(result_tuple);
+  constexpr uint32_t slm_stride_a_m = std::get<4>(result_tuple);
+  constexpr uint32_t slm_stride_a_k = std::get<5>(result_tuple);
+  constexpr uint32_t slm_stride_b_k = std::get<6>(result_tuple);
+  constexpr uint32_t slm_stride_meta_a_m = std::get<7>(result_tuple);
+  constexpr uint32_t slm_stride_meta_a_k = std::get<8>(result_tuple);
+  constexpr uint32_t slm_stride_meta_b = std::get<9>(result_tuple);
+  constexpr uint32_t slm_stride_sparse = std::get<10>(result_tuple);
+
+#pragma unroll
+  for (int i = 0; i < rep_k - 1; i++) {
+    matrix_desc_t cur_mat_desc_b = mat_desc_b + slm_stride_b_k * i;
+    matrix_desc_t cur_meta_desc_b = meta_desc_b + slm_stride_meta_b * i;
+    matrix_desc_t cur_sparse_desc = sparse_desc + slm_stride_sparse * i;
+#pragma unroll
+    for (int j = 0; j < rep_m; j++) {
+      matrix_desc_t cur_mat_desc_a = mat_desc_a + slm_stride_a_m * j + slm_stride_a_k * i;
+      matrix_desc_t cur_meta_desc_a = meta_desc_a + slm_stride_meta_a_m * j + slm_stride_meta_a_k * i;
+      matrix_desc_t cur_mat_desc_acc = mat_desc_acc + slm_stride_acc_m * j;
+      async_gmma_handler<dtype_acc, dtype_acc, dtype_a, dtype_b, mma_m, wg_n, mma_k, is_sparsity, is_scale_a,
+                         is_scale_b, layout_a, layout_b>(cur_mat_desc_acc, cur_mat_desc_acc, cur_mat_desc_a,
+                                                         cur_mat_desc_b, cur_sparse_desc, cur_meta_desc_a,
+                                                         cur_meta_desc_b, mma_ctrl, abar_a, abar_b);
+    }
+    mma_ctrl &= ~(uint64_t(1) << MMA_CTRL_NULL_C_OFFSET); // clean null_c
+  }
+
+#pragma unroll
+  for (int j = 0; j < rep_m; j++) {
+    matrix_desc_t cur_mat_desc_c = mat_desc_c + slm_stride_c_m * j;
+    matrix_desc_t cur_mat_desc_acc = mat_desc_acc + slm_stride_acc_m * j;
+    matrix_desc_t cur_mat_desc_a = mat_desc_a + slm_stride_a_m * j + slm_stride_a_k * (rep_k - 1);
+    matrix_desc_t cur_meta_desc_a = meta_desc_a + slm_stride_meta_a_m * j + slm_stride_meta_a_k * (rep_k - 1);
+    matrix_desc_t cur_mat_desc_b = mat_desc_b + slm_stride_b_k * (rep_k - 1);
+    matrix_desc_t cur_meta_desc_b = meta_desc_b + slm_stride_meta_b * (rep_k - 1);
+    matrix_desc_t cur_sparse_desc = sparse_desc + slm_stride_sparse * (rep_k - 1);
+    async_gmma_handler<dtype_c, dtype_acc, dtype_a, dtype_b, mma_m, wg_n, mma_k, is_sparsity, is_scale_a, is_scale_b,
+                       layout_a, layout_b>(cur_mat_desc_c, cur_mat_desc_acc, cur_mat_desc_a, cur_mat_desc_b,
+                                           cur_sparse_desc, cur_meta_desc_a, cur_meta_desc_b, mma_ctrl, abar_a, abar_b);
+  }
+}
+
+// multi-mk non-cluster gmma entry; abar_d/abar_a/abar_b
+template <typename dtype_c, typename dtype_acc, typename dtype_a, typename dtype_b, uint32_t wg_m, uint32_t wg_n,
+          uint32_t wg_k, uint32_t mma_m, uint32_t mma_k, bool is_sparsity = false, bool is_scale_a = false,
+          bool is_scale_b = false, mem_layout layout_a = mem_layout::row_major,
+          mem_layout layout_b = mem_layout::row_major, sparsity_repr_t sparse_repr = sparsity_repr_t::A4xB2,
+          typename abar_ptr_t = uint64_t *, typename matrix_desc_t = uint32_t, typename ctrl_t = uint64_t>
+ALWAYS_INLINE void multi_mk_gmma(matrix_desc_t mat_desc_c, matrix_desc_t mat_desc_acc, matrix_desc_t mat_desc_a,
+                                 matrix_desc_t mat_desc_b, matrix_desc_t sparse_desc, matrix_desc_t meta_desc_a,
+                                 matrix_desc_t meta_desc_b, ctrl_t mma_ctrl, abar_ptr_t abar_d, abar_ptr_t abar_a,
+                                 abar_ptr_t abar_b) {
+  constexpr auto result_tuple =
+      checkout_per_loop_stride<dtype_c, dtype_acc, dtype_a, dtype_b, wg_m, wg_n, wg_k, mma_m, mma_k, layout_a, layout_b,
+                               is_sparsity, is_scale_a, is_scale_b, sparse_repr>();
+  constexpr uint32_t rep_m = std::get<0>(result_tuple);
+  constexpr uint32_t rep_k = std::get<1>(result_tuple);
+  constexpr uint32_t slm_stride_c_m = std::get<2>(result_tuple);
+  constexpr uint32_t slm_stride_acc_m = std::get<3>(result_tuple);
+  constexpr uint32_t slm_stride_a_m = std::get<4>(result_tuple);
+  constexpr uint32_t slm_stride_a_k = std::get<5>(result_tuple);
+  constexpr uint32_t slm_stride_b_k = std::get<6>(result_tuple);
+  constexpr uint32_t slm_stride_meta_a_m = std::get<7>(result_tuple);
+  constexpr uint32_t slm_stride_meta_a_k = std::get<8>(result_tuple);
+  constexpr uint32_t slm_stride_meta_b = std::get<9>(result_tuple);
+  constexpr uint32_t slm_stride_sparse = std::get<10>(result_tuple);
+
+#pragma unroll
+  for (int i = 0; i < rep_k - 1; i++) {
+    matrix_desc_t cur_mat_desc_b = mat_desc_b + slm_stride_b_k * i;
+    matrix_desc_t cur_meta_desc_b = meta_desc_b + slm_stride_meta_b * i;
+    matrix_desc_t cur_sparse_desc = sparse_desc + slm_stride_sparse * i;
+#pragma unroll
+    for (int j = 0; j < rep_m; j++) {
+      matrix_desc_t cur_mat_desc_a = mat_desc_a + slm_stride_a_m * j + slm_stride_a_k * i;
+      matrix_desc_t cur_meta_desc_a = meta_desc_a + slm_stride_meta_a_m * j + slm_stride_meta_a_k * i;
+      matrix_desc_t cur_mat_desc_acc = mat_desc_acc + slm_stride_acc_m * j;
+      async_gmma_handler<dtype_acc, dtype_acc, dtype_a, dtype_b, mma_m, wg_n, mma_k, is_sparsity, is_scale_a,
+                         is_scale_b, layout_a, layout_b>(cur_mat_desc_acc, cur_mat_desc_acc, cur_mat_desc_a,
+                                                         cur_mat_desc_b, cur_sparse_desc, cur_meta_desc_a,
+                                                         cur_meta_desc_b, mma_ctrl, abar_d, abar_a, abar_b);
+    }
+    mma_ctrl &= ~(uint64_t(1) << MMA_CTRL_NULL_C_OFFSET); // clean null_c
+  }
+
+#pragma unroll
+  for (int j = 0; j < rep_m; j++) {
+    matrix_desc_t cur_mat_desc_c = mat_desc_c + slm_stride_c_m * j;
+    matrix_desc_t cur_mat_desc_acc = mat_desc_acc + slm_stride_acc_m * j;
+    matrix_desc_t cur_mat_desc_a = mat_desc_a + slm_stride_a_m * j + slm_stride_a_k * (rep_k - 1);
+    matrix_desc_t cur_meta_desc_a = meta_desc_a + slm_stride_meta_a_m * j + slm_stride_meta_a_k * (rep_k - 1);
+    matrix_desc_t cur_mat_desc_b = mat_desc_b + slm_stride_b_k * (rep_k - 1);
+    matrix_desc_t cur_meta_desc_b = meta_desc_b + slm_stride_meta_b * (rep_k - 1);
+    matrix_desc_t cur_sparse_desc = sparse_desc + slm_stride_sparse * (rep_k - 1);
+    async_gmma_handler<dtype_c, dtype_acc, dtype_a, dtype_b, mma_m, wg_n, mma_k, is_sparsity, is_scale_a, is_scale_b,
+                       layout_a, layout_b>(cur_mat_desc_c, cur_mat_desc_acc, cur_mat_desc_a, cur_mat_desc_b,
+                                           cur_sparse_desc, cur_meta_desc_a, cur_meta_desc_b, mma_ctrl, abar_d, abar_a,
+                                           abar_b);
+  }
+}
+
+// multi-mk cluster gmma entry; abar_a/abar_b
+template <typename dtype_c, typename dtype_acc, typename dtype_a, typename dtype_b, uint32_t wg_m, uint32_t wg_n,
+          uint32_t wg_k, uint32_t mma_m, uint32_t mma_k, bool is_sparsity = false, bool is_scale_a = false,
+          bool is_scale_b = false, mem_layout layout_a = mem_layout::row_major,
+          mem_layout layout_b = mem_layout::row_major, sparsity_repr_t sparse_repr = sparsity_repr_t::A4xB2,
+          typename abar_ptr_t = uint64_t *, typename matrix_desc_t = uint32_t, typename ctrl_t = uint64_t>
+ALWAYS_INLINE void multi_mk_gmma(matrix_desc_t mat_desc_c, matrix_desc_t mat_desc_acc, matrix_desc_t mat_desc_a,
+                                 matrix_desc_t mat_desc_b, matrix_desc_t sparse_desc, matrix_desc_t meta_desc_a,
+                                 matrix_desc_t meta_desc_b, ctrl_t mma_ctrl, abar_ptr_t abar_a, uint32_t mask_a,
+                                 abar_ptr_t abar_b, uint32_t mask_b) {
+  constexpr auto result_tuple =
+      checkout_per_loop_stride<dtype_c, dtype_acc, dtype_a, dtype_b, wg_m, wg_n, wg_k, mma_m, mma_k, layout_a, layout_b,
+                               is_sparsity, is_scale_a, is_scale_b, sparse_repr>();
+  constexpr uint32_t rep_m = std::get<0>(result_tuple);
+  constexpr uint32_t rep_k = std::get<1>(result_tuple);
+  constexpr uint32_t slm_stride_c_m = std::get<2>(result_tuple);
+  constexpr uint32_t slm_stride_acc_m = std::get<3>(result_tuple);
+  constexpr uint32_t slm_stride_a_m = std::get<4>(result_tuple);
+  constexpr uint32_t slm_stride_a_k = std::get<5>(result_tuple);
+  constexpr uint32_t slm_stride_b_k = std::get<6>(result_tuple);
+  constexpr uint32_t slm_stride_meta_a_m = std::get<7>(result_tuple);
+  constexpr uint32_t slm_stride_meta_a_k = std::get<8>(result_tuple);
+  constexpr uint32_t slm_stride_meta_b = std::get<9>(result_tuple);
+  constexpr uint32_t slm_stride_sparse = std::get<10>(result_tuple);
+
+#pragma unroll
+  for (int i = 0; i < rep_k - 1; i++) {
+    matrix_desc_t cur_mat_desc_b = mat_desc_b + slm_stride_b_k * i;
+    matrix_desc_t cur_meta_desc_b = meta_desc_b + slm_stride_meta_b * i;
+    matrix_desc_t cur_sparse_desc = sparse_desc + slm_stride_sparse * i;
+#pragma unroll
+    for (int j = 0; j < rep_m; j++) {
+      matrix_desc_t cur_mat_desc_a = mat_desc_a + slm_stride_a_m * j + slm_stride_a_k * i;
+      matrix_desc_t cur_meta_desc_a = meta_desc_a + slm_stride_meta_a_m * j + slm_stride_meta_a_k * i;
+      matrix_desc_t cur_mat_desc_acc = mat_desc_acc + slm_stride_acc_m * j;
+      async_gmma_handler<dtype_acc, dtype_acc, dtype_a, dtype_b, mma_m, wg_n, mma_k, is_sparsity, is_scale_a,
+                         is_scale_b, layout_a, layout_b>(cur_mat_desc_acc, cur_mat_desc_acc, cur_mat_desc_a,
+                                                         cur_mat_desc_b, cur_sparse_desc, cur_meta_desc_a,
+                                                         cur_meta_desc_b, mma_ctrl, abar_a, mask_a, abar_b, mask_b);
+    }
+    mma_ctrl &= ~(uint64_t(1) << MMA_CTRL_NULL_C_OFFSET); // clean null_c
+  }
+
+#pragma unroll
+  for (int j = 0; j < rep_m; j++) {
+    matrix_desc_t cur_mat_desc_c = mat_desc_c + slm_stride_c_m * j;
+    matrix_desc_t cur_mat_desc_acc = mat_desc_acc + slm_stride_acc_m * j;
+    matrix_desc_t cur_mat_desc_a = mat_desc_a + slm_stride_a_m * j + slm_stride_a_k * (rep_k - 1);
+    matrix_desc_t cur_meta_desc_a = meta_desc_a + slm_stride_meta_a_m * j + slm_stride_meta_a_k * (rep_k - 1);
+    matrix_desc_t cur_mat_desc_b = mat_desc_b + slm_stride_b_k * (rep_k - 1);
+    matrix_desc_t cur_meta_desc_b = meta_desc_b + slm_stride_meta_b * (rep_k - 1);
+    matrix_desc_t cur_sparse_desc = sparse_desc + slm_stride_sparse * (rep_k - 1);
+    async_gmma_handler<dtype_c, dtype_acc, dtype_a, dtype_b, mma_m, wg_n, mma_k, is_sparsity, is_scale_a, is_scale_b,
+                       layout_a, layout_b>(cur_mat_desc_c, cur_mat_desc_acc, cur_mat_desc_a, cur_mat_desc_b,
+                                           cur_sparse_desc, cur_meta_desc_a, cur_meta_desc_b, mma_ctrl, abar_a, mask_a,
+                                           abar_b, mask_b);
+  }
+}
+
+// multi-mk cluster gmma entry; abar_d/abar_a/abar_b
+template <typename dtype_c, typename dtype_acc, typename dtype_a, typename dtype_b, uint32_t wg_m, uint32_t wg_n,
+          uint32_t wg_k, uint32_t mma_m, uint32_t mma_k, bool is_sparsity = false, bool is_scale_a = false,
+          bool is_scale_b = false, mem_layout layout_a = mem_layout::row_major,
+          mem_layout layout_b = mem_layout::row_major, sparsity_repr_t sparse_repr = sparsity_repr_t::A4xB2,
+          typename abar_ptr_t = uint64_t *, typename matrix_desc_t = uint32_t, typename ctrl_t = uint64_t>
+ALWAYS_INLINE void multi_mk_gmma(matrix_desc_t mat_desc_c, matrix_desc_t mat_desc_acc, matrix_desc_t mat_desc_a,
+                                 matrix_desc_t mat_desc_b, matrix_desc_t sparse_desc, matrix_desc_t meta_desc_a,
+                                 matrix_desc_t meta_desc_b, ctrl_t mma_ctrl, abar_ptr_t abar_d, abar_ptr_t abar_a,
+                                 uint32_t mask_a, abar_ptr_t abar_b, uint32_t mask_b) {
+  constexpr auto result_tuple =
+      checkout_per_loop_stride<dtype_c, dtype_acc, dtype_a, dtype_b, wg_m, wg_n, wg_k, mma_m, mma_k, layout_a, layout_b,
+                               is_sparsity, is_scale_a, is_scale_b, sparse_repr>();
+  constexpr uint32_t rep_m = std::get<0>(result_tuple);
+  constexpr uint32_t rep_k = std::get<1>(result_tuple);
+  constexpr uint32_t slm_stride_c_m = std::get<2>(result_tuple);
+  constexpr uint32_t slm_stride_acc_m = std::get<3>(result_tuple);
+  constexpr uint32_t slm_stride_a_m = std::get<4>(result_tuple);
+  constexpr uint32_t slm_stride_a_k = std::get<5>(result_tuple);
+  constexpr uint32_t slm_stride_b_k = std::get<6>(result_tuple);
+  constexpr uint32_t slm_stride_meta_a_m = std::get<7>(result_tuple);
+  constexpr uint32_t slm_stride_meta_a_k = std::get<8>(result_tuple);
+  constexpr uint32_t slm_stride_meta_b = std::get<9>(result_tuple);
+  constexpr uint32_t slm_stride_sparse = std::get<10>(result_tuple);
+
+#pragma unroll
+  for (int i = 0; i < rep_k - 1; i++) {
+    matrix_desc_t cur_mat_desc_b = mat_desc_b + slm_stride_b_k * i;
+    matrix_desc_t cur_meta_desc_b = meta_desc_b + slm_stride_meta_b * i;
+    matrix_desc_t cur_sparse_desc = sparse_desc + slm_stride_sparse * i;
+#pragma unroll
+    for (int j = 0; j < rep_m; j++) {
+      matrix_desc_t cur_mat_desc_a = mat_desc_a + slm_stride_a_m * j + slm_stride_a_k * i;
+      matrix_desc_t cur_meta_desc_a = meta_desc_a + slm_stride_meta_a_m * j + slm_stride_meta_a_k * i;
+      matrix_desc_t cur_mat_desc_acc = mat_desc_acc + slm_stride_acc_m * j;
+      async_gmma_handler<dtype_acc, dtype_acc, dtype_a, dtype_b, mma_m, wg_n, mma_k, is_sparsity, is_scale_a,
+                         is_scale_b, layout_a, layout_b>(
+          cur_mat_desc_acc, cur_mat_desc_acc, cur_mat_desc_a, cur_mat_desc_b, cur_sparse_desc, cur_meta_desc_a,
+          cur_meta_desc_b, mma_ctrl, abar_d, abar_a, mask_a, abar_b, mask_b);
+    }
+    mma_ctrl &= ~(uint64_t(1) << MMA_CTRL_NULL_C_OFFSET); // clean null_c
+  }
+
+#pragma unroll
+  for (int j = 0; j < rep_m; j++) {
+    matrix_desc_t cur_mat_desc_c = mat_desc_c + slm_stride_c_m * j;
+    matrix_desc_t cur_mat_desc_acc = mat_desc_acc + slm_stride_acc_m * j;
+    matrix_desc_t cur_mat_desc_a = mat_desc_a + slm_stride_a_m * j + slm_stride_a_k * (rep_k - 1);
+    matrix_desc_t cur_meta_desc_a = meta_desc_a + slm_stride_meta_a_m * j + slm_stride_meta_a_k * (rep_k - 1);
+    matrix_desc_t cur_mat_desc_b = mat_desc_b + slm_stride_b_k * (rep_k - 1);
+    matrix_desc_t cur_meta_desc_b = meta_desc_b + slm_stride_meta_b * (rep_k - 1);
+    matrix_desc_t cur_sparse_desc = sparse_desc + slm_stride_sparse * (rep_k - 1);
+    async_gmma_handler<dtype_c, dtype_acc, dtype_a, dtype_b, mma_m, wg_n, mma_k, is_sparsity, is_scale_a, is_scale_b,
+                       layout_a, layout_b>(cur_mat_desc_c, cur_mat_desc_acc, cur_mat_desc_a, cur_mat_desc_b,
+                                           cur_sparse_desc, cur_meta_desc_a, cur_meta_desc_b, mma_ctrl, abar_d, abar_a,
+                                           mask_a, abar_b, mask_b);
+  }
+}
 """
     }
 
@@ -563,10 +907,10 @@ class EmitMMA:
                 "LayoutB": LayoutB_,
                 "LA": repr_layout(LayoutA_, True),
                 "LB": repr_layout(LayoutB_, False),
-                "D": dtype_[0],
-                "C": dtype_[1],
-                "A": dtype_[-2],
-                "B": dtype_[-1],
+                "D": as_pisa_type(dtype_[0]),
+                "C": as_pisa_type(dtype_[1]),
+                "A": as_pisa_type(dtype_[-2]),
+                "B": as_pisa_type(dtype_[-1]),
                 "TD": as_sycl_type(dtype_[0]),
                 "TC": as_sycl_type(dtype_[1]),
                 "TA": as_sycl_type(dtype_[-2]),

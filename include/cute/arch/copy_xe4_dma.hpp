@@ -127,7 +127,7 @@ inline uint32_t get_copy_size(const uint32_t coord, const uint32_t shape, uint32
     return copy_size;
 }
 
-template <slm_matrix_type cm_type>
+template <slm_matrix_type cm_type, uint32_t stride>
 struct ASYNC_ROW_LOAD_IM2COL_4D : public DMA_LOAD, public ASYNC_ROW_IM2COL
 {
   template<class TS, class TG, int NumBytesPerCopy>
@@ -147,11 +147,12 @@ struct ASYNC_ROW_LOAD_IM2COL_4D : public DMA_LOAD, public ASYNC_ROW_IM2COL
     uint64_t offset = crd_c + crd1 * tma_desc->bytes[6] + crd2 * tma_desc->bytes[7] + crd_n * tma_desc->bytes[8];
     uint32_t copy_size = is_coord_valid ? get_copy_size<TG>(crd_c, tma_desc->bytes[1], NumBytesPerCopy) : 0;
     uint64_t offset_a64 = uint64_t(gmem_address) + offset * sizeof(TG);
-    row_copy_tiled_a64_load<cm_type, NumBytesPerCopy, TG>(slm_space_cast(slm_ptr), offset_a64, copy_size, abar_ptr);
+    matrix_desc_t mat_desc(slm_space_cast(slm_ptr), stride, cm_type);
+    row_copy_tiled_a64_load<NumBytesPerCopy, TG>(mat_desc.get(), offset_a64, copy_size, abar_ptr);
   }
 };
 
-template <slm_matrix_type cm_type>
+template <slm_matrix_type cm_type, uint32_t stride>
 struct ASYNC_ROW_LOAD_IM2COL : public DMA_LOAD, public ASYNC_ROW_IM2COL
 {
   template<class TS, class TG, int NumBytesPerCopy, class Coord>
@@ -159,7 +160,7 @@ struct ASYNC_ROW_LOAD_IM2COL : public DMA_LOAD, public ASYNC_ROW_IM2COL
   copy(Im2ColTmaDescriptor<TG, NumBytesPerCopy> const* tma_desc, uint64_t const* abar_ptr,
                               TS const* slm_ptr, Coord coord)
   {
-    using Impl = ASYNC_ROW_LOAD_IM2COL_4D<cm_type>;
+    using Impl = ASYNC_ROW_LOAD_IM2COL_4D<cm_type, stride>;
     return Impl::template copy<TS, TG, NumBytesPerCopy>(
       tma_desc, abar_ptr, slm_ptr, coord[0], coord[1], coord[2], coord[3], coord[4], coord[5]);
   }
@@ -169,7 +170,7 @@ struct ASYNC_ROW_LOAD_IM2COL : public DMA_LOAD, public ASYNC_ROW_IM2COL
 /// ASYNC_ROW_STORE_IM2COL: Initiates an im2col async row copy from shared memory to global memory
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <slm_matrix_type cm_type>
+template <slm_matrix_type cm_type, uint32_t stride>
 struct XE4_ASYNC_ROW_STORE_IM2COL_4D : public DMA_STORE, public ASYNC_ROW_IM2COL
 {
   template<class TS, class TG, int NumBytesPerCopy>
@@ -186,11 +187,12 @@ struct XE4_ASYNC_ROW_STORE_IM2COL_4D : public DMA_STORE, public ASYNC_ROW_IM2COL
     uint64_t offset = crd_c + crd_w * tma_desc->bytes[6] + crd_h * tma_desc->bytes[7] + crd_n * tma_desc->bytes[8];
     uint32_t copy_size = is_coord_valid ? get_copy_size<TG>(crd_c, tma_desc->bytes[1], NumBytesPerCopy) : 0;
     uint64_t offset_a64 = uint64_t(gmem_address) + offset * sizeof(TG);
-    row_copy_tiled_a64_store<cm_type, NumBytesPerCopy, TG>(slm_space_cast(slm_ptr), offset_a64, copy_size, abar_ptr);
+    matrix_desc_t mat_desc(slm_space_cast(slm_ptr), stride, cm_type);
+    row_copy_tiled_a64_store<NumBytesPerCopy, TG>(mat_desc.get(), offset_a64, copy_size, abar_ptr);
   }
 };
 
-template <slm_matrix_type cm_type>
+template <slm_matrix_type cm_type, uint32_t stride>
 struct ASYNC_ROW_STORE_IM2COL : public DMA_STORE, public ASYNC_ROW_IM2COL
 {
   template<class TS, class TG, int NumBytesPerCopy, class Coord>
@@ -199,7 +201,7 @@ struct ASYNC_ROW_STORE_IM2COL : public DMA_STORE, public ASYNC_ROW_IM2COL
                               TS const* slm_ptr, Coord coord)
   {
 
-    using Impl = XE4_ASYNC_ROW_STORE_IM2COL_4D<cm_type>;
+    using Impl = XE4_ASYNC_ROW_STORE_IM2COL_4D<cm_type, stride>;
     return Impl::template copy<TS, TG, NumBytesPerCopy>(tma_desc, abar_ptr, slm_ptr, coord[0], coord[1], coord[2], coord[3]);
   }
 };

@@ -85,24 +85,26 @@ struct CollectiveBuilder<
 
   // For wgrad kernel, tensor A uses tma tiled mode and tensor B uses tma im2col mode.
   static constexpr slm_matrix_type cmTypeA = GmmaMajorA == cute::SM90::GMMA::Major::K ? slm_matrix_type::type1 : slm_matrix_type::type2;
+  static constexpr uint32_t cmStrideA = GmmaMajorA == cute::SM90::GMMA::Major::MN ? size<0>(TileShape_MNK{}) : size<2>(TileShape_MNK{});
+  static constexpr uint32_t cmStrideB = GmmaMajorB == cute::SM90::GMMA::Major::MN ? size<1>(TileShape_MNK{}) : size<2>(TileShape_MNK{});
 
   using GmemTiledCopyA = cute::conditional_t<
     ConvOp == conv::Operator::kWgrad,
     cute::conditional_t<
       size(ClusterShape_MNK{}) == 1,
-      cute::xe4::ASYNC_TENSOR_LOAD<cmTypeA>,
-      cute::xe4::ASYNC_TENSOR_LOAD_MULTICAST<cmTypeA>
+      cute::xe4::ASYNC_TENSOR_LOAD<cmTypeA, cmStrideA>,
+      cute::xe4::ASYNC_TENSOR_LOAD_MULTICAST<cmTypeA, cmStrideA>
     >,
-    cute::xe4::ASYNC_ROW_LOAD_IM2COL<cmTypeA>
+    cute::xe4::ASYNC_ROW_LOAD_IM2COL<cmTypeA, cmStrideA>
   >;
 
   using GmemTiledCopyB = cute::conditional_t<
     ConvOp == conv::Operator::kWgrad,
-    cute::xe4::ASYNC_ROW_LOAD_IM2COL<slm_matrix_type::type1>,
+    cute::xe4::ASYNC_ROW_LOAD_IM2COL<slm_matrix_type::type1, cmStrideB>,
     cute::conditional_t<
       size(ClusterShape_MNK{}) == 1,
-      cute::xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1>,
-      cute::xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1>
+      cute::xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1, cmStrideB>,
+      cute::xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1, cmStrideB>
     >
   >;
 
