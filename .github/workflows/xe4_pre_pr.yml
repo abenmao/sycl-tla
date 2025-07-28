@@ -42,9 +42,9 @@ jobs:
           update_img: true
           print_version: true
 
-          igc20_version: "main 4359"
+          igc20_version: "main 4426"
           xesim_version: "XE3P_V2 98092 --snapshot"
-          zesim_version: "main 20250717"
+          zesim_version: "main 20250724"
 
       - name: Build Xe4 workloads
         shell: bash
