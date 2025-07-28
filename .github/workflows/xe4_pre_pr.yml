@@ -14,7 +14,7 @@ jobs:
     name: Xe4 Workloads Pre PR Test
     runs-on: [self-hosted, linux, gca_sim_docker]
     container:
-      image: amr-registry.caas.intel.com/gca-sim-bkc/gen-isa:ww09
+      image: amr-registry.caas.intel.com/gca-sim-bkc/gen-isa:ww26
       volumes:
         - ${{ github.workspace }}/../../../creds:/root/creds
       credentials:

@@ -140,18 +140,24 @@ int run_test(const conv2d::problem_shape_t &problem_shape)
         CollectiveEpilogue,
         void>;
 
-    q.parallel_for<test>(Range, [=](nd_item<3> item) {
-        using FusionCallbacks = typename CollectiveEpilogue::FusionCallbacks;
-        auto callbacks_args = typename FusionCallbacks::Arguments {};
-        auto args = typename ConvKernel::Arguments {
-            cutlass_problem_shape,
-            {A_shared, B_shared},
-            {callbacks_args, nullptr, stride_D, C_shared, stride_D}
-        };
+    namespace syclexp = sycl::ext::oneapi::experimental;
+    syclexp::properties Props {syclexp::work_groups_per_cluster<3>(sycl::range<3>{1, 1, 1})};
 
-        ConvKernel kernel;
-        auto params = kernel.to_underlying_arguments(args, nullptr);
-        kernel(params);
+    auto launch_cfg = syclexp::launch_config(Range, Props);
+    syclexp::submit_with_event(q, [&](sycl::handler &handler) {
+            syclexp::nd_launch<test>(handler, launch_cfg, [=](nd_item<3> item) ALWAYS_INLINE {
+            using FusionCallbacks = typename CollectiveEpilogue::FusionCallbacks;
+            auto callbacks_args = typename FusionCallbacks::Arguments {};
+            auto args = typename ConvKernel::Arguments {
+                cutlass_problem_shape,
+                {A_shared, B_shared},
+                {callbacks_args, nullptr, stride_D, C_shared, stride_D}
+            };
+
+            ConvKernel kernel;
+            auto params = kernel.to_underlying_arguments(args, nullptr);
+            kernel(params);
+        });
     }).wait();
 
     uint32_t err_cnt = validate_conv2d_result_by_wgrad_onednn(A_shared, B_shared, C_shared, problem_shape);

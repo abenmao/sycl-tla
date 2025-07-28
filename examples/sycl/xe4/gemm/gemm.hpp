@@ -214,16 +214,6 @@ void run_gemm()
   auto dev = q.get_device();
   std::cout << "Running on " << dev.get_info<info::device::name>() << "\n";
 
-  auto [cluster_size_y, cluster_size_x, cluster_size_z] = ClusterShape{};
-
-  if constexpr (size(ClusterShape{}) > 1) {
-    std::stringstream ss;
-    ss << int(cluster_size_x) << "x" << int(cluster_size_y) << "x" << int(cluster_size_z);
-    std::string cluster_str = ss.str();
-    std::cout << "Cluster size: " << cluster_str << "\n";
-    setenv("XE4_CLUSTER_SIZE", cluster_str.c_str(), 1);
-  }
-
   auto problem_shape_mnkl = typename GemmKernel::ProblemShape {};
   cute::fill_int_tuple_from(problem_shape_mnkl, Config::ProblemShape_MNKL);
 
@@ -253,6 +243,11 @@ void run_gemm()
     Bias_s = malloc_shared<ElementBias>(sizeBias, q);
     std::generate_n(Bias_s, sizeBias, [=]() { return static_cast<float>(rand()) / static_cast<float>(RAND_MAX); });
   }
+
+  namespace syclexp = sycl::ext::oneapi::experimental;
+  auto [cluster_size_y, cluster_size_x, cluster_size_z] = ClusterShape{};
+  sycl::range<3> clusterSize(cluster_size_z, cluster_size_y, cluster_size_x);
+  syclexp::properties Props {syclexp::work_groups_per_cluster<3>(clusterSize)};
 
   auto num_groups = ceil_div(problem_shape_mnkl, TileShape {});
   range<3> local_range(1, NumControlWarps + NumEpilogueWarps, cutlass::NumThreadsPerWarp);
@@ -302,17 +297,20 @@ void run_gemm()
   GemmKernel kernel;
   auto params = kernel.to_underlying_arguments(args, nullptr);
 
-  q.parallel_for<Config>(Range, [=](nd_item<3> item) {
-    // WA: reset gmem ptr in the tiled copy objects, to fix xesim page fault error
-    auto params_workaround = params;
-    params_workaround.mainloop.tma_load_a.cache_.set_gmem_ptr(A_s);
-    params_workaround.mainloop.tma_load_b.cache_.set_gmem_ptr(B_s);
-    if constexpr (!cute::is_void_v<ElementC>) {
-      params_workaround.epilogue.tma_load_c.cache_.set_gmem_ptr(C_s);
-    }
-    params_workaround.epilogue.tma_store_d.cache_.set_gmem_ptr(D_s);
+  auto launch_cfg = syclexp::launch_config(Range, Props);
+  syclexp::submit_with_event(q, [&](sycl::handler &handler) {
+    syclexp::nd_launch<Config>(handler, launch_cfg, [=](nd_item<3> item) ALWAYS_INLINE {
+      // WA: reset gmem ptr in the tiled copy objects, to fix xesim page fault error
+      auto params_workaround = params;
+      params_workaround.mainloop.tma_load_a.cache_.set_gmem_ptr(A_s);
+      params_workaround.mainloop.tma_load_b.cache_.set_gmem_ptr(B_s);
+      if constexpr (!cute::is_void_v<ElementC>) {
+        params_workaround.epilogue.tma_load_c.cache_.set_gmem_ptr(C_s);
+      }
+      params_workaround.epilogue.tma_store_d.cache_.set_gmem_ptr(D_s);
 
-    kernel(params_workaround);
+      kernel(params_workaround);
+    });
    }).wait();
 
   auto as_mem_layout = [](auto layout) {
