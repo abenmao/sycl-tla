@@ -38,13 +38,11 @@ find_library(DPCPP_LIB_DIR NAMES sycl sycl6 PATHS "${DPCPP_BIN_DIR}/../lib" NO_D
 
 add_library(DPCPP::DPCPP INTERFACE IMPORTED)
 
-set(DPCPP_FLAGS "-fsycl;")
+set(DPCPP_FLAGS "-fsycl")
 set(DPCPP_COMPILE_ONLY_FLAGS "")
 
-if(NOT "${DPCPP_SYCL_TARGET}" STREQUAL "")
-  if (NOT "${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_xe4")
-    list(APPEND DPCPP_FLAGS "-fsycl-targets=${DPCPP_SYCL_TARGET};")
-  endif()
+if ("${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_xe4")
+  list(APPEND DPCPP_FLAGS "-fsycl-targets=spir64_gen")
 endif()
 
 option(DPCPP_DISABLE_ITT_FOR_CUTLASS "Disables linking of the Instrumentation and Tracing Technology (ITT) device libraries for VTune" ON)
@@ -53,12 +51,10 @@ if(NOT "${DPCPP_USER_FLAGS}" STREQUAL "")
   list(APPEND DPCPP_FLAGS "${DPCPP_USER_FLAGS};")
 endif()
 
-if(NOT "${DPCPP_SYCL_ARCH}" STREQUAL "")
-  if("${DPCPP_SYCL_TARGET}" STREQUAL "nvptx64-nvidia-cuda")
-    list(APPEND DPCPP_FLAGS "-Xsycl-target-backend")
-    list(APPEND DPCPP_FLAGS "--cuda-gpu-arch=${DPCPP_SYCL_ARCH}")
-    list(APPEND DPCPP_COMPILE_ONLY_FLAGS; "-mllvm;-enable-global-offset=false;")
-  endif()
+if("${DPCPP_SYCL_TARGET}" STREQUAL "nvptx64-nvidia-cuda")
+  list(APPEND DPCPP_FLAGS "-Xsycl-target-backend")
+  list(APPEND DPCPP_FLAGS "--cuda-gpu-arch=${DPCPP_SYCL_ARCH}")
+  list(APPEND DPCPP_COMPILE_ONLY_FLAGS; "-mllvm;-enable-global-offset=false;")
 endif()
 
 if("${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_pvc" OR

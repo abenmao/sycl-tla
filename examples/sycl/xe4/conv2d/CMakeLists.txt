@@ -33,28 +33,36 @@ target_link_libraries(xe4_conv2d PRIVATE DNNL::dnnl)
 target_include_directories(xe4_conv2d PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(xe4_conv2d PRIVATE AMMA_GENERATED)
 target_compile_definitions(xe4_conv2d PRIVATE -DTEST_PERF_NORMAL)
-target_link_options(xe4_conv2d PUBLIC "-Xs;\"-xe-set-abarrier-arrive-lmc -disable-branch-fold -xe-enable-phi-uniform -misched-prera-direction=topdown\"")
+target_link_options(xe4_conv2d PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)
 
 add_xe4_test(xe4_conv2d_dgrad conv2d_dgrad.cpp)
 target_link_libraries(xe4_conv2d_dgrad PRIVATE DNNL::dnnl)
 target_include_directories(xe4_conv2d_dgrad PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(xe4_conv2d_dgrad PRIVATE AMMA_GENERATED)
 target_compile_definitions(xe4_conv2d_dgrad PRIVATE -DTEST_WITH_PAD_WITH_DILATION)
-target_link_options(xe4_conv2d_dgrad PUBLIC "-Xs;\"-xe-set-abarrier-arrive-lmc -disable-branch-fold -xe-enable-phi-uniform\"")
+target_link_options(xe4_conv2d_dgrad PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)
 
 add_xe4_test(xe4_conv2d_wgrad conv2d_wgrad.cpp)
 target_link_libraries(xe4_conv2d_wgrad PRIVATE DNNL::dnnl)
 target_include_directories(xe4_conv2d_wgrad PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(xe4_conv2d_wgrad PRIVATE AMMA_GENERATED)
 target_compile_definitions(xe4_conv2d_wgrad PRIVATE -DTEST_WITH_PAD_WITH_STRIDE_WITH_DILATION)
-target_link_options(xe4_conv2d_wgrad PUBLIC "-Xs;\"-xe-set-abarrier-arrive-lmc -disable-branch-fold -xe-enable-phi-uniform\"")
+target_link_options(xe4_conv2d_wgrad PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)
 
 add_xe4_test(xe4_conv2d_int8 conv2d_int8.cpp)
 target_link_libraries(xe4_conv2d_int8 PRIVATE DNNL::dnnl)
 target_include_directories(xe4_conv2d_int8 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(xe4_conv2d_int8 PRIVATE AMMA_GENERATED)
 target_compile_definitions(xe4_conv2d_int8 PRIVATE -DTEST_SMALL_WITH_PAD_WITH_STRIDE)
-target_link_options(xe4_conv2d_int8 PUBLIC "-Xs;\"-xe-set-abarrier-arrive-lmc -disable-branch-fold -xe-enable-phi-uniform\"")
+target_link_options(xe4_conv2d_int8 PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)
 
 generate_amma_header(
   xe4_conv2d_helper
