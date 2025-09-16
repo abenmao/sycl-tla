@@ -5,7 +5,7 @@
 #include <limits>
 #include <mkl.h>
 #include <sstream>
-#include "./util.hpp"
+#include <cute/arch/xe4_util.hpp>
 
 template <typename T>
 struct tolerance_traits;

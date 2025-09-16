@@ -64,13 +64,13 @@ target_link_options(xe4_conv2d_int8 PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)
 
-generate_amma_header(
-  xe4_conv2d_helper
-  "--mma_type" "mma"
-  "--shape" "128x128x128;256x512x128;256x128x128;256x256x128;128x512x128"
-  "--dtype" "f32_f32_f16_f16;f16_f32_f16_f16;s32_s32_s8_s8"
-)
-add_dependencies(xe4_conv2d xe4_conv2d_helper)
-add_dependencies(xe4_conv2d_dgrad xe4_conv2d_helper)
-add_dependencies(xe4_conv2d_wgrad xe4_conv2d_helper)
-add_dependencies(xe4_conv2d_int8 xe4_conv2d_helper)
+# generate_amma_header(
+#   xe4_conv2d_helper
+#   "--mma_type" "mma"
+#   "--shape" "128x128x128;256x512x128;256x128x128;256x256x128;128x512x128"
+#   "--dtype" "f32_f32_f16_f16;f16_f32_f16_f16;s32_s32_s8_s8"
+# )
+# add_dependencies(xe4_conv2d xe4_conv2d_helper)
+# add_dependencies(xe4_conv2d_dgrad xe4_conv2d_helper)
+# add_dependencies(xe4_conv2d_wgrad xe4_conv2d_helper)
+# add_dependencies(xe4_conv2d_int8 xe4_conv2d_helper)

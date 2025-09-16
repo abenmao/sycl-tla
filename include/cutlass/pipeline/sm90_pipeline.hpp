@@ -63,13 +63,13 @@ bool pipeline_is_producer(ThreadCategory role) {
 template<class ThreadCategory>
 CUTLASS_DEVICE
 void pipeline_check_is_producer(ThreadCategory role) {
-  #ifndef NDEBUG
+  /* #ifndef NDEBUG
   if (!pipeline_is_producer(role)) {
     #if defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
     #endif
   }
-  #endif
+  #endif */
 }
 
 template<class ThreadCategory>
@@ -81,13 +81,13 @@ bool pipeline_is_consumer(ThreadCategory role) {
 template<class ThreadCategory>
 CUTLASS_DEVICE
 void pipeline_check_is_consumer(ThreadCategory role) {
-  #ifndef NDEBUG
+  /* #ifndef NDEBUG
   if (!pipeline_is_consumer(role)) {
     #if defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
     #endif
   }
-  #endif
+  #endif */
 }
 
 CUTLASS_DEVICE
@@ -541,12 +541,12 @@ private:
     }
     #ifndef NDEBUG
     if (params_.role == ThreadCategory::Consumer || params_.role == ThreadCategory::NonParticipant) {
-      asm volatile ("brkpt;\n" ::);
+      // asm volatile ("brkpt;\n" ::);
     }
 
     // Most likely you have elected more than one leader
     if (params_.is_leader && (ThreadIdxX() % 32 != 0)) {
-      asm volatile ("brkpt;\n" ::);
+      // asm volatile ("brkpt;\n" ::);
     }
     #endif
   }

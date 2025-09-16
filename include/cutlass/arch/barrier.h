@@ -39,7 +39,7 @@
 #include <cute/arch/copy_sm100_tma.hpp> 
 #include <cutlass/arch/config.h>
 #if defined(SYCL_INTEL_XE4_TARGET)
-#include "inline_pisa.hpp"
+#include <cute/arch/inline_pisa.hpp>
 #elif defined(SYCL_INTEL_TARGET)
 #include <cute/arch/copy_xe.hpp>
 #endif

@@ -4191,7 +4191,7 @@ struct NumericArrayConverter<int8_t, float, N, Round> {
 
   CUTLASS_HOST_DEVICE
   static result_type convert(source_type const & source) {
-  #if defined(SYCL_INTEL_XE4_TARGET)
+#if defined(SYCL_INTEL_XE4_TARGET) && defined(__SYCL_DEVICE_ONLY__)
     result_type result;
 
     CUTLASS_PRAGMA_UNROLL
@@ -4201,10 +4201,10 @@ struct NumericArrayConverter<int8_t, float, N, Round> {
       result[i] = temp;
     }
     return result;
-  #else
+#else
     NumericArrayFP32ToIntConverter<int8_t, N, Round> converter;
     return converter(source);
-  #endif
+#endif
   }
 
   CUTLASS_HOST_DEVICE

@@ -1,9 +1,9 @@
 #pragma once
 
-#include "./util.hpp"
+#include "xe4_util.hpp"
 
 #ifdef AMMA_GENERATED
-#include "generated_headers/async_gmma.hpp"
+#include "async_gmma.hpp"
 #endif
 
 #ifdef TP_GENERATED
