@@ -112,7 +112,13 @@ void FilterArchitecture() {
     {architecture::nvidia_gpu_sm_90a, 90},
     {architecture::intel_gpu_pvc, 0},
     {architecture::intel_gpu_bmg_g21, 1}
+    // TODO: Update this code section once we can retrieve arch info from oneAPI APIs.
   };
+  // TODO: This is a temporary solution to support CRI. 
+  // Once we can retrieve arch info from oneAPI APIs, we can remove this.
+  #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+  const int deviceMajorMinor = 1;
+  #else
   auto device_architecture =
         compat::get_default_queue().get_device().get_info<info::device::architecture>();
   if (device_architecture == architecture::unknown) {
@@ -124,6 +130,7 @@ void FilterArchitecture() {
   }
 
   const int deviceMajorMinor = arch_map[device_architecture];
+  #endif
 #else
   cudaError_t err;
 

@@ -119,8 +119,17 @@ if (CUTLASS_ENABLE_SYCL)
   elseif(DPCPP_SYCL_TARGET STREQUAL "intel_gpu_pvc" OR
          DPCPP_SYCL_TARGET STREQUAL "spir64" OR
          DPCPP_SYCL_TARGET STREQUAL "intel_gpu_bmg_g21")
-    set(SYCL_INTEL_TARGET ON)
-    add_compile_definitions(SYCL_INTEL_TARGET)
+    # Xe_Core Architecture_number(SYCL_INTEL_TARGET)
+    # XeHPC 12
+    # Xe2 20
+    # Xe3 30
+    # Xe3P 35
+    # Xe4 40
+    set(SYCL_INTEL_TARGET 20)
+    add_compile_definitions(SYCL_INTEL_TARGET=${SYCL_INTEL_TARGET})
+  elseif(DPCPP_SYCL_TARGET STREQUAL "intel_gpu_cri")
+    set(SYCL_INTEL_TARGET 35)
+    add_compile_definitions(SYCL_INTEL_TARGET=${SYCL_INTEL_TARGET})
   endif()
 
   add_compile_definitions(CUTLASS_ENABLE_SYCL)

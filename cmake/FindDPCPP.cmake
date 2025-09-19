@@ -46,7 +46,11 @@ endif()
 set(DPCPP_COMPILE_ONLY_FLAGS "")
 set(DPCPP_LINK_ONLY_FLAGS "")
 
-if(NOT "${DPCPP_SYCL_TARGET}" STREQUAL "")
+# TODO: intel_gpu_cri is a temporary SYCL target for CRI and reuse 'spir64'.
+# It will be updated once the official target name is available.
+if("${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_cri")
+  list(APPEND DPCPP_FLAGS "-fsycl-targets=spir64;")
+elseif(NOT "${DPCPP_SYCL_TARGET}" STREQUAL "")
   list(APPEND DPCPP_FLAGS "-fsycl-targets=${DPCPP_SYCL_TARGET};")
 endif()
 
@@ -64,9 +68,12 @@ if(NOT "${DPCPP_SYCL_ARCH}" STREQUAL "")
   endif()
 endif()
 
+# TODO: intel_gpu_cri is a temporary SYCL target for CRI.
+# It will be updated once the official target name is available.
 if("${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_pvc" OR
    "${DPCPP_SYCL_TARGET}" STREQUAL "spir64" OR
-   "${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_bmg_g21")
+   "${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_bmg_g21" OR
+   "${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_cri")
   if ((CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 2025.2) OR CUTLASS_SYCL_BUILTIN_ENABLE)
     list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xspirv-translator;-spirv-ext=+SPV_INTEL_split_barrier")
   else()
