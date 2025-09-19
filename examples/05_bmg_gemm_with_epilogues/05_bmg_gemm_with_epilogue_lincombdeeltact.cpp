@@ -1,6 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2024 - 2024 Codeplay Software Ltd. All rights reserved.
- * Copyright (C) 2025 Intel Corporation, All rights reserved.
+ * Copyright (c) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -95,7 +95,7 @@ struct Options {
   bool help;
   bool error;
 
-  int m, n, k, l, iterations;
+  int m, n, k, l, iterations, verify;
   float alpha, beta;
   Activation activation;
 
@@ -123,6 +123,7 @@ struct Options {
     cmd.get_cmd_line_argument("alpha", alpha, 1.f);
     cmd.get_cmd_line_argument("beta", beta, 0.f);
     cmd.get_cmd_line_argument("iterations", iterations, 100);
+    cmd.get_cmd_line_argument("verify", verify, 1);
     std::string activation_str = "sum";
     cmd.get_cmd_line_argument("activation", activation_str);
     if (activation_str == "sum") {
@@ -148,7 +149,8 @@ struct Options {
       << "  --alpha=<s32>               Epilogue scalar alpha\n"
       << "  --beta=<s32>                Epilogue scalar beta\n\n"
       << "  --iterations=<int>          Iterations\n\n"
-      << "  --activation=[sum|mult]     Elementwise Binary Activation Function\n\n";
+      << "  --activation=[sum|mult]     Elementwise Binary Activation Function\n\n"
+      << "  --verify=<int>              Specify whether to verify.\n\n";
 
     return out;
   }
@@ -319,11 +321,15 @@ struct ExampleRunner {
 
     compat::wait();
 
+    if (options.verify != 0) {
     // Verify that the result is correct
     bool passed = verify(problem_size, options.alpha, options.beta);
     std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
 
-    if(!passed) return cutlass::Status::kErrorInternal;
+    if (!passed) return cutlass::Status::kErrorInternal;
+    } else {
+      std::cout << "Verification is skipped.\n";
+    }
 
     if (options.iterations > 0) {
       GPU_Clock timer;

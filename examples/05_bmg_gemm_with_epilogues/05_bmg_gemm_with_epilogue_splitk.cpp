@@ -1,6 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2024 - 2024 Codeplay Software Ltd. All rights reserved.
- * Copyright (C) 2025 Intel Corporation, All rights reserved.
+ * Copyright (c) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -59,7 +59,7 @@ struct Options {
   bool help;
   bool error;
 
-  int m, n, k, l, num_head, nope_dim, rope_dim, iterations;
+  int m, n, k, l, num_head, nope_dim, rope_dim, iterations, verify;
   float alpha, beta;
 
   Options():
@@ -89,6 +89,7 @@ struct Options {
     cmd.get_cmd_line_argument("alpha", alpha, 1.f);
     cmd.get_cmd_line_argument("beta", beta, 0.f);
     cmd.get_cmd_line_argument("iterations", iterations, 100);
+    cmd.get_cmd_line_argument("verify", verify, 1);
   }
 
   /// Prints the usage statement.
@@ -106,7 +107,8 @@ struct Options {
       << "  --rope-dim=<int>            Sets the rope_dim for splitk fusion\n"
       << "  --alpha=<s32>               Epilogue scalar alpha\n"
       << "  --beta=<s32>                Epilogue scalar beta\n\n"
-      << "  --iterations=<int>          Iterations\n\n";
+      << "  --iterations=<int>          Iterations\n\n"
+      << "  --verify=<int>              Specify whether to verify.\n\n";
 
     return out;
   }
@@ -329,6 +331,7 @@ struct ExampleRunner {
     ProblemShapeType splitk_size = ProblemShapeType{options.num_head, options.nope_dim, options.rope_dim, 1};
 
     initialize(problem_size, splitk_size);
+
     using EpilogueArguments = typename Gemm::GemmKernel::EpilogueArguments;
     EpilogueArguments epilogue_arguments{
       {options.alpha, options.beta}, block_C.get(), stride_C, block_D.get(), stride_D};
@@ -361,12 +364,16 @@ struct ExampleRunner {
 
     compat::wait();
 
-    // Verify that the result is correct
-    bool passed = verify(problem_size, splitk_size, options.alpha, options.beta);
-    std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
-    if (!passed) return cutlass::Status::kErrorInternal;
+    if (options.verify != 0) {
+      // Verify that the result is correct
+      bool passed = verify(problem_size, splitk_size, options.alpha, options.beta);
+      std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
+      if (!passed) return cutlass::Status::kErrorInternal;
+    } else {
+      std::cout << "Verification is skipped.\n";
+    }
 
-    if (passed && options.iterations > 0) {
+    if (options.iterations > 0) {
       GPU_Clock timer;
       timer.start();
       for (int i = 0; i < options.iterations; ++i) {

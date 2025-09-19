@@ -1,6 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2025 - 2025 Codeplay Software Ltd. All rights reserved.
- * Copyright (C) 2025 Intel Corporation, All rights reserved.
+ * Copyright (c) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -84,7 +84,7 @@ struct Options {
   bool error;
 
   int mode;
-  int m, n, k, l, iterations;
+  int m, n, k, l, iterations, verify;
   int g;
   float alpha, beta;
 
@@ -114,6 +114,7 @@ struct Options {
     cmd.get_cmd_line_argument("alpha", alpha, 1.f);
     cmd.get_cmd_line_argument("beta", beta, 0.f);
     cmd.get_cmd_line_argument("iterations", iterations, 100);
+    cmd.get_cmd_line_argument("verify", verify, 1);
   }
 
   /// Prints the usage statement.
@@ -130,7 +131,8 @@ struct Options {
       << "  --mode=<int>                The mode to run the gemm. 0 is Convert Only, 1 is Convert and Scale\n"
       << "  --alpha=<s32>               Epilogue scalar alpha\n"
       << "  --beta=<s32>                Epilogue scalar beta\n\n"
-      << "  --iterations=<int>          Iterations\n\n";
+      << "  --iterations=<int>          Iterations\n\n"
+      << "  --verify=<int>              Specify whether to verify.\n\n";
 
     return out;
   }
@@ -396,7 +398,6 @@ struct ExampleRunner {
     ProblemShapeType problem_size = ProblemShapeType{options.m, options.n, options.k, options.l};
 
     initialize(options);
-
     typename Gemm::GemmKernel::Arguments arguments{
       cutlass::gemm::GemmUniversalMode::kGemm,
       problem_size,
@@ -425,11 +426,15 @@ struct ExampleRunner {
 
     compat::wait();
 
+    if (options.verify != 0) {
     // Verify that the result is correct
     bool passed = verify(options);
     std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
 
-    if(!passed) return cutlass::Status::kErrorInternal;
+    if (!passed) return cutlass::Status::kErrorInternal;
+    } else {
+      std::cout << "Disposition is skipped." << std::endl;
+    }
 
     if (options.iterations > 0) {
       GPU_Clock timer;

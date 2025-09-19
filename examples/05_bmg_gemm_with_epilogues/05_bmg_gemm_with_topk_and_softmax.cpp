@@ -1,5 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (c) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -81,6 +82,8 @@
 #include "cutlass/util/reference/host/tensor_compare.h"
 #include "cutlass/util/reference/host/tensor_norm.h"
 #include "cutlass/util/reference/host/gett.hpp"
+
+#include "sycl_common.hpp"
 #include "helper.h"
 
 
@@ -199,7 +202,7 @@ struct Options {
 
   bool help = false;
 
-  int iterations = 1000;
+  int iterations = 1000, verify = 1;
   int m = 16, n = 8, k = 64, l = 1;
   double eps = 1e-5;
 
@@ -218,6 +221,7 @@ struct Options {
     cmd.get_cmd_line_argument("l", l);
     cmd.get_cmd_line_argument("iterations", iterations);
     cmd.get_cmd_line_argument("eps", eps);
+    cmd.get_cmd_line_argument("verify", verify, 1);
   }
 
   /// Prints the usage statement.
@@ -232,7 +236,8 @@ struct Options {
       << "  --k=<int>                   Sets the K extent of the GEMM\n"
       << "  --l=<int>                   Sets the l extent (batch) of the GEMM\n"
       << "  --iterations=<int>          Number of profiling iterations to perform.\n\n"
-      << "  --eps=<float>               Threshold of numerical verification. Default: 1e-5.\n\n";
+      << "  --eps=<float>               Threshold of numerical verification. Default: 1e-5.\n\n"
+      << "  --verify=<int>              Specify whether to verify.\n\n";
 
     out
       << "\n\nExamples:\n\n"
@@ -465,11 +470,15 @@ int run(Options &options) {
   // Correctness / Warmup iteration
   CUTLASS_CHECK(gemm.run());
 
-  // Check if output from CUTLASS kernel and reference kernel are equal or not
-  result.passed = result.verify(options);
+  if (options.verify != 0) {
+    // Check if output from CUTLASS kernel and reference kernel are equal or not
+    result.passed = result.verify(options);
 
-  if (!result.passed) {
-    exit(-1);
+    if (!result.passed) {
+      exit(-1);
+    }
+  } else {
+    std::cout << "Verification is skipped.\n";
   }
 
   // Run profiling loop

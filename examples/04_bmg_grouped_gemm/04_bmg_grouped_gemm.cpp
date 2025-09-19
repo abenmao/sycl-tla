@@ -1,6 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
- * Copyright (C) 2025 Intel Corporation, All rights reserved.
+ * Copyright (c) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -105,8 +105,10 @@ struct Options {
   bool help = false;
 
   float alpha, beta;
+
   int iterations;
-  int m, n, k, groups;
+  int m, n, k, groups, verify;
+
   std::vector<typename ProblemShape::UnderlyingProblemShape> problem_sizes_host;
 
   Options() : error(false), help(false), alpha(FLT_MAX), beta(FLT_MAX), iterations(100),
@@ -133,6 +135,7 @@ struct Options {
     cmd.get_cmd_line_argument("alpha", alpha, 1.f);
     cmd.get_cmd_line_argument("beta",  beta,  0.f);
     cmd.get_cmd_line_argument("iterations", iterations, 100);
+    cmd.get_cmd_line_argument("verify", verify, 1);
 
     assert(groups > 0);
     problem_sizes_host.clear();
@@ -154,7 +157,8 @@ struct Options {
       << "  --groups=<int>              Sets the number of individual GEMM problems for Grouped GEMM\n"
       << "  --alpha=<f32>               Epilogue scalar alpha\n"
       << "  --beta=<f32>                Epilogue scalar beta\n\n"
-      << "  --iterations=<int>          Number of profiling iterations to perform\n\n";
+      << "  --iterations=<int>          Number of profiling iterations to perform\n\n"
+      << "  --verify=<int>              Specify whether to verify.\n\n";
 
     out
       << "\n\nExamples:\n\n"
@@ -293,7 +297,7 @@ struct ExampleRunner {
 
       // Check if output from CUTLASS kernel and reference kernel are equal or not
       passed &= cutlass::reference::device::BlockCompareEqual(block_ref_D.get() + offset_D.at(i), block_D.get() + offset_D.at(i), M * N);
-      if(!passed)
+      if (!passed)
         break;
     }
     return passed;
@@ -480,7 +484,6 @@ void initialize(const Options &options) {
   cutlass::Status run(const Options& options, const cutlass::KernelHardwareInfo& hw_info, bool host_problem_shapes_available = true) {
     allocate(options);
     initialize(options);
-
     Gemm gemm_op;
 
     auto arguments = args_from_options(options, hw_info, host_problem_shapes_available);
@@ -497,11 +500,15 @@ void initialize(const Options &options) {
 
     compat::wait();
 
-    // Verify that the result is correct
-    bool passed = verify(options);
-    std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
+    if (options.verify != 0) {
+      // Verify that the result is correct
+      bool passed = verify(options);
+      std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
 
-    if(!passed) return cutlass::Status::kErrorInternal;
+      if (!passed) return cutlass::Status::kErrorInternal;
+    } else {
+      std::cout << "Disposition is skipped." << std::endl;
+    }
 
     if (options.iterations > 0) {
       GPU_Clock timer;

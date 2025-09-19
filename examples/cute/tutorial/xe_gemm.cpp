@@ -43,6 +43,7 @@
 #include "cutlass/util/reference/device/gemm_complex.h"
 #include "cutlass/util/reference/device/tensor_compare.h"
 #include "cutlass/util/reference/host/tensor_fill.h"
+#include "cutlass/util/command_line.h"
 
 #include "../../common/sycl_cute_common.hpp"
 
@@ -373,23 +374,11 @@ test_case(sycl::queue &Q, int m, int n, int k)
 
 int main(int argc, char** argv)
 {
-  auto shift = [&] {
-    return (argc-- > 0) ? *argv++ : nullptr;
-  };
-
-  auto parse_size = [&] {
-    static constexpr int default_size = 4096;
-    if (auto e = shift())
-      return atoi(e);
-    else
-      return default_size;
-  };
-
-  (void) shift();
-
-  auto m = parse_size();
-  auto n = parse_size();
-  auto k = parse_size();
+  int m, n, k;
+  cutlass::CommandLine cmd(argc, const_cast<const char**>(argv));
+  cmd.get_cmd_line_argument("m", m, 4096);
+  cmd.get_cmd_line_argument("n", n, 4096);
+  cmd.get_cmd_line_argument("k", k, 4096);
 
   sycl::queue Q;
 
