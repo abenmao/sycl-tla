@@ -686,6 +686,9 @@ struct BenchmarkRunnerGemm {
 
     if (state.error_occurred()) return;
 
+#ifdef CUTLASS_TEST_FOR_CRI
+    // disable warmup run and verification for CRI simulator as it's time-consuming
+#else
     // Run the GEMM
     gemm_op.run();
 
@@ -700,6 +703,7 @@ struct BenchmarkRunnerGemm {
     if(not passed) {
       state.SkipWithError("Disposition Failed.");
     }
+#endif
 
     state.counters["m"] = options.m;
     state.counters["n"] = options.n;

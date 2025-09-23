@@ -35,6 +35,12 @@
 #include <sstream>
 #include <fstream>
 
+#ifdef CUTLASS_TEST_FOR_CRI
+#define ITERATIONS 1
+#else
+#define ITERATIONS 100
+#endif
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass {
@@ -149,7 +155,12 @@ auto benchmark_main(int argc, const char **argv) -> int {
 
   std::stringstream benchmark_name;
   benchmark_name << benchmark_config << "/" << options.benchmark_name();
+#ifdef CUTLASS_TEST_FOR_CRI
+  ::benchmark::RegisterBenchmark(benchmark_name.str(), runner, options, hw_info)->UseManualTime()->Iterations(ITERATIONS)->MinTime(0.0);
+#else
   ::benchmark::RegisterBenchmark(benchmark_name.str(), runner, options, hw_info)->UseManualTime();
+#endif
+
   return 0;
 }
 
