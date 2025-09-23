@@ -29,8 +29,16 @@
 
 set(CUTLASS_APPLICATIONS_DIR ${CMAKE_SOURCE_DIR}/applications)
 
+if (CUTLASS_TEST_FOR_CRI)
+  set(TEST_ARGS "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=0 --verify=0")
+else()
+  set(TEST_ARGS "")
+endif()
+
 cutlass_example_add_executable(
-  07_bmg_dual_gemm
-  07_bmg_dual_gemm.cpp
-)
+    07_bmg_dual_gemm
+    07_bmg_dual_gemm.cpp
+    TEST_COMMAND_OPTIONS
+    TEST_ARGS
+  )
 

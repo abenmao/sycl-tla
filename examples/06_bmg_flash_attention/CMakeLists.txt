@@ -29,44 +29,61 @@
 
 set(CUTLASS_APPLICATIONS_DIR ${CMAKE_SOURCE_DIR}/applications)
 
-set(TEST_NO_PAGED "")
-set(TEST_PAGED "--use_paged_kv")
-
 foreach(HEAD_DIM 64 96 128 192)
+
+  if (CUTLASS_TEST_FOR_CRI)
+    set(TEST_BASE "--batch=1 --num_heads_q=4 --num_heads_kv=4 --seq_len_kv=256 --head_size_qk=64 --iterations=0 --verify=0")
+
+    set(PAGED_ARGS "--seq_len_kv_cache=64 --page_size=64 --use_paged_kv")
+    set(TEST_PAGED_PREFILL ${TEST_BASE} ${PAGED_ARGS} "--seq_len_qo=256")
+    set(TEST_PAGED_DECODE ${TEST_BASE} ${PAGED_ARGS} "--seq_len_qo=1")
+    set(TEST_NO_PAGED_PREFILL ${TEST_BASE} "--seq_len_qo=256")
+    set(TEST_NO_PAGED_DECODE ${TEST_BASE} "--seq_len_qo=1")
+  else()
+    set(TEST_PAGED_PREFILL "--use_paged_kv")
+    set(TEST_PAGED_DECODE "--use_paged_kv")
+    set(TEST_NO_PAGED_PREFILL "")
+    set(TEST_NO_PAGED_DECODE "")
+  endif()
 
   cutlass_example_add_executable(
     06_bmg_prefill_attention_hdim${HEAD_DIM}
     06_bmg_prefill_attention.cpp
+    TEST_COMMAND_OPTIONS
+    TEST_NO_PAGED_PREFILL
   )
 
   cutlass_example_add_executable(
     06_bmg_prefill_attention_cachedKV_hdim${HEAD_DIM}
     06_bmg_prefill_attention_prefill_cachedKV.cpp
     TEST_COMMAND_OPTIONS
-    TEST_NO_PAGED
-    TEST_PAGED
+    TEST_NO_PAGED_PREFILL
+    TEST_PAGED_PREFILL
   )
 
   cutlass_example_add_executable(
     06_bmg_decode_attention_hdim${HEAD_DIM}
     06_bmg_decode_attention.cpp
     TEST_COMMAND_OPTIONS
-    TEST_NO_PAGED
-    TEST_PAGED
+    TEST_NO_PAGED_DECODE
+    TEST_PAGED_DECODE
   )
+
   cutlass_example_add_executable(
     06_bmg_prefill_attention_fp8_hdim${HEAD_DIM}
     06_bmg_prefill_attention_fp8.cpp
     TEST_COMMAND_OPTIONS
+    TEST_NO_PAGED_PREFILL
   )
 
   cutlass_example_add_executable(
     06_bmg_decode_attention_fp8_hdim${HEAD_DIM}
     06_bmg_decode_attention_fp8.cpp
     TEST_COMMAND_OPTIONS
-    TEST_NO_PAGED
-    TEST_PAGED
+    TEST_NO_PAGED_DECODE
+    TEST_PAGED_DECODE
   )
+
   target_compile_definitions(06_bmg_prefill_attention_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM})
   target_compile_definitions(06_bmg_prefill_attention_cachedKV_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM})
   target_compile_definitions(06_bmg_decode_attention_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM})

@@ -95,9 +95,13 @@ endfunction()
 # =============================================================================
 # This CMakeLists.txt builds SYCL-based examples for CUTLASS.
 
-if(CUTLASS_ENABLE_SYCL)
+if (CUTLASS_TEST_FOR_CRI)
+  set(CRI_GEMM_DEFAULT_SIZE 256 CACHE INTERNAL "Default GEMM MNK size")
+endif()
+
+if (CUTLASS_ENABLE_SYCL)
   message(STATUS "Building CUTLASS SYCL Examples")
-  if(SYCL_INTEL_TARGET)
+  if (SYCL_INTEL_TARGET)
     message(STATUS "Building examples for Intel GPU targets")
     foreach(EXAMPLE
       00_bmg_gemm

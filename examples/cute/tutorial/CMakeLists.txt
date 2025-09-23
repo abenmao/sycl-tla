@@ -30,14 +30,27 @@
 if (CUTLASS_ENABLE_SYCL)
   message(STATUS "Building CuTE tutorial examples with SYCL")
 
+  if (CUTLASS_TEST_FOR_CRI)
+    set(TEST_BASE "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --l=1 --iterations=0")
+    set(SGEMM_ARGS ${TEST_BASE})
+    set(BMG_ARGS ${TEST_BASE} "--verify=0")
+  else()
+    set(SGEMM_ARGS "")
+    set(BMG_ARGS "")
+  endif()
+
   cutlass_example_add_executable(
     cute_tutorial_sgemm_1
     sgemm_1_sycl.cpp
+    TEST_COMMAND_OPTIONS
+    SGEMM_ARGS
   )
 
   cutlass_example_add_executable(
     cute_tutorial_sgemm_2
     sgemm_2_sycl.cpp
+    TEST_COMMAND_OPTIONS
+    SGEMM_ARGS
   )
 
   cutlass_example_add_executable(
@@ -55,12 +68,19 @@ if (CUTLASS_ENABLE_SYCL)
     cutlass_example_add_executable(
       cute_tutorial_bmg
       bgemm_bmg_legacy.cpp
+      TEST_COMMAND_OPTIONS
+      BMG_ARGS
     )
 
-    cutlass_example_add_executable(
-      cute_tutorial_xe_gemm
-      xe_gemm.cpp
-    )
+    if(CUTLASS_TEST_FOR_CRI)
+      # TODO: Not add the Xe gemm for now as it requires additional tuning. 
+    else()
+      cutlass_example_add_executable(
+        cute_tutorial_xe_gemm
+        xe_gemm.cpp
+      )
+    endif()
+
   endif()
 
   if (SYCL_NVIDIA_TARGET)
