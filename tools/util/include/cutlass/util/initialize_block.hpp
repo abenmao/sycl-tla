@@ -80,7 +80,11 @@ bool initialize_block(Element* block, std::size_t size, uint64_t seed, Args_t&&.
   }
 
   if constexpr (cute::sizeof_bits_v<Element> >= 8) {
+#if defined(CUTLASS_TEST_FOR_CRI)
+    cutlass::reference::device::BlockFillRandomUniformCopyFromHost(block, size, seed, scope_max, scope_min, 0);
+#else
     cutlass::reference::device::BlockFillRandomUniform(block, size, seed, scope_max, scope_min, 0);
+#endif
   } else {
     std::uniform_int_distribution<> dist(scope_min, scope_max);
 
