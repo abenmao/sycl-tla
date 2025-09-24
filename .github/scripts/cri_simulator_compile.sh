@@ -33,7 +33,7 @@ tmux send-keys -t session_compile:0 \
 tmux send-keys -t session_compile:0 \
     "cmake .. -G Ninja \
         -DCUTLASS_ENABLE_SYCL=ON \
-        -DDPCPP_SYCL_TARGET=spir64 \
+        -DDPCPP_SYCL_TARGET=intel_gpu_cri \
         -DCUTLASS_ENABLE_BENCHMARKS=ON \
         -DCUTLASS_SYCL_RUNNING_CI=ON \
         -DCUTLASS_SYCL_PROFILING_ENABLED=ON \
