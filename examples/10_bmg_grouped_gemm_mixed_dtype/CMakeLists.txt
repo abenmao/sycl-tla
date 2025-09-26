@@ -51,7 +51,11 @@ foreach(MMA_TYPE IN LISTS MMA_T)
     set(exe_name "${mma_name}_s8")
     if (${MMA_TYPE} STREQUAL "half_t" AND ${QUANT_TYPE} STREQUAL "int8_t")
       set(exe_name "${mma_name}_s8_tensorwise")
-      set(TEST_GROUP_DEQUANT ${TEST_BASE} --g=0)
+      if (NOT CUTLASS_TEST_FOR_CRI)
+        set(TEST_GROUP_DEQUANT ${TEST_BASE} --g=0) 
+        # TODO(Zhitao): use default g for CRI testing for now due to stable
+        # simulator crashing.
+      endif()
       set(TEST_A_NARROW ${TEST_BASE} --groups=2)
     endif()
 
