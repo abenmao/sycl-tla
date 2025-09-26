@@ -1,5 +1,21 @@
 # CUTLASS SYCL Changelog
 
+## [CUTLASS SYCL 0.5-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.5-cri) (2025-09-26)
+### CRI Enabling (Notes: all the tests based on CRI simulator)
+  - Add support for CRI architecture ([#34](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/34))
+  - Add support for CRI test option ([#35](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/35))
+  - Add support for CRI UT ([#36](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/36))
+  - Add support for CRI examples ([#37](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/37), [#44](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/44))
+  - Add support for CRI benchmarks ([#45](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/45))
+
+### New Features
+  - Ensure BF16/FP16 basic GEMM support (test cases and examples changes)
+  - Ensure BF16/FP16 flash attention v2 kernels support (test cases and examples changes)
+
+### Performance (Internal Only)
+  - BF16/FP16 GEMM example kernel performance at 71% of target (goal: 60%)
+  - BF16/FP16 attention kernel example performance at 37% (target for half of BMG efficiency) (goal:40%)
+
 ## [CUTLASS SYCL 0.5](https://github.com/intel/cutlass-sycl/releases/tag/v0.5) (2025-09-26)
 ### Major Architecture Changes
 - **Xe Rearchitecture ([#477](https://github.com/intel/cutlass-sycl/pull/477))**: Complete redesign of Xe CuTe atoms with new architecture

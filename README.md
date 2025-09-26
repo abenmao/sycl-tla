@@ -1,6 +1,6 @@
 ![ALT](./media/images/gemm-hierarchy-with-epilogue-no-labels.png "Complete CUDA GEMM decomposition")
 
-# CUTLASS SYCL 0.5
+# CUTLASS SYCL [0.5-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.5-cri) (Base - CUTLASS SYCL [0.5](https://github.com/intel/cutlass-sycl/releases/tag/v0.5))
 
 **This repository fast-follows NVIDIA CUTLASS repository adding SYCL support for Intel GPUs.**
 
@@ -41,26 +41,22 @@ Base NVIDIA CUTLASS Versions for CUTLASS-SYCL releases:
 |0.3 | 3.9.2 |
 |0.5 | 4.2.0 |
 
-# What's New in CUTLASS SYCL 0.5 
+# What's New in CUTLASS SYCL [0.5-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.5-cri)
 
-### Major Architecture Changes
-- **Xe Rearchitecture ([#477](https://github.com/intel/cutlass-sycl/pull/477))**: Complete redesign of Xe CuTe atoms with new architecture
-  - New MMA atoms for improved performance
-  - Enhanced 2D copy atoms (loads, stores, prefetch with VNNI/transpose support)
-  - New 2D copy helpers (low-level `make_block_2d_copy` and high-level `make_block_2d_copy_{A,B,C}`)
-  - Generic and optimized reorder atoms for {int4, uint4, int8, uint8, e2m1, e4m3, e5m2} -> {half, bfloat16}
-  - Requires IGC version [v2.18.5](https://github.com/intel/intel-graphics-compiler/releases/tag/v2.18.5) or later
+### CRI Enabling (Notes: all the tests based on CRI simulator )
+  - Add support for CRI architecture ([#34](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/34))
+  - Add support for CRI test option ([#35](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/35))
+  - Add support for CRI UT ([#36](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/36))
+  - Add support for CRI examples ([#37](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/37), [#44](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/44))
+  - Add support for CRI benchmarks ([#45](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/45))
 
-### New Features  
-- **G++ Host Compiler Support ([#490](https://github.com/intel/cutlass-sycl/pull/490))**: Support for G++ 13 as host compiler
-- Migrated `syclcompat` to this repository as `cutlasscompat` for better compatibility
-  - Fixed compilation issues when using G++ instead of clang++
-  - Added new CI workflow for testing G++ host compiler builds
-  - Enhanced build system to support `-DDPCPP_HOST_COMPILER=g++` option
-- **Grouped GEMM for Mixed Dtype ([#457](https://github.com/intel/cutlass-sycl/pull/457))**: Extended grouped GEMM support to mixed precision operations
-  - Added support for BF16 + S8 mixed dtype grouped GEMM
-  - Added support for FP16 + U4 mixed dtype grouped GEMM
-  - New examples: `10_bmg_grouped_gemm_bf16_f16_s8.cpp` and `10_bmg_grouped_gemm_f16_u4.cpp`
+### New Features
+  - Ensure BF16/FP16 basic GEMM support (test cases and examples changes)
+  - Ensure BF16/FP16 flash attention v2 kernels support (test cases and examples changes)
+
+### Performance (Internal Only)
+  - BF16/FP16 GEMM example kernel performance at 71% of target (goal: 60%)
+  - BF16/FP16 attention kernel example performance at 37% (target for half of BMG efficiency) (goal:40%)
 
   **See the [CHANGELOG](CHANGELOG-SYCL.md) for details of all past releases and updates.**
 
@@ -103,6 +99,7 @@ CUTLASS-SYCL runs successfully on the following Intel GPUs.
 |---|---|
 |Intel Data Center GPU Max Series            |Xe-HPC|
 |Intel Arc GPU B580 Graphics                       |Xe2|
+|Intel Data Center GPU Crescent Island             |Xe3p|
 
 ## Validated Software Configurations
 
@@ -112,8 +109,7 @@ We are regularly testing following setup in CI.
 |-----------------|----------|-----------------|--------|---------------------|-----------------------|
 |Xe-HPC| Ubuntu 22.04 |2025.2+ |G++13  | 25.18 | 2.11 |
 |Xe2| Ubuntu 25.04 |2025.2+  |G++13  | 25.35 | 2.18 |
-
-
+|Xe3p| Ubuntu 25.04 |2025.2+  |G++13  | 25.35 | 2.18 |
 
 
 
@@ -130,6 +126,12 @@ Or
 ```
 cmake .. -DDPCPP_SYCL_TARGET="intel_gpu_bmg_g21" 
 ```
+Or
+
+```
+cmake .. -DDPCPP_SYCL_TARGET="intel_gpu_cri"
+```
+
 
 Please refer to the [functionality documentation](./media/docs/cpp/functionality.md)
 for details on which kernels require which target architectures.
@@ -174,6 +176,7 @@ Create a build directory within the CUTLASS-SYCL project, then run CMake. You ne
 the target Intel GPU architecture using the `DPCPP_SYCL_TARGET` flag.
 For Intel Data Center GPU Max Series (Ponte Vecchio), use `intel_gpu_pvc`.
 For Intel Arc GPU B580 Graphics, use `intel_gpu_bmg_g21`.
+For Intel Data Center GPU Crescent Island, use `intel_gpu_cri`.
 
 ```bash
 $ mkdir build && cd build
@@ -185,6 +188,12 @@ Or for Intel Arc GPU B580 Graphics:
 
 ```bash
 $  CC=icx CXX=icpx cmake .. -G Ninja -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET="intel_gpu_bmg_g21" # compiles for Intel Arc GPU B580 Graphics
+```
+
+Or for Intel Data Center GPU Crescent Island:
+
+```bash
+$  CC=icx CXX=icpx cmake .. -G Ninja -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET="intel_gpu_cri" # compiles for Intel Data Center GPU Crescent Island
 ```
 
 To compile with G++ as host compiler, add the flag `-DDPCPP_HOST_COMPILER=g++-13` to the cmake command. Please note that the build system must be able to find `g++-13` in your PATH.
