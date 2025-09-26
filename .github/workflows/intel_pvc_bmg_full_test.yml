@@ -21,12 +21,12 @@ jobs:
             gpu: BMG
             intel_graphics: ROLLING
             sycl_target: intel_gpu_bmg_g21
-            runner: [self-hosted, Linux, X64, bmg]
+            runner: [self-hosted, shanghai-hosted, Linux, X64, bmg]
           - compiler: RELEASE
             gpu: PVC
             intel_graphics: ROLLING
             sycl_target: intel_gpu_pvc
-            runner: [self-hosted, Linux, X64, pvc]
+            runner: [self-hosted, shanghai-hosted, Linux, X64, pvc]
 
     name: Run Intel ${{ matrix.compiler }} tests on ${{ matrix.gpu }} with intel-graphics ${{ matrix.intel_graphics }}
     runs-on: ${{ matrix.runner }}
