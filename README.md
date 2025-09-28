@@ -40,6 +40,7 @@ Base NVIDIA CUTLASS Versions for CUTLASS-SYCL releases:
 |0.2 | 3.9.2 |
 |0.3 | 3.9.2 |
 |0.5 | 4.2.0 |
+|0.5-cri | 4.2.0 |
 
 # What's New in CUTLASS SYCL [0.5-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.5-cri)
 
