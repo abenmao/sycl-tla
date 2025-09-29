@@ -21,7 +21,7 @@ jobs:
             gpu: BMG
             intel_graphics: ROLLING
             sycl_target: intel_gpu_bmg_g21
-            runner: [self-hosted, shanghai-hosted, Linux, X64, bmg]
+            runner: [self-hosted, shanghai-bmg, Linux, X64]
 
     name: Run Intel ${{ matrix.compiler }} tests on ${{ matrix.gpu }} with intel-graphics ${{ matrix.intel_graphics }}
     runs-on: ${{ matrix.runner }}
@@ -36,7 +36,7 @@ jobs:
       - name: Setup virtual environment
         shell: bash
         run: |
-          source /opt/intel/oneapi/setvars.sh
+          source /opt/intel/oneapi/setvars.sh --force
           export ONEAPI_DEVICE_SELECTOR=level_zero:gpu
           export CMAKE_BUILD_TYPE=Release
           export IGC_VISAOptions="-perfmodel"
