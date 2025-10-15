@@ -250,4 +250,49 @@ union Abarrier {
   uint32_t raw;
 };*/
 
+// Initialize barrier present in shared memory
+CUTE_HOST_DEVICE
+void
+xe4_initialize_barrier(uint64_t& smem_barrier,                 // 64 bits user-manged barrier in smem
+                   int thread_count = 1)                   // Thread count expected to arrive/wait on this barrier
+{
+#if defined(__SYCL_DEVICE_ONLY__)
+  abarrier_init(&smem_barrier, thread_count);
+#endif
+}
+
+// Set the number of bytes transfered per transaction and perform an arrive operation as well
+CUTE_HOST_DEVICE
+void
+xe4_set_barrier_transaction_bytes(uint64_t& smem_barrier,      // 64 bits user-manged barrier in smem
+                              uint32_t bytes)              // Number of bytes transfered by per TMA transaction
+{
+#if defined(__SYCL_DEVICE_ONLY__)
+  abarrier_workgroup_arrive_expect_tx(&smem_barrier, bytes);
+#endif
+}
+
+// Barrier wait
+CUTE_HOST_DEVICE
+void
+xe4_wait_barrier(uint64_t& smem_barrier,                       // 64 bits user-manged barrier in smem
+             int phase_bit)                                // Current phase bit the barrier waiting to flip
+{
+#if defined(__SYCL_DEVICE_ONLY__)
+  abarrier_try_wait(&smem_barrier, phase_bit);
+#endif
+}
+
+// Barrier arrive
+CUTE_HOST_DEVICE
+void
+xe4_arrive_barrier(uint64_t& smem_barrier, int thread_count = 1)                      // 64 bits user-manged barrier in smem
+{
+#if defined(__SYCL_DEVICE_ONLY__)
+  abarrier_workgroup_arrives(&smem_barrier, thread_count);
+#endif
+}
+
+
+
 }

@@ -213,9 +213,7 @@ struct TiledCopy : Copy_Atom
   CUTE_HOST_DEVICE
   auto
   with(TraitsArgs&&... args) const {
-    TiledCopy result;
-    static_cast<Copy_Atom&>(result) = Copy_Atom::with(static_cast<TraitsArgs&&>(args)...);
-    return result;
+    return Copy_Atom::with(static_cast<TraitsArgs&&>(args)...);
   }
 
   // Tile a tensor or a layout from shape
