@@ -52,7 +52,6 @@
 
 using namespace cute;
 
-
 template <class ATensor, class BTensor, class CTensor,
           class TiledMMA>
 void
@@ -295,7 +294,7 @@ gemm_verify(sycl::queue &Q,
 template <typename TA, typename TB, typename TC,
           char layoutA = 'R', char layoutB = 'R'>
 void
-test_case(sycl::queue &Q, int m, int n, int k)
+test_case(sycl::queue &Q, int m, int n, int k, int iterations)
 {
   std::cout << type_str<TA>() << " (" << layoutA << ") x "
             << type_str<TB>() << " (" << layoutB << ") -> "
@@ -337,19 +336,24 @@ test_case(sycl::queue &Q, int m, int n, int k)
 #endif
 
   if (ok) {
-    // Test performance:
-    const int timing_iterations = 100;
-    GPU_Clock timer;
+    if (iterations > 0) {
+      // Test performance:
+      GPU_Clock timer;
 
-    timer.start();
-    for (int i = 0; i < timing_iterations; ++i)
-      gemm_cute<decltype(A), decltype(B), decltype(C), TA, TB, layoutA, layoutB>(Q, A, B, C);
-    Q.wait_and_throw();
+      timer.start();
+      for (int i = 0; i < iterations; ++i)
+        gemm_cute<decltype(A), decltype(B), decltype(C), TA, TB, layoutA, layoutB>(Q, A, B, C);
+      Q.wait_and_throw();
 
-    double avg = timer.seconds() / timing_iterations;
-    double tops = (2.0*m*n*k) * 1e-12;
+      double avg = timer.seconds() / iterations;
+      double tops = (2.0*m*n*k) * 1e-12;
 
-    printf(", %4.3f TF/s", tops / avg, avg*1000);
+      printf(", %4.3f TF/s", tops / avg, avg*1000);
+    } else {
+      printf(", performance benchmark skipped due to 0 iterations");
+    }
+  } else {
+    printf(", performance benchmark skipped due to verification failure");
   }
 
   free_usm_tensor(A, Q);
@@ -374,82 +378,83 @@ test_case(sycl::queue &Q, int m, int n, int k)
 
 int main(int argc, char** argv)
 {
-  int m, n, k;
+  int m, n, k, iterations;
   cutlass::CommandLine cmd(argc, const_cast<const char**>(argv));
   cmd.get_cmd_line_argument("m", m, 4096);
   cmd.get_cmd_line_argument("n", n, 4096);
   cmd.get_cmd_line_argument("k", k, 4096);
+  cmd.get_cmd_line_argument("iterations", iterations, 100);
 
   sycl::queue Q;
 
   // Native compute
-  test_case<tfloat32_t, tfloat32_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<tfloat32_t, tfloat32_t, float, 'R', 'C'>(Q, m, n, k);
-  test_case<tfloat32_t, tfloat32_t, float, 'C', 'R'>(Q, m, n, k);
+  test_case<tfloat32_t, tfloat32_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<tfloat32_t, tfloat32_t, float, 'R', 'C'>(Q, m, n, k, iterations);
+  test_case<tfloat32_t, tfloat32_t, float, 'C', 'R'>(Q, m, n, k, iterations);
 
-  test_case<half_t, half_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<half_t, half_t, float, 'R', 'C'>(Q, m, n, k);
-  test_case<half_t, half_t, float, 'C', 'R'>(Q, m, n, k);
+  test_case<half_t, half_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<half_t, half_t, float, 'R', 'C'>(Q, m, n, k, iterations);
+  test_case<half_t, half_t, float, 'C', 'R'>(Q, m, n, k, iterations);
 
-  test_case<bfloat16_t, bfloat16_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<bfloat16_t, bfloat16_t, float, 'R', 'C'>(Q, m, n, k);
-  test_case<bfloat16_t, bfloat16_t, float, 'C', 'R'>(Q, m, n, k);
+  test_case<bfloat16_t, bfloat16_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<bfloat16_t, bfloat16_t, float, 'R', 'C'>(Q, m, n, k, iterations);
+  test_case<bfloat16_t, bfloat16_t, float, 'C', 'R'>(Q, m, n, k, iterations);
 
-  test_case<int8_t, int8_t, int32_t, 'R', 'R'>(Q, m, n, k);
-  test_case<uint8_t, uint8_t, int32_t, 'R', 'C'>(Q, m, n, k);
-  test_case<uint8_t, int8_t, int32_t, 'C', 'R'>(Q, m, n, k);
+  test_case<int8_t, int8_t, int32_t, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<uint8_t, uint8_t, int32_t, 'R', 'C'>(Q, m, n, k, iterations);
+  test_case<uint8_t, int8_t, int32_t, 'C', 'R'>(Q, m, n, k, iterations);
 
-  test_case<int8_t, uint4_t, int32_t, 'R', 'C'>(Q, m, n, k);
-  test_case<int4_t, uint8_t, int32_t, 'R', 'C'>(Q, m, n, k);
+  test_case<int8_t, uint4_t, int32_t, 'R', 'C'>(Q, m, n, k, iterations);
+  test_case<int4_t, uint8_t, int32_t, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<uint4_t, uint4_t, uint32_t, 'R', 'C'>(Q, m, n, k);
+  test_case<uint4_t, uint4_t, uint32_t, 'R', 'C'>(Q, m, n, k, iterations);
 
   // Upconversion cases
-  test_case<half_t, float_e5m2_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<half_t, float_e5m2_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<half_t, float_e5m2_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<half_t, float_e5m2_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<float_e5m2_t, float_e5m2_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<float_e5m2_t, float_e5m2_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<float_e5m2_t, float_e5m2_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<float_e5m2_t, float_e5m2_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<half_t, float_e4m3_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<half_t, float_e4m3_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<half_t, float_e4m3_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<half_t, float_e4m3_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<float_e4m3_t, float_e4m3_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<float_e4m3_t, float_e4m3_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<float_e4m3_t, float_e4m3_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<float_e4m3_t, float_e4m3_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<half_t, float_e2m1_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<half_t, float_e2m1_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<half_t, float_e2m1_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<half_t, float_e2m1_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<half_t, uint8_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<half_t, uint8_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<half_t, uint8_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<half_t, uint8_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<half_t, int8_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<half_t, int8_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<half_t, int8_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<half_t, int8_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<half_t, uint4_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<half_t, uint4_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<half_t, uint4_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<half_t, uint4_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<half_t, int4_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<half_t, int4_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<half_t, int4_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<half_t, int4_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<bfloat16_t, float_e5m2_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<bfloat16_t, float_e5m2_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<bfloat16_t, float_e5m2_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<bfloat16_t, float_e5m2_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<bfloat16_t, float_e4m3_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<bfloat16_t, float_e4m3_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<bfloat16_t, float_e4m3_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<bfloat16_t, float_e4m3_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<bfloat16_t, float_e2m1_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<bfloat16_t, float_e2m1_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<bfloat16_t, float_e2m1_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<bfloat16_t, float_e2m1_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<bfloat16_t, uint8_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<bfloat16_t, uint8_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<bfloat16_t, uint8_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<bfloat16_t, uint8_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<bfloat16_t, int8_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<bfloat16_t, int8_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<bfloat16_t, int8_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<bfloat16_t, int8_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<bfloat16_t, uint4_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<bfloat16_t, uint4_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<bfloat16_t, uint4_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<bfloat16_t, uint4_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 
-  test_case<bfloat16_t, int4_t, float, 'R', 'R'>(Q, m, n, k);
-  test_case<bfloat16_t, int4_t, float, 'R', 'C'>(Q, m, n, k);
+  test_case<bfloat16_t, int4_t, float, 'R', 'R'>(Q, m, n, k, iterations);
+  test_case<bfloat16_t, int4_t, float, 'R', 'C'>(Q, m, n, k, iterations);
 }
