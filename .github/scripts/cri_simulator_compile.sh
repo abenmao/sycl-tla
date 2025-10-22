@@ -19,7 +19,7 @@ tmux send-keys -t session_compile:0 "sleep 5" Enter
 # --- setup environment ---
 tmux send-keys -t session_compile:0 \
     "source /home/preci/crisim/env.sh && \
-     source /opt/intel/oneapi/setvars.sh && \   
+     source /opt/intel/oneapi/setvars.sh && \
      export ONEAPI_DEVICE_SELECTOR=level_zero:gpu && \
      export CMAKE_BUILD_TYPE=Release && \
      export IGC_VISAOptions=\"-perfmodel\" && \
