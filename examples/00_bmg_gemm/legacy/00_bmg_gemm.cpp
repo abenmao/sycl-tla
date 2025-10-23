@@ -30,23 +30,32 @@
  *
  **************************************************************************************************/
 /*! \file
-    \brief CUTLASS Intel BMG Gemm with ReLU Activation Fn epilogue
+    \brief CUTLASS Intel BMG Gemm Example.
 
-    This example constructs and executes a standard GEMM fused with a ReLU (Rectified Linear Unit)
-    activation epilogue. Aside from the epilogue operation, it is identical to 00_bmg_gemm.
+    This example constructs and executes a simple CUTLASS GEMM kernel on Intel BMG hardware, and
+    verifies its correctness with a reference implementation
+    (cutlass::reference::device::GemmComplex). The example also provides a performance measurement
+    for the GEMM in TFLOPS.
 
-    CUTLASS 3.x epilogues are implemented using the Epilogue Visitor Tree design pattern, and
-    typically combine 'Linear Combination' (i.e. `D = alpha * A*B + beta * C`) with an additional
-    epilogue operation.
+    This example makes use of BMGs subgroup cooperative 2d-block copy operations and DPAS instructions.
 
-    In this case, the ReLU Element-wise activation function is applied:
+    The shapes of the A and B matrix are defined at runtime by `options.m`, `.n` and `.k`, and the
+    batch size is defined by `options.l`. The tile shape, which defines how much work is executed by
+    a single work-group, is defined at compile time by:
+    ```
+      using TileShape = Shape<_256, _256, _32>;
+    ```
+    That is, each work-group processes a tile of M=256, N=256, and iterates over `options.k` in
+    blocks of K=32.
 
-    // D = ReLU(alpha * (A*B) + beta * C)
+    Performance of GEMM on BMG is heavily dependent on prefetching the A and B matrices. That is,
+    executing Intel specific prefetch instructions for future iterations to ensure that the required
+    blocks of A and B are resident in cache before they are needed.
 
     To build & run this example (from your build dir):
 
-      $ ninja 05_bmg_gemm_with_epilogue_relu
-      $ ./examples/sycl/05_bmg_gemm_with_epilogues/05_bmg_gemm_with_epilogue_relu
+      $ ninja 00_bmg_gemm
+      $ ./examples/sycl/00_bmg_gemm/00_bmg_gemm
 
     Call with `--help` for information about available options
 */
@@ -67,10 +76,6 @@
 #include "cutlass/util/packed_stride.hpp"
 #include "cutlass/util/reference/device/gemm_complex.h"
 #include "cutlass/util/reference/device/tensor_compare.h"
-#include "cutlass/util/reference/device/tensor_relu.h"
-#include "cutlass/tensor_view.h"
-#include "cutlass/coord.h"
-
 #include "sycl_common.hpp"
 #include "helper.h"
 
@@ -84,13 +89,13 @@ struct Options {
   bool help;
   bool error;
 
-  int m, n, k, l, iterations, verify;
+  int m, n, k, l, iterations;
   float alpha, beta;
 
   Options():
     help(false),
     error(false),
-    m(5120), n(4096), k(4096), l(1), iterations(100),
+    m(5120), n(4096), k(4096), l(1), iterations(20),
     alpha(1.f), beta(0.f)
   { }
 
@@ -110,7 +115,6 @@ struct Options {
     cmd.get_cmd_line_argument("alpha", alpha, 1.f);
     cmd.get_cmd_line_argument("beta", beta, 0.f);
     cmd.get_cmd_line_argument("iterations", iterations, 100);
-    cmd.get_cmd_line_argument("verify", verify, 1);
   }
 
   /// Prints the usage statement.
@@ -125,8 +129,7 @@ struct Options {
       << "  --l=<int>                   Sets the L extent (batch count) of the GEMM\n"
       << "  --alpha=<s32>               Epilogue scalar alpha\n"
       << "  --beta=<s32>                Epilogue scalar beta\n\n"
-      << "  --iterations=<int>          Iterations\n\n"
-      << "  --verify=<int>              Specify whether to verify.\n\n";
+      << "  --iterations=<int>          Iterations\n\n";
 
     return out;
   }
@@ -176,7 +179,7 @@ struct ExampleRunner {
   cutlass::DeviceAllocation<ElementB> block_B;
   cutlass::DeviceAllocation<ElementC> block_C;
   cutlass::DeviceAllocation<ElementOutput> block_D;
-  cutlass::DeviceAllocation<ElementOutput> block_ref_D;
+  cutlass::DeviceAllocation<ElementOutput> block_ref_D; // Reference GEMM result for verification
 
   //
   // Methods
@@ -208,14 +211,7 @@ struct ExampleRunner {
           M * N  // batch_stride_D
         );
 
-    compat::wait();
-
-    using TensorView = cutlass::TensorView<ElementOutput, LayoutD>;
-    for(int batch = 0, offset = 0; batch < L; batch++, offset += M * N) {
-      cutlass::reference::device::TensorReLu(TensorView(block_ref_D.get() + offset, LayoutD::packed({M, N}),
-                                                        cutlass::make_Coord(M, N)));
-    }
-
+    // CUTLASS on SYCL uses the compatibility library compat for e.g. default in-order queue
     compat::wait();
 
     // Check if output from CUTLASS kernel and reference kernel are equal or not
@@ -230,6 +226,7 @@ struct ExampleRunner {
     auto problem_shape_MNKL = cute::append<4>(problem_size, 1);
     auto [M, N, K, L] = problem_shape_MNKL;
 
+    // Complete the stride by combining static layout info (StrideA) with runtime size info (M,K,L)
     stride_A = cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(M, K, L));
     stride_B = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(N, K, L));
     stride_C = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(M, N, L));
@@ -264,7 +261,10 @@ struct ExampleRunner {
     size_t workspace_size = Gemm::get_workspace_size(arguments);
     cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
 
-    CUTLASS_CHECK(gemm_op.can_implement(arguments));
+    if (gemm_op.can_implement(arguments) != cutlass::Status::kSuccess){
+      std::cout << "Invalid Problem Size: " << options.m << 'x' << options.n << 'x' << options.k << 'x' << options.l << std::endl;
+      std::exit(1);
+    }
 
     CUTLASS_CHECK(gemm_op.initialize(arguments, workspace.get()));
 
@@ -273,15 +273,11 @@ struct ExampleRunner {
 
     compat::wait();
 
-    if (options.verify != 0) {
     // Verify that the result is correct
     bool passed = verify(problem_size, options.alpha, options.beta);
     std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
 
-    if (!passed) return cutlass::Status::kErrorInternal;
-    } else {
-      std::cout << "Verification is skipped.\n";
-    }
+    if(!passed) return cutlass::Status::kErrorInternal;
 
     if (options.iterations > 0) {
       GPU_Clock timer;
@@ -338,69 +334,91 @@ int main(int argc, const char** argv)
 
   // The code section below describes datatype for input, output matrices and computation between
   // elements in input matrices.
-  using ElementAccumulator = float;     // <- data type of accumulator
-  using ElementComputeEpilogue = float; // <- data type of epilogue operations
-  using ElementInputA = bfloat16_t;     // <- data type of elements in input matrix A
-  using ElementInputB = bfloat16_t;     // <- data type of elements in input matrix B
-  using ElementOutput = float;          // <- data type of elements in output matrix D
+  using ElementAccumulator = float;      // <- data type of accumulator
+  using ElementComputeEpilogue = float;  // <- data type of epilogue operations
+  using ElementInputA = bfloat16_t;      // <- data type of elements in input matrix A
+  using ElementInputB = bfloat16_t;      // <- data type of elements in input matrix B
+  using ElementOutput = float;           // <- data type of elements in output matrix D
 
   using LayoutA = cutlass::layout::RowMajor;
   using LayoutB = cutlass::layout::RowMajor;
   using LayoutC = cutlass::layout::RowMajor;
   using LayoutD = cutlass::layout::RowMajor;
 
+  // The 2D block copy operations used for the A and B matrices
   using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
   using GmemTiledCopyB = XE_2D_U16x32x32_LD_V;
 
   // Workgroup-level tile
   using TileShape = Shape<_256, _256, _32>;
 
-  using TiledMma =
+  // A TiledMMA struct defines a tiling of an MMA atom over M, N and K, combining both additional
+  // hardware (sub-groups for Intel BMG) and iterations by each sub-group.
+  //
+  // The TiledMMAHelper struct defines a specific TiledMMA for a given MMA atom
+  // (XE_8x16x16_F32BF16BF16F32_TT), TileShape (<256, 256, 32>) and sub-group layout (8x4x1). The
+  // TiledMMA constructed using TiledMMAHelper has the property that each sub-group operates on a
+  // single contiguous chunk of the work-group TileShape. For this configuration, this implies that
+  // each sub-group operates on a contiguous 32x64x32 chunk (4x4x2 iterations). See
+  // 0t_mma_atom.md#TiledMMAs for more info. Sub-groups are arranged row-major (stride 4,1,0) for
+  // performance reasons.
+  using TiledMma =                    // M=8,N=16,K=16, D=f32,A=bf16,B=bf16,C=f32
       typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
                                     Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
 
+  // For Intel BMG, PipelineStages defines how many k-blocks ahead to prefetch from A and B.
   constexpr int PipelineStages = 2;
   using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16<PipelineStages>;
   using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeXMX16;
 
-  // The Linear Combination with ReLU epilogue
-  using EpilogueOp = cutlass::epilogue::fusion::LinCombEltAct<cutlass::epilogue::thread::ReLu, ElementOutput,
-          ElementComputeEpilogue, ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
+  // This is the 'default' epilogue operation (Linear Combination) which performs everything in:
+  // (D = alpha * (A*B) + beta * C)
+  // aside from the (A*B), which is handled by the GEMM. See 05_bmg_gemm_with_epilogues for more
+  // complex epilogue examples.
+  using EpilogueOp = cutlass::epilogue::fusion::LinearCombination<ElementOutput, ElementComputeEpilogue,
+          ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
 
+  // FusionCallbacks ties the EpilogueOp to an implementation (based on the dispatch
+  // policy/architecture) and defines the epilogue arguments.
   using FusionCallBacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueOp, TileShape,
           decltype(tile_shape(TiledMma()))>;
+  // GEMM Epilogue - loads & stores C/D matrices, performs epilogue operations & load/stores any
+  // auxiliary data required
   using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
           EpilogueDispatchPolicy,
           TileShape,
           ElementAccumulator,
-          cutlass::gemm::TagToStrideC_t<LayoutC>,
+          cutlass::gemm::TagToStrideC_t<LayoutC>, // Converts CUTLASS 2.x to CUTLASS 3.x representation
           ElementOutput,
-          cutlass::gemm::TagToStrideC_t<LayoutD>,
+          cutlass::gemm::TagToStrideC_t<LayoutD>, // Converts CUTLASS 2.x to CUTLASS 3.x representation
           FusionCallBacks,
-          XE_2D_U32x8x16_LD_N,
+          XE_2D_U32x8x16_LD_N, // The copy atom used to load matrix C
           void, void,
-          XE_2D_U32x8x16_ST_N,
+          XE_2D_U32x8x16_ST_N, // The copy atom used to store matrix D
           void, void>;
 
-// Mainloop
+  // GEMM Mainloop - iteration over blocks in K dimension
   using CollectiveMainloop = cutlass::gemm::collective::CollectiveMma<
           GEMMDispatchPolicy,
           TileShape,
           ElementInputA,
-          cutlass::gemm::TagToStrideA_t<LayoutA>,
+          cutlass::gemm::TagToStrideA_t<LayoutA>, // Converts CUTLASS 2.x to CUTLASS 3.x representation
           ElementInputB,
-          cutlass::gemm::TagToStrideB_t<LayoutB>,
+          cutlass::gemm::TagToStrideB_t<LayoutB>, // Converts CUTLASS 2.x to CUTLASS 3.x representation
           TiledMma,
           GmemTiledCopyA, void, void, cute::identity,  // A
           GmemTiledCopyB, void, void, cute::identity   // B
   >;
 
+  // Define the whole kernel (mainloop and epilogue)
   using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
-  Shape<int, int, int, int>,
+  Shape<int, int, int, int>, // Defer global problem shape definition to runtime
   CollectiveMainloop,
   CollectiveEpilogue
   >;
 
+  // The GemmUniversalAdapter wraps the defined GEMM kernel and handles the launch, and e.g.
+  // persistent scratch memory if required.
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
 
   ExampleRunner<Gemm> runner;

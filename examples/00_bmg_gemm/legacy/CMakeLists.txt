@@ -26,32 +26,16 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-include(FetchContent)
+set(TEST_BATCHES --l=2)
+set(TEST_LARGE "--l=513 --m=8 --n=16384 --k=512") # B matrix capacity > uint32_max
+set(TEST_SMALL_SHAPE --m=4 --n=8 --k=8 --l=2)
 
-set(GOOGLEBENCHMARK_DIR "" CACHE STRING "Location of local GoogleBenchmark repo to build against")
-set(BENCHMARK_ENABLE_ASSEMBLY_TESTS OFF)
 
-if(GOOGLEBENCHMARK_DIR)
-  set(FETCHCONTENT_SOURCE_DIR_GOOGLEBENCHMARK ${GOOGLEBENCHMARK_DIR} CACHE STRING "GoogleBenchmark source directory override")
-endif()
-
-set(GBENCH_REPOSITORY "https://github.com/google/benchmark.git" CACHE STRING "GoogleBench repo to fetch")
-FetchContent_Declare(
-  googlebenchmark
-  GIT_REPOSITORY ${GBENCH_REPOSITORY}
-  GIT_TAG        v1.9.0
-  EXCLUDE_FROM_ALL
-  )
-
-FetchContent_MakeAvailable(googlebenchmark)
-
-# Silence warnings from GoogleBenchmark sources
-if(CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
-  foreach(tgt benchmark benchmark_main)
-    if(TARGET ${tgt})
-      target_compile_options(${tgt} PRIVATE -w)
-    endif()
-  endforeach()
-endif()
-
-set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+cutlass_example_add_executable(
+  00_bmg_gemm_legacy
+  00_bmg_gemm.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_BATCHES
+  TEST_LARGE
+  TEST_SMALL_SHAPE
+)
