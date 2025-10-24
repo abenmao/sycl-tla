@@ -404,8 +404,12 @@ int main(int argc, char** argv)
   test_case<uint8_t, uint8_t, int32_t, 'R', 'C'>(Q, m, n, k, iterations);
   test_case<uint8_t, int8_t, int32_t, 'C', 'R'>(Q, m, n, k, iterations);
 
+#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+  // Skip int8 x int4 for CRI as the dpas is removed.
+#else
   test_case<int8_t, uint4_t, int32_t, 'R', 'C'>(Q, m, n, k, iterations);
   test_case<int4_t, uint8_t, int32_t, 'R', 'C'>(Q, m, n, k, iterations);
+#endif
 
   test_case<uint4_t, uint4_t, uint32_t, 'R', 'C'>(Q, m, n, k, iterations);
 

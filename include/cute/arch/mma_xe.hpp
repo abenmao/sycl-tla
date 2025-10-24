@@ -131,7 +131,6 @@ template <int M> struct XE_DPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::T
 };
 #endif
 
-
 CUTE_DECLARE_XE_DPAS_TT(f,   tf32, tf32, f)
 
 CUTE_DECLARE_XE_DPAS_TT(f,   bf,   bf,   f)
@@ -150,6 +149,10 @@ CUTE_DECLARE_XE_DPAS_TT(d,   u8,   s8,   d)
 CUTE_DECLARE_XE_DPAS_TT(d,   s8,   u8,   d)
 CUTE_DECLARE_XE_DPAS_TT(d,   s8,   s8,   d)
 
+
+#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+// Skip int8 x int4 for CRI as the dpas is removed.
+#else
 CUTE_DECLARE_XE_DPAS_TT(ud,  u8,   u4,   ud)
 CUTE_DECLARE_XE_DPAS_TT(d,   u8,   u4,   d)
 CUTE_DECLARE_XE_DPAS_TT(d,   u8,   s4,   d)
@@ -161,6 +164,7 @@ CUTE_DECLARE_XE_DPAS_TT(d,   u4,   u8,   d)
 CUTE_DECLARE_XE_DPAS_TT(d,   u4,   s8,   d)
 CUTE_DECLARE_XE_DPAS_TT(d,   s4,   u8,   d)
 CUTE_DECLARE_XE_DPAS_TT(d,   s4,   s8,   d)
+#endif
 
 CUTE_DECLARE_XE_DPAS_TT(ud,  u4,   u4,   ud)
 CUTE_DECLARE_XE_DPAS_TT(d,   u4,   u4,   d)
