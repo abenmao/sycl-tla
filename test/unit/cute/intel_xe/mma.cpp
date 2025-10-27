@@ -1,5 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2024 - 2024 Codeplay Software Ltd. All rights reserved.
+ * Copyright (C) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,16 +34,18 @@
 
 #include <cute/tensor.hpp>
 #include <sycl/sycl.hpp>
-#include <syclcompat.hpp>
+#include <cute/util/compat.hpp>
 
 #include "cutlass_unit_test.h"
 #include "utils.hpp"
 
 using namespace cute;
 using namespace cutlass;
-using namespace syclcompat::experimental;
+using namespace compat::experimental;
 
 #define SUBGROUP_SIZE (16)
+
+template<class...> class GemmDeviceName;
 
 template <class MMA, uint32_t wg_tile_m, uint32_t wg_tile_n, uint32_t sg_tile_m,
           uint32_t sg_tile_n, uint32_t sg_tile_k, class TA, class TB, class TC>
@@ -89,6 +92,7 @@ void gemm_device(TA const *A, TB const *B, TC *C, uint32_t m, uint32_t n,
 
 #define CUTLASS_ENABLE_DEBUG_PRINTS (0)
 
+#undef LOG_THREAD
 #define LOG_THREAD (16)
 
 #if CUTLASS_ENABLE_DEBUG_PRINTS
@@ -169,13 +173,13 @@ template <class MMA, uint32_t wg_tile_m, uint32_t wg_tile_n, uint32_t sg_tile_m,
 void gemm(int m, int n, int k, TA *A, TB *B, TC *C) {
   using namespace cute;
 
-  auto dimBlock = syclcompat::dim3(SUBGROUP_SIZE * (wg_tile_m * wg_tile_n) /
+  auto dimBlock = compat::dim3(SUBGROUP_SIZE * (wg_tile_m * wg_tile_n) /
                                    (sg_tile_m * sg_tile_n));
-  auto dimGrid = syclcompat::dim3(size(ceil_div(m, wg_tile_m)),
+  auto dimGrid = compat::dim3(size(ceil_div(m, wg_tile_m)),
                                   size(ceil_div(n, wg_tile_n)));
 
   launch<gemm_device<MMA, wg_tile_m, wg_tile_n, sg_tile_m, sg_tile_n, sg_tile_k,
-                     TA, TB, TC>>(
+                     TA, TB, TC>, GemmDeviceName<MMA, TA, TB, TC>>(
       launch_policy{dimGrid, dimBlock,
                     kernel_properties{sycl_exp::sub_group_size<SUBGROUP_SIZE>}},
       A, B, C, m, n, k);
@@ -197,7 +201,7 @@ void MMA_Test(int m, int n, int k) {
 
   ::gemm<MMA, wg_tile_m, wg_tile_n, sg_tile_m, sg_tile_n, sg_tile_k>(
       m, n, k, d_A.data(), d_B.data(), d_C.data());
-  syclcompat::wait();
+  compat::wait();
 
   h_C = d_C;
   verify(m, n, k, h_A.data(), h_B.data(), h_C.data());

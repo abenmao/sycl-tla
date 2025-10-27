@@ -1,5 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (C) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,6 +36,8 @@
 #include "cutlass/cutlass.h"
 #include "cutlass/util/reference/device/kernel/tensor_foreach.h"
 #include "cutlass/kernel_hardware_info.h"
+
+template<class, class> class TensorForEachKernelName;
 
 namespace cutlass  {
 namespace reference {
@@ -76,9 +79,9 @@ struct TensorForEach {
     }
 
 #if defined(CUTLASS_ENABLE_SYCL)
-    const auto sycl_block = syclcompat::dim3(block_size, 1, 1);
-    const auto sycl_grid = syclcompat::dim3(grid_size, 1, 1);
-    syclcompat::launch<kernel::TensorForEach<Func, Rank, Params>>(sycl_grid, sycl_block, size, params);
+    const auto sycl_block = compat::dim3(block_size, 1, 1);
+    const auto sycl_grid = compat::dim3(grid_size, 1, 1);
+    compat::launch<kernel::TensorForEach<Func, Rank, Params>, TensorForEachKernelName<Func, decltype(Rank)>>(sycl_grid, sycl_block, size, params);
 #else
     dim3 grid(grid_size, 1, 1);
     dim3 block(block_size, 1, 1);
@@ -88,6 +91,8 @@ struct TensorForEach {
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
+
+template<class, class, class> class TensorDiagonalForEachKernelName;
 
 /// Launches a kernel calling a functor for each element along a tensor's diagonal
 template <typename Func, int Rank, typename Params>
@@ -104,9 +109,9 @@ struct TensorDiagonalForEach {
     }
 
 #if defined(CUTLASS_ENABLE_SYCL)
-    const auto sycl_block = syclcompat::dim3(block_size, 1, 1);
-    const auto sycl_grid = syclcompat::dim3((end - start + block_size - 1) / block_size, 1, 1);
-    syclcompat::launch<kernel::TensorDiagonalForEach<Func, Rank, Params>>(sycl_grid, sycl_block, size, params, start, end);
+    const auto sycl_block = compat::dim3(block_size, 1, 1);
+    const auto sycl_grid = compat::dim3((end - start + block_size - 1) / block_size, 1, 1);
+    compat::launch<kernel::TensorDiagonalForEach<Func, Rank, Params>, TensorDiagonalForEachKernelName<Func, decltype(Rank), Params>>(sycl_grid, sycl_block, size, params, start, end);
 #else
     dim3 block(block_size, 1, 1);
     dim3 grid((end - start + block_size - 1) / block_size, 1, 1);
@@ -118,6 +123,8 @@ struct TensorDiagonalForEach {
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
+
+template<class, class> class BlockForEachKernelName;
 
 template <typename Element, typename Func>
 struct BlockForEach {
@@ -154,9 +161,9 @@ struct BlockForEach {
     }
 
 #if defined(CUTLASS_ENABLE_SYCL)
-    const auto sycl_block = syclcompat::dim3(block_size, 1, 1);
-    const auto sycl_grid = syclcompat::dim3(grid_size, 1, 1);
-    syclcompat::launch<kernel::BlockForEach<Element, Func>>(sycl_grid, sycl_block, ptr, capacity, params);
+    const auto sycl_block = compat::dim3(block_size, 1, 1);
+    const auto sycl_grid = compat::dim3(grid_size, 1, 1);
+    compat::launch<kernel::BlockForEach<Element, Func>, BlockForEachKernelName<Element, Func>>(sycl_grid, sycl_block, ptr, capacity, params);
 #else
     dim3 grid(grid_size, 1, 1);
     dim3 block(block_size, 1, 1);

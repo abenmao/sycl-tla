@@ -1,5 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2025 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (C) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,7 +38,6 @@
 #include "cute/algorithm/functional.hpp"
 #include "cute/atom/mma_atom.hpp"
 #include "cute/algorithm/gemm.hpp"
-#include "cute/tensor_predicate.hpp"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -81,25 +81,25 @@ struct CollectiveMma<MainloopIntelW8A8<Stages, Schedule>, TileShape_, ElementA_,
 
   using MmaAtomShape = typename TiledMma::AtomShape_MNK;
 
-  static constexpr auto BLK_M = get<0>(WorkgroupTileShape{});
-  static constexpr auto BLK_N = get<1>(WorkgroupTileShape{});
-  static constexpr auto BLK_K = get<2>(WorkgroupTileShape{});
+  static constexpr int BLK_M = get<0>(WorkgroupTileShape{});
+  static constexpr int BLK_N = get<1>(WorkgroupTileShape{});
+  static constexpr int BLK_K = get<2>(WorkgroupTileShape{});
 
-  static constexpr auto ATOM_M = get<1>(typename TiledMma::ThrLayoutVMNK{}.shape());
-  static constexpr auto ATOM_N = get<2>(typename TiledMma::ThrLayoutVMNK{}.shape());
-  static constexpr auto ATOM_K = get<3>(typename TiledMma::ThrLayoutVMNK{}.shape());
+  static constexpr int ATOM_M = get<1>(typename TiledMma::ThrLayoutVMNK{}.shape());
+  static constexpr int ATOM_N = get<2>(typename TiledMma::ThrLayoutVMNK{}.shape());
+  static constexpr int ATOM_K = get<3>(typename TiledMma::ThrLayoutVMNK{}.shape());
 
   static_assert(BLK_M % TiledMma{}.template tile_size_mnk<0>() == 0, "TiledMma permutation size must match block size.");
   static_assert(BLK_N % TiledMma{}.template tile_size_mnk<1>() == 0, "TiledMma permutation size must match block size.");
   static_assert(BLK_K % TiledMma{}.template tile_size_mnk<2>() == 0, "TiledMma permutation size must match block size.");
 
-  static constexpr auto SG_M = ceil_div(BLK_M, ATOM_M);
-  static constexpr auto SG_N = ceil_div(BLK_N, ATOM_N);
-  static constexpr auto SG_K = ceil_div(BLK_K, ATOM_K);
-  using SubgroupTileShape = Shape<decltype(SG_M), decltype(SG_N), decltype(SG_K)>;
+  static constexpr int SG_M = ceil_div(BLK_M, ATOM_M);
+  static constexpr int SG_N = ceil_div(BLK_N, ATOM_N);
+  static constexpr int SG_K = ceil_div(BLK_K, ATOM_K);
+  using SubgroupTileShape = Shape<C<SG_M>, C<SG_N>, C<SG_K>>;
 
   // 32
-  static constexpr auto Num_SGs = ATOM_N * ATOM_M * ATOM_K;
+  static constexpr int Num_SGs = ATOM_N * ATOM_M * ATOM_K;
   static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{});
 
   using CopyThreadShape = Shape<_1, Int<SubgroupSize>>;
@@ -195,7 +195,7 @@ struct CollectiveMma<MainloopIntelW8A8<Stages, Schedule>, TileShape_, ElementA_,
     TiledMma tiled_mma;
     // TODO(Codeplay): see if we can make this nicer
     // To make all work items in a subgroup have the same global tensors pass in the index of work item 0 in each subgroup
-    auto sg = syclcompat::get_nd_item<1>().get_sub_group();
+    auto sg = compat::get_nd_item<1>().get_sub_group();
     auto first_thread_in_sg_idx = sg.get_group_linear_id() * DispatchPolicy::SubgroupSize;
     auto thr_mma = tiled_mma.get_slice(first_thread_in_sg_idx);
 

@@ -1,5 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (C) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,7 +38,6 @@
 #include "cute/algorithm/functional.hpp"
 #include "cute/atom/mma_atom.hpp"
 #include "cute/algorithm/gemm.hpp"
-#include "cute/tensor_predicate.hpp"
 #include "fmha_fusion.hpp"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -198,7 +198,7 @@ struct FlashPrefillMma<gemm::MainloopIntelXeXMX16<Stages>, ProblemShapeType_, El
     // Instantiate the MMA object
     TiledMmaQK tiled_mma;
     // To make all threads in a warp have the same global tensors pass in the index of thread 0 in each warp
-    auto sg = syclcompat::get_nd_item<1>().get_sub_group();
+    auto sg = compat::get_nd_item<1>().get_sub_group();
     auto first_thread_in_sg_idx = sg.get_group_id()[0] * DispatchPolicy::SubgroupSize;
     auto thread_mma_k = tiled_mma.get_slice(0);
     auto thread_mma_q = tiled_mma.get_slice(first_thread_in_sg_idx);
@@ -283,7 +283,7 @@ struct FlashPrefillMma<gemm::MainloopIntelXeXMX16<Stages>, ProblemShapeType_, El
     TiledMmaPV tiled_mma;
     // Tile GV to the shape of <64,64> and loop over the HeadSize/64 to avoid Register spill 
     Tensor gV_ = take<0,3>(local_tile(gV, select<1,2>(TileShapePV{}), make_coord(_, _))); 
-    auto sg = syclcompat::get_nd_item<1>().get_sub_group();
+    auto sg = compat::get_nd_item<1>().get_sub_group();
     auto first_thread_in_sg_idx = sg.get_group_id()[0] * DispatchPolicy::SubgroupSize;
     auto thread_mma = tiled_mma.get_slice(first_thread_in_sg_idx);  
     Tensor tCgV = thread_mma.partition_B(gV_);
@@ -318,7 +318,12 @@ struct FlashPrefillMma<gemm::MainloopIntelXeXMX16<Stages>, ProblemShapeType_, El
     //
     // Mainloop
     //
+    // Likely a simulator bug: The last tile exhibits an accuracy issue that only occurs on the CRI simulator (SYCL_INTEL_TARGET == 35).
+    // Tests run without issues on BMG and PVC hardware.
+    // TODO: Reinstate the CUTLASS_PRAGMA_UNROLL once the CRI simulator accuracy issue is resolved.
+    #if !(defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
     CUTLASS_PRAGMA_UNROLL
+    #endif
     for(int i = 0; i< tile_count; i++) {
       copy(params.gmem_tiled_copy_v, tVgV(_,_,_,i), tVrV);
       if constexpr (is_fp8_v<ElementV>) {

@@ -2,7 +2,41 @@
 
 [README](./README.md#documentation) > **Contributors**
 
-# CUTLASS Developers **
+# CUTLASS SYCL Developers **
+
+Alejandro Acosta<br />
+Amit Singh Chandel<br />
+Antony Vance<br />
+Atharva Dubey<br />
+Carlos Gonzalez<br />
+Chen Xi<br />
+Finlay Marno<br />
+Jacky Deng<br />
+Ji Yang<br />
+Jiexin Zheng<br />
+Joe Todd<br />
+Leslie Fang<br />
+Liyang Ling<br />
+Lukas Sommer<br />
+Mehdi Goli<br />
+Min Jean Cho<br />
+Muhammad Tanvir<br />
+Ouadie EL FAROUKI<br />
+Peter Caday<br />
+Ratnam Parikh<br />
+Roland Schulz<br />
+Ruyman Reyes<br />
+Sanchit Jain<br />
+Sijia Lou<br />
+Tadej Ciglarič<br />
+Tao Zhang<br />
+Victor Perez<br />
+Yang Ji<br />
+Yuankun Shi<br />
+
+** _The list is sorted alphabetically by first name._
+
+# CUTLASS C++ Developers ****
 
 Andrew Kerr<br />
 Paul Springer<br />
@@ -68,10 +102,51 @@ Ian Tramble<br />
 Ali Hassani<br />
 Shreya Gaur<br />
 
-** _The list is sorted in order of the author's first contribution to the CUTLASS project._
+**** _The list is sorted in order of the author's first contribution to the CUTLASS project._
+
+# CUTLASS DSL Developers ***
+
+Albert Di<br />
+Albert Xu<br />
+Anakin Zheng<br />
+Arvin Jou<br />
+Brandon Sun<br />
+Chenyang Xu<br />
+Chunyu Wang<br />
+Cris Cecka<br />
+dePaul Miller<br />
+Edward Cao<br />
+Fung Xie<br />
+Guray Ozen<br />
+Hao Hu<br />
+Hong Wang<br />
+Jeremy Furtek<br />
+Jie Fang <br />
+JingZe Cui<br />
+Kihiro Bando<br />
+Linfeng Zheng<br />
+Longsheng Du<br />
+Mina Sun<br />
+Mindy Li<br />
+Pradeep Ramani<br />
+Questa Wang<br />
+Serif Yesil<br />
+Tao Xie<br />
+Tina Li<br />
+Vicki Wang<br />
+Vincent Zhang<br />
+Vijay Thakkar<br />
+Xiao Dong<br />
+Xiaolei Shi<br />
+Xinyu Wang<br />
+Yihan Chen<br />
+Yuhan Li<br />
+Zekun Fan<br />
+
+*** _Sorted in alphabetical order._
 
 
-# CUTE Developers
+# CuTe Developers
 
 Cris Cecka<br />
 Vijay Thakkar<br />
@@ -100,6 +175,9 @@ David Tanner<br />
 
 Tri Dao<br />
 Jay Shah<br />
+Mehdi Amini<br />
+Larry Wu<br />
+Justin Holewinski<br />
 Timothy Costa<br />
 Julien Demouth<br />
 Brian Fahs<br />
@@ -108,14 +186,11 @@ Michael Goldfarb<br />
 Mostafa Hagog<br />
 Fei Hu<br />
 Alan Kaatz<br />
-Tina Li<br />
 Wei Liu<br />
 Tim Martin<br />
 Kevin Siu<br />
 Markus Tavenrath<br />
 John Tran<br />
-Vicki Wang<br />
-Fung Xie<br />
 Yang Xu<br />
 Scott Yokim<br />
 Girish Bharambe<br />
@@ -132,6 +207,7 @@ Sean Treichler<br />
 # Copyright
 
 Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+Copyright (c) 2025 Intel Corporation. All rights reserved.
 SPDX-License-Identifier: BSD-3-Clause
 
 ```

@@ -1,5 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2025 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (C) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,7 +38,6 @@
 #include "cute/algorithm/functional.hpp"
 #include "cute/atom/mma_atom.hpp"
 #include "cute/algorithm/gemm.hpp"
-#include "cute/tensor_predicate.hpp"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -242,18 +242,18 @@ public:
 
   using MmaAtomShape = typename TiledMma::AtomShape_MNK;
 
-  static constexpr auto BLK_M = get<0>(WorkgroupTileShape{});
-  static constexpr auto BLK_N = get<1>(WorkgroupTileShape{});
-  static constexpr auto BLK_K = get<2>(WorkgroupTileShape{});
+  static constexpr int BLK_M = get<0>(WorkgroupTileShape{});
+  static constexpr int BLK_N = get<1>(WorkgroupTileShape{});
+  static constexpr int BLK_K = get<2>(WorkgroupTileShape{});
   
-  static constexpr auto ATOM_M = get<1>(typename TiledMma::ThrLayoutVMNK{}.shape());
-  static constexpr auto ATOM_N = get<2>(typename TiledMma::ThrLayoutVMNK{}.shape());
-  static constexpr auto ATOM_K = get<3>(typename TiledMma::ThrLayoutVMNK{}.shape());
+  static constexpr int ATOM_M = get<1>(typename TiledMma::ThrLayoutVMNK{}.shape());
+  static constexpr int ATOM_N = get<2>(typename TiledMma::ThrLayoutVMNK{}.shape());
+  static constexpr int ATOM_K = get<3>(typename TiledMma::ThrLayoutVMNK{}.shape());
 
-  static constexpr auto SG_M = ceil_div(BLK_M, ATOM_M);
-  static constexpr auto SG_N = ceil_div(BLK_N, ATOM_N);
-  static constexpr auto SG_K = ceil_div(BLK_K, ATOM_K);
-  using SubgroupTileShape = Shape<decltype(SG_M), decltype(SG_N), decltype(SG_K)>;
+  static constexpr int SG_M = ceil_div(BLK_M, ATOM_M);
+  static constexpr int SG_N = ceil_div(BLK_N, ATOM_N);
+  static constexpr int SG_K = ceil_div(BLK_K, ATOM_K);
+  using SubgroupTileShape = Shape<C<SG_M>, C<SG_N>, C<SG_K>>;
   
   static constexpr auto SG_QNT_WIDTH = cute::conditional_t<IsATransformed, Int<SG_M>, Int<SG_N>>{};
   using GmemTiledCopyScale = typename scale_zero_copy_traits<NonVoidElementScale, SG_QNT_WIDTH>::type;
@@ -349,7 +349,7 @@ public:
       }();
 
       if constexpr (ModeScale) {
-        return Params{tiled_copy_a, tiled_copy_b, tiled_copy_scale, {}, args.group_size};
+        return Params{tiled_copy_a, tiled_copy_b, {tiled_copy_scale}, {}, args.group_size};
       } else {
         auto ptr_Z = [&]() {
           if constexpr (sizeof_bits_v<NonVoidElementZero> < 8) {
@@ -374,7 +374,7 @@ public:
           }
         }();
 
-        return Params{tiled_copy_a, tiled_copy_b, tiled_copy_scale, tiled_copy_zero, args.group_size};
+        return Params{tiled_copy_a, tiled_copy_b, {tiled_copy_scale}, {tiled_copy_zero}, args.group_size};
       }
     }
   }
@@ -669,7 +669,7 @@ public:
 
     // Instantiate the MMA object and get thread slice
     TiledMma tiled_mma;
-    auto sg = syclcompat::get_nd_item<1>().get_sub_group();
+    auto sg = compat::get_nd_item<1>().get_sub_group();
     auto first_thread_in_sg_idx = sg.get_group_linear_id() * DispatchPolicy::SubgroupSize;
     auto thr_mma = tiled_mma.get_slice(first_thread_in_sg_idx);
 
@@ -681,16 +681,16 @@ public:
     Tensor mma_A = make_tensor<ElementMMA>(make_fragment_layout(mainloop.tiled_copy_a, tCgA(_,_,_,0).shape()));
     Tensor mma_B = make_tensor<ElementMMA>(make_fragment_layout(mainloop.tiled_copy_b, tCgB(_,_,_,0).shape()));
 
-    static constexpr auto scale_traits_size = is_tensorwise ? 1
+    static constexpr int scale_traits_size = is_tensorwise ? 1
                                               : decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / SubgroupSize;
-    static constexpr auto scale_traits_num = is_tensorwise ? 1
+    static constexpr int scale_traits_num = is_tensorwise ? 1
                                               : SG_QNT_WIDTH / size<1>(typename GmemTiledCopyScale::BlockShape{});
     Tensor fragment_scale = [&](){
       if constexpr(is_groupwise) {
         // If IsATransformed, we need modes M_atom, and M_iter from fragment_A
         // layout else we need mode N_iter from fragment_B layout.
-        static constexpr auto scale_traits_size = decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / SubgroupSize;
-        static constexpr auto scale_traits_num = SG_QNT_WIDTH / size<1>(typename GmemTiledCopyScale::BlockShape{});
+        static constexpr int scale_traits_size = decltype(size(typename GmemTiledCopyScale::BlockShape{}))::value / SubgroupSize;
+        static constexpr int scale_traits_num = SG_QNT_WIDTH / size<1>(typename GmemTiledCopyScale::BlockShape{});
         using FragScaleLayout = std::conditional_t<IsATransformed,
                                                   Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>>,
                                                       Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>>>;
@@ -700,9 +700,9 @@ public:
       }
     }();
 
-    static constexpr auto zero_traits_size = is_tensorwise ? 1
+    static constexpr int zero_traits_size = is_tensorwise ? 1
                                              : decltype(size(typename GmemTiledCopyZero::BlockShape{}))::value / SubgroupSize;
-    static constexpr auto zero_traits_num = is_tensorwise ? 1
+    static constexpr int zero_traits_num = is_tensorwise ? 1
                                             : SG_QNT_WIDTH * zero_elements_packed_along_k / size<1>(typename GmemTiledCopyZero::BlockShape{});
     Tensor fragment_zero = [&](){
       if constexpr(is_groupwise) {

@@ -1,5 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (C) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,14 +35,13 @@
 */
 
 #pragma once
-
+#include "cutlass/cutlass.h"
 #if defined(__CUDACC_RTC__)
-#include <cuda/std/limits>
+#include CUDA_STD_HEADER(limits)
 #else
 #include <limits>
 #endif
 
-#include "cutlass/cutlass.h"
 #include "cutlass/numeric_types.h"
 #include "cutlass/arch/arch.h"
 #include "cutlass/device_kernel.h"
@@ -459,17 +459,17 @@ public:
       CUTLASS_ASSERT(cuda_adapter == nullptr);
 
 #if defined(CUTLASS_ENABLE_SYCL)
-      const auto sycl_block = syclcompat::dim3(block.x, block.y, block.z);
-      const auto sycl_grid = syclcompat::dim3(grid.x, grid.y, grid.z);
+      const auto sycl_block = compat::dim3(block.x, block.y, block.z);
+      const auto sycl_grid = compat::dim3(grid.x, grid.y, grid.z);
 
-      sycl::queue q = stream ? *stream : syclcompat::get_default_queue();
-      syclcompat::experimental::launch<Kernel2<GemmKernel>>(
-        syclcompat::experimental::launch_policy{
+      sycl::queue q = stream ? *stream : compat::get_default_queue();
+      compat::experimental::launch<Kernel2<GemmKernel>, GemmKernel>(
+        compat::experimental::launch_policy{
           sycl_grid, sycl_block,
 #if defined(SYCL_EXT_ONEAPI_WORK_GROUP_SCRATCH_MEMORY)
           sycl::ext::oneapi::experimental::work_group_scratch_size(kSharedStorageSize)
 #else
-          syclcompat::experimental::local_mem_size{static_cast<std::size_t>(kSharedStorageSize)}
+          compat::experimental::local_mem_size{static_cast<std::size_t>(kSharedStorageSize)}
 #endif
         },
         q, params_);

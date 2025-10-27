@@ -1,5 +1,6 @@
 /***************************************************************************************************
-* Copyright (c) 2024 - 2024 Codeplay Software Ltd. All rights reserved.
+ * Copyright (c) 2024 - 2024 Codeplay Software Ltd. All rights reserved.
+ * Copyright (C) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,6 +36,7 @@
 #include "cutlass/util/device_memory.h"
 #include "cutlass/util/reference/device/sycl_tensor_fill.h"
 #include "cutlass/util/mixed_dtype_utils.hpp"
+#include "cutlass/util/initialize_block.hpp"
 
 template<typename T>
 inline
@@ -42,29 +44,11 @@ bool is_close(T a, T b, float atol, float rtol) {
   return std::abs((float)a - (float)b) <= atol + rtol * std::abs((float)b);
 }
 
-// TODO(Codeplay): use on device initialisation for this
-template<typename T>
-inline
-void random_fill(T *src, int seed, size_t N, float max, float min) {
-  if constexpr(std::is_same_v<T, float> || std::is_same_v<T, cute::bfloat16_t> || std::is_same_v<T, cute::half_t>) {
-    std::random_device rd;
-    std::mt19937 gen(seed);
-    std::uniform_real_distribution<float> dis(min, max);
-    auto buff = std::vector<T>(N);
+template <class, class, class> class convert_dtype_name;
 
-    for (size_t i = 0; i < N; ++i) {
-      buff[i] = (T)(dis(gen));
-    }
-    syclcompat::memcpy<T>(src, buff.data(), N);
-    syclcompat::wait();
-  } else {
-    assert(0 & "Not supported dtype");
-  }
-}
-
-template <typename SrcT, typename DstT>
+template <typename SrcT, typename DstT, typename Runner>
 void convert_dtype(const SrcT* d_src, DstT* d_dst, size_t size) {
-  syclcompat::get_default_queue().parallel_for(size, [=](auto indx) {
+  compat::get_default_queue().parallel_for<convert_dtype_name<SrcT, DstT, Runner>>(size, [=](auto indx) {
     d_dst[indx] = static_cast<DstT>(d_src[indx]);
   }).wait();
 }

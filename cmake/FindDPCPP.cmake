@@ -38,11 +38,22 @@ find_library(DPCPP_LIB_DIR NAMES sycl sycl6 PATHS "${DPCPP_BIN_DIR}/../lib" NO_D
 
 add_library(DPCPP::DPCPP INTERFACE IMPORTED)
 
-set(DPCPP_FLAGS "-fsycl")
+set(DPCPP_FLAGS "-fsycl;")
+if(DPCPP_HOST_COMPILER)
+  list(APPEND DPCPP_FLAGS "-fsycl-host-compiler=${DPCPP_HOST_COMPILER}")
+  list(APPEND DPCPP_FLAGS "-fsycl-host-compiler-options=-Wno-changes-meaning -D$<JOIN:$<TARGET_PROPERTY:COMPILE_DEFINITIONS>, -D> -I$<JOIN:$<TARGET_PROPERTY:INCLUDE_DIRECTORIES>, -I>")
+endif()
 set(DPCPP_COMPILE_ONLY_FLAGS "")
+set(DPCPP_LINK_ONLY_FLAGS "")
 
 if ("${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_xe4")
   list(APPEND DPCPP_FLAGS "-fsycl-targets=spir64_gen")
+# TODO: intel_gpu_cri is a temporary SYCL target for CRI and reuse 'spir64'.
+# It will be updated once the official target name is available.
+elseif("${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_cri")
+  list(APPEND DPCPP_FLAGS "-fsycl-targets=spir64;")
+elseif(NOT "${DPCPP_SYCL_TARGET}" STREQUAL "")
+  list(APPEND DPCPP_FLAGS "-fsycl-targets=${DPCPP_SYCL_TARGET};")
 endif()
 
 option(DPCPP_DISABLE_ITT_FOR_CUTLASS "Disables linking of the Instrumentation and Tracing Technology (ITT) device libraries for VTune" ON)
@@ -57,14 +68,17 @@ if("${DPCPP_SYCL_TARGET}" STREQUAL "nvptx64-nvidia-cuda")
   list(APPEND DPCPP_COMPILE_ONLY_FLAGS; "-mllvm;-enable-global-offset=false;")
 endif()
 
+# TODO: intel_gpu_cri is a temporary SYCL target for CRI.
+# It will be updated once the official target name is available.
 if("${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_pvc" OR
    "${DPCPP_SYCL_TARGET}" STREQUAL "spir64" OR
-   "${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_bmg_g21")
+   "${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_bmg_g21" OR
+   "${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_cri")
   if ((CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 2025.2) OR CUTLASS_SYCL_BUILTIN_ENABLE)
-    list(APPEND DPCPP_FLAGS "-Xspirv-translator;-spirv-ext=+SPV_INTEL_split_barrier")
+    list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xspirv-translator;-spirv-ext=+SPV_INTEL_split_barrier")
   else()
-    list(APPEND DPCPP_FLAGS "-Xspirv-translator;-spirv-ext=+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate")
- endif()
+    list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xspirv-translator;-spirv-ext=+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate")
+  endif()
   if(DPCPP_DISABLE_ITT_FOR_CUTLASS)
     list(APPEND DPCPP_FLAGS "-fno-sycl-instrument-device-code")
   endif()
@@ -74,14 +88,16 @@ endif()
 if(UNIX)
   set_target_properties(DPCPP::DPCPP PROPERTIES
     INTERFACE_COMPILE_OPTIONS "${DPCPP_FLAGS};${DPCPP_COMPILE_ONLY_FLAGS}"
-    INTERFACE_LINK_OPTIONS "${DPCPP_FLAGS}"
+    INTERFACE_LINK_OPTIONS "${DPCPP_FLAGS};${DPCPP_LINK_ONLY_FLAGS}"
     INTERFACE_LINK_LIBRARIES ${DPCPP_LIB_DIR}
     INTERFACE_INCLUDE_DIRECTORIES "${DPCPP_BIN_DIR}/../include/sycl;${DPCPP_BIN_DIR}/../include")
   message(STATUS "DPCPP INCLUDE DIR: ${DPCPP_BIN_DIR}/../include/sycl;${DPCPP_BIN_DIR}/../include")
-  message(STATUS "Using DPCPP flags: ${DPCPP_FLAGS};${DPCPP_COMPILE_ONLY_FLAGS}")
+  message(STATUS "Using DPCPP compile flags: ${DPCPP_FLAGS};${DPCPP_COMPILE_ONLY_FLAGS}")
+  message(STATUS "Using DPCPP link flags: ${DPCPP_FLAGS};${DPCPP_LINK_ONLY_FLAGS}")
 else()
   set_target_properties(DPCPP::DPCPP PROPERTIES
     INTERFACE_COMPILE_OPTIONS "${DPCPP_FLAGS};${DPCPP_COMPILE_ONLY_FLAGS}"
+    INTERFACE_LINK_OPTIONS "${DPCPP_FLAGS};${DPCPP_LINK_ONLY_FLAGS}"
     INTERFACE_LINK_LIBRARIES ${DPCPP_LIB_DIR}
     INTERFACE_INCLUDE_DIRECTORIES "${DPCPP_BIN_DIR}/../include/sycl")
 endif()
@@ -103,7 +119,7 @@ function(add_sycl_to_target)
   )
   get_target_property(target_type ${CUTLASS_ADD_SYCL_TARGET} TYPE)
   if (NOT target_type STREQUAL "OBJECT_LIBRARY")
-    target_link_options(${CUTLASS_ADD_SYCL_TARGET} PUBLIC ${DPCPP_FLAGS})
+    target_link_options(${CUTLASS_ADD_SYCL_TARGET} PUBLIC ${DPCPP_FLAGS} ${DPCPP_LINK_ONLY_FLAGS})
   endif()
 endfunction()
 

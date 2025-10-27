@@ -1,0 +1,83 @@
+name: "Intel PVC and BMG Full Test"
+
+on:
+  push:
+    branches: [ "cri" ]
+  pull_request:
+    branches: [ "cri" ]
+  merge_group:
+    branches: [ "cri" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run-tests:
+    strategy:
+      matrix:
+        include:
+          - compiler: RELEASE
+            gpu: BMG
+            intel_graphics: ROLLING
+            sycl_target: intel_gpu_bmg_g21
+            runner: [self-hosted, shanghai-bmg, Linux, X64]
+          - compiler: RELEASE
+            gpu: PVC
+            intel_graphics: ROLLING
+            sycl_target: intel_gpu_pvc
+            runner: [self-hosted, shanghai-pvc, Linux, X64]
+
+    name: Run Intel ${{ matrix.compiler }} tests on ${{ matrix.gpu }} with intel-graphics ${{ matrix.intel_graphics }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      - name: Setup virtual environment
+        shell: bash
+        run: |
+          source /opt/intel/oneapi/setvars.sh --force
+          export ONEAPI_DEVICE_SELECTOR=level_zero:gpu
+          export CMAKE_BUILD_TYPE=Release
+          export IGC_VISAOptions="-perfmodel"
+          export IGC_VectorAliasBBThreshold=100000000000
+          export IGC_ExtraOCLOptions="-cl-intel-256-GRF-per-thread"
+          export CC=icx
+          export CXX=icpx
+          export CUTLASS_SYCL_PROFILING_ENABLED=ON
+          # Persist environment variables to following steps 
+          env >> $GITHUB_ENV
+          which $CXX
+          $CXX --version
+          sycl-ls
+      - name: Build
+        shell: bash
+        run: |
+          mkdir build && cd build
+          cmake .. -G Ninja \
+            -DCUTLASS_ENABLE_SYCL=ON \
+            -DDPCPP_SYCL_TARGET=${{ matrix.sycl_target }} \
+            -DCUTLASS_ENABLE_BENCHMARKS=ON \
+            -DCUTLASS_SYCL_PROFILING_ENABLED=ON \
+            -DCUTLASS_SYCL_RUNNING_CI=ON
+          cmake --build .
+      - name: Unit test
+        working-directory: build
+        shell: bash
+        run: |
+          cmake --build . --target test_unit
+      - name: Examples
+        working-directory: build
+        shell: bash
+        run: |
+          cmake --build . --target test_examples -j 1
+      - name: Build Benchmarks
+        working-directory: build
+        shell: bash
+        run: |
+          cmake --build . --target cutlass_benchmarks

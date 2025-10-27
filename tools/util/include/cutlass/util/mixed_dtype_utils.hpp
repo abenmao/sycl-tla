@@ -1,5 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (C) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,7 +35,7 @@
 
 #pragma once
 #ifdef CUTLASS_ENABLE_SYCL
-#include <syclcompat.hpp> 
+#include <cute/util/compat.hpp> 
 #else
 #include <cuda.h>
 #endif
@@ -85,15 +86,7 @@ CUTLASS_GLOBAL void dequantize_kernel(DequantizedElement* dq_buffer,
   // Represent the full tensors to gmem elements.
   // These are expected to have shape [MN, K, L]
   cute::Tensor gmem_op_dq = cute::make_tensor(cute::make_gmem_ptr(dq_buffer), operand_layout);
-  auto init_quantized_iterator = [&]() {
-    if constexpr (cute::sizeof_bits_v<QuantizedElement> >= 8) {
-      return cute::make_gmem_ptr(q_buffer);
-    }
-    else {
-      return cute::subbyte_iterator<const QuantizedElement>(q_buffer);
-    }
-  };
-  cute::Tensor gmem_op_q  = cute::make_tensor(init_quantized_iterator(), operand_layout);
+  cute::Tensor gmem_op_q  = cute::make_tensor(cute::make_gmem_ptr<QuantizedElement const>(q_buffer), operand_layout);
   // While the scales are expected to have shape [MN, G, L] but with a stride to allow broadcasting
   // It is expected that K % G == 0
   cute::Tensor gmem_scale_broadcasted = cute::make_tensor(make_gmem_ptr(scale_buffer), broadcasted_scale_layout);
@@ -150,6 +143,8 @@ CUTLASS_GLOBAL void dequantize_kernel(DequantizedElement* dq_buffer,
   }
 }
 
+template<class...> class dequantize_kernel_name;
+
 template <
   class QuantizedElement,
   class DequantizedElement,
@@ -203,13 +198,15 @@ static void dequantize(DequantizedElement* dq_buffer,
 
   dim3 blocks(blocks_x, blocks_y, 1);
 #ifdef CUTLASS_ENABLE_SYCL
-  syclcompat::launch<dequantize_kernel<
+  compat::launch<dequantize_kernel<
       QuantizedElement, DequantizedElement, OperandLayout, ElementScale,
+      ElementZero, decltype(scale_layout_bcast), decltype(zero_layout_bcast), decltype(thr_layout)>, 
+      dequantize_kernel_name<QuantizedElement, DequantizedElement, OperandLayout, ElementScale,
       ElementZero, decltype(scale_layout_bcast), decltype(zero_layout_bcast), decltype(thr_layout)>>(
       blocks, tpb, dq_buffer, q_buffer, operand_layout, scale_buffer,
       zero_buffer, scale_layout_bcast, zero_layout_bcast, thr_layout);
 
-  syclcompat::wait_and_throw();
+  compat::wait_and_throw();
 #else
   dequantize_kernel<<<blocks, tpb, 0, stream>>>(dq_buffer, q_buffer, operand_layout, scale_buffer, zero_buffer, scale_layout_bcast, thr_layout);
   CUDA_CHECK(cudaStreamSynchronize(stream));

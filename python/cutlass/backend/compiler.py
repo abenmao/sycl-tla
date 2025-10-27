@@ -39,7 +39,7 @@ import subprocess
 import tempfile
 from functools import lru_cache
 
-from cutlass.utils.lazy_import import lazy_import
+from cutlass_cppgen.utils.lazy_import import lazy_import
 cuda = lazy_import("cuda.cuda")
 cudart = lazy_import("cuda.cudart")
 nvrtc = lazy_import("cuda.nvrtc")
@@ -47,11 +47,11 @@ from cutlass_library import SubstituteTemplate
 
 import dpctl
 
-import cutlass
-from cutlass import CACHE_FILE, CUTLASS_PATH, cuda_install_path, logger
-from cutlass.backend.gemm_operation import GemmOperationUniversal
-from cutlass.backend.library import ApiVersion
-from cutlass.backend.utils.device import device_cc
+import cutlass_cppgen
+from cutlass_cppgen import CACHE_FILE, CUTLASS_PATH, cuda_install_path, logger
+from cutlass_cppgen.backend.gemm_operation import GemmOperationUniversal
+from cutlass_cppgen.backend.library import ApiVersion
+from cutlass_cppgen.backend.utils.device import device_cc
 
 IncludeTemplate = r"""#include "${include}"
 """
@@ -104,7 +104,7 @@ class CompilationOptions:
             arch_flag = f"-fsycl-targets={self.arch}"
         else:
             arch_flag = f"-arch=sm_{self.arch}"
-            if self.arch == 90 and int(cutlass.nvcc_version().split('.')[0]) >= 12:
+            if self.arch == 90 and int(cutlass_cppgen.nvcc_version().split('.')[0]) >= 12:
                 arch_flag += "a"
 
         opts.append(arch_flag)
@@ -218,7 +218,7 @@ class ArtifactManager:
             key, cubin_image, host_binary, operation_name, op_attr = row
             op_attr = json.loads(op_attr)
             if self._is_sycl():
-                q = dpctl.SyclQueue(cutlass.sycl_device())
+                q = dpctl.SyclQueue(cutlass_cppgen.sycl_device())
                 module = dpctl.program.create_program_from_spirv(
                     q, cubin_image)
                 kernel = module.get_sycl_kernel(operation_name)
@@ -359,7 +359,7 @@ class ArtifactManager:
                     file.write(source_buffer_device)
 
                 # Compile with DPC++
-                cmd_template = "clang++ ${options} ${srcfile} -o ${outfile} -fsycl-dump-device-code=${tmpdir}"
+                cmd_template = "icpx ${options} ${srcfile} -o ${outfile} -fsycl-dump-device-code=${tmpdir}"
                 values = {
                     "options": compilation_options.get_str(),
                     "srcfile": temp_cpp.name,
@@ -378,7 +378,7 @@ class ArtifactManager:
                 # generates multiple SPIR-V files. We create a program from each of
                 # them to find the one containing the kernel with the correct
                 # subgroup size.
-                q = dpctl.SyclQueue(cutlass.sycl_device())
+                q = dpctl.SyclQueue(cutlass_cppgen.sycl_device())
                 op_name = f"__sycl_kernel_{operation_list[0].name()}"
                 cubin_image = None
                 for f in spv_files:
@@ -441,7 +441,7 @@ class ArtifactManager:
             cmd.extend(["-shared", "-o", temp_dst.name,
                         temp_src.name, "-lcudart", "-lcuda"])
         else:
-            cmd.append("clang++")
+            cmd.append("icpx")
             # Clang does not support "-fpermissive"
             cmd.extend(["-fsycl", "-w", "-fPIC"])
             cmd.extend(host_compilation_options.get_str().split(" "))
@@ -467,12 +467,12 @@ class ArtifactManager:
         if not self._is_sycl():
             include_paths.append(cuda_install_path() + "/include")
 
-            cutlass.initialize_cuda_context()
+            cutlass_cppgen.initialize_cuda_context()
             arch = device_cc()
             host_compile_options = CompilationOptions(
                 self._nvcc_compile_options, arch, include_paths, False)
         else:
-            cutlass.initialize_sycl_context()
+            cutlass_cppgen.initialize_sycl_context()
             arch = "intel_gpu_pvc"
             host_compile_options = CompilationOptions(
                 ["-std=c++17", "-DCUTLASS_ENABLE_SYCL", "-DSYCL_INTEL_TARGET"],
@@ -515,7 +515,7 @@ class ArtifactManager:
             if self._is_sycl():
                 if cubin_image is None:
                     raise RuntimeError("SYCL compilation failed, see debug log")
-                q = dpctl.SyclQueue(cutlass.sycl_device())
+                q = dpctl.SyclQueue(cutlass_cppgen.sycl_device())
                 program = dpctl.program.create_program_from_spirv(
                     q, cubin_image)
             else:

@@ -1,5 +1,6 @@
 /***************************************************************************************************
-* Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (C) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,12 +35,18 @@
 #include <sstream>
 #include <fstream>
 
+#ifdef CUTLASS_TEST_FOR_CRI
+#define ITERATIONS 1
+#else
+#define ITERATIONS 100
+#endif
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass {
   static inline std::size_t get_llc_size() {
     #if defined(CUTLASS_ENABLE_SYCL)
-      return syclcompat::get_default_queue().get_device().get_info<sycl::info::device::global_mem_cache_size>();   
+      return compat::get_default_queue().get_device().get_info<sycl::info::device::global_mem_cache_size>();   
     #else
       cudaDeviceProp prop_struct;
       auto result = cudaGetDeviceProperties(&prop_struct, 0);
@@ -148,7 +155,12 @@ auto benchmark_main(int argc, const char **argv) -> int {
 
   std::stringstream benchmark_name;
   benchmark_name << benchmark_config << "/" << options.benchmark_name();
+#ifdef CUTLASS_TEST_FOR_CRI
+  ::benchmark::RegisterBenchmark(benchmark_name.str(), runner, options, hw_info)->UseManualTime()->Iterations(ITERATIONS)->MinTime(0.0);
+#else
   ::benchmark::RegisterBenchmark(benchmark_name.str(), runner, options, hw_info)->UseManualTime();
+#endif
+
   return 0;
 }
 

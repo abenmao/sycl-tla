@@ -22,8 +22,11 @@ runs:
             | sudo tee /etc/apt/preferences.d/kobuk-driver
           sudo apt update
         else
-          sudo apt update
-          sudo apt install --allow-downgrades -y \
+          . /etc/os-release
+          wget https://repositories.intel.com/gpu/ubuntu/dists/${VERSION_CODENAME}/intel-gpu-ubuntu-${VERSION_CODENAME}.run
+          chmod +x intel-gpu-ubuntu-${VERSION_CODENAME}.run
+          sudo ./intel-gpu-ubuntu-${VERSION_CODENAME}.run
+          sudo apt install -y \
             intel-media-va-driver-non-free libmfx-gen1 libvpl2 \
             libegl-mesa0 libegl1-mesa-dev libgl1-mesa-dev  \
             libgles2-mesa-dev libigdgmm12 libxatracker2 mesa-va-drivers \
@@ -40,8 +43,7 @@ runs:
       run: |
         export no_proxy="127.0.0.1,localhost"
         if [[ "${{ inputs.GPU }}" == "BMG" ]]; then
-          echo -e "Package: *\nPin: release o=LP-PPA-kobuk-team-intel-graphics-staging\nPin-Priority: 1001" \
-            | sudo tee /etc/apt/preferences.d/kobuk-driver
+          sudo rm -f /etc/apt/sources.list.d/ppa_kobuk_team_intel_graphics_oracular.list
           sudo add-apt-repository ppa:kobuk-team/intel-graphics-staging
           sudo apt update
           sudo apt-get install --allow-downgrades -y libze-intel-gpu1 libze-dev intel-metrics-discovery \

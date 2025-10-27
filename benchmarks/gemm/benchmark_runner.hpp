@@ -1,5 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (C) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -49,6 +50,7 @@
 #include "cutlass/util/reference/device/tensor_compare.h"
 #include "cutlass/util/reference/device/tensor_fill.h"
 #include "cutlass/util/reference/device/tensor_silu.h"
+#include "cutlass/util/initialize_block.hpp"
 #include "cutlass/util/mixed_dtype_utils.hpp"
 
 #include "../common.hpp"
@@ -61,16 +63,18 @@ namespace cutlass::benchmark {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <class T>
+#if defined(SYCL_INTEL_TARGET)
+template <class T, int Stages = 0>
 static constexpr auto is_mixed_dtype = false;
 
-#if defined(SYCL_INTEL_TARGET)
 template <int Stages>
 static constexpr auto is_mixed_dtype<cutlass::gemm::MainloopIntelXeXMX16MixedPrecision<Stages>> = true;
+#else
+template <class T, int Stages = 0>
+static constexpr auto is_mixed_dtype = false;
 #endif
 
-// ScaleType
-template <class, class = void>
+template <class T, class = void>
 struct ScaleType {
   using type = int;
 };
@@ -79,8 +83,7 @@ struct ScaleType<T, cute::void_t<typename T::ElementScale>> {
   using type = typename T::ElementScale;
 };
 
-// ZeroType
-template <class, class = void>
+template <class T, class = void>
 struct ZeroType {
   using type = int;
 };
@@ -89,8 +92,7 @@ struct ZeroType<T, cute::void_t<typename T::ElementZero>> {
   using type = typename T::ElementZero;
 };
 
-// ScaleStride
-template <class, class = void>
+template <class T, class = void>
 struct ScaleStride {
   using type = int;
 };
@@ -99,8 +101,7 @@ struct ScaleStride<T, cute::void_t<typename T::StrideScale>> {
   using type = typename T::StrideScale;
 };
 
-// ZeroStride
-template <class, class = void>
+template <class T, class = void>
 struct ZeroStride {
   using type = int;
 };
@@ -176,12 +177,12 @@ struct BenchmarkRunnerGemm {
 
   using CollectiveMainloop = typename Gemm::GemmKernel::CollectiveMainloop;
   using DispatchPolicy = typename CollectiveMainloop::DispatchPolicy;
-  using ElementMma = CollectiveMainloop::TiledMma::ValTypeA;
+  using ElementMma = typename CollectiveMainloop::TiledMma::ValTypeA;
 
-  using ElementScale = ScaleType<CollectiveMainloop>::type;
-  using ElementZero = ZeroType<CollectiveMainloop>::type;
-  using StrideS = ScaleStride<CollectiveMainloop>::type;
-  using StrideZ = ZeroStride<CollectiveMainloop>::type;
+  using ElementScale = typename ScaleType<CollectiveMainloop>::type;
+  using ElementZero = typename ZeroType<CollectiveMainloop>::type;
+  using StrideS = typename ScaleStride<CollectiveMainloop>::type;
+  using StrideZ = typename ZeroStride<CollectiveMainloop>::type;
 
   using CollectiveEpilogue = typename Gemm::CollectiveEpilogue;
   using ElementC = typename Gemm::ElementC;
@@ -291,7 +292,7 @@ struct BenchmarkRunnerGemm {
     std::vector<uint8_t> zero(size(zero_layout) * sizeof_bits_v<ElementZero> / 8, 0);
     cutlass::device_memory::copy_to_host(zero.data(), (uint8_t*)zero_buffer, zero.size());
 
-    syclcompat::wait();
+    compat::wait();
 
     auto dst_tensor = make_tensor(make_gmem_ptr(reinterpret_cast<DequantizedElement*>(dst.data())), select<1, 0, 2>(operand_layout));
 
@@ -363,7 +364,7 @@ struct BenchmarkRunnerGemm {
     }
 
     cutlass::device_memory::copy_to_device(dq_buffer, (DequantizedElement*)(raw_pointer_cast(dst_tensor.data())), dst_tensor.size());
-    syclcompat::wait();
+    compat::wait();
     return dq_buffer;
   }
 
@@ -395,7 +396,7 @@ struct BenchmarkRunnerGemm {
     std::vector<uint8_t> zero(size(zero_layout) * sizeof_bits_v<ElementZero> / 8, 0);
     cutlass::device_memory::copy_to_host(zero.data(), (uint8_t*)zero_buffer, zero.size());
 
-    syclcompat::wait();
+    compat::wait();
 
     auto dst_tensor = make_tensor(make_gmem_ptr(reinterpret_cast<DequantizedElement*>(dst.data())), operand_layout);
 
@@ -449,12 +450,15 @@ struct BenchmarkRunnerGemm {
     }
 
     cutlass::device_memory::copy_to_device(dq_buffer, (DequantizedElement*)(raw_pointer_cast(dst_tensor.data())), dst_tensor.size());
-    syclcompat::wait();
+    compat::wait();
     return dq_buffer;
   }
 
   bool verify(const ProblemShapeType& problem_size, ElementCompute alpha, ElementCompute beta) {
-    auto [M, N, K, L] = problem_size;
+    auto& M = cute::get<0>(problem_size);
+    auto& N = cute::get<1>(problem_size);
+    auto& K = cute::get<2>(problem_size);
+    auto& L = cute::get<3>(problem_size);
 
     TensorRef ref_C(block_C[0].get(), LayoutC::packed({M, N}));
     TensorRef ref_D(block_ref_D.get(), LayoutD::packed({M, N}));
@@ -527,7 +531,7 @@ struct BenchmarkRunnerGemm {
     );
 
 #if defined(CUTLASS_ENABLE_SYCL)
-    syclcompat::wait();
+    compat::wait();
 #else
     cudaDeviceSynchronize();
 #endif
@@ -544,7 +548,7 @@ struct BenchmarkRunnerGemm {
           block_ref_D.get(), block_ref_D.get(), block_Aux[0].get(), block_D.size());
     }
 
-    syclcompat::wait();
+    compat::wait();
 
     // Check if output from CUTLASS kernel and reference kernel are equal or not
     bool passed = reference::device::BlockCompareEqual(
@@ -683,11 +687,14 @@ struct BenchmarkRunnerGemm {
 
     if (state.error_occurred()) return;
 
+#ifdef CUTLASS_TEST_FOR_CRI
+    // disable warmup run and verification for CRI simulator as it's time-consuming
+#else
     // Run the GEMM
     gemm_op.run();
 
 #if defined(CUTLASS_ENABLE_SYCL)
-    syclcompat::wait();
+    compat::wait();
 #else
     cudaDeviceSynchronize();
 #endif
@@ -697,6 +704,7 @@ struct BenchmarkRunnerGemm {
     if(not passed) {
       state.SkipWithError("Disposition Failed.");
     }
+#endif
 
     state.counters["m"] = options.m;
     state.counters["n"] = options.n;
@@ -724,11 +732,17 @@ struct BenchmarkRunnerGemm {
     state.SetLabel(extra_label.str());
 
     auto gflop = 2.0 * options.m * options.n * options.k * options.l * 1e-9;
+
+    // Compatible with data types smaller than 8 bits here
+    constexpr double bits_per_byte = static_cast<double>(sizeof_bits_v<char>);
+    constexpr double sizeof_a = sizeof_bits_v<ElementA> / bits_per_byte;
+    constexpr double sizeof_b = sizeof_bits_v<ElementB> / bits_per_byte;
+    constexpr double sizeof_c = sizeof_bits_v<ElementC> / bits_per_byte;
     auto mega_bytes_transferred = static_cast<double>(
-        options.m * options.k * sizeof_bits_v<ElementA> +
-        options.k * options.n * sizeof_bits_v<ElementB> +
-        (options.beta != 0 ? 2 : 1) * options.m * options.n * sizeof_bits_v<ElementC>
-      ) * 1e-6 * options.l / sizeof_bits_v<int8_t>;
+        options.m * options.k * sizeof_a +
+        options.k * options.n * sizeof_b +
+        (options.beta != 0 ? 2 : 1) * options.m * options.n * sizeof_c
+      ) * 1e-6 * options.l;
 
     initialize_counters(state);
     int32_t counter = 1;

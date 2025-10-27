@@ -1,5 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (C) 2025 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -193,6 +194,8 @@ __global__ void
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+template<class...> class GemmComplexKernelName;
+
 /// Computes a general matrix product among matrices (tensors of rank=2) pointed to by TensorRef
 /// objects.
 ///
@@ -239,7 +242,7 @@ void GemmComplex(
   int const kNblock = 4;
 
 #if defined (CUTLASS_ENABLE_SYCL)
-using syclcompat::dim3;
+using compat::dim3;
 #endif
 
   dim3 block(16, 8);
@@ -252,7 +255,7 @@ using syclcompat::dim3;
   if (grid.y <= std::numeric_limits<uint16_t>::max()) {
 #if defined(CUTLASS_ENABLE_SYCL)
 
-  syclcompat::launch<kernel::GemmComplex<
+  compat::launch<kernel::GemmComplex<
                       ElementA,
                       LayoutA,
                       ElementB,
@@ -266,6 +269,20 @@ using syclcompat::dim3;
                       InnerProductOp,
                       kMblock,
                       kNblock
+                    >, GemmComplexKernelName<
+                      ElementA,
+                      LayoutA,
+                      ElementB,
+                      LayoutB,
+                      ElementC,
+                      LayoutC,
+                      ScalarType,
+                      ComputeType,
+                      ElementD,
+                      ConvertOp,
+                      InnerProductOp,
+                      decltype(kMblock),
+                      decltype(kNblock)
                     >>(grid, block, 
                         problem_size,
                         alpha,
@@ -329,7 +346,7 @@ using syclcompat::dim3;
     );
 
 #if defined (CUTLASS_ENABLE_SYCL)
-  syclcompat::launch<kernel::GemmComplex<
+  compat::launch<kernel::GemmComplex<
                       ElementA,
                       LayoutA,
                       ElementB,
@@ -343,6 +360,18 @@ using syclcompat::dim3;
                       InnerProductOp,
                       kBigMblock,
                       kBigNblock
+                    >, GemmComplexKernelName<
+                      ElementA,
+                      LayoutA,
+                      ElementB,
+                      LayoutB,
+                      ElementC,
+                      LayoutC,
+                      ScalarType,
+                      ComputeType,
+                      ElementD,
+                      ConvertOp,
+                      InnerProductOp
                     >>(Biggrid, Bigblock, 
                         problem_size,
                         alpha,

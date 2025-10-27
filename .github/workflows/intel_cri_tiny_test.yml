@@ -1,0 +1,70 @@
+name: "Intel CRI Tiny Test"
+
+on:
+  push:
+    branches: [ "cri" ]
+  pull_request:
+    branches: [ "cri" ]
+  merge_group:
+    branches: [ "cri" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run-tests:
+    strategy:
+      matrix:
+        include:
+          - compiler: RELEASE
+            gpu: CRI
+            intel_graphics: ROLLING
+            sycl_target: spir64
+            runner: [self-hosted, shanghai-cri, Linux, X64]
+
+    name: Run Intel ${{ matrix.compiler }} tests on ${{ matrix.gpu }} with intel-graphics ${{ matrix.intel_graphics }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      - name: Build and run tests with simulator
+        shell: bash
+        run: |
+          source ./.github/scripts/cri_simulator_compile.sh
+          tmux new-session -d -s session_simulator -n "Simulator"
+          tmux send-keys -t session_simulator:0 "echo 'Starting simulator...'; cd /home/gta/jiexinzh/crisim && ./runsim.sh" Enter
+      - name: Clean sessions and collect logs
+        working-directory: build
+        shell: bash
+        run: |
+          FLAG_FILE="finish_compilation_job.log"
+          echo "waiting for compilation session..."
+          while [[ ! -f "$FLAG_FILE" ]]; do
+              sleep 2
+          done
+          echo "Compilation finished, now checking test result..."
+          TEST_EXIT_CODE=$(cat test_exit_code.log)
+          echo "Test exit code: $TEST_EXIT_CODE"
+          echo "Compilation finished, now cleaning up sessions..."
+          tmux kill-session -t session_compile
+          tmux kill-session -t session_simulator
+          echo "cmake build log: "
+          cat cmake_build.log
+          echo "build log: "
+          cat build.log
+          echo "test example log: "
+          cat test_example.log
+          echo "test ut log: "
+          cat test_ut.log
+          if [[ $TEST_EXIT_CODE -ne 0 ]]; then
+          echo "Test failed with exit code $TEST_EXIT_CODE"
+          exit $TEST_EXIT_CODE
+          else
+          echo "Tests passed!"
+          fi

@@ -32,11 +32,11 @@
 
 import numpy as np
 
-import cutlass
-from cutlass.utils.datatypes import is_numpy_tensor
-from cutlass.utils.lazy_import import lazy_import
+import cutlass_cppgen
+from cutlass_cppgen.utils.datatypes import is_numpy_tensor
+from cutlass_cppgen.utils.lazy_import import lazy_import
 
-if cutlass.use_rmm:
+if cutlass_cppgen.use_rmm:
     import rmm
 else:
     cudart = lazy_import("cuda.cudart")
@@ -90,9 +90,9 @@ def _todevice(host_data, stream):
     """
     Helper for transferring host data to device memory
     """
-    if cutlass.use_rmm:
+    if cutlass_cppgen.use_rmm:
         return rmm.DeviceBuffer.to_device(host_data.tobytes())
-    if cutlass._use_sycl:
+    if cutlass_cppgen._use_sycl:
         nbytes = len(host_data.tobytes())
         usm_device_ptr = device_mem_alloc(nbytes, stream)
         stream.memcpy(usm_device_ptr.usm_mem, host_data.tobytes(), nbytes)
@@ -122,9 +122,9 @@ def todevice(host_data, dtype=np.float32, stream = None):
 
 
 def device_mem_alloc(size, stream = None):
-    if cutlass.use_rmm:
+    if cutlass_cppgen.use_rmm:
         return rmm.DeviceBuffer(size=size)
-    elif cutlass._use_sycl:
+    elif cutlass_cppgen._use_sycl:
         device_usm = MemoryUSMDevice(size, queue=stream)
         return SYCLPtrWrapper(device_usm)
     else:
@@ -139,7 +139,7 @@ def align_size(size, alignment=256):
 
 
 def create_memory_pool(init_pool_size=0, max_pool_size=2 ** 34):
-    if cutlass.use_rmm:
+    if cutlass_cppgen.use_rmm:
         memory_pool = PoolMemoryManager(init_pool_size=init_pool_size, max_pool_size=max_pool_size)
         return memory_pool
     else:
