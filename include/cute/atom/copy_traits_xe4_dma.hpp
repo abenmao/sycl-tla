@@ -149,7 +149,7 @@ struct Xe4DmaCache {
   CUTE_HOST_DEVICE constexpr
   auto get_tma_tensor(GShape const& g_shape) const {
     static_assert(is_congruent<decltype(g_shape), decltype(aux_params_.g_stride_)>::value);
-    return make_counting_tensor(make_layout(g_shape, aux_params_.g_stride_));
+    return make_coord_tensor(make_layout(g_shape, aux_params_.g_stride_));
   }
 
   template <typename... Args>

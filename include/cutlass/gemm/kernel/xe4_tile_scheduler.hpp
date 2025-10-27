@@ -21,7 +21,7 @@ static auto make_coord_tensor(cute::tuple<int, int, int> problem_blocks_shape, C
   auto tiled_problem_blocks_layout = zipped_divide(problem_blocks_layout, group_range);
 
   auto coord_tensor_layout = replace<0>(tiled_problem_blocks_layout, tiled_wg_gride_layout);
-  auto coord_tensor = cute::make_tensor(cute::make_inttuple_iter(0,0), coord_tensor_layout);
+  auto coord_tensor = cute::make_tensor(cute::make_inttuple_iter(cute::make_tuple(0,0)), coord_tensor_layout);
 
   return coord_tensor;
 }

@@ -38,21 +38,6 @@ if (CUTLASS_ENABLE_SYCL)
     set(SGEMM_ARGS "")
     set(BMG_ARGS "")
   endif()
-
-  cutlass_example_add_executable(
-    cute_tutorial_sgemm_sm70
-    sgemm_sm70.cu
-  )
-
-  cutlass_example_add_executable(
-    cute_tutorial_sgemm_sm80
-    sgemm_sm80.cu
-  )
-
-  cutlass_example_add_executable(
-    cute_tutorial_tiled_copy
-    tiled_copy.cu
-  )
 elseif(NOT DPCPP_SYCL_TARGET STREQUAL "intel_gpu_xe4")
   cutlass_example_add_executable(
     cute_tutorial_sgemm_1
