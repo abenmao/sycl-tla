@@ -411,6 +411,9 @@ int main(int argc, char** argv)
 #endif
 
   test_case<uint4_t, uint4_t, uint32_t, 'R', 'C'>(Q, m, n, k, iterations, verify);
+  test_case<uint4_t, uint4_t, uint32_t, 'R', 'C'>(Q, m, n, k);
+  test_case<uint4_t, uint4_t, uint32_t, 'R', 'R'>(Q, m, n, k);
+>>>>>>> public_sycl/main
 
   // Upconversion cases
   test_case<half_t, float_e5m2_t, float, 'R', 'R'>(Q, m, n, k, iterations, verify);
