@@ -36,8 +36,9 @@
 #pragma once
 
 #include "cutlass/epilogue/fusion/sm90_callbacks_tma_warpspecialized.hpp"
+#if defined(SYCL_INTEL_XE4_TARGET)
 #include "cutlass/epilogue/fusion/xe4_visitor_load_tma_warpspecialized.hpp"
-
+#endif
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass::epilogue::fusion {
