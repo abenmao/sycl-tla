@@ -1,4 +1,4 @@
-name: codeplay-install-dpcpp
+name: install-dpcpp
 description: Download and unpack DPC++ nightly release
 inputs:
   DPCPP_RELEASE:
@@ -12,8 +12,11 @@ inputs:
     description: Path to DPC++
     type: string
     default: ~/dpcpp
-  GH_TOKEN:
-    description: "PAT token to use gh api"
+  GPU:
+    description: "Install for PVC or BMG gpu"
+    type: string
+  IGC:
+    description: "Use ROLLING or STAGING release"
     type: string
 
 runs:
@@ -23,7 +26,8 @@ runs:
       if: inputs.DPCPP_RELEASE == 'NIGHTLY'
       shell: bash
       run: |
-        export no_proxy="127.0.0.1,localhost"
+        shopt -s expand_aliases
+        which sudo || alias sudo=""
         export DPCPP_PATH=${{ inputs.DPCPP_PATH }}
         mkdir -p $DPCPP_PATH
         pushd $DPCPP_PATH
@@ -94,12 +98,12 @@ runs:
           sudo tee /etc/apt/sources.list.d/oneAPI.list
         sudo apt update
         sudo apt install -y intel-oneapi-runtime-libs intel-oneapi-compiler-dpcpp-cpp
-        source /opt/intel/oneapi/setvars.sh
-        echo "$PATH" >> "$GITHUB_PATH"
-        {
-          echo "CC=icx"
-          echo "CXX=icpx"
-          echo "C_INCLUDE_PATH=$CMPLR_ROOT/include:$C_INCLUDE_PATH"
-          echo "CPLUS_INCLUDE_PATH=$CMPLR_ROOT/include:$CPLUS_INCLUDE_PATH"
-          echo "LD_LIBRARY_PATH=$CMPLR_ROOT/lib:$LD_LIBRARY_PATH"
-        } >> "$GITHUB_ENV"
+        . /opt/intel/oneapi/setvars.sh
+        cat <<EOF | tee setvars.sh
+        . /opt/intel/oneapi/setvars.sh
+        export CC=icx
+        export CXX=icpx
+        export C_INCLUDE_PATH=$CMPLR_ROOT/include:$C_INCLUDE_PATH
+        export CPLUS_INCLUDE_PATH=$CMPLR_ROOT/include:$CPLUS_INCLUDE_PATH
+        export LD_LIBRARY_PATH=$CMPLR_ROOT/lib:$LD_LIBRARY_PATH
+        EOF
