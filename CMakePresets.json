@@ -18,7 +18,7 @@
           "CUTLASS_ENABLE_SYCL": "ON",
           "CUTLASS_ENABLE_BENCHMARKS": "OFF",
           "CUTLASS_ENABLE_GTEST_UNIT_TESTS": "OFF",
-          "DPCPP_SYCL_TARGET": "intel_gpu_xe4",
+          "DPCPP_SYCL_TARGET": "intel_gpu_jgsa",
           "CUTLASS_TEST_EXECUTION_ENVIRONMENT": "${sourceDir}/examples/sycl/xe4/utils/script/test_wrapper.sh"
         },
         "environment": {

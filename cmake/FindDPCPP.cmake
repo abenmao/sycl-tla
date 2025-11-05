@@ -46,13 +46,7 @@ endif()
 set(DPCPP_COMPILE_ONLY_FLAGS "")
 set(DPCPP_LINK_ONLY_FLAGS "")
 
-if ("${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_xe4")
-  list(APPEND DPCPP_FLAGS "-fsycl-targets=spir64_gen")
-# TODO: intel_gpu_cri is a temporary SYCL target for CRI and reuse 'spir64'.
-# It will be updated once the official target name is available.
-elseif("${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_cri")
-  list(APPEND DPCPP_FLAGS "-fsycl-targets=spir64;")
-elseif(NOT "${DPCPP_SYCL_TARGET}" STREQUAL "")
+if(NOT "${DPCPP_SYCL_TARGET}" STREQUAL "")
   list(APPEND DPCPP_FLAGS "-fsycl-targets=${DPCPP_SYCL_TARGET};")
 endif()
 

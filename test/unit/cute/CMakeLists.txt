@@ -32,7 +32,7 @@ if (CUTLASS_ENABLE_SYCL)
   add_subdirectory(layout)
   add_subdirectory(msvc_compilation)
   
-  if(SYCL_INTEL_TARGET STREQUAL "intel-xe")
+  if(NOT SYCL_INTEL_TARGET EQUAL 40 AND NOT SYCL_INTEL_TARGET EQUAL 35)
     add_subdirectory(intel_xe)
   endif()
 

@@ -44,7 +44,7 @@
 #include "cutlass/epilogue/thread/linear_combination_generic.h"
 #include "cutlass/epilogue/thread/linear_combination_bias_elementwise.h"
 #include "cutlass/epilogue/fusion/callbacks.hpp"
-#if defined(SYCL_INTEL_XE4_TARGET)
+#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 40)
 #include "cutlass/epilogue/fusion/xe4_callbacks_tma_warpspecialized.hpp"
 #endif
 

@@ -38,7 +38,8 @@ if (CUTLASS_ENABLE_SYCL)
     set(SGEMM_ARGS "")
     set(BMG_ARGS "")
   endif()
-elseif(NOT DPCPP_SYCL_TARGET STREQUAL "intel_gpu_xe4")
+endif()
+if(NOT SYCL_INTEL_TARGET EQUAL 40)
   cutlass_example_add_executable(
     cute_tutorial_sgemm_1
     sgemm_1_sycl.cpp
