@@ -134,8 +134,7 @@ struct Obsolete_Xe4DmaCache {
   CUTE_HOST_DEVICE constexpr
   auto get_tma_tensor(GShape const& g_shape) const {
     static_assert(is_congruent<decltype(g_shape), decltype(aux_params_.g_stride_)>::value);
-    auto layout = make_layout(g_shape, aux_params_.g_stride_);
-    return make_tensor(make_inttuple_iter(coprofile(layout)), layout);
+    return make_counting_tensor(make_layout(g_shape, aux_params_.g_stride_));
   }
 
   template <typename... Args>
@@ -473,7 +472,7 @@ make_adma_copy_atom(
   //
 
   constexpr int num_bits_per_tma = size(adma_gbasis) * sizeof_bits_v<InternalType>;
-#if (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 40))
+#if defined(SYCL_INTEL_XE4_TARGET)
   auto gmem_ptr = cute::raw_pointer_cast(recast<InternalType>(gtensor).data());
   using DmaCache = Obsolete_Xe4DmaCache<decltype(tma_desc), decltype(aux_params), decltype(gmem_ptr)>;
   using Traits = Copy_Traits<Obsolete_Xe4CopyOp<CopyOp>, cute::C<num_bits_per_tma>, DmaCache>;
@@ -539,7 +538,7 @@ make_adma_copy_tiled(
     Layout<TShape,TStride>  const& cta_t_map,   // T: CTA thr idx -> logical TMA tid
     Layout<VShape,VStride>  const& cta_v_map)   // V: CTA val idx -> gmem mode
 {
-  auto matrix_desc = make_matrix_descriptor((slayout));
+  auto matrix_desc = make_matrix_descriptor(coalesce(slayout));
   Copy_Atom atom = make_adma_copy_atom<InternalType>(
       copy_op, gtensor, slayout, cosize(cta_t_map), matrix_desc, cta_v_map);
 

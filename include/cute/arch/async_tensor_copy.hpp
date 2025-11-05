@@ -55,8 +55,8 @@ enum FillMethod {
 template <typename DataType, CacheCtrl CacheType, FillMethod FM> struct AsyncTensorGlobal2SLM;
 
 template <>
-struct AsyncTensorGlobal2SLM<cutlass::half_t, CacheCtrl::L2c_L3uc, FillMethod::Zero> {
-  using DataType = cutlass::half_t;
+struct AsyncTensorGlobal2SLM<sycl::half, CacheCtrl::L2c_L3uc, FillMethod::Zero> {
+  using DataType = sycl::half;
 
   static inline void
   copy(MatrixDescriptor Mat, const DataType *GmemPtr, uint64_t* pAbar, TensorPayload* pTDesc,

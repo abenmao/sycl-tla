@@ -34,7 +34,6 @@ if (CUTLASS_ENABLE_SYCL)
   
   if(SYCL_INTEL_TARGET)
     add_subdirectory(intel_xe)
-    add_subdirectory(xe4)
   endif()
 
   if(SYCL_NVIDIA_TARGET)
