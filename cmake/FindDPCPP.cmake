@@ -46,7 +46,9 @@ endif()
 set(DPCPP_COMPILE_ONLY_FLAGS "")
 set(DPCPP_LINK_ONLY_FLAGS "")
 
-if(NOT "${DPCPP_SYCL_TARGET}" STREQUAL "")
+if("${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_cri")
+  list(APPEND DPCPP_FLAGS "-fsycl-targets=spir64;")
+elseif(NOT "${DPCPP_SYCL_TARGET}" STREQUAL "")
   list(APPEND DPCPP_FLAGS "-fsycl-targets=${DPCPP_SYCL_TARGET};")
 endif()
 
