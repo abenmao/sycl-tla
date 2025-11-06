@@ -1,14 +1,15 @@
 ![ALT](./media/images/gemm-hierarchy-with-epilogue-no-labels.png "Complete CUDA GEMM decomposition")
 
-# SYCL* Templates for Linear Algebra (SYCL*TLA)
+# SYCL\* Templates for Linear Algebra (SYCL\*TLA)
 
 **This repository is forked from the NVIDIA CUTLASS repository and extends CUTLASS and CuTe API support to Intel GPUs through SYCL enablement.**
-**This project was previously referred to as CUTLASS-SYCL, you may see references to CUTLASS-SYCL in the code and documentation.**
-**For SYCL support instructions, refer to the [SYCL build documentation](./media/docs/cpp/build/building_with_sycl_support.md)**
+*This project was previously referred to as CUTLASS-SYCL, you may see references to CUTLASS-SYCL in the code and documentation.*
+*For SYCL support instructions, refer to the [SYCL build documentation](./media/docs/cpp/build/building_with_sycl_support.md)*
 
+*SYCL is a trademark of the Khronos Group Inc, Other names and brands may be claimed as the property of others.*
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/intel/sycl-tla/badge)](https://scorecard.dev/viewer/?uri=github.com/intel/sycl-tla)
 
-SYCL*TLA is a modular, header‑only C++ template framework for high‑performance 
+SYCL\*TLA is a modular, header‑only C++ template framework for high‑performance 
 GEMM, and fused epilogue kernels. It applies hierarchical tiling, composable policy 
 abstractions, and efficient data‑movement primitives to build flexible, reusable 
 building blocks for dense linear algebra. The SYCL implementation brings those 
@@ -16,13 +17,13 @@ optimizations to Intel GPUs with tuned kernels for modern execution units and me
 hierarchies. It adds mixed‑precision and epilogue fusion pathways designed to 
 simplify integrating advanced quantization and post‑processing into custom pipelines.
 
-To support a wide variety of applications, SYCL*TLA provides extensive
+To support a wide variety of applications, SYCL\*TLA provides extensive
 support for mixed-precision computations on Intel hardware, providing
 specialized data-movement and multiply-accumulate abstractions for FP64, FP32,
 FP16, BF16, 8b floating point types (E5M2 and E4M3 for FP8), narrow integer
 types (4 and 8b signed and unsigned integers with support for zero-point
 quantization), and mixed-precision operations with tensor-wise, channel-wise,
-and group-wise quantization support. SYCL*TLA demonstrates optimal matrix
+and group-wise quantization support. SYCL\*TLA demonstrates optimal matrix
 multiply operations targeting Intel's programmable, high-throughput execution
 units implemented in Intel Data Center GPU Max/Flex Series (Intel Xe
 architecture, codename: Ponte-Vecchio) and Intel Arc B580 GPUs.
@@ -65,8 +66,8 @@ Base NVIDIA CUTLASS Versions for SYCL*TLA releases:
 
 # CuTe
 
-SYCL*TLA supports the newly introduced core library, CuTe, to describe and manipulate tensors of threads and data.
-CuTe in SYCL*TLA is a collection of C++ SYCL template abstractions for
+SYCL\*TLA supports the newly introduced core library, CuTe, to describe and manipulate tensors of threads and data.
+CuTe in SYCL\*TLA is a collection of C++ SYCL template abstractions for
 defining and operating on hierarchically multidimensional layouts of threads and data.
 CuTe provides `Layout` and `Tensor` objects that compactly package the type,
 shape, memory space, and layout of data, while performing the complicated indexing for the user.
@@ -80,7 +81,7 @@ The representation of layouts is powerful enough to represent nearly
 everything we need to implement efficient dense linear algebra.
 Layouts can also be combined and manipulated via functional composition, on which we build a large set of common operations such as tiling and partitioning.
 
-SYCL*TLA and beyond adopts CuTe throughout the GEMM hierarchy in its templates.
+SYCL\*TLA and beyond adopts CuTe throughout the GEMM hierarchy in its templates.
 This greatly simplifies the design and improves code composability and readability.
 More documentation specific to CuTe can be found in its
 [dedicated documentation directory](./media/docs/cpp/cute/00_quickstart.md).
@@ -312,6 +313,34 @@ SYCL*TLA is released by INTEL Corporation as Open Source software under the
 # Contributors
 
 The official list of SYCL*TLA developers and contributors is available here: [CONTRIBUTORS](CONTRIBUTORS.md).
+
+# Contributing
+
+## Pull Request Templates
+
+We provide concise PR templates to streamline documentation:
+
+### Quick Start
+
+**GitHub CLI:**
+```bash
+gh pr create --template .github/PULL_REQUEST_TEMPLATE/bug_fix.md
+gh pr create --template .github/PULL_REQUEST_TEMPLATE/performance.md
+gh pr create --template .github/PULL_REQUEST_TEMPLATE/feature.md
+gh pr create --template .github/PULL_REQUEST_TEMPLATE/refactoring.md
+```
+
+**GitHub Web:** Add `?template=<name>.md` to PR URL (e.g., `?template=bug_fix.md`)
+
+### Which Template?
+
+- 🐛 **Bug fixes** → `bug_fix.md` - Root cause + verification
+- ⚡ **Performance** → `performance.md` - Profiling data + benchmarks
+- ✨ **Features** → `feature.md` - API design + examples
+- 🔨 **Refactoring** → `refactoring.md` - Refactored/Redesigned code
+- 📝 **Mixed/Other** → Default template
+
+See [`.github/PULL_REQUEST_TEMPLATE/README.md`](.github/PULL_REQUEST_TEMPLATE/README.md) for details.
 
 # Copyright
 
