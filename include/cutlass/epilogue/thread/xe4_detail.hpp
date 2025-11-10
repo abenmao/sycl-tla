@@ -94,16 +94,6 @@ CUTLASS_HOST_DEVICE constexpr auto make_pattern2_tiled_copy(TileShape const& til
   return tiled_copy;
 }
 
-/**
- * @brief We can't use `make_tensor_like()` here due to the alignment issue of allocating registers.
- */
-template <typename Tensor>
-CUTLASS_HOST_DEVICE constexpr auto make_register_tensor(Tensor const& tensor) {
-  using Layout = decltype(make_layout_like(tensor.layout()));
-  using Engine = Xe4Engine<typename Tensor::value_type, cosize_v<Layout>>;
-  return cute::Tensor<Engine, Layout>();
-}
-
 #if 0
 template <
   int FragmentSize,
