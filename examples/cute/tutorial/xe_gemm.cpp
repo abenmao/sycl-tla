@@ -227,8 +227,8 @@ choose_tiled_mma(ATensor const& A, BTensor const& B, CTensor const&)
   return MMA{};
 }
 
-template <class, class, char, char> class GemmCuteName;
-template <class ATensor, class BTensor, class CTensor, typename TA, typename TB, char layoutA, char layoutB>
+template <class, class, class, char, char> class GemmCuteName;
+template <class ATensor, class BTensor, class CTensor, typename TA, typename TB, typename TC, char layoutA, char layoutB>
 void
 gemm_cute(sycl::queue &Q,
           ATensor   const& A,         // (M,K)
@@ -249,7 +249,7 @@ gemm_cute(sycl::queue &Q,
     intelex::grf_size<256>
   };
 
-  auto event = Q.parallel_for<GemmCuteName<TA, TB, layoutA, layoutB>>(sycl::nd_range<2>(global, local), kernel_props,
+  auto event = Q.parallel_for<GemmCuteName<TA, TB, TC, layoutA, layoutB>>(sycl::nd_range<2>(global, local), kernel_props,
     [=](auto) {
       gemm_device(A, B, C, mma);
     }
@@ -283,7 +283,7 @@ gemm_verify(sycl::queue &Q,
     for (int h = 0; h < k; h++)
       c += AccType(A(i,h)) * AccType(B(j,h));
 
-    auto tol = AccType(1e-5f * k);
+    auto tol = AccType(static_cast<float>(std::numeric_limits<AccType>::epsilon()) * 2 * k);
     if (std::abs(SignedAccType(c - AccType(C(i,j)))) > tol) {
 #ifdef SHOW_DIFF
       printf("Error at (%d,%d): got %f, expected %f\n", i, j, double(C(i,j)), double(c));
@@ -332,7 +332,7 @@ test_case(sycl::queue &Q, int m, int n, int k, int iterations, int verify)
   subbyte_pack(B);
 
   // Run the GEMM
-  gemm_cute<decltype(A), decltype(B), decltype(C), TA, TB, layoutA, layoutB>(Q, A, B, C);
+  gemm_cute<decltype(A), decltype(B), decltype(C), TA, TB, TC, layoutA, layoutB>(Q, A, B, C);
   Q.wait_and_throw();
 
   if (verify != 0) {  
@@ -353,13 +353,19 @@ test_case(sycl::queue &Q, int m, int n, int k, int iterations, int verify)
 
       timer.start();
       for (int i = 0; i < iterations; ++i)
-        gemm_cute<decltype(A), decltype(B), decltype(C), TA, TB, layoutA, layoutB>(Q, A, B, C);
+        gemm_cute<decltype(A), decltype(B), decltype(C), TA, TB, TC, layoutA, layoutB>(Q, A, B, C);
       Q.wait_and_throw();
 
       double avg = timer.seconds() / iterations;
+#if defined(CUTLASS_TEST_FOR_CRI)      
+      // Use MF/s instead of TF/s as we always use small problem size on CRI 
+      // simulator, will remove this when HW is available
+      double tops = (2.0*m*n*k) * 1e-12 * 1e6;
+      printf(", %4.3f MF/s", tops / avg, avg*1000);
+#else
       double tops = (2.0*m*n*k) * 1e-12;
-
       printf(", %4.3f TF/s", tops / avg, avg*1000);
+#endif
     } else {
       printf(", performance benchmark skipped due to 0 iterations");
     }
@@ -412,7 +418,38 @@ int main(int argc, char** argv)
   test_case<uint8_t, int8_t, int32_t, 'C', 'R'>(Q, m, n, k, iterations, verify);
 
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
-  // Skip int8 x int4 for CRI as the dpas is removed.
+  // For CRI: 
+  // 1. Skip int8 x int4 as the DPAS support has been removed.
+  // 2. Add pure FP8 and FP4 cases as DPAS support is available.
+  test_case<float_e4m3_t, float_e5m2_t, bfloat16_t, 'R', 'R'>(Q, m, n, k, iterations, verify);
+  test_case<float_e4m3_t, float_e5m2_t, bfloat16_t, 'R', 'C'>(Q, m, n, k, iterations, verify);
+
+  test_case<float_e5m2_t, float_e4m3_t, bfloat16_t, 'R', 'R'>(Q, m, n, k, iterations, verify);
+  test_case<float_e5m2_t, float_e4m3_t, bfloat16_t, 'R', 'C'>(Q, m, n, k, iterations, verify);
+
+  test_case<float_e5m2_t, float_e5m2_t, bfloat16_t, 'R', 'R'>(Q, m, n, k, iterations, verify);
+  test_case<float_e5m2_t, float_e5m2_t, bfloat16_t, 'R', 'C'>(Q, m, n, k, iterations, verify);
+
+  test_case<float_e4m3_t, float_e4m3_t, bfloat16_t, 'R', 'R'>(Q, m, n, k, iterations, verify);
+  test_case<float_e4m3_t, float_e4m3_t, bfloat16_t, 'R', 'C'>(Q, m, n, k, iterations, verify);
+
+  test_case<float_e2m1_t, float_e2m1_t, bfloat16_t, 'R', 'R'>(Q, m, n, k, iterations, verify);
+  test_case<float_e2m1_t, float_e2m1_t, bfloat16_t, 'R', 'C'>(Q, m, n, k, iterations, verify);
+
+  test_case<float_e4m3_t, float_e5m2_t, float, 'R', 'R'>(Q, m, n, k, iterations, verify);
+  test_case<float_e4m3_t, float_e5m2_t, float, 'R', 'C'>(Q, m, n, k, iterations, verify);
+
+  test_case<float_e5m2_t, float_e4m3_t, float, 'R', 'R'>(Q, m, n, k, iterations, verify);
+  test_case<float_e5m2_t, float_e4m3_t, float, 'R', 'C'>(Q, m, n, k, iterations, verify);
+
+  test_case<float_e5m2_t, float_e5m2_t, float, 'R', 'R'>(Q, m, n, k, iterations, verify);
+  test_case<float_e5m2_t, float_e5m2_t, float, 'R', 'C'>(Q, m, n, k, iterations, verify);
+
+  test_case<float_e4m3_t, float_e4m3_t, float, 'R', 'R'>(Q, m, n, k, iterations, verify);
+  test_case<float_e4m3_t, float_e4m3_t, float, 'R', 'C'>(Q, m, n, k, iterations, verify);
+
+  test_case<float_e2m1_t, float_e2m1_t, float, 'R', 'R'>(Q, m, n, k, iterations, verify);
+  test_case<float_e2m1_t, float_e2m1_t, float, 'R', 'C'>(Q, m, n, k, iterations, verify);
 #else
   test_case<int8_t, uint4_t, int32_t, 'R', 'C'>(Q, m, n, k, iterations, verify);
   test_case<int4_t, uint8_t, int32_t, 'R', 'C'>(Q, m, n, k, iterations, verify);
@@ -426,14 +463,8 @@ int main(int argc, char** argv)
   test_case<half_t, float_e5m2_t, float, 'R', 'R'>(Q, m, n, k, iterations, verify);
   test_case<half_t, float_e5m2_t, float, 'R', 'C'>(Q, m, n, k, iterations, verify);
 
-  test_case<float_e5m2_t, float_e5m2_t, float, 'R', 'R'>(Q, m, n, k, iterations, verify);
-  test_case<float_e5m2_t, float_e5m2_t, float, 'R', 'C'>(Q, m, n, k, iterations, verify);
-
   test_case<half_t, float_e4m3_t, float, 'R', 'R'>(Q, m, n, k, iterations, verify);
   test_case<half_t, float_e4m3_t, float, 'R', 'C'>(Q, m, n, k, iterations, verify);
-
-  test_case<float_e4m3_t, float_e4m3_t, float, 'R', 'R'>(Q, m, n, k, iterations, verify);
-  test_case<float_e4m3_t, float_e4m3_t, float, 'R', 'C'>(Q, m, n, k, iterations, verify);
 
   test_case<half_t, float_e2m1_t, float, 'R', 'R'>(Q, m, n, k, iterations, verify);
   test_case<half_t, float_e2m1_t, float, 'R', 'C'>(Q, m, n, k, iterations, verify);
