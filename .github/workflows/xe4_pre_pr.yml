@@ -1,122 +1,116 @@
-name: Xe4 Workloads Pre PR Test
+name: Xe4 Workloads PR Test
 on:
+  push:
+    branches: [ "master_next" ]
   pull_request:
-    paths:
-      - "examples/sycl/xe4/**"
-      - ".github/workflows/xe4_workloads_pre_pr.yml"
-  workflow_dispatch:
+    branches: [ "master_next" ]
+  merge_group:
+    branches: [ "master_next" ]
 
-env:
-  HOME: /root
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   xe4_workloads_test:
-    name: Xe4 Workloads Pre PR Test
-    runs-on: [self-hosted, linux, gca_sim_docker]
-    container:
-      image: amr-registry.caas.intel.com/gca-sim-bkc/gen-isa:ww26
-      volumes:
-        - ${{ github.workspace }}/../../../creds:/root/creds
-      credentials:
-        username: ${{ secrets.DOCKER_REGISTRY_USR }}
-        password: ${{ secrets.DOCKER_REGISTRY_PWD }}
-
-    strategy:
-      matrix:
-        cfg: [genisa, xesim]
+    name: Xe4 Workloads PR Test
+    runs-on: [self-hosted, linux, xe4_sim]
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Print last commit
-        run: git log -1
-
-      - name: Update credentials
-        uses: intel-sandbox/containers.docker.gpu.compute.sim/.github/actions/update_creds@action_v1
-
-      - name: Update Docker Image
-        uses: intel-sandbox/containers.docker.gpu.compute.sim/.github/actions/update_img@action_v1
         with:
-          # update_img is global flag, when it is false, it disalbed all other updates
-          update_img: true
-          print_version: true
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
 
-          igc20_version: "main 4454"
-          xesim_version: "XE3P_V2 98092 --snapshot"
-          zesim_version: "main 20250724"
+      - name: Xe4 Toolkit version
+        shell: bash
+        run: |
+          echo "Xe4 Toolkit Version:"
+          cat ~/xe4_toolkit/versions.txt
+
+      - name: Start Xe4 Simulator
+        shell: bash
+        run: |
+          cd ~/xe4_toolkit/xe4_simulator/
+          # Start simulator in a loop that restarts on successful exit
+          (
+            while true; do
+              echo "Starting Xe4 Simulator at $(date)"
+              ./AubLoad -device :config/fleur_de_lis/devices/xe4hpc.1tx1x1x4x4.a0.map.xml \
+              -socket tcp:4321 -attr EU.XESIM 3 -sim_mode perf_mpu \
+              -cb_cfg hang_detect_enable true hang_activation_threshold 1500 \
+              hang_threshold 50 hang_analysis_period 1000000 hang_max_hang_cycles 250 \
+              -enableDcGpgpuPrintMessage -disableFeature 14017893554 -enableFeature gpuCapabilityStructure \
+              -disableFeature 14019930466 -enableFeature 14024886170 -enableFeature 14023456409 \
+              -enableFeature 14022148216 -enableFeature 14021142441 -disableFeature 14024592460 \
+              -disableFeature 14023522245
+              EXIT_CODE=$?
+              echo "Xe4 Simulator exited with code $EXIT_CODE at $(date)"
+              if [ $EXIT_CODE -ne 0 ]; then
+                echo "Simulator exited with error, stopping loop"
+                break
+              fi
+              echo "Restarting simulator in 2 seconds..."
+              sleep 2
+            done
+          ) &
+          echo $! > /tmp/xe4_simulator.pid
+          echo "Xe4 Simulator loop started with PID: $(cat /tmp/xe4_simulator.pid)"
+          # Give simulator time to start
+          sleep 5
 
       - name: Build Xe4 workloads
         shell: bash
         run: |
-          start_time=$(date +%s)
+          cat ~/xe4_toolkit/source_oneapi_env.sh
+          source ~/xe4_toolkit/source_oneapi_env.sh
+          mkdir -p build && cd build
+          cmake .. -G Ninja \
+          -DCUTLASS_ENABLE_SYCL=ON \
+          -DCUTLASS_ENABLE_BENCHMARKS=OFF \
+          -DCUTLASS_ENABLE_GTEST_UNIT_TESTS=OFF \
+          -DDPCPP_SYCL_TARGET=intel_gpu_jgs \
+          -DCMAKE_CXX_COMPILER=${CXX} \
+          -DCMAKE_C_COMPILER=${CC} \
+          -DCUTLASS_SYCL_RUNNING_CI=ON
 
-          cmake --preset xe4 2>&1 | tee build.log
-          cmake --build --preset xe4 2>&1 | tee -a build.log
+      - name: Run Xe4 Workloads
+        working-directory: build
+        shell: bash
+        run: |
+          source ~/xe4_toolkit/source_oneapi_env.sh
+          source ~/xe4_toolkit/source_simulator_env.sh
+          echo #--------------------------------------"
+          echo "Running Xe4 GEMM Workload"
+          ninja xe4_gemm
+          ./examples/sycl/xe4/gemm/xe4_gemm
+          echo #--------------------------------------"
+          echo "Running Xe4 GEMM Cluster Workload"
+          ninja xe4_gemm_cluster
+          ./examples/sycl/xe4/gemm/xe4_gemm_cluster
+          echo #--------------------------------------"
 
-          exit_status=${{ '${PIPESTATUS[0]}' }}
-          if [[ $exit_status -eq 124 ]]; then
-            echo "Build timed out with exit code $exit_status." | tee -a $GITHUB_STEP_SUMMARY
+      - name: Stop Xe4 Simulator
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          if [ -f /tmp/xe4_simulator.pid ]; then
+            PID=$(cat /tmp/xe4_simulator.pid)
+            echo "Stopping Xe4 Simulator (PID: $PID)"
+            # Kill the loop process and all its children
+            pkill -P $PID || true
+            kill $PID || true
+            rm /tmp/xe4_simulator.pid
+            echo "Xe4 Simulator stopped"
+          else
+            echo "No simulator PID file found"
           fi
 
-          end_time=$(date +%s)
-          elapsed_time=$((end_time - start_time))
-          echo "Cmake build elapsed time: ${elapsed_time} seconds" | tee -a $GITHUB_STEP_SUMMARY
-
-          exit $exit_status
-
-      - name: Upload build log
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
-        with:
-          name: "xe4_workloads_build.log"
-          path: ./build.log
-          retention-days: 14
-
-      - name: Run Unit Test
-        shell: bash
-        run: |
-          ctest --preset ${{ matrix.cfg }} --output-on-failure --timeout 2000 --output-junit "test_report.xml"
-
-      - name: Publish Test Report
-        uses: intel-sandbox/action-junit-report@v3
-        continue-on-error: true
-        with:
-          check_name: "${{ matrix.cfg }} Report"
-          detailed_summary: true
-          include_passed: true
-          require_passed_tests: true
-          report_paths: "./build/test_report.xml"
-
-      - name: Upload test log
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
-        with:
-          name: "${{ inputs.cfg }}_test.log"
-          path: ./build/Testing/Temporary/LastTest.log
-          retention-days: 14
-
-      - name: Delete unwantted files for artifacts
-        continue-on-error: true
-        shell: bash
-        run: |
-          # the name for ll dump file is too long that can't be extracted in windows
-          find build/ -type f -iname "Dump.*.after*.ll" -exec rm -rf {} \;
-          find build/ -type d -name "kernel_trace" -exec rm -rf {} \;
-          # remove some large files in grits_data folder
-          find build/ -type f -regex '.*grits_data.*buf\(in\|out\).*\(dat\|bin\)$' -exec rm -rf {} \;
-          du build -sh
-
-      - name: Upload the test Artifact
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
-        with:
-          name: "${{ inputs.cfg }}_test_artifact"
-          path: ./build
-          retention-days: 14
-          include-hidden-files: true
-
       - name: Clean up
+        if: always()
         continue-on-error: true
         run: |
           pwd
