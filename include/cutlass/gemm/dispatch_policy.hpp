@@ -1276,6 +1276,10 @@ struct MainloopIntelXeXMX16MixedPrecision : MainloopIntelXeXMX16<Stages_, Kernel
 };
 
 template<int Stages_, class KernelSchedule = KernelXe>
+struct MainloopIntelXeXMX16BlockScaled : MainloopIntelXeXMX16<Stages_, KernelSchedule> {
+};
+
+template<int Stages_, class KernelSchedule = KernelXe>
 struct MainloopIntelW8A8 : MainloopIntelXeXMX16<Stages_, KernelSchedule> {
 };
 

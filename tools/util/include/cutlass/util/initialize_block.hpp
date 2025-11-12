@@ -60,7 +60,7 @@ template<class T, class = void>
 auto max_for_test = T(1 << cute::ceil_div(digits<T> , 4));
 
 template<class T>
-auto max_for_test<T, std::enable_if_t<cute::sizeof_bits_v<T> < 8>> = T(cutlass::platform::numeric_limits<T>::max() / 2);
+auto max_for_test<T, std::enable_if_t<cute::sizeof_bits_v<T> < 8>> = T(cutlass::platform::numeric_limits<T>::max() / T(2));
 
 /// Helper to initialize a block of device data
 template <class Element, class... Args_t>

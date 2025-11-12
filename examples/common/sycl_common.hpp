@@ -48,6 +48,10 @@ template <class, class, class> class convert_dtype_name;
 template <typename SrcT, typename DstT, typename Runner>
 void convert_dtype(const SrcT* d_src, DstT* d_dst, size_t size) {
   compat::get_default_queue().parallel_for<convert_dtype_name<SrcT, DstT, Runner>>(size, [=](auto indx) {
-    d_dst[indx] = static_cast<DstT>(d_src[indx]);
+    if constexpr (cute::sizeof_bits_v<SrcT> < 8) {
+      d_dst[indx] = static_cast<DstT>(cute::subbyte_iterator<const SrcT>(d_src)[indx].get());
+    } else {
+      d_dst[indx] = static_cast<DstT>(d_src[indx]);
+    }
   }).wait();
 }
