@@ -414,6 +414,23 @@ TEST(PVC_CuTe_Xe, MMA_DPAS_TF32_1x16) {
            tfloat32_t, float>(512, 512, 256);
 }
 
+#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+// TODO: add full FP8/FP4/MXFP8/MXFP4 test here
+// missing FP4/MXFP8/MMXFP4 case here due to:
+// 1. Examples under folder examples/12_xe35_block_scaled_gemm covered MXFP8/MXFP4 cases.
+// 2. Examples/cute/tutorial/xe_gemm.cpp covered FP8/FP4 cases.
+// 3. It is somewhat tedious and repetitive to da that here.
+TEST(PVC_CuTe_Xe, MMA_DPAS_E5M2) {
+  MMA_Test<XE_DPAS_TT<8, float, float_e5m2_t>, 64, 64, 8, 16, 32, float_e5m2_t,
+           float_e5m2_t, float>(512, 512, 256);
+}
+
+TEST(PVC_CuTe_Xe, MMA_DPAS_E4M3) {
+  MMA_Test<XE_DPAS_TT<8, float, float_e4m3_t>, 64, 64, 8, 16, 32, float_e4m3_t,
+           float_e4m3_t, float>(512, 512, 256);
+}
+#endif
+
 #else
 
 // For the fallback case
