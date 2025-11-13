@@ -34,7 +34,7 @@ include(FindPackageHandleStandardArgs)
 set(DPCPP_USER_FLAGS "" CACHE STRING "Additional user-specified compiler flags for DPC++")
 
 get_filename_component(DPCPP_BIN_DIR ${CMAKE_CXX_COMPILER} DIRECTORY)
-find_library(DPCPP_LIB_DIR NAMES sycl sycl6 PATHS "${DPCPP_BIN_DIR}/../lib")
+find_library(DPCPP_LIB_DIR NAMES sycl sycl6 PATHS "${DPCPP_BIN_DIR}/../lib" NO_DEFAULT_PATH)
 
 add_library(DPCPP::DPCPP INTERFACE IMPORTED)
 
@@ -46,8 +46,6 @@ endif()
 set(DPCPP_COMPILE_ONLY_FLAGS "")
 set(DPCPP_LINK_ONLY_FLAGS "")
 
-# TODO: intel_gpu_cri is a temporary SYCL target for CRI and reuse 'spir64'.
-# It will be updated once the official target name is available.
 if("${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_cri")
   list(APPEND DPCPP_FLAGS "-fsycl-targets=spir64;")
 elseif(NOT "${DPCPP_SYCL_TARGET}" STREQUAL "")
@@ -60,12 +58,10 @@ if(NOT "${DPCPP_USER_FLAGS}" STREQUAL "")
   list(APPEND DPCPP_FLAGS "${DPCPP_USER_FLAGS};")
 endif()
 
-if(NOT "${DPCPP_SYCL_ARCH}" STREQUAL "")
-  if("${DPCPP_SYCL_TARGET}" STREQUAL "nvptx64-nvidia-cuda")
-    list(APPEND DPCPP_FLAGS "-Xsycl-target-backend")
-    list(APPEND DPCPP_FLAGS "--cuda-gpu-arch=${DPCPP_SYCL_ARCH}")
-    list(APPEND DPCPP_COMPILE_ONLY_FLAGS; "-mllvm;-enable-global-offset=false;")
-  endif()
+if("${DPCPP_SYCL_TARGET}" STREQUAL "nvptx64-nvidia-cuda")
+  list(APPEND DPCPP_FLAGS "-Xsycl-target-backend")
+  list(APPEND DPCPP_FLAGS "--cuda-gpu-arch=${DPCPP_SYCL_ARCH}")
+  list(APPEND DPCPP_COMPILE_ONLY_FLAGS; "-mllvm;-enable-global-offset=false;")
 endif()
 
 # TODO: intel_gpu_cri is a temporary SYCL target for CRI.

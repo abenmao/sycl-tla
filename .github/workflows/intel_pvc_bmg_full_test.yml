@@ -2,11 +2,11 @@ name: "Intel PVC and BMG Full Test"
 
 on:
   push:
-    branches: [ "cri" ]
+    branches: [ "cri", "master_next" ]
   pull_request:
-    branches: [ "cri" ]
+    branches: [ "cri", "master_next" ]
   merge_group:
-    branches: [ "cri" ]
+    branches: [ "cri", "master_next" ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

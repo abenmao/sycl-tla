@@ -30,6 +30,7 @@
  **************************************************************************************************/
 #pragma once
 
+#include "cutlass/conv/convolution.h"
 #include "cutlass/arch/arch.h"
 #include "cutlass/gemm/gemm.h"
 
@@ -1299,6 +1300,59 @@ struct MainloopDeviceAgnostic {
   using ClusterShape = Shape<_1,_1,_1>;
   using Schedule = KernelMultistage;
 };
+
+
+struct KernelImplicitTmaWarpSpecializedXe4 {
+  static constexpr int SchedulerPipelineStageCount = 1;
+  static constexpr int AccumulatorPipelineStageCount = 1;
+};
+
+template<
+  int SchedulerPipelineStageCount_,
+  int AccumulatorPipelineStageCount_
+>
+struct KernelTmaWarpSpecializedXe4 final {
+  static constexpr int SchedulerPipelineStageCount = SchedulerPipelineStageCount_;
+  static constexpr int AccumulatorPipelineStageCount = AccumulatorPipelineStageCount_;
+};
+
+// n-buffer in smem (Xe4 DMA), pipelined with Xe4 Async MMA and DMA, Warp specialized dynamic schedule
+template<
+  int Stages_,
+  int SchedulerPipelineStageCount_,
+  int AccumulatorPipelineStageCount_,
+  class ClusterShape_ = Shape<_1,_1,_1>
+>
+struct MainloopXe4DmaGmmaWarpSpecialized {
+  constexpr static int Stages = Stages_;
+  using ClusterShape = ClusterShape_;
+  using ArchTag = arch::Xe4;
+  using Schedule = KernelTmaWarpSpecializedXe4<SchedulerPipelineStageCount_, AccumulatorPipelineStageCount_>;
+  constexpr static bool IsOverlappingAccum = false;
+};
+
+template<
+  conv::Operator ConvOp_,
+  int Stages_,
+  int NumSpatialDimensions_,
+  class ClusterShape_ = Shape<_1,_1,_1>,
+  class KernelSchedule = KernelImplicitTmaWarpSpecializedXe4,
+  int PipelineAsyncMmaStages_= 1
+>
+struct MainloopXe4DmaGmmaWarpSpecializedImplicitGemm {
+  static constexpr int Stages = Stages_;
+  static constexpr int NumSpatialDimensions = NumSpatialDimensions_;
+  static constexpr int PipelineAsyncMmaStages = PipelineAsyncMmaStages_;
+  static constexpr conv::Operator ConvOp = ConvOp_;
+  using ClusterShape = ClusterShape_;
+  using ArchTag = arch::Xe4;
+  using Schedule = KernelSchedule;
+
+  static_assert(NumSpatialDimensions >= 1);
+  static_assert(cute::is_same_v<Schedule, KernelImplicitTmaWarpSpecializedXe4>,
+    "KernelSchedule must be one of the warp specialized policies");
+};
+
 #endif
 
 #if defined(CUTLASS_ENABLE_SYCL) 

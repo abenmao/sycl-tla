@@ -72,7 +72,6 @@
 #include "cutlass/util/reference/device/tensor_compare.h"
 #include "sycl_common.hpp"
 #include "helper.h"
-#include "cutlass/util/mixed_dtype_utils.hpp"
 
 using namespace cute;
 

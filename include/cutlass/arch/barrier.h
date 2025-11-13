@@ -38,7 +38,9 @@
 #include <cute/arch/cluster_sm90.hpp>
 #include <cute/arch/copy_sm100_tma.hpp> 
 #include <cutlass/arch/config.h>
-#if defined(SYCL_INTEL_TARGET)
+#if defined(SYCL_INTEL_XE4_TARGET)
+#include <cute/arch/inline_pisa.hpp>
+#elif defined(SYCL_INTEL_TARGET)
 #include <cute/arch/copy_xe.hpp>
 #endif
 
@@ -406,6 +408,8 @@ public:
         :
         : "r"(arrive_count), "r"(smem_addr));
     cutlass::arch::synclog_emit_cluster_barrier_init(__LINE__, smem_addr, arrive_count);
+#elif defined(SYCL_INTEL_XE4_TARGET)
+    abarrier_init(smem_ptr, arrive_count);
 #elif defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
 #endif
@@ -430,7 +434,8 @@ public:
         "}"
         :
         : "r"(smem_addr), "r"(phase), "r"(ticks));
-
+#elif defined(SYCL_INTEL_XE4_TARGET)
+    abarrier_try_wait(smem_ptr, phase);
 #elif defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
 #endif
@@ -455,6 +460,8 @@ public:
         : "r"(smem_addr), "r"(phase), "r"(pred));
 
     return static_cast<bool>(waitComplete);
+#elif defined(SYCL_INTEL_XE4_TARGET)
+    abarrier_try(smem_ptr, phase);
 #elif defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
 #endif
@@ -478,6 +485,8 @@ public:
         : "r"(smem_addr), "r"(phase));
 
     return static_cast<bool>(waitComplete);
+#elif defined(SYCL_INTEL_XE4_TARGET)
+    abarrier_try_wait(smem_ptr, phase);
 #elif defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
 #endif
@@ -501,6 +510,8 @@ public:
     }
 
     cutlass::arch::synclog_emit_cluster_barrier_arrive_cluster(__LINE__, smem_addr, cta_id, pred);
+#elif defined(SYCL_INTEL_XE4_TARGET)
+    abarrier_workgroup_arrive(smem_ptr, 1);
 #elif defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
 #endif
@@ -518,6 +529,8 @@ public:
         :
         : "r"(smem_addr));
     cutlass::arch::synclog_emit_cluster_barrier_arrive(__LINE__, smem_addr);
+#elif defined(SYCL_INTEL_XE4_TARGET)
+    abarrier_workgroup_arrive(smem_ptr, 1);
 #elif defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
 #endif
@@ -533,6 +546,8 @@ public:
         "}"
         :
         : "r"(smem_addr));
+#elif defined(SYCL_INTEL_XE4_TARGET)
+    abarrier_inval(smem_ptr);
 #elif defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
 #endif
@@ -595,6 +610,8 @@ struct ClusterTransactionBarrier : public ClusterBarrier {
         :
         : "r"(transaction_bytes), "r"(smem_addr));
     cutlass::arch::synclog_emit_cluster_transaction_barrier_arrive_and_expect_tx(__LINE__, smem_addr, transaction_bytes);
+#elif defined(SYCL_INTEL_XE4_TARGET)
+    abarrier_workgroup_arrive_expect_tx(smem_ptr, transaction_bytes);
 #elif defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
 #endif
@@ -616,6 +633,8 @@ struct ClusterTransactionBarrier : public ClusterBarrier {
         "}"
         :
         : "r"(smem_addr), "r"(cta_id), "r"(pred), "r"(transaction_bytes));
+#elif defined(SYCL_INTEL_XE4_TARGET)
+    abarrier_workgroup_arrive_expect_tx(smem_ptr, transaction_bytes);
 #elif defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
 #endif
@@ -633,6 +652,8 @@ struct ClusterTransactionBarrier : public ClusterBarrier {
         :
         : "r"(transaction_bytes), "r"(smem_addr));
     cutlass::arch::synclog_emit_cluster_transaction_barrier_expect_transaction(__LINE__, smem_addr, transaction_bytes);
+#elif defined(SYCL_INTEL_XE4_TARGET)
+    abarrier_workgroup_expect_tx(smem_ptr, transaction_bytes);
 #elif defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
 #endif
@@ -654,6 +675,8 @@ struct ClusterTransactionBarrier : public ClusterBarrier {
         :
         : "r"(transaction_bytes), "r"(smem_addr), "r"(pred));
     cutlass::arch::synclog_emit_cluster_transaction_barrier_complete_transaction(__LINE__, smem_addr, dst_cta_id, transaction_bytes, pred);
+#elif defined(SYCL_INTEL_XE4_TARGET)
+    abarrier_workgroup_complete_tx(smem_ptr, transaction_bytes);
 #elif defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
 #endif

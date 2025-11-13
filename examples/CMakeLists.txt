@@ -101,7 +101,10 @@ endif()
 
 if (CUTLASS_ENABLE_SYCL)
   message(STATUS "Building CUTLASS SYCL Examples")
-  if (SYCL_INTEL_TARGET)
+  if (SYCL_INTEL_TARGET EQUAL 40)
+    message(STATUS "Building examples for Intel Xe4 GPU targets")
+    add_subdirectory(sycl)
+  elseif (SYCL_INTEL_TARGET)
     message(STATUS "Building examples for Intel GPU targets")
     foreach(EXAMPLE
       00_bmg_gemm
