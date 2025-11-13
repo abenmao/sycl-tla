@@ -1264,6 +1264,10 @@ template<int Stages_, class KernelScheduler = KernelXePtrArrayCooperative>
 struct MainloopIntelXeXMX16Group : MainloopIntelXeXMX16<Stages_, KernelScheduler> {
 };
 
+template<int Stages_, class KernelSchedule = KernelXePtrArrayCooperative>
+struct MainloopIntelXeXMX16BlockScaledGroup : MainloopIntelXeXMX16<Stages_, KernelSchedule> {
+};
+
 template<int Stages_, class KernelScheduler = KernelXePtrArrayCooperative>
 struct MainloopXeL1StagedGroup : MainloopIntelXeXMX16<Stages_, KernelScheduler> {
 };
