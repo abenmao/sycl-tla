@@ -62,7 +62,7 @@ struct Options {
   bool varlen = false;
   std::string scheduler;
 
-  int batch, num_heads_q, num_heads_kv, seq_len_qo, seq_len_kv, head_size_qk, head_size_vo, iterations;
+  int batch, num_heads_q, num_heads_kv, seq_len_qo, seq_len_kv, head_size_qk, head_size_vo, iterations, verify;
   float softmax_scale;
 
   Options()
@@ -100,6 +100,7 @@ struct Options {
     cmd.get_cmd_line_argument("head_size_vo", head_size_vo, HEAD_DIM);
     cmd.get_cmd_line_argument("head_size_qk", head_size_qk, head_size_vo);
     cmd.get_cmd_line_argument("iterations", iterations, 100);
+    cmd.get_cmd_line_argument("verify", verify, 1);    
 
     softmax_scale = 1 / sqrt(static_cast<float>(head_size_qk));
   }
@@ -120,8 +121,8 @@ struct Options {
         << "  --seq_len_kv=<int>          Sets the Sequence length of the Key-Value pair in Multi-Head Self Attention module\n"
         << "  --head_size_qk=<int>        Sets the Attention Head dimension of the 1st Matrix Multiplication in Multi-Head Self Attention module\n"
         << "  --head_size_vo=<int>        Sets the Attention Head dimension of the 2nd Matrix Multiplication in Multi-Head Self Attention module\n"
-        << "  --iterations=<int>          Iterations\n\n";
-
+        << "  --iterations=<int>          Iterations\n\n"
+        << "  --verify=<int>              Specify whether to verify.\n\n";
     return out;
   }
 };
@@ -572,14 +573,18 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
 
     compat::wait();
 
-    // Verify that the result is correct
-    bool passed = verify(shape, options.is_causal);
-    std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
+    if (options.verify != 0) {
+      // Verify that the result is correct
+      bool passed = verify(shape, options.is_causal);
+      std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
 
-    if (!passed) {
-      return cutlass::Status::kErrorInternal;
+      if (!passed) {
+        return cutlass::Status::kErrorInternal;
+      }
+    } else {
+      std::cout << "Disposition is skipped." << std::endl;
     }
-
+    
     if (options.iterations > 0) {
       GPU_Clock timer;
       timer.start();

@@ -31,16 +31,6 @@ set(CUTLASS_APPLICATIONS_DIR ${CMAKE_SOURCE_DIR}/applications)
 
 foreach(HEAD_DIM 64 96 128 192)
   foreach(INPUT_TYPE bfloat16_t float_e5m2_t float_e4m3_t)
-    cutlass_example_add_executable(
-      06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM}
-      06_xe_fmha_fwd.cpp
-    )
-
-    cutlass_example_add_executable(
-      06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM}
-      06_xe_fmha_fwd.cpp
-    )
- 
     if (CUTLASS_TEST_FOR_CRI)
       set(TEST_BASE "--batch=1 --num_heads_q=4 --num_heads_kv=4 --seq_len_kv=256 --head_size_qk=64 --iterations=0 --verify=0")
       set(PAGED_ARGS "--seq_len_kv_cache=64 --page_size=64 --use_paged_kv")
@@ -62,7 +52,21 @@ foreach(HEAD_DIM 64 96 128 192)
     elseif(INPUT_TYPE STREQUAL "float_e4m3_t")
       set(INPUT_MACRO "IS_FLOAT_E4M3")
     endif()
- 
+
+    cutlass_example_add_executable(
+      06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM}
+      06_xe_fmha_fwd.cpp
+      TEST_COMMAND_OPTIONS
+      TEST_NO_PAGED_PREFILL
+    )
+
+    cutlass_example_add_executable(
+      06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM}
+      06_xe_fmha_fwd.cpp
+      TEST_COMMAND_OPTIONS
+      TEST_NO_PAGED_DECODE
+    )
+
     target_compile_definitions(06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
     target_compile_definitions(06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
 
