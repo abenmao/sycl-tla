@@ -26,4 +26,15 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-add_subdirectory(xe4)
+
+add_xe4_test(xe4_gemm gemm.cpp)
+target_include_directories(xe4_gemm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(xe4_gemm PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)
+
+add_xe4_test(xe4_gemm_cluster gemm_cluster.cpp)
+target_include_directories(xe4_gemm_cluster PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(xe4_gemm_cluster PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)

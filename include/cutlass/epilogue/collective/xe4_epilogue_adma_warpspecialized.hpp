@@ -1,7 +1,9 @@
 #pragma once
 
-#include "cute/arch/copy_xe4_dma.hpp"
-#include "cute/atom/copy_traits_xe4_dma.hpp"
+#include "cute/arch/copy_xe4_dma_legacy.hpp"
+#include "cute/atom/copy_traits_xe4_dma_legacy.hpp"
+#include "cute/arch/copy_xe4_adma.hpp"
+#include "cute/atom/copy_traits_xe4_adma.hpp"
 #include "cute/container/array.hpp"
 #include "cute/tensor.hpp"
 #include "cutlass/cutlass.h"
@@ -51,7 +53,7 @@ template <
   class CopyOpR2R_
 >
 class CollectiveEpilogue<
-  Xe4DmaWarpSpecialized<StagesC_, StagesD_, FragmentSize_, ReuseSmemC_, DelayTmaStore_, NumControlWarps_, NumEpilogueWarps_>,
+  Xe4AdmaWarpSpecialized<StagesC_, StagesD_, FragmentSize_, ReuseSmemC_, DelayTmaStore_, NumControlWarps_, NumEpilogueWarps_>,
   CtaTileShape_,
   EpilogueTile_,
   ElementC_,
@@ -72,7 +74,7 @@ public:
   //
   // Type Aliases
   //
-  using DispatchPolicy = Xe4DmaWarpSpecialized<StagesC_, StagesD_, FragmentSize_, ReuseSmemC_, DelayTmaStore_, NumControlWarps_, NumEpilogueWarps_>;
+  using DispatchPolicy = Xe4AdmaWarpSpecialized<StagesC_, StagesD_, FragmentSize_, ReuseSmemC_, DelayTmaStore_, NumControlWarps_, NumEpilogueWarps_>;
   using CtaTileShape = CtaTileShape_;
   using EpilogueTile = EpilogueTile_;
   using FusionCallbacks = FusionCallbacks_;
@@ -239,30 +241,32 @@ private:
 
   template <class ProblemShapeMNL>
   static constexpr auto
-  get_tma_load_c(ProblemShapeMNL const& problem_shape_mnl, Arguments const& args) {
+  get_adma_load_c(ProblemShapeMNL const& problem_shape_mnl, Arguments const& args) {
     if constexpr (is_im2col_C) {
       Tensor tensor_c = make_tensor(make_gmem_ptr<GmemElementC>(args.ptr_C),
                                     make_layout(problem_shape_mnl, args.dC));
-      return make_tma_copy(CopyOpG2S{}, tensor_c, SmemLayoutAtomC{}, TmaEpilogueTile{}, _1{});
+      return make_adma_copy(
+          CopyOpG2S{}, tensor_c, SmemLayoutAtomC{}, TmaEpilogueTile{}, _1{});
     }
     else {
       Tensor tensor_c = make_tensor(make_gmem_ptr<GmemElementC>(args.ptr_C),
                                     make_layout(problem_shape_mnl, append<3>(args.dC, _0{})));
-      return make_tma_copy(CopyOpG2S{}, tensor_c, SmemLayoutStageC{}, TmaEpilogueTile{}, _1{});
+      return make_adma_copy(
+          CopyOpG2S{}, tensor_c, SmemLayoutStageC{}, TmaEpilogueTile{}, _1{});
     }
   }
 
   template <class ProblemShapeMNL>
   static constexpr auto
-  get_tma_store_d(ProblemShapeMNL const& problem_shape_mnl, Arguments const& args) {
+  get_adma_store_d(ProblemShapeMNL const& problem_shape_mnl, Arguments const& args) {
     if constexpr(is_im2col_D) {
       Tensor tensor_d = make_tensor(make_gmem_ptr<GmemElementD>(args.ptr_D),
                                     make_layout(problem_shape_mnl, args.dD));
-      return make_tma_copy(CopyOpS2G{}, tensor_d, SmemLayoutAtomD{}, take<0,2>(CtaTileShape{}), _1{});
+      return make_adma_copy(CopyOpS2G{}, tensor_d, SmemLayoutAtomD{}, take<0,2>(CtaTileShape{}), _1{});
     } else {
       Tensor tensor_d = make_tensor(make_gmem_ptr<GmemElementD>(args.ptr_D),
                                     make_layout(problem_shape_mnl, append<3>(args.dD, _0{})));
-      return make_tma_copy(CopyOpS2G{}, tensor_d, SmemLayoutD{}, take<0,2>(CtaTileShape{}), _1{});
+      return make_adma_copy(CopyOpS2G{}, tensor_d, SmemLayoutD{}, take<0,2>(CtaTileShape{}), _1{});
 
     }
   }
@@ -270,14 +274,14 @@ private:
 public:
   // Device side epilogue params
   struct Params {
-    using TMA_C = cute::conditional_t<is_im2col_C, decltype(get_tma_load_c (repeat_like(take<0,2>(StrideC{}), int32_t(0)), Arguments{})),
-                                                   decltype(get_tma_load_c (repeat_like(append<3>(StrideC{},_1{}), int32_t(0)), Arguments{}))>;
-    using TMA_D = cute::conditional_t<is_im2col_D, decltype(get_tma_store_d(repeat_like(take<0,2>(StrideD{}), int32_t(0)), Arguments{})),
-                                                   decltype(get_tma_store_d(repeat_like(append<3>(StrideD{},_1{}), int32_t(0)), Arguments{}))>;
+    using ADMA_C = cute::conditional_t<is_im2col_C, decltype(get_adma_load_c (repeat_like(take<0,2>(StrideC{}), int32_t(0)), Arguments{})),
+                                                   decltype(get_adma_load_c (repeat_like(append<3>(StrideC{},_1{}), int32_t(0)), Arguments{}))>;
+    using ADMA_D = cute::conditional_t<is_im2col_D, decltype(get_adma_store_d(repeat_like(take<0,2>(StrideD{}), int32_t(0)), Arguments{})),
+                                                   decltype(get_adma_store_d(repeat_like(append<3>(StrideD{},_1{}), int32_t(0)), Arguments{}))>;
 
     typename FusionCallbacks::Params thread{};
-    TMA_C tma_load_c;
-    TMA_D tma_store_d;
+    ADMA_C adma_load_c;
+    ADMA_D adma_store_d;
   };
 
   //
@@ -292,32 +296,32 @@ public:
       [[maybe_unused]] void* workspace) {
     if constexpr (is_im2col_C || is_im2col_D) {
       auto problem_shape_mnl = problem_shape;
-      typename Params::TMA_C tma_load_c{};
+      typename Params::ADMA_C adma_load_c{};
       if constexpr (is_source_supported) {
-        tma_load_c = get_tma_load_c(problem_shape_mnl, args);
+        adma_load_c = get_adma_load_c(problem_shape_mnl, args);
       }
 
-      typename Params::TMA_D tma_store_d = get_tma_store_d(problem_shape_mnl, args);
+      typename Params::ADMA_D adma_store_d = get_adma_store_d(problem_shape_mnl, args);
 
       return {
         FusionCallbacks::to_underlying_arguments(problem_shape, args.thread, nullptr),
-        tma_load_c,
-        tma_store_d
+        adma_load_c,
+        adma_store_d
       };
     }
     else {
       auto problem_shape_mnl = select<0,1,3>(append<4>(problem_shape, 1));
-      typename Params::TMA_C tma_load_c{};
+      typename Params::ADMA_C adma_load_c{};
       if constexpr (is_source_supported) {
-        tma_load_c = get_tma_load_c(problem_shape_mnl, args);
+        adma_load_c = get_adma_load_c(problem_shape_mnl, args);
       }
 
-      typename Params::TMA_D tma_store_d = get_tma_store_d(problem_shape_mnl, args);
+      typename Params::ADMA_D adma_store_d = get_adma_store_d(problem_shape_mnl, args);
 
       return {
         FusionCallbacks::to_underlying_arguments(problem_shape, args.thread, nullptr),
-        tma_load_c,
-        tma_store_d
+        adma_load_c,
+        adma_store_d
       };
     }
   }
@@ -345,8 +349,8 @@ public:
       , wave_order_barrier(wave_order_barrier_) {
     if constexpr (!is_im2col_C && !is_im2col_D) {
        auto [tensor_desc_c, tensor_desc_d] = tdesc_tuple;
-       params.tma_load_c.cache_.set_tensor_desc(tensor_desc_c);
-       params.tma_store_d.cache_.set_tensor_desc(tensor_desc_d);
+       params.adma_load_c.cache_.set_tensor_desc(tensor_desc_c);
+       params.adma_store_d.cache_.set_tensor_desc(tensor_desc_d);
     }
   }
 
@@ -414,7 +418,7 @@ public:
     else{
       shapeC = make_shape(M,N,L);
     }
-    Tensor mC_mn = params.tma_load_c.get_tma_tensor(shapeC);                                //       (M,N,L)
+    Tensor mC_mn = params.adma_load_c.get_tma_tensor(shapeC);                                //       (M,N,L)
     Tensor mC = coalesce(mC_mn, take<0,2>(cta_tile_mnk));
     Tensor gC = local_tile(mC, take<0,2>(cta_tile_mnk), coord_shape);                                  // (CTA_M,CTA_N)
 
@@ -425,7 +429,7 @@ public:
     else{
       shapeD = make_shape(M,N,L);
     }
-    Tensor mD_mnl = params.tma_store_d.get_tma_tensor(shapeD);
+    Tensor mD_mnl = params.adma_store_d.get_tma_tensor(shapeD);
     Tensor mD = coalesce(mD_mnl, take<0,2>(cta_tile_mnk));
     Tensor gD = local_tile(mD, take<0,2>(cta_tile_mnk), coord_shape);   // (CTA_M,CTA_N)
 
@@ -440,12 +444,12 @@ public:
     auto sD_epi = make_slm_tensor<SmemElementD>(ptr_sD, SmemLayoutD{});   // (CTA_M,CTA_N,PIPE_D)
     
     // Prepare the thread(b)lock's (G)mem to (S)mem TMA tiled copy (bGS_)
-    ThrCopy thrblk_g2s = params.tma_load_c.get_slice(thread_idx);
+    ThrCopy thrblk_g2s = params.adma_load_c.get_slice(thread_idx);
     Tensor bGS_gC = thrblk_g2s.partition_S(gC_epi);                                    // (TMA,TMA_M,TMA_N,EPI_M,EPI_N)
     Tensor bGS_sC = thrblk_g2s.partition_D(sC_epi);                                    // (TMA,TMA_M,TMA_N,PIPE_C)
 
     // thread(b)lock-partition for (s)mem to (g)mem copy (bSG_)
-    ThrCopy thrblk_s2g = params.tma_store_d.get_slice(thread_idx);
+    ThrCopy thrblk_s2g = params.adma_store_d.get_slice(thread_idx);
     auto bSG_sD = thrblk_s2g.partition_S(sD_epi);   // (S2G,S2G_M,S2G_N,PIPE_D)
     auto bSG_gD = thrblk_s2g.partition_D(gD_epi);   // (S2G,S2G_M,S2G_N,EPI_M,EPI_N)
 
@@ -483,7 +487,7 @@ public:
         // Execute the TMA load for C if needed
         if (lane_predicate && is_C_load_needed) {
           constexpr uint16_t mcast_mask = 0;
-          copy(params.tma_load_c.with(tma_barrier, mcast_mask),
+          copy(params.adma_load_c.with(tma_barrier, mcast_mask),
               bGS_gC(_,_,_,epi_m,epi_n), bGS_sC(_,_,_,load_pipe_producer_state.index()));
           load_pipeline.producer_expect_transaction(load_pipe_producer_state);
         }
@@ -507,14 +511,14 @@ public:
       }
       else {
         auto abar_store = store_pipeline.consumer_get_barrier(store_pipe_consumer_state);
-        copy(params.tma_store_d.with(abar_store), bSG_sD(_,_,_,store_pipe_consumer_state.index()), bSG_gD(_,_,_,_0{},_0{}));
+        copy(params.adma_store_d.with(abar_store), bSG_sD(_,_,_,store_pipe_consumer_state.index()), bSG_gD(_,_,_,_0{},_0{}));
         store_pipeline.consumer_commit(store_pipe_consumer_state, TransactionBytesStore);
       }
     }
 
     if constexpr (is_im2col_D) {
       auto abar_store = store_pipeline.consumer_get_barrier(store_pipe_consumer_state);
-      copy(params.tma_store_d.with(abar_store), bSG_sD(_,_,_,store_pipe_consumer_state.index()), bSG_gD(_,_,_,_0{},_0{}));
+      copy(params.adma_store_d.with(abar_store), bSG_sD(_,_,_,store_pipe_consumer_state.index()), bSG_gD(_,_,_,_0{},_0{}));
     }
     ++store_pipe_consumer_state;
 
@@ -572,7 +576,7 @@ public:
     else{
       shapeD = make_shape(M,N,L);
     }
-    auto mD_mnl = params.tma_store_d.get_tma_tensor(shapeD);
+    auto mD_mnl = params.adma_store_d.get_tma_tensor(shapeD);
     auto mD = coalesce(mD_mnl, take<0,2>(cta_tile_mnk));
     auto gD = local_tile(mD, take<0,2>(cta_tile_mnk), coord_shape);   // (CTA_M,CTA_N)
     auto sAcc = as_cm_tensor(accumulators)(_,_,_0{});                 // (CTA_M,CTA_N)

@@ -26,28 +26,14 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+set(INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/utils)
 
-set(TARGET_NAME xe4_gemm)
-add_xe4_test(${TARGET_NAME} gemm.cpp)
-target_compile_definitions(${TARGET_NAME} PRIVATE AMMA_GENERATED)
-target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_options(${TARGET_NAME} PUBLIC
-	-Xsycl-target-backend=spir64_gen
-	-device\ jgs-a0)
+function(add_xe4_test TARGET_NAME SRCS)
+  cutlass_example_add_executable(${TARGET_NAME} ${SRCS} ${ARGN})
+  target_include_directories(${TARGET_NAME} PRIVATE ${INCLUDE_DIRS})
+  target_link_libraries(${TARGET_NAME} PRIVATE -lur_loader)
+  set_tests_properties(ctest_examples_${TARGET_NAME} PROPERTIES FAIL_REGULAR_EXPRESSION "Test Failed")
+endfunction()
 
-set(GEMM_CLUSTER_TARGET xe4_gemm_cluster)
-add_xe4_test(${GEMM_CLUSTER_TARGET} gemm_cluster.cpp)
-target_compile_definitions(${GEMM_CLUSTER_TARGET} PRIVATE AMMA_GENERATED)
-target_include_directories(${GEMM_CLUSTER_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_options(${GEMM_CLUSTER_TARGET} PUBLIC
-	-Xsycl-target-backend=spir64_gen
-	-device\ jgs-a0)
-
-# generate_amma_header(
-#   ${TARGET_NAME}_helper
-#   "--mma_type" "mma"
-#   "--shape" "128x128x128;256x256x128;256x512x128"
-#   "--dtype" "f32_f32_f16_f16;f16_f32_f16_f16;f32_f32_bf8_bf8;bf16_f32_bf8_bf8"
-# )
-# add_dependencies(${TARGET_NAME} ${TARGET_NAME}_helper)
-# add_dependencies(${GEMM_CLUSTER_TARGET} ${TARGET_NAME}_helper)
+add_subdirectory(gemm)
+# add_subdirectory(conv2d)

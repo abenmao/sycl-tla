@@ -45,7 +45,7 @@
 #include <cutlass/cuda_host_adapter.hpp>
 
 #if defined(SYCL_INTEL_XE4_TARGET)
-#include <cute/atom/copy_traits_xe4_dma.hpp>
+#include <cute/atom/copy_traits_xe4_dma_legacy.hpp>
 #endif
 
 namespace cute

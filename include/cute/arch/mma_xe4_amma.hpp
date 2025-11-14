@@ -1,88 +1,201 @@
 #pragma once
 
-#include "inline_pisa.hpp"
-#include "cute/arch/mma_sm90_gmma.hpp"
+#include <cute/arch/mma_sm90_gmma.hpp>
+#include <cute/arch/mma_xe4_desc.hpp>
+
+#include <cute/arch/asm_helper.hpp>
 
 namespace cute {
 
-namespace xe4 {
-  using MatDesc = matrix_desc_t;
-  using Abarrier = uint64_t*;
+namespace AMMA {
+// Enumerate barrier tracking combinations
+enum class Tracking {
+  None = 0, GroupSync, D, A, B, DA, DB, AB, DAB, GA, GB, GAB
+};
+
+template <Tracking Method> struct TrackMethod {
+  constexpr static Tracking value = Method;
+};
 }
 
-template <class TupleC, class TA, class TB, class Shape_MNK_, SM90::GMMA::Major tnspA, SM90::GMMA::Major tnspB>
-struct XE4_ASYNC_GMMA
-{
-  using MatDesc = xe4::MatDesc;
-  using Abarrier = xe4::Abarrier;
-  using Shape_MNK = Shape_MNK_;
+// Async-MMA barriers track none
+template <class d_type, class a_type, class b_type, class c_type,
+         int M, int N, int K, AMMA::Major a_major, AMMA::Major b_major>
+struct XE4_AMMA {
+  using DRegisters = void;
+  using ARegisters = void;
+  using BRegisters = void;
+  using CRegisters = void;
 
-  template<typename MatDescD, typename MatDescC, typename MatDescA, typename MatDescB, typename... Args>
-  CUTE_HOST_DEVICE static void
-  fma(MatDescD const& mat_desc_d,
-      MatDescC const& mat_desc_c,
-      MatDescA const& mat_desc_a,
-      MatDescB const& mat_desc_b,
-      Args&&... args)
-  {
-    constexpr auto Tile_M = get<0>(Shape_MNK{});
-    constexpr auto Tile_N = get<1>(Shape_MNK{});
-    constexpr auto Tile_K = get<2>(Shape_MNK{});
-
-    constexpr mem_layout layout_a = (tnspA == SM90::GMMA::Major::K) ? mem_layout::row_major: mem_layout::col_major;
-    constexpr mem_layout layout_b = (tnspB == SM90::GMMA::Major::MN) ? mem_layout::row_major: mem_layout::col_major;
-
-    using dtypeA = typename MatDescA::underlying_type;
-    using dtypeB = typename MatDescB::underlying_type;
-    using dtypeC = typename MatDescC::underlying_type;
-    using dtypeD = typename MatDescD::underlying_type;
-    async_gmma<dtypeD, dtypeC, dtypeA, dtypeB, Tile_M, Tile_N, Tile_K, layout_a, layout_b>(
-      *mat_desc_d, *mat_desc_c, *mat_desc_a, *mat_desc_b, static_cast<Args&&>(args)...);
+  CUTE_HOST_DEVICE static void fma(
+      MMAControl const& ctrl,
+      uint32_t const& desc_d, uint32_t const& desc_a,
+      uint32_t const& desc_b, uint32_t const& desc_c
+  ) {
+#if defined(__SYCL_DEVICE_ONLY__)
+    if ( cute::elect_one_sync() ) {
+        asm volatile (
+          ("async_gmma.m"+_s<M>+"n"+_s<N>+"k"+_s<K>+"."+_t<d_type>+"_"+_t<a_type>+"_"+_t<b_type>+"_"+_t<c_type>+_am<a_major>+_bk<b_major>+" %0, %1, %2, %3, %4;\n")
+          ::"r"(ctrl), "r"(desc_d), "r"(desc_a), "r"(desc_b), "r"(desc_c));
+    }
+#endif
   }
 };
 
-template <class TupleC, class TA, class TB, class Shape_MNK_, SM90::GMMA::Major tnspA, SM90::GMMA::Major tnspB>
-struct XE4_ASYNC_GMMA_MULTICAST
-{
-  using MatDesc = xe4::MatDesc;
-  using Abarrier = xe4::Abarrier;
-  using Shape_MNK = Shape_MNK_;
+template <class d_type, class a_type, class b_type, class c_type,
+         int M, int N, int K, AMMA::Major a_major, AMMA::Major b_major>
+struct XE4_AMMA_GROUPSYNC {
+  using DRegisters = void;
+  using ARegisters = void;
+  using BRegisters = void;
+  using CRegisters = void;
 
-  template<typename MatDescD, typename MatDescC, typename MatDescA, typename MatDescB, typename MmaCtrl, typename... Args>
-  CUTE_HOST_DEVICE static void
-  fma(MatDescD const& mat_desc_d,
-      MatDescC const& mat_desc_c,
-      MatDescA const& mat_desc_a,
-      MatDescB const& mat_desc_b,
-      MmaCtrl mma_ctrl,
-      Args&&... args)
-  {
-    constexpr auto Tile_M = get<0>(Shape_MNK{});
-    constexpr auto Tile_N = get<1>(Shape_MNK{});
-    constexpr auto Tile_K = get<2>(Shape_MNK{});
-
-    constexpr mem_layout layout_a = (tnspA == SM90::GMMA::Major::K) ? mem_layout::row_major: mem_layout::col_major;
-    constexpr mem_layout layout_b = (tnspB == SM90::GMMA::Major::MN) ? mem_layout::row_major: mem_layout::col_major;
-
-    using dtypeA = typename MatDescA::underlying_type;
-    using dtypeB = typename MatDescB::underlying_type;
-    using dtypeC = typename MatDescC::underlying_type;
-    using dtypeD = typename MatDescD::underlying_type;
-
-    constexpr auto args_count = sizeof...(args);
-    auto args_tuple = std::make_tuple(static_cast<Args&&>(args)...);
-
-    if constexpr (args_count == 4) {
-      auto [abar_a, abar_b, mask_a, mask_b] = args_tuple;
-      async_gmma<dtypeD, dtypeC, dtypeA, dtypeB, Tile_M, Tile_N, Tile_K, layout_a, layout_b>(
-        *mat_desc_d, *mat_desc_c, *mat_desc_a, *mat_desc_b, mma_ctrl, abar_a, mask_a, abar_b, mask_b);
-    } else if constexpr (args_count == 5) {
-      auto [abar_d, abar_a, abar_b, mask_a, mask_b] = args_tuple;
-      async_gmma<dtypeD, dtypeC, dtypeA, dtypeB, Tile_M, Tile_N, Tile_K, layout_a, layout_b>(
-        *mat_desc_d, *mat_desc_c, *mat_desc_a, *mat_desc_b, mma_ctrl, abar_d, abar_a, mask_a, abar_b, mask_b);
-    } else {
-      static_assert(args_count == 4 || args_count == 5, "Invalid number of arguments for async_gmma_multicast");
+  CUTE_HOST_DEVICE static void fma(
+      MMAControl const& ctrl,
+      uint32_t const& desc_d, uint32_t const& desc_a,
+      uint32_t const& desc_b, uint32_t const& desc_c
+  ) {
+#if defined(__SYCL_DEVICE_ONLY__)
+    if ( cute::elect_one_sync() ) {
+        asm volatile (
+          ("async_gmma.m"+_s<M>+"n"+_s<N>+"k"+_s<K>+"."+_t<d_type>+"_"+_t<a_type>+"_"+_t<b_type>+"_"+_t<c_type>+_am<a_major>+_bk<b_major>+".groupsync %0, %1, %2, %3, %4;\n")
+          ::"r"(ctrl), "r"(desc_d), "r"(desc_a), "r"(desc_b), "r"(desc_c));
     }
+#endif
+  }
+};
+
+// Async-MMA barriers track D and B
+template <class d_type, class a_type, class b_type, class c_type,
+         int M, int N, int K, AMMA::Major a_major, AMMA::Major b_major>
+struct XE4_AMMA_DB {
+  using DRegisters = void;
+  using ARegisters = void;
+  using BRegisters = void;
+  using CRegisters = void;
+
+  CUTE_HOST_DEVICE static void fma(
+      MMAControl const& ctrl,
+      uint32_t const& desc_d, uint32_t const& desc_a,
+      uint32_t const& desc_b, uint32_t const& desc_c,
+      uint64_t* abar_d, uint64_t* abar_b
+  ) {
+#if defined(__SYCL_DEVICE_ONLY__)
+    if ( cute::elect_one_sync() ) {
+        asm volatile (
+          ("async_gmma.m"+_s<M>+"n"+_s<N>+"k"+_s<K>+"."+_t<d_type>+"_"+_t<a_type>+"_"+_t<b_type>+"_"+_t<c_type>+_am<a_major>+_bk<b_major>+".dtm.btm %0, %1, %2, %3, %4, [%5], [%6];\n")
+          ::"r"(ctrl), "r"(desc_d), "r"(desc_a), "r"(desc_b), "r"(desc_c),
+          "r"(abar_d), "r"(abar_b));
+    }
+#endif
+  }
+};
+
+// Async-MMA barriers track A and B
+template <class d_type, class a_type, class b_type, class c_type,
+         int M, int N, int K, AMMA::Major a_major, AMMA::Major b_major>
+struct XE4_AMMA_AB {
+  using DRegisters = void;
+  using ARegisters = void;
+  using BRegisters = void;
+  using CRegisters = void;
+
+  CUTE_HOST_DEVICE static void fma(
+      MMAControl const& ctrl,
+      uint32_t const& desc_d, uint32_t const& desc_a,
+      uint32_t const& desc_b, uint32_t const& desc_c,
+      uint64_t* abar_a, uint64_t* abar_b
+  ) {
+#if defined(__SYCL_DEVICE_ONLY__)
+    if ( cute::elect_one_sync() ) {
+        asm volatile (
+          ("async_gmma.m"+_s<M>+"n"+_s<N>+"k"+_s<K>+"."+_t<d_type>+"_"+_t<a_type>+"_"+_t<b_type>+"_"+_t<c_type>+_am<a_major>+_bk<b_major>+".atm.btm %0, %1, %2, %3, %4, [%5], [%6];\n")
+          ::"r"(ctrl), "r"(desc_d), "r"(desc_a), "r"(desc_b), "r"(desc_c),
+          "r"(abar_a), "r"(abar_b));
+    }
+#endif
+  }
+};
+
+
+
+// 32-bit accum, barriers track d, a, b
+template <class d_type, class a_type, class b_type, class c_type,
+         int M, int N, int K, AMMA::Major a_major, AMMA::Major b_major>
+struct XE4_AMMA_DAB {
+  using DRegisters = void;
+  using ARegisters = void;
+  using BRegisters = void;
+  using CRegisters = void;
+
+  CUTE_HOST_DEVICE static void fma(
+      MMAControl const& ctrl,
+      uint32_t const& desc_d, uint32_t const& desc_a,
+      uint32_t const& desc_b, uint32_t const& desc_c,
+      uint64_t* abar_d, uint64_t* abar_a, uint64_t* abar_b
+  ) {
+#if defined(__SYCL_DEVICE_ONLY__)
+    if ( cute::elect_one_sync() ) {
+        asm volatile (
+          ("async_gmma.m"+_s<M>+"n"+_s<N>+"k"+_s<K>+"."+_t<d_type>+"_"+_t<a_type>+"_"+_t<b_type>+"_"+_t<c_type>+_am<a_major>+_bk<b_major>+".dtm.atm.btm %0, %1, %2, %3, %4, [%5], [%6], [%7];\n")
+          ::"r"(ctrl), "r"(desc_d), "r"(desc_a), "r"(desc_b), "r"(desc_c),
+          "r"(abar_d), "r"(abar_a), "r"(abar_b));
+    }
+#endif
+  }
+};
+
+// 32-bit accum, barriers track a, b, cluster version
+template <class d_type, class a_type, class b_type, class c_type,
+         int M, int N, int K, AMMA::Major a_major, AMMA::Major b_major>
+struct XE4_AMMA_AB_CLUSTER {
+  using DRegisters = void;
+  using ARegisters = void;
+  using BRegisters = void;
+  using CRegisters = void;
+
+  CUTE_HOST_DEVICE static void fma(
+      MMAControl const& ctrl,
+      uint32_t const& desc_d, uint32_t const& desc_a,
+      uint32_t const& desc_b, uint32_t const& desc_c,
+      uint64_t* abar_a, uint64_t* abar_b,
+      uint32_t a_mask, uint32_t b_mask
+  ) {
+#if defined(__SYCL_DEVICE_ONLY__)
+    if ( cute::elect_one_sync() ) {
+        asm volatile (
+          ("async_gmma.m"+_s<M>+"n"+_s<N>+"k"+_s<K>+"."+_t<d_type>+"_"+_t<a_type>+"_"+_t<b_type>+"_"+_t<c_type>+_am<a_major>+_bk<b_major>+".atmm.btmm %0, %1, %2, %3, %4, [%5], %7, [%6], %8;\n")
+          ::"r"(ctrl), "r"(desc_d), "r"(desc_a), "r"(desc_b), "r"(desc_c),
+          "r"(abar_a), "r"(abar_b), "r"(a_mask), "r"(b_mask));
+    }
+#endif
+  }
+};
+
+// 32-bit accum, barriers track d, a, b, cluster version
+template <class d_type, class a_type, class b_type, class c_type,
+         int M, int N, int K, AMMA::Major a_major, AMMA::Major b_major>
+struct XE4_AMMA_DAB_CLUSTER {
+  using DRegisters = void;
+  using ARegisters = void;
+  using BRegisters = void;
+  using CRegisters = void;
+
+  CUTE_HOST_DEVICE static void fma(
+      MMAControl const& ctrl,
+      uint32_t const& desc_d, uint32_t const& desc_a,
+      uint32_t const& desc_b, uint32_t const& desc_c,
+      uint64_t* abar_d, uint64_t* abar_a, uint64_t* abar_b,
+      uint32_t a_mask, uint32_t b_mask
+  ) {
+#if defined(__SYCL_DEVICE_ONLY__)
+    if ( cute::elect_one_sync() ) {
+        asm volatile (
+          ("async_gmma.m"+_s<M>+"n"+_s<N>+"k"+_s<K>+"."+_t<d_type>+"_"+_t<a_type>+"_"+_t<b_type>+"_"+_t<c_type>+_am<a_major>+_bk<b_major>+".dtm.atmm.btmm %0, %1, %2, %3, %4, [%5], [%6], %8, [%7], %9;\n")
+          ::"r"(ctrl), "r"(desc_d), "r"(desc_a), "r"(desc_b), "r"(desc_c),
+          "r"(abar_d), "r"(abar_a), "r"(abar_b), "r"(a_mask), "r"(b_mask));
+    }
+#endif
   }
 };
 

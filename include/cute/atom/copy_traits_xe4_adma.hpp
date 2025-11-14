@@ -13,17 +13,16 @@
 
 namespace cute {
 
-template <class CopyOp>
+template <class CopyOp, class... Args>
 struct ADMA_LOAD_Unpack {
-  template <class... Args,
-           class TS, class SLayout,
-           class TD, class DLayout>
+  template <class TS, class SLayout,
+            class TD, class DLayout>
   CUTE_HOST_DEVICE friend constexpr void
   copy_unpack(
       Copy_Traits<CopyOp, Args...> const& traits,
       Tensor<TS, SLayout>          const& src,
       Tensor<TD, DLayout>               & dst) {
-    static_assert(is_smem<TD>::value, "ASYNCL_ADMA_LOAD requires the destination be shared memory.");
+    static_assert(is_smem<TD>::value, "XE4_ADMA_LOAD requires the destination be shared memory.");
 
     auto src_coord = src.data().coord_;
     auto* dst_ptr = cute::raw_pointer_cast(dst.data());
@@ -52,7 +51,7 @@ struct Obsolete_XE4_COPY_Unpack
               Tensor<TS,SLayout>           const& src,
               Tensor<TD,DLayout>                & dst)
   {
-    constexpr auto isLoadOperation = !cute::is_base_of<XE4_ASYNC_TENSOR_STORE, CopyOp>::value;
+    constexpr auto isLoadOperation = !cute::is_base_of<XE4_ADMA_STORE, CopyOp>::value;
     constexpr auto isIm2ColOperation = false;
 
     auto as_xe4_coord = [](auto const& t) {
@@ -95,7 +94,7 @@ struct Obsolete_Xe4CopyOp {};
 template <typename CopyOperation>
 struct Obsolete_Xe4CopyOpWrapper : CopyOperation {};
 
-template <class GmemDetails, class AuxParams, class GmemPtr>
+template <typename T, class AuxParams>
 struct Obsolete_Xe4DmaCache {
   template <typename CopyOp>
   using OpUnpack = Obsolete_XE4_COPY_Unpack<CopyOp>;
@@ -103,26 +102,14 @@ struct Obsolete_Xe4DmaCache {
   Obsolete_Xe4DmaCache() = default;
 
   Obsolete_Xe4DmaCache(
-      GmemDetails const& gmem_details, AuxParams const& aux_params, GmemPtr gmem_ptr)
-    : gmem_details_(gmem_details), aux_params_(aux_params), gmem_ptr_(gmem_ptr) {}
-
-  CUTE_DEVICE void
-  set_gmem_ptr(GmemPtr gmem_ptr) {
-    gmem_ptr_ = gmem_ptr;
-  }
+      TensorDescriptor<T>& tdesc, AuxParams const& aux_params)
+    : tensorDesc_(tdesc), aux_params_(aux_params) {
+    }
 
   CUTE_DEVICE void
   set_tensor_desc(uint64_t* tensor_desc) const {
-    constexpr int tma_dim = rank_v<typename AuxParams::TmaGmemBasis>;
-    auto [gmem_shape, gmem_stride, roi_shape, element_stride, matrix_desc] = gmem_details_;
-
-    tensordesc_fill_dim_size<tma_dim>(tensor_desc, gmem_shape);
-    tensordesc_fill_dim_stride<tma_dim>(tensor_desc, gmem_stride);
-    tensordesc_fill_roitensor_dim_size<tma_dim>(tensor_desc, roi_shape);
-    tensordesc_fill_element_stride<tma_dim>(tensor_desc, element_stride);
-
+    dupTensorPayload(tensor_desc, (uint64_t *)&tensorDesc_.payload);
     tdesc_ptr_ = tensor_desc;
-    slm_desc = matrix_desc;
   }
 
   CUTE_HOST_DEVICE constexpr
@@ -140,14 +127,14 @@ struct Obsolete_Xe4DmaCache {
   template <typename... Args>
   CUTE_HOST_DEVICE constexpr
   auto make_args_tuple(Args&&... args) const {
-    return make_tuple(tdesc_ptr_, gmem_ptr_, slm_desc, static_cast<Args&&>(args)...);
+    return make_tuple(
+        tdesc_ptr_, tensorDesc_.g_pointer,
+        tensorDesc_.matrix_desc, static_cast<Args&&>(args)...);
   }
 
-  GmemDetails gmem_details_;
+  mutable TensorDescriptor<T> tensorDesc_;
   AuxParams aux_params_;
-  GmemPtr gmem_ptr_ {nullptr};
   mutable uint64_t* tdesc_ptr_ { nullptr };
-  mutable uint32_t slm_desc;
 };
 
 template <class CopyOperation, class NumBitsPerTMA, class DmaCache>
@@ -244,7 +231,7 @@ make_adma_copy_desc(
   // Recast the original tensor for shape/stride inspections
   Tensor gtensor_T = recast<InternalType>(gtensor);
 
-  void* gmem_address = (void*) raw_pointer_cast(gtensor_T.data());
+  auto* gmem_address = raw_pointer_cast(gtensor_T.data());
   auto  gmem_layout  = gtensor_T.layout();
 
   cute::array<uint64_t, 5> gmem_prob_shape  = {1,1,1,1,1};
@@ -290,8 +277,8 @@ make_adma_copy_desc(
   //
   // TMA smem desc info
   //
-  sycl::marray<uint32_t, t_dim> smem_box_shape(uint32_t(1));
-  sycl::marray<uint32_t, t_dim> smem_box_stride(uint32_t(1));
+  cute::array<uint16_t, 5> smem_box_shape  = {1,1,1,1,1};
+  cute::array<uint32_t, 5> smem_box_stride = {1,1,1,1,1};
 
   // The smem box is simply given by the sizes of the modes in adma_gbasis
   for_each(make_seq<t_dim>{}, [&](auto i) {
@@ -335,7 +322,7 @@ make_adma_copy_desc(
     // Construct the descriptor
     //
 
-    uint64_t* tma_desc{};
+    TensorDescriptor<InternalType> tensor_desc{};
 
     //
     // TMA general info
@@ -426,14 +413,26 @@ make_adma_copy_desc(
                                  Swizzle<0, 4, 3>>; // XXX: do we need this?
 
   // Carry tensor descriptor message out of here.
-  sycl::marray<uint32_t, t_dim> gmem_shape;
+  cute::array<uint32_t, t_dim> gmem_shape;
   for_each(make_seq<t_dim>{}, [&](auto i) {gmem_shape[i] = gmem_prob_shape[i];});
-  sycl::marray<uint64_t, t_dim-1> gmem_stride;
+  cute::array<uint64_t, t_dim-1> gmem_stride;
   for_each(make_seq<t_dim-1>{}, [&](auto i) {gmem_stride[i] = gmem_prob_stride[i+1];});
-  auto tma_desc_details = make_tuple(
-      gmem_shape, gmem_stride, smem_box_shape, smem_box_stride, matrix_desc);
-  return cute::make_tuple(tma_desc_details, AuxParams{gmem_tma_basis_stride});
-  // return cute::make_tuple(tma_desc, AuxParams{gmem_tma_basis_stride});
+  cute::array<uint16_t, t_dim> sbox_shape;
+  for_each(make_seq<t_dim>{}, [&](auto i) {sbox_shape[i] = smem_box_shape[i];});
+  cute::array<uint32_t, t_dim> sbox_stride;
+  for_each(make_seq<t_dim>{}, [&](auto i) {sbox_stride[i] = smem_box_stride[i];});
+
+  fillTensorDescriptorDimSize((uint64_t *)&tensor_desc, gmem_shape);
+  fillTensorDescriptorDimStride((uint64_t *)&tensor_desc, gmem_stride);
+  fillTensorDescriptorROI((uint64_t *)&tensor_desc, sbox_shape);
+  fillTensorDescriptorElementStride((uint64_t *)&tensor_desc, sbox_stride);
+  tensor_desc.matrix_desc = matrix_desc;
+  tensor_desc.g_pointer = sycl::address_space_cast<
+    sycl::access::address_space::global_space,
+    sycl::access::decorated::yes
+  >(gmem_address).get();
+
+  return cute::make_tuple(tensor_desc, AuxParams{gmem_tma_basis_stride});
 }
 
 template <class InternalType,
@@ -473,12 +472,11 @@ make_adma_copy_atom(
 
   constexpr int num_bits_per_tma = size(adma_gbasis) * sizeof_bits_v<InternalType>;
 #if defined(SYCL_INTEL_XE4_TARGET)
-  auto gmem_ptr = cute::raw_pointer_cast(recast<InternalType>(gtensor).data());
-  using DmaCache = Obsolete_Xe4DmaCache<decltype(tma_desc), decltype(aux_params), decltype(gmem_ptr)>;
+  using DmaCache = Obsolete_Xe4DmaCache<InternalType, decltype(aux_params)>;
   using Traits = Copy_Traits<Obsolete_Xe4CopyOp<CopyOp>, cute::C<num_bits_per_tma>, DmaCache>;
   using Atom   = Copy_Atom<Traits, typename GEngine::value_type>;
 
-  Traits tma_traits{{tma_desc, aux_params, gmem_ptr}};
+  Traits tma_traits{{tma_desc, aux_params}};
 
 #else
   using Traits = Copy_Traits<CopyOp, cute::C<num_bits_per_tma>, decltype(aux_params)>;
@@ -614,9 +612,9 @@ make_adma_atom_A_xe4(
 #endif
 
   auto num_multicast = [&]() {
-    if constexpr (is_same_v<CopyOp, XE4_ASYNC_TENSOR_LOAD_MULTICAST>)
+    if constexpr (is_same_v<CopyOp, XE4_ADMA_LOAD_MULTICAST>)
       return size<2>(cluster_shape);
-    else if constexpr (is_same_v<CopyOp, XE4_ASYNC_TENSOR_LOAD>)
+    else if constexpr (is_same_v<CopyOp, XE4_ADMA_LOAD>)
       return Int<1>{};
     else
       static_assert(dependent_false<CopyOp>, "Unsupported CopyOp");
@@ -664,9 +662,9 @@ make_adma_atom_B_xe4(
 #endif
 
   auto num_multicast = [&]() {
-    if constexpr (is_same_v<CopyOp, XE4_ASYNC_TENSOR_LOAD_MULTICAST>)
+    if constexpr (is_same_v<CopyOp, XE4_ADMA_LOAD_MULTICAST>)
       return size<1>(cluster_shape);
-    else if constexpr (is_same_v<CopyOp, XE4_ASYNC_TENSOR_LOAD>)
+    else if constexpr (is_same_v<CopyOp, XE4_ADMA_LOAD>)
       return Int<1>{};
   }();
 

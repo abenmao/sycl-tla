@@ -80,7 +80,7 @@ struct CollectiveBuilder<
   static constexpr auto GmmaMajorB =
     (ConvOp == conv::Operator::kFprop) ? cute::SM90::GMMA::Major::K : cute::SM90::GMMA::Major::MN;
 
-  using TiledMma = decltype(cute::make_tiled_mma(xe4::GMMA::ss_op_selector<
+  using TiledMma = decltype(cute::make_tiled_mma(AMMA::ss_op_selector<
       ElementAMma, ElementBMma, ElementAccumulator, decltype(cute::product_each(TileShape_MNK{})), ClusterShape_MNK, GmmaMajorA, GmmaMajorB>()));
 
   // For wgrad kernel, tensor A uses tma tiled mode and tensor B uses tma im2col mode.

@@ -71,18 +71,19 @@ struct CollectiveBuilder<
     KernelScheduleType,
     cute::enable_if_t<cutlass::detail::is_kernel_tag_of_v<KernelScheduleType, KernelTmaWarpSpecializedXe4>>>
 {
-  #ifdef SYCL_NVIDIA_TARGET
-  static_assert(cutlass::detail::dependent_false<arch::Xe4>,"Trying to use Intel pipeline on Non Intel hardware");
-  #endif
-
   static_assert(cute::is_static_v<TileShape_MNK>, "TileShape has to be static");
 
-  static constexpr auto majorA = cutlass::gemm::detail::is_mn_major_A<GmemLayoutATag>() ? cute::SM90::GMMA::Major::MN : cute::SM90::GMMA::Major::K;
-  static constexpr auto majorB = cutlass::gemm::detail::is_mn_major_B<GmemLayoutBTag>() ? cute::SM90::GMMA::Major::MN : cute::SM90::GMMA::Major::K;
+  static constexpr auto majorA = cutlass::gemm::detail::is_mn_major_A<GmemLayoutATag>() ? cute::AMMA::Major::MN : cute::AMMA::Major::K;
+  static constexpr auto majorB = cutlass::gemm::detail::is_mn_major_B<GmemLayoutBTag>() ? cute::AMMA::Major::MN : cute::AMMA::Major::K;
 
   using TiledMma = decltype(cute::make_tiled_mma(
-    cute::xe4::GMMA::ss_op_selector<ElementA, ElementB, ElementAccumulator,
-    decltype(cute::product_each(TileShape_MNK{})), ClusterShape_MNK, majorA, majorB>()));
+    cute::AMMA::ss_op_selector<
+      typename tuple_element<1, ElementAccumulator>::type,
+      ElementA, ElementB,
+      typename tuple_element<0, ElementAccumulator>::type,
+      decltype(cute::product_each(TileShape_MNK{})),
+      ClusterShape_MNK, majorA, majorB>()
+  ));
 
   static constexpr int PipelineStages = StageCountType::value;
   static constexpr int SchedulerPipelineStageCount = 3;
@@ -96,39 +97,30 @@ struct CollectiveBuilder<
         ClusterShape_MNK
     >;
     
-  static constexpr slm_matrix_type cmTypeA =
-    cutlass::gemm::detail::is_mn_major_A<GmemLayoutATag>() ? slm_matrix_type::type2 : slm_matrix_type::type1;
-
-  static constexpr uint32_t cmStrideA = 
-    cutlass::gemm::detail::is_mn_major_A<GmemLayoutATag>() ? size<0>(TileShape_MNK{}) : size<2>(TileShape_MNK{});
-
-  static constexpr uint32_t cmStrideB = 
-    cutlass::gemm::detail::is_mn_major_B<GmemLayoutBTag>() ? size<1>(TileShape_MNK{}) : size<2>(TileShape_MNK{});
-
   using GmemTiledCopyA =
     cute::conditional_t<
       size(ClusterShape_MNK{}) == 1,
-      cute::xe4::ASYNC_TENSOR_LOAD<cmTypeA, cmStrideA>,
-      cute::xe4::ASYNC_TENSOR_LOAD_MULTICAST<cmTypeA, cmStrideA>
+      cute::XE4_ADMA_LOAD,
+      cute::XE4_ADMA_LOAD_MULTICAST
     >;
 
   using GmemTiledCopyB =
     cute::conditional_t<
       size(ClusterShape_MNK{}) == 1,
-      cute::xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1, cmStrideB>,
-      cute::xe4::ASYNC_TENSOR_LOAD_MULTICAST<slm_matrix_type::type1, cmStrideB>
+      cute::XE4_ADMA_LOAD,
+      cute::XE4_ADMA_LOAD_MULTICAST
     >;
 
   using SmemLayoutAtomA =
     cute::conditional_t<
-      majorA == cute::SM90::GMMA::Major::K,
+      majorA == cute::AMMA::Major::K,
       decltype(make_layout(cute::select<0, 2>(TileShape_MNK{}), GenRowMajor{})),
       decltype(make_layout(cute::select<0, 2>(TileShape_MNK{}), GenColMajor{}))
     >;
 
   using SmemLayoutAtomB =
     cute::conditional_t<
-      majorB == cute::SM90::GMMA::Major::K,
+      majorB == cute::AMMA::Major::K,
       decltype(make_layout(cute::select<1, 2>(TileShape_MNK{}), GenRowMajor{})),
       decltype(make_layout(cute::select<1, 2>(TileShape_MNK{}), GenColMajor{}))
     >;

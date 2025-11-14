@@ -8,6 +8,13 @@
 
 namespace cute {
 
+namespace AMMA {
+  enum class Major : uint8_t {
+    K  = 0,
+    MN = 1
+  };
+}
+
 union MatrixDescriptor
 {
   enum {Type1 = 0, Type2, Type3};
@@ -36,9 +43,6 @@ union MatrixDescriptor
 };
 
 static inline void print(MatrixDescriptor const& desc) {
-#if defined(__SYCL_DEVICE_ONLY__)
-//  using sycl::ext::oneapi::experimental::printf;
-#endif
   printf("MatrixDescriptor: %#08x\n", desc.raw_);
   printf("  StartAddress: %#04x\n", desc.StartAddress);
   printf("  Pitch       : %#04x (%d)\n", desc.Pitch, desc.Pitch);
@@ -77,6 +81,11 @@ union MMAControl {
 
   uint64_t raw_;
   constexpr operator uint64_t() const noexcept { return raw_; }
+  MMAControl nullC() const noexcept {
+    auto ret = *this;
+    ret.NullC = 1;
+    return ret;
+  }
 };
 
 //
@@ -87,11 +96,7 @@ union MMAControl {
 //
 union alignas(64) TensorPayload {
   struct {
-    uint16_t ROITensorDimSize0;
-    uint16_t ROITensorDimSize1;
-    uint16_t ROITensorDimSize2;
-    uint16_t ROITensorDimSize3;
-    uint16_t ROITensorDimSize4;
+    uint16_t ROITensorDimSize[5];
 
     uint16_t ElementStride0:3;
     uint16_t ElementStride1:3;
@@ -99,115 +104,208 @@ union alignas(64) TensorPayload {
     uint16_t ElementStride3:3;
     uint16_t ElementStride4:3, : 1;
 
-    uint32_t DimSize0;
-    uint32_t DimSize1;
-    uint32_t DimSize2;
-    uint32_t DimSize3;
-    uint32_t DimSize4;
-
-    uint64_t DimStride1;
-    uint64_t DimStride2;
-    uint64_t DimStride3;
-    uint64_t DimStride4;
+    uint32_t DimSize[5];
+    uint64_t DimStride[4]; // stride 1,2,3,4
   };
 
   uint64_t raw_[8];
-};
 
-using TensorDescriptor = TensorPayload;
+};
 
 static_assert(sizeof(TensorPayload::raw_) == sizeof(TensorPayload));
 
-template <uint32_t dim_num, typename dims_t>
-inline void tensordesc_fill_dim_size(uint64_t* pTDesc, const dims_t &dim_sizes) {
-  static_assert(dim_num > 0 && dim_num <= 5,
-      "Unsupported dimention size for tensor descriptor dim_size");
-  static_assert(sizeof(dims_t {}[0]) == sizeof(uint32_t), "Invalid dim size type");
+template <typename T>
+struct TensorDescriptor {
+  cute::array<uint64_t, 8> payload;
+  uint32_t matrix_desc;
+  const T *g_pointer;
+};
 
+static inline void dupTensorPayload(uint64_t* pTDesc, uint64_t* pSrc) {
 #if defined(__SYCL_DEVICE_ONLY__)
-  asm volatile ("tensordesc.fill.dim_size.32b [%0], 0, %1;" ::"r"(pTDesc), "r"(dim_sizes[0] -1));
-  if constexpr (dim_num > 1)
-    asm volatile ("tensordesc.fill.dim_size.32b [%0], 1, %1;" ::"r"(pTDesc), "r"(dim_sizes[1] -1));
-  if constexpr (dim_num > 2)
-    asm volatile ("tensordesc.fill.dim_size.32b [%0], 2, %1;" ::"r"(pTDesc), "r"(dim_sizes[1] -1));
-  if constexpr (dim_num > 3)
-    asm volatile ("tensordesc.fill.dim_size.32b [%0], 3, %1;" ::"r"(pTDesc), "r"(dim_sizes[1] -1));
-  if constexpr (dim_num > 4)
-    asm volatile ("tensordesc.fill.dim_size.32b [%0], 4, %1;" ::"r"(pTDesc), "r"(dim_sizes[1] -1));
-  if constexpr (dim_num > 5)
-    asm volatile ("tensordesc.fill.dim_size.32b [%0], 5, %1;" ::"r"(pTDesc), "r"(dim_sizes[1] -1));
+  auto* pTPld = reinterpret_cast<TensorPayload *>(pSrc);
+  uint32_t roi0 = (uint32_t)pTPld ->ROITensorDimSize[0];
+  uint32_t roi1 = (uint32_t)pTPld ->ROITensorDimSize[1];
+  uint32_t roi2 = (uint32_t)pTPld ->ROITensorDimSize[2];
+  uint32_t roi3 = (uint32_t)pTPld ->ROITensorDimSize[3];
+  uint32_t roi4 = (uint32_t)pTPld ->ROITensorDimSize[4];
+  asm volatile(
+      "tensordesc.fill.roitensor_dim_size.32b [%0], 0, %1;\n"
+      "tensordesc.fill.roitensor_dim_size.32b [%0], 1, %2;\n"
+      "tensordesc.fill.roitensor_dim_size.32b [%0], 2, %3;\n"
+      "tensordesc.fill.roitensor_dim_size.32b [%0], 3, %4;\n"
+      "tensordesc.fill.roitensor_dim_size.32b [%0], 4, %5;\n"
+      ::"r"(pTDesc), "r"(roi0),
+      "r"(roi1), "r"(roi2),
+      "r"(roi3), "r"(roi4));
+
+  uint32_t es0 = pTPld->ElementStride0;
+  uint32_t es1 = pTPld->ElementStride1;
+  uint32_t es2 = pTPld->ElementStride2;
+  uint32_t es3 = pTPld->ElementStride3;
+  uint32_t es4 = pTPld->ElementStride4;
+
+  asm volatile(
+      "tensordesc.fill.element_stride.32b [%0], 0, %1;\n"
+      "tensordesc.fill.element_stride.32b [%0], 1, %2;\n"
+      "tensordesc.fill.element_stride.32b [%0], 2, %3;\n"
+      "tensordesc.fill.element_stride.32b [%0], 3, %4;\n"
+      "tensordesc.fill.element_stride.32b [%0], 4, %5;\n"
+      ::"r"(pTDesc), "r"((uint32_t)es0),
+      "r"((uint32_t)es1), "r"((uint32_t)es2),
+      "r"((uint32_t)es3), "r"((uint32_t)es4));
+
+  uint32_t dimsize0 = (uint32_t)pTPld->DimSize[0];
+  uint32_t dimsize1 = (uint32_t)pTPld->DimSize[1];
+  uint32_t dimsize2 = (uint32_t)pTPld->DimSize[2];
+  uint32_t dimsize3 = (uint32_t)pTPld->DimSize[3];
+  uint32_t dimsize4 = (uint32_t)pTPld->DimSize[4];
+
+  asm volatile (
+      "tensordesc.fill.dim_size.32b [%0], 0, %1;\n"
+      "tensordesc.fill.dim_size.32b [%0], 1, %2;\n"
+      "tensordesc.fill.dim_size.32b [%0], 2, %3;\n"
+      "tensordesc.fill.dim_size.32b [%0], 3, %4;\n"
+      "tensordesc.fill.dim_size.32b [%0], 4, %5;\n"
+      ::"r"(pTDesc), "r"(dimsize0), "r"(dimsize1),
+      "r"(dimsize2), "r"(dimsize3), "r"(dimsize4));
+
+  uint64_t dimstride1 = pTPld->DimStride[0];
+  uint64_t dimstride2 = pTPld->DimStride[1];
+  uint64_t dimstride3 = pTPld->DimStride[2];
+  uint64_t dimstride4 = pTPld->DimStride[3];
+
+  asm volatile(
+      "tensordesc.fill.dim_stride.64b [%0], 1, %1;"
+      "tensordesc.fill.dim_stride.64b [%0], 2, %2;"
+      "tensordesc.fill.dim_stride.64b [%0], 3, %3;"
+      "tensordesc.fill.dim_stride.64b [%0], 4, %4;"
+      ::"r"(pTDesc), "r"(dimstride1), "r"(dimstride2),
+      "r"(dimstride3), "r"(dimstride4));
 #endif
 }
 
-template <uint32_t dim_num>
-inline void tensordesc_set_dim_size(uint64_t* pTDesc, uint32_t dim_size) {
-  static_assert(dim_num > 0 && dim_num <= 5,
-      "Unsupported dimention size for tensor descriptor dim_size");
-
+template <size_t Dim>
+static inline void fillTensorDescriptorDimSize(
+    uint64_t* pTDesc, cute::array<uint32_t, Dim>& dimSize
+) {
 #if defined(__SYCL_DEVICE_ONLY__)
-  if constexpr (dim_num == 1) {
-    asm volatile("tensordesc.fill.dim_size.32b [%0], 0, %1;" ::"r"(pTDesc), "r"(dim_size -1));
-  } else if constexpr (dim_num == 2) {
-    asm volatile("tensordesc.fill.dim_size.32b [%0], 1, %1;" ::"r"(pTDesc), "r"(dim_size -1));
-  } else if constexpr (dim_num == 3) {
-    asm volatile("tensordesc.fill.dim_size.32b [%0], 2, %1;" ::"r"(pTDesc), "r"(dim_size -1));
-  } else if constexpr (dim_num == 4) {
-    asm volatile("tensordesc.fill.dim_size.32b [%0], 3, %1;" ::"r"(pTDesc), "r"(dim_size -1));
-  } else if constexpr (dim_num == 5) {
-    asm volatile("tensordesc.fill.dim_size.32b [%0], 4, %1;" ::"r"(pTDesc), "r"(dim_size -1));
-  }
+  asm volatile (
+      "tensordesc.fill.dim_size.32b [%0], 0, %1;"
+      ::"r"(pTDesc), "r"(dimSize[0] -1));
+  if constexpr (Dim > 1)
+    asm volatile (
+        "tensordesc.fill.dim_size.32b [%0], 1, %1;"
+        ::"r"(pTDesc), "r"(dimSize[1] -1));
+  if constexpr (Dim > 2)
+    asm volatile (
+        "tensordesc.fill.dim_size.32b [%0], 2, %1;"
+        ::"r"(pTDesc), "r"(dimSize[2] -1));
+  if constexpr (Dim > 3)
+    asm volatile (
+        "tensordesc.fill.dim_size.32b [%0], 3, %1;"
+        ::"r"(pTDesc), "r"(dimSize[3] -1));
+  if constexpr (Dim > 4)
+    asm volatile ("tensordesc.fill.dim_size.32b [%0], 4, %1;"
+        ::"r"(pTDesc), "r"(dimSize[4] -1));
+#else
+  auto* pTPld = reinterpret_cast<TensorPayload *>(pTDesc);
+  for (int i = 0; i < Dim; ++ i)
+    pTPld->DimSize[i] = dimSize[i] -1;
 #endif
 }
 
-template <uint32_t dim_num, typename strides_t>
-inline void tensordesc_fill_dim_stride(uint64_t* pTDesc, const strides_t &dim_strides) {
-  static_assert(dim_num >= 2 && dim_num <= 5, "Unsupported dimention size fortensor descriptor dim_stride");
-  static_assert(sizeof(strides_t {}[0]) == sizeof(uint64_t), "Invalid stride type");
-
+// Be aware that stride 0 is data-type size.
+template <size_t Dim>
+static inline void fillTensorDescriptorDimStride(
+    uint64_t *pTDesc, cute::array<uint64_t, Dim>& dimStride
+){
 #if defined(__SYCL_DEVICE_ONLY__)
-  asm volatile("tensordesc.fill.dim_stride.64b [%0], 1, %1;" ::"r"(pTDesc), "r"(dim_strides[0]));
-  if constexpr (dim_num > 2)
-    asm volatile("tensordesc.fill.dim_stride.64b [%0], 2, %1;" ::"r"(pTDesc), "r"(dim_strides[1]));
-  if constexpr (dim_num > 3)
-    asm volatile("tensordesc.fill.dim_stride.64b [%0], 3, %1;" ::"r"(pTDesc), "r"(dim_strides[2]));
-  if constexpr (dim_num > 4)
-    asm volatile("tensordesc.fill.dim_stride.64b [%0], 4, %1;" ::"r"(pTDesc), "r"(dim_strides[3]));
+  asm volatile("tensordesc.fill.dim_stride.64b [%0], 1, %1;"
+      ::"r"(pTDesc), "r"(dimStride[0]));
+  if constexpr (Dim > 1)
+    asm volatile("tensordesc.fill.dim_stride.64b [%0], 2, %1;"
+      ::"r"(pTDesc), "r"(dimStride[1]));
+  if constexpr (Dim > 2)
+    asm volatile("tensordesc.fill.dim_stride.64b [%0], 3, %1;"
+      ::"r"(pTDesc), "r"(dimStride[2]));
+  if constexpr (Dim > 3)
+    asm volatile("tensordesc.fill.dim_stride.64b [%0], 4, %1;"
+      ::"r"(pTDesc), "r"(dimStride[3]));
+#else
+  auto* pTPld = reinterpret_cast<TensorPayload *>(pTDesc);
+  for (int i = 0; i < Dim; ++ i)
+    pTPld->DimStride[i] = dimStride[i];
 #endif
 }
 
-template <uint32_t dim_num, typename dims_t>
-inline void tensordesc_fill_roitensor_dim_size(uint64_t* pTDesc, const dims_t &roitensor_sizes) {
-  static_assert(dim_num > 0 && dim_num <= 5, "Unsupported dimention size for tensor descriptor roitensor_size");
-  static_assert(sizeof(dims_t {}[0]) == sizeof(uint32_t), "Invalid roitensor size type");
-
+template <size_t Dim>
+static inline void fillTensorDescriptorROI(
+    uint64_t *pTDesc, cute::array<uint16_t, Dim> &roiSize
+){
 #if defined(__SYCL_DEVICE_ONLY__)
-  asm volatile("tensordesc.fill.roitensor_dim_size.32b [%0], 0, %1;" ::"r"(pTDesc), "r"(roitensor_sizes[0] -1));
-  if constexpr (dim_num > 1)
-    asm volatile("tensordesc.fill.roitensor_dim_size.32b [%0], 1, %1;" ::"r"(pTDesc), "r"(roitensor_sizes[1] -1));
-  if constexpr (dim_num > 2)
-    asm volatile("tensordesc.fill.roitensor_dim_size.32b [%0], 2, %1;" ::"r"(pTDesc), "r"(roitensor_sizes[2] -1));
-  if constexpr (dim_num > 3)
-    asm volatile("tensordesc.fill.roitensor_dim_size.32b [%0], 3, %1;" ::"r"(pTDesc), "r"(roitensor_sizes[3] -1));
-  if constexpr (dim_num > 4)
-    asm volatile("tensordesc.fill.roitensor_dim_size.32b [%0], 4, %1;" ::"r"(pTDesc), "r"(roitensor_sizes[4] -1));
+  asm volatile(
+      "tensordesc.fill.roitensor_dim_size.32b [%0], 0, %1;"
+      ::"r"(pTDesc), "r"(roiSize[0] -1));
+  if (Dim > 1)
+    asm volatile(
+        "tensordesc.fill.roitensor_dim_size.32b [%0], 1, %1;"
+        ::"r"(pTDesc), "r"(roiSize[1] -1));
+  if (Dim > 2)
+    asm volatile(
+        "tensordesc.fill.roitensor_dim_size.32b [%0], 2, %1;"
+        ::"r"(pTDesc), "r"(roiSize[2] -1));
+  if (Dim > 3)
+    asm volatile(
+        "tensordesc.fill.roitensor_dim_size.32b [%0], 3, %1;"
+        ::"r"(pTDesc), "r"(roiSize[3] -1));
+  if (Dim > 4)
+    asm volatile(
+        "tensordesc.fill.roitensor_dim_size.32b [%0], 4, %1;"
+        ::"r"(pTDesc), "r"(roiSize[4] -1));
+#else
+  auto* pTPld = reinterpret_cast<TensorPayload *>(pTDesc);
+  for (int i = 0; i < Dim; ++ i)
+    pTPld->ROITensorDimSize[i] = roiSize[i] -1;
 #endif
 }
 
-template <uint32_t dim_num, typename strides_t>
-inline void tensordesc_fill_element_stride(uint64_t* pTDesc, const strides_t &element_stride) {
-  static_assert(dim_num > 0 && dim_num <= 5, "Unsupported dimention size for tensor descriptor element_stride");
-  static_assert(sizeof(strides_t {}[0]) == sizeof(uint32_t), "Invalid element stride type");
-
+template <size_t Dim>
+static inline void fillTensorDescriptorElementStride(
+    uint64_t *pTDesc,
+    cute::array<uint32_t, Dim> &elemStride
+) {
 #if defined(__SYCL_DEVICE_ONLY__)
-  asm volatile("tensordesc.fill.element_stride.32b [%0], 0, %1;" ::"r"(pTDesc), "r"(element_stride[0] -1));
-  if constexpr (dim_num > 1)
-    asm volatile("tensordesc.fill.element_stride.32b [%0], 1, %1;" ::"r"(pTDesc), "r"(element_stride[1] -1));
-  if constexpr (dim_num > 2)
-    asm volatile("tensordesc.fill.element_stride.32b [%0], 2, %1;" ::"r"(pTDesc), "r"(element_stride[2] -1));
-  if constexpr (dim_num > 3)
-    asm volatile("tensordesc.fill.element_stride.32b [%0], 3, %1;" ::"r"(pTDesc), "r"(element_stride[3] -1));
-  if constexpr (dim_num > 4)
-    asm volatile("tensordesc.fill.element_stride.32b [%0], 4, %1;" ::"r"(pTDesc), "r"(element_stride[4] -1));
+  asm volatile(
+      "tensordesc.fill.element_stride.32b [%0], 0, %1;"
+      ::"r"(pTDesc), "r"(elemStride[0] -1));
+  if constexpr (Dim > 1)
+    asm volatile(
+        "tensordesc.fill.element_stride.32b [%0], 1, %1;"
+        ::"r"(pTDesc), "r"(elemStride[1] -1));
+  if constexpr (Dim > 2)
+    asm volatile(
+        "tensordesc.fill.element_stride.32b [%0], 2, %1;"
+        ::"r"(pTDesc), "r"(elemStride[2] -1));
+  if constexpr (Dim > 3)
+    asm volatile(
+        "tensordesc.fill.element_stride.32b [%0], 3, %1;"
+        ::"r"(pTDesc), "r"(elemStride[3] -1));
+  if constexpr (Dim > 4)
+    asm volatile(
+        "tensordesc.fill.element_stride.32b [%0], 4, %1;"
+        ::"r"(pTDesc), "r"(elemStride[4] -1));
+#else
+  auto* pTPld = reinterpret_cast<TensorPayload *>(pTDesc);
+  assert(elemStride[0] == 1);
+  if (elemStride[0] != 1)
+    std::cout<< "Warning! Element stride 0 must be 1" << std::endl;
+
+  pTPld->ElementStride0 = 0;
+  if (Dim > 1) pTPld->ElementStride1 = elemStride[1] -1;
+  if (Dim > 2) pTPld->ElementStride2 = elemStride[2] -1;
+  if (Dim > 3) pTPld->ElementStride3 = elemStride[3] -1;
+  if (Dim > 4) pTPld->ElementStride4 = elemStride[4] -1;
 #endif
 }
 
@@ -249,5 +347,44 @@ union Abarrier {
 
   uint32_t raw;
 };*/
+
+CUTE_HOST_DEVICE
+void
+xe4_initialize_barrier(uint64_t& smem_barrier,
+                   int thread_count = 1)                   // Thread count expected to arrive/wait on this barrier
+{
+#if defined(__SYCL_DEVICE_ONLY__)
+  abarrier_init(&smem_barrier, thread_count);
+#endif
+}
+
+CUTE_HOST_DEVICE
+void
+xe4_set_barrier_transaction_bytes(uint64_t& smem_barrier,
+                              uint32_t bytes)              // Number of bytes transfered by per TMA transaction
+{
+#if defined(__SYCL_DEVICE_ONLY__)
+  abarrier_workgroup_arrive_expect_tx(&smem_barrier, bytes);
+#endif
+}
+
+CUTE_HOST_DEVICE
+void
+xe4_wait_barrier(uint64_t& smem_barrier,
+             int phase_bit)                                // Current phase bit the barrier waiting to flip
+{
+#if defined(__SYCL_DEVICE_ONLY__)
+  abarrier_try_wait(&smem_barrier, phase_bit);
+#endif
+}
+
+CUTE_HOST_DEVICE
+void
+xe4_arrive_barrier(uint64_t& smem_barrier, int thread_count = 1)
+{
+#if defined(__SYCL_DEVICE_ONLY__)
+  abarrier_workgroup_arrives(&smem_barrier, thread_count);
+#endif
+}
 
 }

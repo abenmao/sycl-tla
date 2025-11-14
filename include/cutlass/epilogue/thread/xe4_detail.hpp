@@ -2,8 +2,8 @@
 
 #include "cute/tensor.hpp"
 #include "cute/util/print.hpp"
-#include "cute/arch/copy_xe4_dma.hpp"
-#include "cute/atom/copy_traits_xe4_dma.hpp"
+#include "cute/arch/copy_xe4_dma_legacy.hpp"
+#include "cute/atom/copy_traits_xe4_dma_legacy.hpp"
 
 namespace cutlass {
 namespace epilogue {

@@ -17,7 +17,7 @@ struct GEMM_TEST_CONFIG {
   static constexpr bool is_persistent = false;
   static constexpr auto activation_type = ActivationType::SiLu;
   static constexpr auto operationC_type = OperationCType::Mul;
-  static constexpr cute::array<int, 4> ProblemShape_MNKL = {1024, 1024, 1024, 1};
+  static constexpr cute::array<int, 4> ProblemShape_MNKL = {512, 768, 384, 1};
 };
 
 struct GEMM_ROW_ROW : public GEMM_TEST_CONFIG {

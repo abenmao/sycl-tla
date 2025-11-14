@@ -2,7 +2,7 @@
 
 #include <sycl/sycl.hpp>
 #include <cute/tensor.hpp>
-#include "cute/arch/copy_xe4_dma.hpp"
+#include "cute/arch/copy_xe4_dma_legacy.hpp"
 #include "cutlass/gemm/kernel/gemm_universal.hpp"
 #include "cutlass/gemm/collective/collective_mma.hpp"
 #include "cutlass/epilogue/collective/collective_epilogue.hpp"

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cute/arch/copy_xe4_dma.hpp"
+#include "cute/arch/copy_xe4_dma_legacy.hpp"
 #include "cutlass/detail/layout.hpp"
 #include "cute/atom/copy_traits_sm90_tma.hpp"
 #include "cutlass/gemm/gemm.h"

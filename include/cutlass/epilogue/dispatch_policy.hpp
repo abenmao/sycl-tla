@@ -299,16 +299,16 @@ template<
   int StagesD_,
   int FragmentSize_,
   bool ReuseSmemC_,
-  bool DelayTmaStore_,
+  bool DelayAdmaStore_,
   int NumControlWarps_,
   int NumEpilogueWarps_
 >
-struct Xe4DmaWarpSpecialized {
+struct Xe4AdmaWarpSpecialized {
   constexpr static int StagesC = StagesC_;
   constexpr static int StagesD = StagesD_;
   constexpr static int FragmentSize = FragmentSize_;
   constexpr static bool ReuseSmemC = ReuseSmemC_;
-  constexpr static bool DelayTmaStore = DelayTmaStore_;
+  constexpr static bool DelayAdmaStore = DelayAdmaStore_;
   constexpr static int NumControlWarps = NumControlWarps_;
   constexpr static int NumEpilogueWarps = NumEpilogueWarps_;
 };

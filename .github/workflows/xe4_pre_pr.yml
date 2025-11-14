@@ -85,11 +85,11 @@ jobs:
           echo #--------------------------------------"
           echo "Running Xe4 GEMM Workload"
           ninja xe4_gemm
-          ./examples/sycl/xe4/gemm/xe4_gemm
+          ./examples/xe4/gemm/xe4_gemm
           echo #--------------------------------------"
           echo "Running Xe4 GEMM Cluster Workload"
           ninja xe4_gemm_cluster
-          ./examples/sycl/xe4/gemm/xe4_gemm_cluster
+          ./examples/xe4/gemm/xe4_gemm_cluster
           echo #--------------------------------------"
 
       - name: Stop Xe4 Simulator

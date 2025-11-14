@@ -41,7 +41,8 @@
 #include "cutlass/numeric_size.h" // cutlass::bytes_to_bits
 #include "cutlass/gemm/gemm.h"
 
-#include "cute/arch/copy_xe4_dma.hpp"
+#include "cute/arch/copy_xe4_dma_legacy.hpp"
+#include "cute/arch/copy_xe4_adma.hpp"
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -158,7 +159,110 @@ private:
 public:
   using CollectiveOp =
     cutlass::epilogue::collective::CollectiveEpilogue<
-      Xe4DmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore, NumControlWarps, NumEpilogueWarps>,
+      Xe4AdmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore, NumControlWarps, NumEpilogueWarps>,
+      CtaTileShape_MNK,
+      EpilogueTile,
+      ElementC_, // Need to pass void through to expose via GemmUniversal
+      GmemStrideTypeC,
+      ElementD,
+      GmemStrideTypeD,
+      FusionCallbacks,
+      CopyOpG2S,
+      SmemLayoutAtomC,
+      decltype(xe4_get_smem_load_op<EpilogueWarpTileN, ElementD>()),
+      decltype(xe4_get_smem_load_op<EpilogueWarpTileN, ElementImm>()),
+      CopyOpS2G,
+      SmemLayoutAtomD,
+      decltype(xe4_get_smem_store_op<EpilogueWarpTileN, ElementD>()),
+      void
+    >;
+};
+
+// Helper for building ADMA warp-specialized collective epilogues, specialized by
+// the fusion operation performed and the dispatch policy to use.
+template <
+  class OpClass,
+  class MmaTileShape_MNK,
+  class ClusterShape_MNK,
+  class EpilogueTileType,
+  class ElementAccumulator,
+  class ElementCompute,
+  class ElementC_,
+  class GmemLayoutTagC_,
+  int AlignmentC,
+  class ElementD,
+  class GmemLayoutTagD,
+  int AlignmentD,
+  class Schedule,
+  class FusionOpOrCallbacks
+>
+struct Xe4AdmaBuilderImpl {
+private:
+  static constexpr int StagesC = 2;
+  static constexpr int StagesD = 1;
+  static constexpr bool ReuseSmemC = false;
+  static constexpr bool DelayTmaStore = false;
+  static constexpr int NumControlWarps = 4;
+  static constexpr int NumEpilogueWarps = 16;
+  static constexpr int EpilogueWarpTileN = 32;
+  static constexpr int FragmentSize = 32 / sizeof(ElementD);
+
+  static constexpr bool DisableSource = cute::is_void_v<ElementC_>;
+  using ElementC = cute::conditional_t<DisableSource, ElementD, ElementC_>; // prevents void ref breakages
+  using GmemLayoutTagC = cute::conditional_t<DisableSource, GmemLayoutTagD, GmemLayoutTagC_>;
+  using GmemStrideTypeC = cutlass::detail::TagToStrideC_t<GmemLayoutTagC>;
+  using GmemStrideTypeD = cutlass::detail::TagToStrideC_t<GmemLayoutTagD>;
+
+  constexpr static bool is_fp_postop = is_floating_t<ElementD>::value && (sizeof_bits_v<ElementD> < 16);
+  constexpr static bool is_int8_postop = is_integral<ElementD>::value && (sizeof_bits_v<ElementD> == 8);
+  using ElementImm = cute::conditional_t<is_fp_postop, bf16, cute::conditional_t<is_int8_postop, int32_t, ElementD>>;
+
+  using CtaTileShape_MNK = MmaTileShape_MNK;
+  using TileShape_MN = decltype(select<0,1>(MmaTileShape_MNK{}));
+
+  static constexpr auto
+  epilogue_tile() {
+    using namespace cute;
+    if constexpr (not is_same_v<EpilogueTileType, EpilogueTileAuto>) {
+      static_assert(is_tuple_v<EpilogueTileType>, "Shape or Tile");
+      return EpilogueTileType{};
+    }
+    else {
+      constexpr int WarpSizeM = cutlass::NumThreadsPerWarp;
+      constexpr int ElementsPerWarpN = 32;
+      constexpr int TileShapeM = size<0>(CtaTileShape_MNK{});
+      constexpr int TileShapeN = size<1>(CtaTileShape_MNK{});
+      static_assert(TileShapeM % WarpSizeM == 0, "CTA tile must be divisible by warp size in M dimension");
+      static_assert(TileShapeN % ElementsPerWarpN == 0, "CTA tile must be divisible by elements per warp in N dimension");
+
+      constexpr int WarpsAlongM = TileShapeM / WarpSizeM;
+      constexpr int WarpsAlongN = TileShapeN / ElementsPerWarpN;
+      static_assert((WarpsAlongM * WarpsAlongN) % (NumEpilogueWarps) == 0, "Total warp count must be divisible by NumEpilogueWarps");
+
+      constexpr int NumWarpsAlongN = min(WarpsAlongN, NumEpilogueWarps);
+      constexpr int NumWarpsAlongM = min(WarpsAlongM, NumEpilogueWarps / NumWarpsAlongN);
+      constexpr int EpilogueTileM = NumWarpsAlongM * WarpSizeM;
+      constexpr int EpilogueTileN = NumWarpsAlongN * ElementsPerWarpN;
+
+      return make_tile(Int<EpilogueTileM>{}, Int<EpilogueTileN>{});
+    }
+  }
+  using EpilogueTile = decltype(epilogue_tile());
+
+  using FusionCallbacks = fusion::FusionCallbacks<
+    Sm90TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
+    FusionOpOrCallbacks, CtaTileShape_MNK, EpilogueTile
+  >;
+
+  using SmemLayoutAtomC = decltype(make_ordered_layout(EpilogueTile{}, Step<_1, _0>{}));
+  using SmemLayoutAtomD = decltype(make_ordered_layout(TileShape_MN{}, Step<_1, _0>{}));
+  using CopyOpS2G = XE4_ADMA_STORE;
+  using CopyOpG2S = XE4_ADMA_LOAD;
+
+public:
+  using CollectiveOp =
+    cutlass::epilogue::collective::CollectiveEpilogue<
+      Xe4AdmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore, NumControlWarps, NumEpilogueWarps>,
       CtaTileShape_MNK,
       EpilogueTile,
       ElementC_, // Need to pass void through to expose via GemmUniversal
@@ -222,7 +326,7 @@ private:
 
 public:
   using CollectiveOp =
-    typename detail::Xe4TmaBuilderImpl<
+    typename detail::Xe4AdmaBuilderImpl<
       OpClass,
       MmaTileShape_MNK,
       ClusterShape_MNK,

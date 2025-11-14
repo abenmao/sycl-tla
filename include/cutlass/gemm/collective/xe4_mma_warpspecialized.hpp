@@ -4,7 +4,9 @@
 #include "cutlass/pipeline/pipeline.hpp"
 
 #include "cutlass/util/packed_stride.hpp"
-#include "cute/atom/copy_traits_xe4_dma.hpp"
+#include "cute/atom/copy_traits_xe4_dma_legacy.hpp"
+#include <cute/atom/copy_traits_xe4_adma.hpp>
+
 #include "cute/atom/mma_traits_xe4_amma.hpp"
 #include "cute/atom/mma_traits_sm100.hpp"
 
@@ -95,8 +97,6 @@ struct CollectiveMma<
   using MainloopPipelineState = typename MainloopPipeline::PipelineState;
 
   static_assert(DispatchPolicy::Stages >= 2, "Specialization requires Stages set to value 2 or more.");
-  static_assert(cute::is_base_of_v<cute::xe4::DMA_LOAD, GmemTiledCopyA>, "GmemTiledCopy - invalid XE4 DMA copy atom specified.");
-  static_assert(cute::is_base_of_v<cute::xe4::DMA_LOAD, GmemTiledCopyB>, "GmemTiledCopy - invalid XE4 DMA copy atom specified.");
 
   // Tile along K mode first before tiling over MN. PIPE mode last as usual.
   // This maximizes TMA boxes due to better smem-K vectorization, reducing total issued TMAs.
@@ -104,12 +104,12 @@ struct CollectiveMma<
   using SmemLayoutA = decltype(UMMA::tile_to_mma_shape(
       SmemLayoutAtomA{},
       append(MmaShapeA_MK{}, Int<DispatchPolicy::Stages>{}),
-      cute::conditional_t<TiledMma::tnspA == cute::SM90::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
+      cute::conditional_t<cutlass::gemm::detail::is_mn_major<StrideA>(), Step<_1,_2,_3>, Step<_2,_1,_3>>{}));
   // (MMA_TILE_N,MMA_TILE_K),MMA_N,MMA_K,PIPE)
   using SmemLayoutB = decltype(UMMA::tile_to_mma_shape(
       SmemLayoutAtomB{},
       append(MmaShapeB_NK{}, Int<DispatchPolicy::Stages>{}),
-      cute::conditional_t<TiledMma::tnspB == cute::SM90::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
+      cute::conditional_t<cutlass::gemm::detail::is_mn_major<StrideB>(), Step<_1,_2,_3>, Step<_2,_1,_3>>{}));
   using SmemLayoutC = decltype(UMMA::tile_to_mma_shape(
       SmemLayoutAtomC{},
       append(MmaShapeC_MN{}, Int<1>{}), Step<_2,_1,_3>{}));
@@ -185,7 +185,7 @@ struct CollectiveMma<
     using ClusterLayout_VMNK = decltype(tiled_divide(make_layout(ClusterShape{}),
                                                      make_tile(typename TiledMma::AtomThrID{})));
 
-    using TMA_A = decltype(make_tma_atom_A_sm100(
+    using ADMA_A = decltype(make_adma_atom_A_xe4(
       GmemTiledCopyA{},
       make_tensor(static_cast<ElementA const*>(nullptr), repeat_like(StrideA{}, int32_t(0)), StrideA{}),
       SmemLayoutA{}(_,_,_,cute::Int<0>{}),
@@ -194,7 +194,7 @@ struct CollectiveMma<
       ClusterLayout_VMNK{})
     );
 
-    using TMA_B = decltype(make_tma_atom_B_sm100(
+    using ADMA_B = decltype(make_adma_atom_B_xe4(
         GmemTiledCopyB{},
         make_tensor(static_cast<ElementB const*>(nullptr), repeat_like(StrideB{}, int32_t(0)), StrideB{}),
         SmemLayoutB{}(_,_,_,cute::Int<0>{}),
@@ -203,16 +203,16 @@ struct CollectiveMma<
         ClusterLayout_VMNK{})
       );
 
-    TMA_A tma_load_a;
-    TMA_B tma_load_b;
+    ADMA_A adma_load_a;
+    ADMA_B adma_load_b;
   };
 
   CUTLASS_DEVICE
   CollectiveMma(Params const& params, ClusterShape cluster_shape) : cluster_shape_(cluster_shape) {
     {
       initialize_mcast_masks();
-      observed_tma_load_a_ = &params.tma_load_a;
-      observed_tma_load_b_ = &params.tma_load_b;
+      observed_adma_load_a_ = &params.adma_load_a;
+      observed_adma_load_b_ = &params.adma_load_b;
     }
   }
 
@@ -227,7 +227,7 @@ struct CollectiveMma<
     auto cluster_shape = ClusterShape{};
     auto cluster_layout_vmnk = tiled_divide(make_layout(cluster_shape), make_tile(typename TiledMma::AtomThrID{}));
 
-    auto tma_load_a = make_tma_atom_A_sm100(
+    auto adma_load_a = make_adma_atom_A_xe4(
         GmemTiledCopyA{},
         tensor_a,
         SmemLayoutA{}(_,_,_,cute::Int<0>{}),
@@ -235,7 +235,7 @@ struct CollectiveMma<
         TiledMma{},
         cluster_layout_vmnk);
 
-    auto tma_load_b = make_tma_atom_B_sm100(
+    auto adma_load_b = make_adma_atom_B_xe4(
         GmemTiledCopyB{},
         tensor_b,
         SmemLayoutB{}(_,_,_,cute::Int<0>{}),
@@ -243,7 +243,7 @@ struct CollectiveMma<
         TiledMma{},
         cluster_layout_vmnk);
 
-    return {tma_load_a, tma_load_b};
+    return {adma_load_a, adma_load_b};
   }
 
   CUTLASS_HOST_DEVICE
@@ -321,12 +321,12 @@ struct CollectiveMma<
     auto [M, N, K, L] = problem_shape;
 
     auto [tdesc_a, tdesc_b] = tdesc_tuple;
-    observed_tma_load_a_->cache_.set_tensor_desc(tdesc_a);
-    observed_tma_load_b_->cache_.set_tensor_desc(tdesc_b);
+    observed_adma_load_a_->cache_.set_tensor_desc(tdesc_a);
+    observed_adma_load_b_->cache_.set_tensor_desc(tdesc_b);
 
     // Represent the full tensors -- get these from TMA
-    auto mA_mkl = observed_tma_load_a_->get_tma_tensor(make_shape(M, K, L));   // (m,k,l)
-    auto mB_nkl = observed_tma_load_b_->get_tma_tensor(make_shape(N, K, L));   // (n,k,l)
+    auto mA_mkl = observed_adma_load_a_->get_tma_tensor(make_shape(M, K, L));   // (m,k,l)
+    auto mB_nkl = observed_adma_load_b_->get_tma_tensor(make_shape(N, K, L));   // (n,k,l)
 
     // Tile the tensors and defer the slice
     auto gA_mkl = local_tile(mA_mkl, TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});    // (BLK_M, BLK_K, m, k, l)
@@ -347,12 +347,12 @@ struct CollectiveMma<
     auto sB = make_tensor(shared_tensors.smem_B.data(), SmemLayoutB{});  // (MMA,MMA_N,MMA_K,PIPE)
 
     // Project the cta_layout for tma_a along the n-modes
-    auto [tAgA_mkl, tAsA] = tma_partition(*observed_tma_load_a_,
+    auto [tAgA_mkl, tAsA] = tma_partition(*observed_adma_load_a_,
                                       get<2>(cta_coord_vmnk), make_layout(size<2>(cta_layout_vmnk)),
                                       group_modes<0,3>(sA), group_modes<0,3>(tCgA_mkl));
 
     // Project the cta_layout for tma_b along the m-modes
-    auto [tBgB_nkl, tBsB] = tma_partition(*observed_tma_load_b_,
+    auto [tBgB_nkl, tBsB] = tma_partition(*observed_adma_load_b_,
                                       get<1>(cta_coord_vmnk), make_layout(size<1>(cta_layout_vmnk)),
                                       group_modes<0,3>(sB), group_modes<0,3>(tCgB_nkl));
     
@@ -417,8 +417,8 @@ struct CollectiveMma<
       uint32_t write_stage = slm_pipe_write.index();
       auto abar_prod = mainloop_pipeline.producer_get_barrier(slm_pipe_write);
 
-      copy(observed_tma_load_a_->with(abar_prod, mcast_mask_a), tAgA(_,*k_tile_iter), tAsA(_,write_stage));
-      copy(observed_tma_load_b_->with(abar_prod, mcast_mask_b), tBgB(_,*k_tile_iter), tBsB(_,write_stage));
+      copy(observed_adma_load_a_->with(abar_prod, mcast_mask_a), tAgA(_,*k_tile_iter), tAsA(_,write_stage));
+      copy(observed_adma_load_b_->with(abar_prod, mcast_mask_b), tBgB(_,*k_tile_iter), tBsB(_,write_stage));
 
       --k_tile_count;
       ++k_tile_iter;
@@ -461,12 +461,24 @@ struct CollectiveMma<
           accumulator_pipeline.producer_acquire(accumulator_pipe_producer_state);
 
           int write_stage = accumulator_pipe_producer_state.index();
-          auto abar_cons_d = accumulator_pipeline.producer_get_barrier(accumulator_pipe_producer_state);
-          auto new_tiled_mma = tiled_mma.with(mma_ctrl, make_tuple(abar_cons_d, abar_cons, abar_cons), cluster_masks_);
-          cute::gemm(new_tiled_mma, tCsC(_,_,_,write_stage), tCsA(_,_,k_block,read_stage), tCsB(_,_,k_block,read_stage), tCsAcc);
+          auto* abar_cons_d = accumulator_pipeline.producer_get_barrier(accumulator_pipe_producer_state);
+          cute::gemm(
+              tiled_mma.with(
+                AMMA::TrackMethod<AMMA::Tracking::DAB>{},
+                mma_ctrl, abar_cons_d, abar_cons, abar_cons,
+                get<0>(cluster_masks_), get<1>(cluster_masks_)),
+              tCsC(_,_,_,write_stage),
+              tCsA(_,_,k_block,read_stage),
+              tCsB(_,_,k_block,read_stage), tCsAcc);
         } else {
-          auto new_tiled_mma = tiled_mma.with(mma_ctrl, make_tuple(abar_cons, abar_cons), cluster_masks_);
-          cute::gemm(new_tiled_mma, tCsA(_,_,k_block,read_stage), tCsB(_,_,k_block,read_stage), tCsAcc);
+          cute::gemm(
+              tiled_mma.with(
+                ElementAccumulator {},
+                AMMA::TrackMethod<AMMA::Tracking::AB>{},
+                mma_ctrl, abar_cons, abar_cons,
+                get<0>(cluster_masks_), get<1>(cluster_masks_)),
+              tCsA(_,_,k_block,read_stage),
+              tCsB(_,_,k_block,read_stage), tCsAcc);
         }
         mma_ctrl = 0;
       }
@@ -479,8 +491,8 @@ struct CollectiveMma<
   }
 
 public:
-  typename Params::TMA_A const* observed_tma_load_a_{nullptr};
-  typename Params::TMA_B const* observed_tma_load_b_{nullptr};
+  typename Params::ADMA_A const* observed_adma_load_a_{nullptr};
+  typename Params::ADMA_B const* observed_adma_load_b_{nullptr};
 
   ClusterShape cluster_shape_;
   uint32_t block_rank_in_cluster_;

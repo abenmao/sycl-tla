@@ -727,38 +727,15 @@ print(ThrCopy<TiledCopy, ThrIdx> const& thr_copy)
 #include <cute/atom/copy_traits_sm80.hpp>
 #include <cute/atom/copy_traits_sm90.hpp>
 #include <cute/atom/copy_traits_sm100.hpp>
-
-
-// Config
-#if (__CUDACC_VER_MAJOR__ >= 12)
-#  define CUTE_COPY_ATOM_TMA_SM90_ENABLED
-#  define CUTE_COPY_ATOM_TMA_SM100_ENABLED
-#endif
-
-
-#if (!defined(CUTE_COPY_ATOM_TMA_SM90_ENABLED))
-#  define CUTE_COPY_ATOM_TMA_SM90_ENABLED
-#endif
-
-#if (!defined(CUTE_COPY_ATOM_TMA_SM100_ENABLED))
-#  define CUTE_COPY_ATOM_TMA_SM100_ENABLED
-#endif
-
-
-#if defined(CUTE_COPY_ATOM_TMA_SM90_ENABLED)
 #include <cute/atom/copy_traits_sm90_tma.hpp>
-#endif
-
-
-#if defined(CUTE_COPY_ATOM_TMA_SM100_ENABLED)
 #include <cute/atom/copy_traits_sm100_tma.hpp>
-#endif
-
 
 #if defined(SYCL_INTEL_TARGET)
 #include <cute/atom/copy_traits_xe.hpp>
 #include <cute/atom/copy_traits_xe_2d.hpp>
 #include <cute/atom/copy_traits_xe_legacy.hpp>
+#endif
+#if defined(SYCL_INTEL_XE4_TARGET)
 #include <cute/atom/copy_traits_xe4_adma.hpp>
 #endif
 

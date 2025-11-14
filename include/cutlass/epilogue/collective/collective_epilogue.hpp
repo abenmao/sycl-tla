@@ -71,7 +71,7 @@ class CollectiveEpilogue {
 #include "sm100_epilogue_array_tma_warpspecialized.hpp"
 
 #if defined (SYCL_INTEL_XE4_TARGET)
-#include "xe4_epilogue_dma_warpspecialized.hpp"
+#include "xe4_epilogue_adma_warpspecialized.hpp"
 #elif defined (SYCL_INTEL_TARGET)
 #include "xe_epilogue.hpp"
 #include "xe_array_epilogue.hpp"
