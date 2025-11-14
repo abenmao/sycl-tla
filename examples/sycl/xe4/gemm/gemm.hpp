@@ -3,6 +3,7 @@
 #include <cutlass/gemm/collective/collective_builder.hpp>
 #include <cutlass/gemm/device/gemm_universal_adapter.h>
 #include <cutlass/gemm/kernel/gemm_universal.hpp>
+#include <cutlass/cluster_launch.hpp>
 #include <sycl/sycl.hpp>
 
 #include "validation.hpp"
@@ -244,10 +245,8 @@ void run_gemm()
     std::generate_n(Bias_s, sizeBias, [=]() { return static_cast<float>(rand()) / static_cast<float>(RAND_MAX); });
   }
 
-  namespace syclexp = sycl::ext::oneapi::experimental;
   auto [cluster_size_y, cluster_size_x, cluster_size_z] = ClusterShape{};
-  sycl::range<3> clusterSize(cluster_size_z, cluster_size_y, cluster_size_x);
-  syclexp::properties Props {syclexp::work_groups_per_cluster<3>(clusterSize)};
+  sycl::range<3> cluster_size(cluster_size_z, cluster_size_y, cluster_size_x);
 
   auto num_groups = ceil_div(problem_shape_mnkl, TileShape {});
   range<3> local_range(1, NumControlWarps + NumEpilogueWarps, cutlass::NumThreadsPerWarp);
@@ -259,7 +258,6 @@ void run_gemm()
     group_range[1] = min(group_range[1], cta_num_y * cluster_size_y);
     group_range[2] = min(group_range[2], cta_num_x * cluster_size_x);
   }
-  nd_range<3> Range(group_range * local_range, local_range);
 
   std::cout << "IsPersistentMode: " << is_persistent << std::endl;
   print("ProblemShape_MNKL: "); print(problem_shape_mnkl); print("\n");
@@ -297,21 +295,14 @@ void run_gemm()
   GemmKernel kernel;
   auto params = kernel.to_underlying_arguments(args, nullptr);
 
-  auto launch_cfg = syclexp::launch_config(Range, Props);
-  syclexp::submit_with_event(q, [&](sycl::handler &handler) {
-    syclexp::nd_launch<Config>(handler, launch_cfg, [=](nd_item<3> item) ALWAYS_INLINE {
-      // WA: reset gmem ptr in the tiled copy objects, to fix xesim page fault error
-      auto params_workaround = params;
-      params_workaround.mainloop.tma_load_a.cache_.set_gmem_ptr(A_s);
-      params_workaround.mainloop.tma_load_b.cache_.set_gmem_ptr(B_s);
-      if constexpr (!cute::is_void_v<ElementC>) {
-        params_workaround.epilogue.tma_load_c.cache_.set_gmem_ptr(C_s);
-      }
-      params_workaround.epilogue.tma_store_d.cache_.set_gmem_ptr(D_s);
+  int smem_size = 0;
+  cutlass::SyclClusterLaunchParams launch_params = {group_range, local_range, cluster_size, smem_size, q};
 
-      kernel(params_workaround);
-    });
-   }).wait();
+  cutlass::launch_kernel_on_cluster(
+    launch_params,
+    kernel,
+    params
+  ).wait();
 
   auto as_mem_layout = [](auto layout) {
     if constexpr (std::is_same_v<decltype(layout), cutlass::layout::RowMajor>) {

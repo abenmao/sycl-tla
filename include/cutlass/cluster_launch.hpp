@@ -393,4 +393,172 @@ launch_kernel_on_cluster(const ClusterLaunchParams& params,
   }
 }
 
+#if (SYCL_INTEL_TARGET == 40)
+
+//
+// SYCL XE4 Cluster Launch Support
+//
+#include <cute/util/compat.hpp>
+#include <sycl/sycl.hpp>
+
+namespace syclexp = sycl::ext::oneapi::experimental;
+
+/// @brief Simple cluster launch wrapper for SYCL XE4
+///
+/// This provides a straightforward interface to launch kernels with cluster support
+/// using SYCL's experimental nd_launch with work_groups_per_cluster properties.
+///
+/// @param group_range Number of work-groups (grid dimensions)
+/// @param local_range Work-group size (block dimensions)
+/// @param cluster_size Cluster dimensions (work-groups per cluster)
+/// @param q SYCL queue for execution
+/// @param smem_size_in_bytes Shared memory size per work-group in bytes
+/// @param kernel_func Kernel functor/callable object (used as kernel name)
+/// @param args Zero or more arguments to pass to the kernel function
+///
+/// @return sycl::event for synchronization
+///
+/// @code
+/// // Example usage:
+/// GemmKernel kernel;
+/// auto params = kernel.to_underlying_arguments(args, nullptr);
+/// 
+/// cutlass::launch_kernel_on_cluster(
+///   group_range, local_range, cluster_size, q, smem_size,
+///   kernel, params
+/// ).wait();
+/// @endcode
+template<class KernelFunc, class... Args>
+CUTLASS_HOST sycl::event
+launch_kernel_on_cluster(
+  sycl::range<3> group_range,
+  sycl::range<3> local_range,
+  sycl::range<3> cluster_size,
+  sycl::queue q,
+  int smem_size_in_bytes,
+  KernelFunc&& kernel_func,
+  Args&&... args)
+{
+  // Ensure kernel_func is a callable object (functor/lambda), not a raw function pointer
+  // Function pointer wrapper support not yet implemented for SYCL
+  static_assert(!std::is_pointer_v<std::remove_reference_t<KernelFunc>>,
+    "SYCL cluster launch requires a callable object (lambda/functor), not a function pointer. "
+    "Function pointer wrapper support is not yet implemented.");
+  
+  // Validate cluster dimensions using ClusterLauncher::check_cluster_dims
+  // Note: sycl::range<3> uses [z,y,x] indexing while dim3 uses (x,y,z)
+  dim3 grid_dim3(group_range[2], group_range[1], group_range[0]);
+  dim3 cluster_dim3(cluster_size[2], cluster_size[1], cluster_size[0]);
+  
+  auto status = ClusterLauncher::check_cluster_dims(grid_dim3, cluster_dim3);
+  if (status != Status::kSuccess) {
+    CUTLASS_TRACE_HOST("SyclClusterLaunch: Invalid cluster configuration. Aborting.");
+    throw sycl::exception(sycl::errc::invalid, "Invalid cluster configuration");
+  }
+
+  // Calculate global range (total work-items) = group_range * local_range
+  sycl::range<3> global_range(group_range * local_range);
+
+  CUTLASS_TRACE_HOST("SyclClusterLaunch: Launching"
+      << " GroupRange=(" << group_range[2] << "," << group_range[1] << "," << group_range[0] << ")"
+      << " LocalRange=(" << local_range[2] << "," << local_range[1] << "," << local_range[0] << ")"
+      << " GlobalRange=(" << global_range[2] << "," << global_range[1] << "," << global_range[0] << ")"
+      << " ClusterSize=(" << cluster_size[2] << "," << cluster_size[1] << "," << cluster_size[0] << ")"
+      << " SmemSize=" << smem_size_in_bytes << " bytes\n");
+
+  try {
+    sycl::nd_range<3> nd_range(global_range, local_range);
+    syclexp::properties Props{
+      syclexp::work_groups_per_cluster<3>(cluster_size),
+      syclexp::work_group_scratch_size(smem_size_in_bytes)
+    };
+    auto launch_cfg = syclexp::launch_config(nd_range, Props);
+
+    return syclexp::submit_with_event(q, [&](sycl::handler& handler) {
+      // Use the kernel functor type itself as the kernel name
+      syclexp::nd_launch<std::remove_reference_t<KernelFunc>>(handler, launch_cfg, 
+        [=](sycl::nd_item<3> item) ALWAYS_INLINE {
+          kernel_func(args...);
+        });
+    });
+
+  } catch (const sycl::exception& e) {
+    CUTLASS_TRACE_HOST("SyclClusterLaunch: SYCL exception: " << e.what());
+    throw;
+  }
+}
+
+/// @brief Simplified params struct for cluster launch (optional convenience)
+struct SyclClusterLaunchParams {
+  sycl::range<3> group_range{1, 1, 1};    // Number of work-groups (grid)
+  sycl::range<3> local_range{1, 1, 1};    // Work-group size (block)
+  sycl::range<3> cluster_size{1, 1, 1};   // Work-groups per cluster
+  int smem_size_in_bytes = 0;             // Shared memory size, used by work-group scratch.
+  sycl::queue queue;
+};
+
+/// @brief Launch with SyclClusterLaunchParams struct
+template<class KernelFunc, class... Args>
+CUTLASS_HOST sycl::event
+launch_kernel_on_cluster(
+  const SyclClusterLaunchParams& params,
+  KernelFunc&& kernel_func,
+  Args&&... args)
+{
+  return launch_kernel_on_cluster(
+    params.group_range,
+    params.local_range,
+    params.cluster_size,
+    params.queue,
+    params.smem_size_in_bytes,
+    std::forward<KernelFunc>(kernel_func),
+    std::forward<Args>(args)...);
+}
+
+
+/// @brief Launch with CUDA-defined ClusterLaunchParams (SYCL overload)
+///
+/// This overload allows using the CUDA-defined ClusterLaunchParams struct with SYCL.
+/// The cudaStream_t is treated as sycl::queue*
+/// Converts dim3 grid/block/cluster dimensions to sycl::range<3> format.
+/// Includes shared memory allocation via work_group_scratch_size.
+///
+/// @code
+/// ClusterLaunchParams params;
+/// params.grid_dims = dim3(grid_x, grid_y, grid_z);
+/// params.block_dims = dim3(block_x, block_y, block_z);
+/// params.cluster_dims = dim3(cluster_x, cluster_y, cluster_z);
+/// params.smem_size_in_bytes = sizeof(SharedMemory);
+/// params.cuda_stream = reinterpret_cast<cudaStream_t>(&queue);
+///
+/// cutlass::launch_kernel_on_cluster(params, kernel, args...).wait();
+/// @endcode
+template<class KernelFunc, class... Args>
+CUTLASS_HOST sycl::event
+launch_kernel_on_cluster(
+  const ClusterLaunchParams& params,
+  KernelFunc&& kernel_func,
+  Args&&... args)
+{
+  // Convert dim3 to sycl::range<3> - note dim3(x,y,z) -> sycl::range<3>[z,y,x]
+  sycl::range<3> group_range(params.grid_dims.z, params.grid_dims.y, params.grid_dims.x);
+  sycl::range<3> local_range(params.block_dims.z, params.block_dims.y, params.block_dims.x);
+  sycl::range<3> cluster_size(params.cluster_dims.z, params.cluster_dims.y, params.cluster_dims.x);
+  
+  // Treat cudaStream_t as sycl::queue* - dereference to get queue value, or use default queue
+  sycl::queue q = params.cuda_stream ? *reinterpret_cast<sycl::queue*>(params.cuda_stream) : compat::get_default_queue();
+  
+  return launch_kernel_on_cluster(
+    group_range,
+    local_range,
+    cluster_size,
+    q,
+    params.smem_size_in_bytes,
+    std::forward<KernelFunc>(kernel_func),
+    std::forward<Args>(args)...);
+}
+
+
+#endif // SYCL_INTEL_TARGET == 40
+
 }  // namespace cutlass
