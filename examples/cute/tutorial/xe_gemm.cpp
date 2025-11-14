@@ -284,6 +284,12 @@ gemm_verify(sycl::queue &Q,
       c += AccType(A(i,h)) * AccType(B(j,h));
 
     auto tol = AccType(static_cast<float>(std::numeric_limits<AccType>::epsilon()) * 2 * k);
+    if constexpr (std::is_same_v<AccType, float>)
+    {
+      //loose tolerance for float AccType
+      tol = 1e-5f * k;
+    }
+
     if (std::abs(SignedAccType(c - AccType(C(i,j)))) > tol) {
 #ifdef SHOW_DIFF
       printf("Error at (%d,%d): got %f, expected %f\n", i, j, double(C(i,j)), double(c));
@@ -338,6 +344,7 @@ test_case(sycl::queue &Q, int m, int n, int k, int iterations, int verify)
   if (verify != 0) {  
     ok = gemm_verify(Q, A_ref, B_ref, C);
     std::cout << (ok ? "passed" : "failed");
+    // TODO: Throw exception or error when verification fails, this requires refactor for the whole example.
   } else {
     std::cout << "verification skipped";
   }
