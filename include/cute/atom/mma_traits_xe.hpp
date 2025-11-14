@@ -130,8 +130,6 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
     auto  [A, SFA, SFA_OFFSET] = unzip_tensor(A_zipped);
     auto  [B, SFB, SFB_OFFSET] = unzip_tensor(B_zipped);
 
-    static_assert(decltype(size(SFA_OFFSET))::value == 1);
-
     Tensor rA = recast<RegTypeA>(A);
     Tensor rB = recast<RegTypeB>(B);
     CUTE_STATIC_ASSERT_V(size(rA) == Int<RegNumA>{});

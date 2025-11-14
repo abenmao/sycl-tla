@@ -484,7 +484,41 @@ public:
     }
 
     constexpr int k_reload_factor = cute::max(GROUP_K / BLK_K, 1);
+    using mma_M = Int<decltype(size<1>(tCrA.shape()))::value>;
+    using mma_N = Int<decltype(size<1>(tCrB.shape()))::value>;
+    using scaleASize = decltype(size(fragment_scaleA));
+    using scaleBSize = decltype(size(fragment_scaleB));
+    auto const scaleA_layout = make_layout(make_shape(size<0>(tCrA.shape()),
+                                                      size<1>(tCrA.shape()),
+                                                      size<2>(tCrA.shape())),
+                                          make_stride(Int<1>{}, Int<0>{}, Int<0>{}));
+    auto const scaleB_layout = make_layout(make_shape(size<0>(tCrB.shape()),
+                                                      size<1>(tCrB.shape()),
+                                                      size<2>(tCrB.shape())),
+                                          make_stride(Int<1>{}, Int<0>{}, Int<0>{}));
 
+    auto const gemm_m_offsets_layout = make_layout(make_shape(size<0>(tCrA.shape()),
+                                                      size<1>(tCrA.shape()),
+                                                      size<2>(tCrA.shape())),
+                                          make_stride(Int<0>{}, Int<1>{}, Int<0>{}));
+    auto const gemm_n_offsets_layout = make_layout(make_shape(size<0>(tCrB.shape()),
+                                                      size<1>(tCrB.shape()),
+                                                      size<2>(tCrB.shape())),
+                                          make_stride(Int<0>{}, Int<1>{}, Int<0>{}));
+    auto gemm_m_indices = make_tensor<uint8_t>(make_shape(mma_M{}));
+    CUTLASS_PRAGMA_UNROLL
+    for (int m = 0; m < mma_M::value; ++m) {
+      gemm_m_indices(m) = static_cast<uint8_t>(m);
+    }
+
+    auto gemm_n_indices = make_tensor<uint8_t>(make_shape(mma_N{}));
+    CUTLASS_PRAGMA_UNROLL
+    for (int n = 0; n < mma_N::value; ++n) {
+      gemm_n_indices(n) = static_cast<uint8_t>(n);
+    }
+
+    auto gemm_m_offsets = make_tensor(gemm_m_indices.data(), gemm_m_offsets_layout);
+    auto gemm_n_offsets = make_tensor(gemm_n_indices.data(), gemm_n_offsets_layout);
     //
     // Mainloop
     //
@@ -507,32 +541,20 @@ public:
       reorder(tArA, tCrA);
       reorder(tBrB, tCrB);
 
-      using mma_M = Int<decltype(size<1>(tCrA.shape()))::value>;
-      using mma_N = Int<decltype(size<1>(tCrB.shape()))::value>;
-      using mma_K = Int<decltype(size<2>(tCrA.shape()))::value>;
 
-      using scaleASize = decltype(size(fragment_scaleA));
-      using scaleBSize = decltype(size(fragment_scaleB));
 
       Tensor scaleA = recast<intel::vector_t<ElementScaleA, scaleASize::value * 2>>(make_tensor(fragment_scaleA.data(), Shape<scaleASize>{}));
       Tensor scaleB = recast<intel::vector_t<ElementScaleB, scaleBSize::value * 2>>(make_tensor(fragment_scaleB.data(), Shape<scaleBSize>{}));
 
-      // this gemm_m_iteraions indicate which iteration for m in gemm which is used for select scale date with this offset
-      auto gemm_m_iteraions = make_tensor<uint8_t>(Shape<_1>{});
-      auto gemm_n_iteraions = make_tensor<uint8_t>(Shape<_1>{});
 
-      CUTLASS_PRAGMA_UNROLL
-      for (int k = 0; k < mma_K{}; k++) {
-        CUTLASS_PRAGMA_UNROLL
-        for (int n = 0; n < mma_N{}; n++) {
-          gemm_n_iteraions[n] = n;
-          CUTLASS_PRAGMA_UNROLL
-          for (int m = 0; m < mma_M{}; m++) {
-            gemm_m_iteraions[m] = m;
-            cute::gemm(tiled_mma, make_zip_tensor(tCrA(_, m, k), scaleA, gemm_m_iteraions) , make_zip_tensor(tCrB(_, n, k), scaleB, gemm_n_iteraions), accum(_, m, n));
-          }
-        }
-      }
+      auto scaleA_view = make_tensor(scaleA.data(), scaleA_layout);
+      auto scaleB_view = make_tensor(scaleB.data(), scaleB_layout);
+
+      cute::gemm(
+        tiled_mma,
+        make_zip_tensor(tCrA, scaleA_view, gemm_m_offsets),
+        make_zip_tensor(tCrB, scaleB_view, gemm_n_offsets),
+        accum);
 
       barrier_wait(barrier_scope);
     }
