@@ -143,7 +143,7 @@ struct ExampleRunner {
   using ElementB = typename Gemm::ElementB;
   using ElementAcc = typename Gemm::ElementAccumulator;
   using ElementMMA = typename CollectiveMainloop::ElementMMA;
-  using ElementMMAVeirfy = float;
+  using ElementMMAVerify = float;
 
   using ElementScaleA = typename CollectiveMainloop::ElementScaleA;
   using ElementScaleB = typename CollectiveMainloop::ElementScaleB;
@@ -175,8 +175,8 @@ struct ExampleRunner {
 
   cutlass::DeviceAllocation<ElementA> block_A;
   cutlass::DeviceAllocation<ElementB> block_B;
-  cutlass::DeviceAllocation<ElementMMAVeirfy> block_A_dq; // Dequantized copy of A for validation
-  cutlass::DeviceAllocation<ElementMMAVeirfy> block_B_dq; // Dequantized copy of B for validation
+  cutlass::DeviceAllocation<ElementMMAVerify> block_A_dq; // Dequantized copy of A for validation
+  cutlass::DeviceAllocation<ElementMMAVerify> block_B_dq; // Dequantized copy of B for validation
   cutlass::DeviceAllocation<ElementC> block_C;
   cutlass::DeviceAllocation<ElementScaleA> block_scaleA;
   cutlass::DeviceAllocation<ElementScaleB> block_scaleB;
@@ -341,12 +341,12 @@ struct ExampleRunner {
     initialize_block(block_B, seed + 2022);
     initialize_block(block_C, seed + 2021);
 
-    convert_dtype<ElementA, ElementMMAVeirfy, ExampleRunner>(
+    convert_dtype<ElementA, ElementMMAVerify, ExampleRunner>(
         block_A.get(),
         block_A_dq.get(),
         block_A.size()
     );
-    convert_dtype<ElementB, ElementMMAVeirfy, ExampleRunner>(
+    convert_dtype<ElementB, ElementMMAVerify, ExampleRunner>(
         block_B.get(),
         block_B_dq.get(),
         block_B.size()

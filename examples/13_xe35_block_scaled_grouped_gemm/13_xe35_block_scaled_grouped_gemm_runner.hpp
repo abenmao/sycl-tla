@@ -177,7 +177,7 @@ struct ExampleRunner {
   using ElementB = typename Gemm::ElementB;
   using ElementAcc = typename Gemm::ElementAccumulator;
   using ElementMMA = typename CollectiveMainloop::ElementMMA;
-  using ElementMMAVeirfy = float;
+  using ElementMMAVerify = float;
 
   using ElementScaleA = typename CollectiveMainloop::ElementScaleA;
   using ElementScaleB = typename CollectiveMainloop::ElementScaleB;
@@ -238,8 +238,8 @@ struct ExampleRunner {
   cutlass::DeviceAllocation<ElementAccumulator> block_alpha;
   cutlass::DeviceAllocation<ElementAccumulator> block_beta;
 
-  std::vector<cutlass::DeviceAllocation<ElementMMAVeirfy>> block_A_dq; // Dequantized copy of A for validation
-  std::vector<cutlass::DeviceAllocation<ElementMMAVeirfy>> block_B_dq; // Dequantized copy of B for validation
+  std::vector<cutlass::DeviceAllocation<ElementMMAVerify>> block_A_dq; // Dequantized copy of A for validation
+  std::vector<cutlass::DeviceAllocation<ElementMMAVerify>> block_B_dq; // Dequantized copy of B for validation
   std::vector<cutlass::DeviceAllocation<ElementOutput>> block_ref_D;
   //
   // Methods
@@ -432,13 +432,13 @@ struct ExampleRunner {
       cutlass::DeviceAllocation<ElementA> a;
       a.reset(elements_A);
       block_A.push_back(a);
-      cutlass::DeviceAllocation<ElementMMAVeirfy> ver_a;
+      cutlass::DeviceAllocation<ElementMMAVerify> ver_a;
       ver_a.reset(elements_A);
       block_A_dq.push_back(ver_a);
       cutlass::DeviceAllocation<ElementB> b;
       b.reset(elements_B);
       block_B.push_back(b);
-      cutlass::DeviceAllocation<ElementMMAVeirfy> ver_b;
+      cutlass::DeviceAllocation<ElementMMAVerify> ver_b;
       ver_b.reset(elements_B);
       block_B_dq.push_back(ver_b);
       cutlass::DeviceAllocation<ElementC> c;
@@ -507,12 +507,12 @@ struct ExampleRunner {
       initialize_block(block_B.at(i), seed + 2022 + i);
       initialize_block(block_C.at(i), seed + 2021 + i);
 
-      convert_dtype<ElementA, ElementMMAVeirfy, ExampleRunner>(
+      convert_dtype<ElementA, ElementMMAVerify, ExampleRunner>(
           block_A.at(i).get(),
           block_A_dq.at(i).get(),
           block_A.at(i).size()
       );
-      convert_dtype<ElementB, ElementMMAVeirfy, ExampleRunner>(
+      convert_dtype<ElementB, ElementMMAVerify, ExampleRunner>(
           block_B.at(i).get(),
           block_B_dq.at(i).get(),
           block_B.at(i).size()
