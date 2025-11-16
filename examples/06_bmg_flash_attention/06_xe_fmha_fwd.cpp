@@ -155,13 +155,35 @@ int main(int argc, const char **argv) {
   using ElementQ = cutlass::float_e4m3_t;
   using ElementK = cutlass::float_e4m3_t;
   using ElementV = cutlass::float_e4m3_t;
+#elif defined(IS_MX_FLOAT_E5M2)
+  using ElementType = cutlass::mx_float8_t<float_e5m2_t>;
+  using ElementQ = typename ElementType::DataType;
+  using ElementK = typename ElementType::DataType;
+  using ElementV = bfloat16_t;
+  using ElementScale = typename ElementType::ScaleFactorType;
+#elif defined(IS_MX_FLOAT_E4M3)
+  using ElementType = cutlass::mx_float8_t<float_e4m3_t>;
+  using ElementQ = typename ElementType::DataType;
+  using ElementK = typename ElementType::DataType;
+  using ElementV = bfloat16_t;
+  using ElementScale = typename ElementType::ScaleFactorType;
+#elif defined(IS_MX_FLOAT_E2M1)
+  using ElementType = cutlass::mx_float4_t<float_e2m1_t>;
+  using ElementQ = typename ElementType::DataType;
+  using ElementK = typename ElementType::DataType;
+  using ElementV = bfloat16_t;
+  using ElementScale = typename ElementType::ScaleFactorType;
 #else
   using ElementQ = bfloat16_t;
   using ElementK = bfloat16_t;
   using ElementV = bfloat16_t;
 #endif
 
-  return options.is_causal ? FMHAConfig<true, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV>::run(options)
-  : FMHAConfig<false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV>::run(options);
-
+#if defined(IS_MX_FLOAT_E5M2) || defined(IS_MX_FLOAT_E4M3) || defined(IS_MX_FLOAT_E2M1)
+  return options.is_causal ? FMHAConfig<true, true, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV, ElementScale>::run(options)
+  : FMHAConfig<false, true, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV, ElementScale>::run(options);
+#else
+  return options.is_causal ? FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV>::run(options)
+  : FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV>::run(options);
+#endif
 }

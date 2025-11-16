@@ -29,8 +29,14 @@
 
 set(CUTLASS_APPLICATIONS_DIR ${CMAKE_SOURCE_DIR}/applications)
 
+if(SYCL_INTEL_TARGET EQUAL 35)
+  set(INPUT_TYPES bfloat16_t float_e5m2_t float_e4m3_t mx_float_e5m2_t mx_float_e4m3_t mx_float_e2m1_t)
+else()
+  set(INPUT_TYPES bfloat16_t float_e5m2_t float_e4m3_t)
+endif()
+
 foreach(HEAD_DIM 64 96 128 192)
-  foreach(INPUT_TYPE bfloat16_t float_e5m2_t float_e4m3_t)
+  foreach(INPUT_TYPE ${INPUT_TYPES})
     if (CUTLASS_TEST_FOR_CRI)
       set(TEST_BASE "--batch=1 --num_heads_q=4 --num_heads_kv=4 --seq_len_kv=256 --head_size_qk=64 --iterations=0 --verify=0")
       set(PAGED_ARGS "--seq_len_kv_cache=64 --page_size=64 --use_paged_kv")
@@ -51,6 +57,12 @@ foreach(HEAD_DIM 64 96 128 192)
       set(INPUT_MACRO "IS_FLOAT_E5M2")
     elseif(INPUT_TYPE STREQUAL "float_e4m3_t")
       set(INPUT_MACRO "IS_FLOAT_E4M3")
+    elseif(INPUT_TYPE STREQUAL "mx_float_e5m2_t")
+      set(INPUT_MACRO "IS_MX_FLOAT_E5M2")
+    elseif(INPUT_TYPE STREQUAL "mx_float_e4m3_t")
+      set(INPUT_MACRO "IS_MX_FLOAT_E4M3")
+    elseif(INPUT_TYPE STREQUAL "mx_float_e2m1_t")
+      set(INPUT_MACRO "IS_MX_FLOAT_E2M1")
     endif()
 
     cutlass_example_add_executable(

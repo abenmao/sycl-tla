@@ -160,20 +160,28 @@ using LayoutK = cutlass::layout::ColumnMajor;
 using LayoutV = cutlass::layout::RowMajor;
 using LayoutO = cutlass::layout::RowMajor;
 
+
+static constexpr int GROUP_SIZE = 32;
+
 template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
 
   using StrideQ = typename FMHAKernel::StrideQ;
   using StrideK = typename FMHAKernel::StrideK;
   using StrideV = typename FMHAKernel::StrideV;
   using StrideO = typename FMHAKernel::StrideO;
+  using StrideScaleQ = typename FMHAKernel::StrideScaleQ;
+  using StrideScaleK = typename FMHAKernel::StrideScaleK;
+  using StrideScaleV = typename FMHAKernel::StrideScaleV;
 
   using ElementQ = typename FMHAKernel::ElementQ;
   using ElementK = typename FMHAKernel::ElementK;
   using ElementV = typename FMHAKernel::ElementV;
   using ElementO = typename FMHAKernel::ElementO;
-
+  using ElementScale = typename FMHAKernel::ElementScale;
+  using ElementMMAVerify = cute::conditional_t<(sizeof_bits_v<ElementQ> <= 8), half_t, ElementQ>;
   using CollectiveMainloop = typename FMHAKernel::CollectiveMainloop;
   using ElementS = typename CollectiveMainloop::ElementS;
+  static constexpr bool UseScale = FMHAKernel::UseScale;
 
   using ProblemShapeType = cutlass::fmha::kernel::FMHAProblemShape<isVarLen>;
 
@@ -186,6 +194,11 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   StrideK stride_K;
   StrideV stride_V;
   StrideO stride_O;
+
+  StrideScaleQ stride_SQ;
+  StrideScaleK stride_SK;
+  StrideScaleV stride_SV;
+
   uint64_t seed = 0;
 
   cutlass::DeviceAllocation<ElementQ> block_Q;
@@ -198,6 +211,17 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   std::vector<int> cumulative_seqlen_kv;
   cutlass::DeviceAllocation<int> device_cumulative_seqlen_q;
   cutlass::DeviceAllocation<int> device_cumulative_seqlen_kv;
+
+  cutlass::DeviceAllocation<ElementMMAVerify> block_Q_dq; // Dequantized copy of Q for validation
+  cutlass::DeviceAllocation<ElementMMAVerify> block_K_dq; // Dequantized copy of K for validation
+  cutlass::DeviceAllocation<ElementMMAVerify> block_V_dq; // Dequantized copy of V for validation
+  cutlass::DeviceAllocation<ElementScale> block_scaleQ;
+  cutlass::DeviceAllocation<ElementScale> block_scaleK;
+  cutlass::DeviceAllocation<ElementScale> block_scaleV;
+  std::vector<int> cumulative_scale_q;
+  std::vector<int> cumulative_scale_kv;
+  cutlass::DeviceAllocation<int> device_cumulative_scale_q;
+  cutlass::DeviceAllocation<int> device_cumulative_scale_kv;
 
   //
   // Methods
@@ -235,6 +259,12 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     int max_seqlen_q = 0;
     int max_seqlen_kv = 0;
 
+    if constexpr (UseScale) {
+      cumulative_scale_q = {0};
+      cumulative_scale_kv = {0};
+    }
+
+
     for (int i = 0; i < num_batches; i++) {
       int seqlen_q = cutlass::round_up(generate_positive_int(dist_q, rng), AlignmentQ);
       int seqlen_kv = cutlass::round_up(generate_positive_int(dist_kv, rng), AlignmentKV);
@@ -247,6 +277,12 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
 
       cumulative_seqlen_q.push_back(cumulative_seqlen_q.back() + seqlen_q);
       cumulative_seqlen_kv.push_back(cumulative_seqlen_kv.back() + seqlen_kv);
+      if constexpr (UseScale) {
+        int scale_len_q = cute::ceil_div(seqlen_q, GROUP_SIZE);
+        int scale_len_kv = cute::ceil_div(seqlen_kv, GROUP_SIZE);
+        cumulative_scale_q.push_back(cumulative_scale_q.back() + scale_len_q);
+        cumulative_scale_kv.push_back(cumulative_scale_kv.back() + scale_len_kv);
+      }
     }
 
     ProblemShape problem_size_for_init = problem_size;
@@ -266,8 +302,6 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     return cute::make_tuple(problem_size_for_init, problem_size_for_launch);
   }
 
-
-
   bool verify(ProblemShapeType shape, bool is_causal) {
 
     if constexpr (isVarLen) {
@@ -275,6 +309,10 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
       int max_seq_len_kv = shape.seq_len_kv;
       shape.seq_len_qo = cutlass::fmha::collective::VariableLength{max_seq_len_q, cumulative_seqlen_q.data()};
       shape.seq_len_kv = cutlass::fmha::collective::VariableLength{max_seq_len_kv, cumulative_seqlen_kv.data()};
+      if constexpr (UseScale) {
+        shape.seq_len_qo.cumulative_scale_length = cumulative_scale_q.data();
+        shape.seq_len_kv.cumulative_scale_length = cumulative_scale_kv.data();
+      }
     }
 
     auto batch = shape.batch;
@@ -284,12 +322,17 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     auto head_size_vo = shape.head_size_vo;
     int seq_len_qo, seq_len_kv;
 
-    auto block_Q_ = in_memory(block_Q);
-    auto block_K_ = in_memory(block_K);
+    auto block_Q_ = UseScale ? block_Q_dq : in_memory(block_Q);
+    auto block_K_ = UseScale ? block_K_dq : in_memory(block_K);
+#if 0
+    auto block_V_ = UseScale ? block_V_dq : in_memory(block_V);
+    using ElementV_ = std::conditional_t<UseScale, 
+                                    ElementMMAVerify, 
+                                    std::remove_pointer_t<decltype(block_V_.get())>>;
+#else
     auto block_V_ = in_memory(block_V);
-
     using ElementV_ = std::remove_pointer_t<decltype(block_V_.get())>;
-
+#endif
     int offset_q = 0;
     int offset_k = 0;
     int offset_v = 0;
@@ -449,7 +492,97 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
 
     return passed;
   }
+  template <class Element>
+  bool initialize_scale(
+    cutlass::DeviceAllocation<Element>& block,
+    Options const& options) {
+    const float elt_max_f = float(cutlass::platform::numeric_limits<Element>::max());
+    // Need to fix max_dequant_val and min_dequant_val?
+    const float max_dequant_val = elt_max_f * 0.25f;
+    const float min_dequant_val = 0.5f;
+    const float scale_max = max_dequant_val / elt_max_f;
+    const float scale_min = min_dequant_val / elt_max_f;
+#if 1
+    cutlass::reference::device::BlockFillRandomUniform(
+        block.get(), block.size(), seed, Element(scale_max), Element(scale_min));
+#else
+    std::vector<Element> host(block.size(), Element(1));
+    cutlass::device_memory::copy_to_device(block.get(), host.data(), host.size());
+    compat::wait();
+#endif
+    return true;
+  }
 
+  template <
+  class DstElement,
+  class SrcElement,
+  class Layout,
+  class ElementScale,
+  class ScaleLayout>
+  static void apply_scale(DstElement* dq_buffer,
+                       SrcElement const* q_buffer,
+                       Layout const operand_layout,
+                       ElementScale const* scale_buffer,
+                       ScaleLayout const scale_layout) {
+    if constexpr (std::is_same_v<DstElement, SrcElement>) {
+      return;
+    }
+
+    std::vector<uint8_t> dst(size(operand_layout) * sizeof_bits_v<DstElement> / 8, 0);
+    cutlass::device_memory::copy_to_host(dst.data(), (uint8_t*)dq_buffer, dst.size());
+
+    std::vector<uint8_t> src(size(operand_layout) * sizeof_bits_v<SrcElement> / 8, 0);
+    cutlass::device_memory::copy_to_host(src.data(), (uint8_t*)q_buffer, src.size());
+
+    std::vector<uint8_t> scale(size(scale_layout) * sizeof_bits_v<ElementScale> / 8, 0);
+    cutlass::device_memory::copy_to_host(scale.data(), (uint8_t*)scale_buffer, scale.size());
+
+    compat::wait();
+
+    static_assert(sizeof_bits_v<DstElement> >= 8);
+
+    auto dst_tensor = make_tensor(make_gmem_ptr(reinterpret_cast<DstElement*>(dst.data())), operand_layout);
+
+    auto src_tensor = [&]() {
+      if constexpr (sizeof_bits_v<SrcElement> < 8) {
+        return make_tensor(cute::subbyte_iterator<const SrcElement>(src.data()), operand_layout);
+      } else {
+        return make_tensor(make_gmem_ptr(reinterpret_cast<SrcElement const *>(src.data())), operand_layout);
+      }
+    }();
+
+    auto scale_tensor = make_tensor(make_gmem_ptr(reinterpret_cast<ElementScale const *>(scale.data())), scale_layout);
+
+    auto dim0 = size<0>(src_tensor);
+    auto dim1 = size<1>(src_tensor);
+    auto dim2 = size<2>(src_tensor);
+    auto dim3 = size<3>(src_tensor);
+
+    using ret_type = float;
+
+    for (int b = 0; b < dim3; b++) {
+      for (int h = 0; h < dim2; h++) {
+        for (int k = 0; k < dim1; k++) {
+          for (int mn = 0; mn < dim0; mn++) {
+            auto src_data = [&]() {
+              if constexpr (sizeof_bits_v<SrcElement> >= 8) {
+                return  (ret_type)(src_tensor(mn, k, h, b));
+              } else {
+                return (ret_type)(src_tensor(mn, k, h, b).get());
+              }
+            }();
+
+            auto scale_data = (ret_type)(scale_tensor(mn, k / 32, h, b));
+
+            dst_tensor(mn, k, h, b) = (src_data) * scale_data;
+          }
+        }
+      }
+    }
+
+    cutlass::device_memory::copy_to_device(dq_buffer, (DstElement*)(raw_pointer_cast(dst_tensor.data())), dst_tensor.size());
+    compat::wait();
+  }
   /// Initialize operands to be used in the GEMM and reference GEMM
   ProblemShapeType initialize(const Options &options) {
     auto problem_shape_in = cute::make_tuple(options.batch, options.num_heads_q, options.num_heads_kv, options.seq_len_qo, options.seq_len_kv, options.head_size_qk, options.head_size_vo);
@@ -473,10 +606,18 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     }
 
     auto [batch, num_heads_q, num_heads_kv, seq_len_qo, seq_len_kv, head_size_qk, head_size_vo] = problem_size;
-    stride_Q = cutlass::make_cute_packed_stride(StrideQ{}, cute::make_shape(seq_len_qo, head_size_qk, num_heads_q,  batch));
-    stride_K = cutlass::make_cute_packed_stride(StrideK{}, cute::make_shape(seq_len_kv, head_size_qk, num_heads_kv, batch));
-    stride_V = cutlass::make_cute_packed_stride(StrideV{}, cute::make_shape(head_size_vo, seq_len_kv, num_heads_kv, batch));
-    stride_O = cutlass::make_cute_packed_stride(StrideO{}, cute::make_shape(seq_len_qo, head_size_vo, num_heads_q,  batch));
+    auto shape_Q = cute::make_shape(seq_len_qo, head_size_qk, num_heads_q,  batch);
+    auto shape_K = cute::make_shape(seq_len_kv, head_size_qk, num_heads_kv, batch);
+    auto shape_V = cute::make_shape(head_size_vo, seq_len_kv, num_heads_kv, batch);
+    auto shape_O = cute::make_shape(seq_len_qo, head_size_vo, num_heads_q,  batch);
+
+    stride_Q = cutlass::make_cute_packed_stride(StrideQ{}, shape_Q);
+    stride_K = cutlass::make_cute_packed_stride(StrideK{}, shape_K);
+    stride_V = cutlass::make_cute_packed_stride(StrideV{}, shape_V);
+    stride_O = cutlass::make_cute_packed_stride(StrideO{}, shape_O);
+    stride_SQ = StrideScaleQ{};
+    stride_SK = StrideScaleK{};
+    stride_SV = StrideScaleV{};
 
     block_Q.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * head_size_qk);
     block_K.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv * head_size_qk);
@@ -500,7 +641,63 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     if constexpr (isVarLen) {
       shape.seq_len_qo.cumulative_length = device_cumulative_seqlen_q.get();
       shape.seq_len_kv.cumulative_length = device_cumulative_seqlen_kv.get();
+      if constexpr (UseScale) {
+        if (!cumulative_scale_q.empty()) {
+          device_cumulative_scale_q.reset(cumulative_scale_q.size());
+          device_cumulative_scale_q.copy_from_host(cumulative_scale_q.data(), cumulative_scale_q.size());
+        }
+        if (!cumulative_scale_kv.empty()) {
+          device_cumulative_scale_kv.reset(cumulative_scale_kv.size());
+          device_cumulative_scale_kv.copy_from_host(cumulative_scale_kv.data(), cumulative_scale_kv.size());
+        }
+        shape.seq_len_qo.cumulative_scale_length = device_cumulative_scale_q.get();
+        shape.seq_len_kv.cumulative_scale_length = device_cumulative_scale_kv.get();
+      }
     }
+
+    block_Q_dq.reset(block_Q.size());
+    block_K_dq.reset(block_K.size());
+    block_V_dq.reset(block_V.size());
+
+    convert_dtype<ElementQ, ElementMMAVerify, ExampleRunner>(block_Q.get(), block_Q_dq.get(), block_Q.size());
+    convert_dtype<ElementK, ElementMMAVerify, ExampleRunner>(block_K.get(), block_K_dq.get(), block_K.size());
+    convert_dtype<ElementV, ElementMMAVerify, ExampleRunner>(block_V.get(), block_V_dq.get(), block_V.size());
+
+    if constexpr (UseScale) {
+      auto scale_q = cute::ceil_div(head_size_qk, GROUP_SIZE);
+      auto scale_k = cute::ceil_div(head_size_qk, GROUP_SIZE);
+      int scale_v = cute::ceil_div(seq_len_kv, GROUP_SIZE);
+      if constexpr (isVarLen && UseScale) { scale_v = cumulative_scale_kv.back(); }
+
+      auto shape_scale_Q = cute::make_shape(seq_len_qo, scale_q, num_heads_q, batch);
+      auto shape_scale_K = cute::make_shape(seq_len_kv, scale_k, num_heads_kv, batch);
+      auto shape_scale_V = cute::make_shape(head_size_vo, scale_v, num_heads_kv, batch);
+
+      stride_SQ = cutlass::make_cute_packed_stride(StrideScaleQ{}, shape_scale_Q); 
+      stride_SK = cutlass::make_cute_packed_stride(StrideScaleK{}, shape_scale_K);
+      stride_SV = cutlass::make_cute_packed_stride(StrideScaleV{}, shape_scale_V);
+
+      block_scaleQ.reset(cute::size(shape_scale_Q));
+      block_scaleK.reset(cute::size(shape_scale_K));
+      block_scaleV.reset(cute::size(shape_scale_V));
+
+      initialize_scale(block_scaleQ, options);
+      initialize_scale(block_scaleK, options);
+      initialize_scale(block_scaleV, options);
+
+      auto layout_Q = cute::make_layout(shape_Q, stride_Q);
+      auto layout_K = cute::make_layout(shape_K, stride_K);
+      auto layout_V = cute::make_layout(shape_V, stride_V);
+
+      auto layout_scale_Q = cute::make_layout(shape_scale_Q, stride_SQ);
+      auto layout_scale_K = cute::make_layout(shape_scale_K, stride_SK);
+      auto layout_scale_V = cute::make_layout(shape_scale_V, stride_SV);
+
+      apply_scale<ElementMMAVerify, ElementQ>(block_Q_dq.get(), block_Q.get(), layout_Q, block_scaleQ.get(), layout_scale_Q);
+      apply_scale<ElementMMAVerify, ElementK>(block_K_dq.get(), block_K.get(), layout_K, block_scaleK.get(), layout_scale_K);
+      apply_scale<ElementMMAVerify, ElementV>(block_V_dq.get(), block_V.get(), layout_V, block_scaleV.get(), layout_scale_V);
+    }
+
     return shape;
   }
 
@@ -544,7 +741,11 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
         block_Q.get(), stride_Q,
         block_K.get(), stride_K,
         block_V.get(), stride_V,
-        block_O.get(), stride_O
+        block_O.get(), stride_O,
+        block_scaleQ.get(), stride_SQ,
+        block_scaleK.get(), stride_SK,
+        block_scaleV.get(), stride_SV,
+        GROUP_SIZE
       },
       {options.softmax_scale},
       {},
@@ -621,6 +822,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
 };
 
 template <bool Causal,
+          bool UseScale,
           typename TileShapeQK,
           typename TileShapePV,
           typename TileShapeOutput,
@@ -630,12 +832,16 @@ template <bool Causal,
           typename ElementQ = bfloat16_t,
           typename ElementK = bfloat16_t,
           typename ElementV = bfloat16_t,
+          typename ElementScale = float,
           typename ElementO = float,
           typename MMAOperation_ = void,    /* void -> default */
           typename StrideQ = Stride<int, _1, int, int>,
           typename StrideK = Stride<int, _1, int, int>,
           typename StrideV = Stride<_1, int, int, int>,
           typename StrideO = Stride<int, _1, int, int>,
+          typename StrideScaleQ = Stride<int, _1, int, int>,
+          typename StrideScaleK = Stride<int, _1, int, int>,
+          typename StrideScaleV = Stride<_1, int, int, int>,
           typename GmemTiledCopyQ = void,   /* void -> default block 2D */
           typename GmemTiledCopyK = void,
           typename GmemTiledCopyV = void,
@@ -643,13 +849,25 @@ template <bool Causal,
 struct FMHAConfig {
 
   static constexpr int SGTileQ = get<0>(shape_div(TileShapeQK{}, shape(SubgroupLayoutQK{})))();
+
+#if !(defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+  using DefaultMMA = typename cute::conditional_t<
+      cute::is_same_v<ElementQ, cutlass::float_e5m2_t> || cute::is_same_v<ElementQ, cutlass::float_e4m3_t>,
+      XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, half_t>,
+      XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, ElementQ>
+  >;
+  using MMAOperationPV = DefaultMMA;
+#else
+  using DefaultDpasOp = XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, ElementQ>;
+  using DefaultBdpasOp = XE_BDPAS_TT<cute::gcd(SGTileQ, 8), float, ElementQ>;
+  using DefaultMMA = cute::conditional_t<UseScale, DefaultBdpasOp, DefaultDpasOp>;
+  using MMAOperationPV = XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, ElementV>;
+#endif
+
   using MMAOperation = cute::conditional_t<is_void_v<MMAOperation_>,
-                                           typename cute::conditional_t<
-                                               cute::is_same_v<ElementQ, cutlass::float_e5m2_t> || cute::is_same_v<ElementQ, cutlass::float_e4m3_t>,
-                                               XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, half_t>,
-                                               XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, ElementQ> 
-                                           >,
+                                           DefaultMMA,
                                            MMAOperation_>;
+  
   using SubgroupLayoutPV = cute::conditional_t<is_void_v<SubgroupLayoutPV_>,
                                                decltype(cutlass::fmha::collective::get_sg_layout_pv(SubgroupLayoutQK{})),
                                                SubgroupLayoutPV_>;
@@ -667,7 +885,7 @@ struct FMHAConfig {
     using ProblemShapeType = cutlass::fmha::kernel::FMHAProblemShape<isVarLen>;
 
     using TiledMMAQK = typename TiledMMAHelper<MMA_Atom<MMAOperation>, Layout<TileShapeQK>, SubgroupLayoutQK>::TiledMMA;
-    using TiledMMAPV = typename TiledMMAHelper<MMA_Atom<MMAOperation>, Layout<TileShapePV>, SubgroupLayoutPV>::TiledMMA;
+    using TiledMMAPV = typename TiledMMAHelper<MMA_Atom<MMAOperationPV>, Layout<TileShapePV>, SubgroupLayoutPV>::TiledMMA;
 
     static_assert(get<0>(TileShapeOutput{}) == get<0>(TileShapePV{}),
         "Output tile and P*V tile have different sizes in Q dimension");
@@ -682,13 +900,16 @@ struct FMHAConfig {
     using TensorK = decltype(make_dummy_tensor(ElementK{}, StrideK{}));
     using TensorV = decltype(make_dummy_tensor(ElementV{}, StrideV{}));
     using TensorO = decltype(make_dummy_tensor(ElementO{}, StrideO{}));
-
+    using TensorScaleQ = decltype(make_dummy_tensor(ElementScale{}, StrideScaleQ{}));
+    using TensorScaleK = decltype(make_dummy_tensor(ElementScale{}, StrideScaleK{}));
+    using TensorScaleV = decltype(make_dummy_tensor(ElementScale{}, StrideScaleV{}));
     // Mainloop
     using MainloopDispatchPolicy = cutlass::fmha::XeDefault<PipelineStages>;
     using CollectiveMainloop = cutlass::fmha::collective::FMHAFwdMainloop<
-        MainloopDispatchPolicy, Causal,
+        MainloopDispatchPolicy, Causal, UseScale,
         TiledMMAQK, TiledMMAPV, VTiles,
         TensorQ, TensorK, TensorV,
+        TensorScaleQ, TensorScaleK, TensorScaleV,
         GmemTiledCopyQ, GmemTiledCopyK, GmemTiledCopyV
     >;
 

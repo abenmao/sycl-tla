@@ -80,10 +80,14 @@ public:
   using ElementQ = typename CollectiveMainloop::TensorQ::element_type;
   using ElementK = typename CollectiveMainloop::TensorK::element_type;
   using ElementV = typename CollectiveMainloop::TensorV::element_type;
-
+  using ElementScale = typename CollectiveMainloop::TensorScaleQ::element_type;
+  using StrideScaleQ = decltype(stride(typename CollectiveMainloop::TensorScaleQ{}));
+  using StrideScaleK = decltype(stride(typename CollectiveMainloop::TensorScaleK{}));
+  using StrideScaleV = decltype(stride(typename CollectiveMainloop::TensorScaleV{}));
   using StrideQ = decltype(stride(typename CollectiveMainloop::TensorQ{}));
   using StrideK = decltype(stride(typename CollectiveMainloop::TensorK{}));
   using StrideV = decltype(stride(typename CollectiveMainloop::TensorV{}));
+  static constexpr bool UseScale = CollectiveMainloop::UseScale;
 
   using SGPerWG = typename CollectiveMainloop::SGPerWG;
 
@@ -125,6 +129,13 @@ public:
     StrideV dV;
     ElementO *O;
     StrideO dO;
+    const ElementScale *scaleQ = nullptr;
+    StrideScaleQ dScaleQ{};
+    const ElementScale *scaleK = nullptr;
+    StrideScaleK dScaleK{};
+    const ElementScale *scaleV = nullptr;
+    StrideScaleV dScaleV{};
+    int group_size = 32;
   };
   using KernelParams = KernelArguments;
 
@@ -224,7 +235,6 @@ public:
 
       int offset_q = 0, offset_k = 0, offset_v = 0, offset_o = 0;
       if constexpr (is_var_len) {
-        int group_heads_q = s.num_heads_q / s.num_heads_kv;
         auto qo_cumulative = s.seq_len_qo.cumulative_length;
         auto kv_cumulative = s.seq_len_kv.cumulative_length;
         offset_q = s.num_heads_q * s.head_size_qk * qo_cumulative[idx_b];
@@ -254,7 +264,6 @@ public:
       Tensor V = make_tensor(make_gmem_ptr(dcV), make_layout(shape_V, stride_v));
       Tensor O = make_tensor(make_gmem_ptr(ptrO), make_layout(shape_O, stride_o));
 
-
       // O accumulator types
       FragA tArA;
       FragARow tA_max, tA_sum;
@@ -262,13 +271,55 @@ public:
       // Main loop
       int l_coord = is_var_len ? 0 : idx_b;
       CollectiveMainloop mainloop(params.mainloop, shared_storage.mainloop);
-      mainloop(Q(_,_,head_q,l_coord),
-               K(_,_,head,l_coord),
-               V(_,_,head,l_coord),
-               tArA, tA_max, tA_sum,
-               blk_qv, 0, k_blocks,
-               thr_id, seq_len,
-               full_tile_offset, discard_seq_coord);
+      if constexpr (UseScale) {
+        auto scale_q = cute::ceil_div(s.head_size_qk, p.group_size);
+        auto scale_k = cute::ceil_div(s.head_size_qk, p.group_size);
+        int scale_v = cute::ceil_div(seq_len_kv, p.group_size);
+
+        auto shape_scale_Q = make_shape(seq_len_qo, scale_q, s.num_heads_q, batch_dim);
+        auto shape_scale_K = make_shape(seq_len_kv, scale_k, s.num_heads_kv, batch_dim);
+        auto shape_scale_V = make_shape(s.head_size_vo, scale_v, s.num_heads_kv, batch_dim);
+        int offset_scaleQ = 0; int offset_scaleK = 0; int offset_scaleV = 0;
+        if constexpr (is_var_len) {
+          auto qo_cumulative = s.seq_len_qo.cumulative_length;
+          auto kv_cumulative = s.seq_len_kv.cumulative_length;
+          auto kv_scale_cumulative = s.seq_len_kv.cumulative_scale_length;
+          offset_scaleQ = s.num_heads_q * scale_q * qo_cumulative[idx_b];
+          offset_scaleK = s.num_heads_kv * scale_k * kv_cumulative[idx_b];
+          offset_scaleV = s.num_heads_kv * kv_scale_cumulative[idx_b];
+        }
+
+        auto stride_scaleQ = is_var_len ? cutlass::make_cute_packed_stride(StrideScaleQ{}, shape_scale_Q) : p.dScaleQ;
+        auto stride_scaleK = is_var_len ? cutlass::make_cute_packed_stride(StrideScaleK{}, shape_scale_K) : p.dScaleK;
+        auto stride_scaleV = is_var_len ? cutlass::make_cute_packed_stride(StrideScaleV{}, shape_scale_V) : p.dScaleV;
+
+        auto dcScaleQ = const_cast<ElementScale*>(p.scaleQ + offset_scaleQ);
+        auto dcScaleK = const_cast<ElementScale*>(p.scaleK + offset_scaleK);
+        auto dcScaleV = const_cast<ElementScale*>(p.scaleV + offset_scaleV);
+
+        Tensor ScaleQ = make_tensor(make_gmem_ptr(dcScaleQ), make_layout(shape_scale_Q, stride_scaleQ));
+        Tensor ScaleK = make_tensor(make_gmem_ptr(dcScaleK), make_layout(shape_scale_K, stride_scaleK));
+        Tensor ScaleV = make_tensor(make_gmem_ptr(dcScaleV), make_layout(shape_scale_V, stride_scaleV));
+
+        mainloop(Q(_,_,head_q,l_coord),
+                 K(_,_,head,l_coord),
+                 V(_,_,head,l_coord),
+                 tArA, tA_max, tA_sum,
+                 blk_qv, 0, k_blocks,
+                 thr_id, seq_len,
+                 full_tile_offset, discard_seq_coord,
+                 ScaleQ(_,_,head_q,l_coord),
+                 ScaleK(_,_,head,l_coord),
+                 ScaleV(_,_,head,l_coord));
+      } else {
+        mainloop(Q(_,_,head_q,l_coord),
+                 K(_,_,head,l_coord),
+                 V(_,_,head,l_coord),
+                 tArA, tA_max, tA_sum,
+                 blk_qv, 0, k_blocks,
+                 thr_id, seq_len,
+                 full_tile_offset, discard_seq_coord);
+      }
       if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
         sycl::group_barrier(get_work_group<3>());
       }
