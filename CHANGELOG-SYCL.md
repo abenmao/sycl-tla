@@ -1,5 +1,68 @@
 # SYCL*TLA (previously referred to as cutlass-sycl) Changelog
 
+## [SYCL*TLA 0.6-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.6-cri) (2025-11-16)
+### New Features (Notes: all the tests based on CRI simulator)
+ - Support MMA backend for FP8/MXFP8(e5m2, e4m3), FP4/MXFP4(e2m1) (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/106)
+ - Support Block Scaled Collective MMA API for MXFP8/MXFP4 (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/119)
+ - Support Block Scaled Grouped Collective MMA API for MXFP8/MXFP4  (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/125)
+ - Support Flash Attention v2 kernels for FP8/FP4/MXFP8/MXFP4 (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/139, https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/141)
+ - Support Flash Attention v2 kernels with Causal Mask ([#fb8c97c](https://github.com/intel-innersource/libraries.ai.cutlass.internal/commit/fb8c97cd))
+ - Support Flash Attention v2 kernels with Varable Length inputs ([#5ac9700](https://github.com/intel-innersource/libraries.ai.cutlass.internal/commit/5ac97000))
+
+### Examples Enabling
+ - General GEMM for FP8/FP4, example [00_bmg_gemm.cpp](examples/00_bmg_gemm/00_bmg_gemm.cpp) with replacing data type of InputA, InputB, and MMA
+ - General Grouped GEMM for FP8/FP4, example [09_bmg_grouped_gemm_f8.cpp](examples/09_bmg_grouped_gemm_f8/09_bmg_grouped_gemm_f8.cpp) with replacing data type of InputA, InputB, and MMA
+ - Block Scaled GEMM for MXFP8/MXFP4, example [12_xe35_block_scaled_gemm](examples/12_xe35_block_scaled_gemm/)
+ - Block Scaled Grouped GEMM for MXFP8/MXFP4, example [13_xe35_block_scaled_grouped_gemm](examples/13_xe35_block_scaled_grouped_gemm/)
+ - Flash Attention v2 kernels, example [06_xe_fmha_fwd.cpp](examples/06_bmg_flash_attention/06_xe_fmha_fwd.cpp)
+
+### Performance (Internal Only)
+ - BF16/FP16 GEMM example kernel performance at **73%** of peak (goal: 60% of peak)
+ - BF16/FP16 Flash Attention v2 kernel performance at **55%** of BMG efficiency (goal: 60% of BMG efficiency)
+
+### Known Issues
+- Focused on functionality enabling in this release
+- More performance tuning is working in progress
+
+## [SYCL*TLA 0.6](https://github.com/intel/sycl-tla/releases/tag/v0.6) (2025-11-03)
+### Major Architecture Changes
+- **Flash Attention Reimplementation ([#d02c58b](https://github.com/intel/sycl-tla/commit/d02c58b4))**: Complete rewrite of Flash Attention using new Xe atoms
+  - Enhanced performance with optimized memory access patterns
+  - Better integration with Intel Xe hardware capabilities
+- **CUTLASS Library Generation ([#578](https://github.com/intel/sycl-tla/pull/578))**: Full support for CUTLASS library generation and operations
+  - New Xe architecture support in library generation pipeline
+  - Automated kernel instantiation and compilation support
+
+### Enhancements
+- **Python Operations Support ([#595](https://github.com/intel/sycl-tla/pull/595))**: Enhanced Python bindings with comprehensive test coverage
+  - Improved Python API stability and usability
+  - Enhanced test framework for Python operations
+- **CuTe Subgroup Extensions**: New subgroup-scope operations for Intel Xe
+  - Subgroup broadcast and reduction operations ([#9a6aa27](https://github.com/intel/sycl-tla/commit/9a6aa27c))
+  - `make_subgroup_tensor` helpers for improved tensor manipulation ([#21fb89a](https://github.com/intel/sycl-tla/commit/21fb89a8))
+- **Enhanced 2D Copy Operations**: Extended block 2D copy functionality
+  - New `make_block_2d_copy_{C,D}` variants with subtiling support ([#48d82e8](https://github.com/intel/sycl-tla/commit/48d82e87))
+  - Support for size-1 fragments in block 2D copies ([#2212f1b](https://github.com/intel/sycl-tla/commit/2212f1b9))
+- **4-bit VNNI Reorders ([#593](https://github.com/intel/sycl-tla/pull/593))**: New 4-bit unit stride to VNNI reorder operations
+- **Batch GEMM with new APIs ([#540](https://github.com/intel/sycl-tla/pull/540))**: Enhanced Batch GEMM with new streamlined APIs
+- **Grouped GEMM with new APIs ([#574](https://github.com/intel/sycl-tla/pull/574))**: Enhanced grouped GEMM with new streamlined APIs
+
+### Test Improvements
+- **Python Test Coverage**: Comprehensive test suite improvements for Python operations
+- **CI Infrastructure**: Enhanced continuous integration with PVC driver updates ([#575](https://github.com/intel/sycl-tla/pull/575))
+- **Code Reorganization**: Renamed `python/cutlass` to `python/cutlass_cppgen` for clarity ([#587](https://github.com/intel/sycl-tla/pull/587))
+
+### Bug Fixes
+- **Epilogue Data Type Fixes**: 
+  - Fixed trD compute type in Xe Epilogue ([#580](https://github.com/intel/sycl-tla/pull/580))
+  - Resolved epilogue data type mismatches ([#563](https://github.com/intel/sycl-tla/pull/563))
+- **CuTe Copy(new APIs) Improvements**: Multiple fixes for Xe copy operations ([#dec36a9](https://github.com/intel/sycl-tla/commit/dec36a9e))
+- **Split Barrier Refactoring**: Improved split barrier functionality for better reliability ([#521dfcd](https://github.com/intel/sycl-tla/commit/521dfcd4))
+
+### Notes and Known Issues
+- Python Operations for FP8 and INT8 not generated for CUTLASS library in this release.
+- Unit tests and benchmark tests are not yet migrated to newly re architected CuTe APIs.
+
 ## [SYCL*TLA 0.5-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.5-cri) (2025-09-26)
 ### CRI Enabling (Notes: all the tests based on CRI simulator)
   - Add support for CRI architecture ([#34](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/34))

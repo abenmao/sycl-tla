@@ -44,25 +44,34 @@ Base NVIDIA CUTLASS Versions for SYCL*TLA releases:
 |0.3 | 3.9.2 |
 |0.5 | 4.2.0 |
 |0.5-cri | 4.2.0 |
+|0.6 | 4.2.0 |
+|0.6-cri | 4.2.0 |
 
-# What's New in SYCL*TLA [0.5-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.5-cri)
+# What's New in SYCL*TLA [0.6-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.6-cri)
+### New Features (Notes: all the tests based on CRI simulator)
+ - Support MMA backend for FP8/MXFP8(e5m2, e4m3), FP4/MXFP4(e2m1) (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/106)
+ - Support Block Scaled Collective MMA API for MXFP8/MXFP4 (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/119)
+ - Support Block Scaled Grouped Collective MMA API for MXFP8/MXFP4  (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/125)
+ - Support Flash Attention v2 kernels for FP8/FP4/MXFP8/MXFP4 (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/139, https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/141)
+ - Support Flash Attention v2 kernels with Causal Mask ([#fb8c97c](https://github.com/intel-innersource/libraries.ai.cutlass.internal/commit/fb8c97cd))
+ - Support Flash Attention v2 kernels with Varable Length inputs ([#5ac9700](https://github.com/intel-innersource/libraries.ai.cutlass.internal/commit/5ac97000))
 
-### CRI Enabling (Notes: all the tests based on CRI simulator )
-  - Add support for CRI architecture ([#34](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/34))
-  - Add support for CRI test option ([#35](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/35))
-  - Add support for CRI UT ([#36](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/36))
-  - Add support for CRI examples ([#37](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/37), [#44](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/44))
-  - Add support for CRI benchmarks ([#45](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/45))
-
-### New Features
-  - Ensure BF16/FP16 basic GEMM support (test cases and examples changes)
-  - Ensure BF16/FP16 flash attention v2 kernels support (test cases and examples changes)
+### Examples Enabling
+ - General GEMM for FP8/FP4, example [00_bmg_gemm.cpp](examples/00_bmg_gemm/00_bmg_gemm.cpp) with replacing data type of InputA, InputB, and MMA
+ - General Grouped GEMM for FP8/FP4, example [09_bmg_grouped_gemm_f8.cpp](examples/09_bmg_grouped_gemm_f8/09_bmg_grouped_gemm_f8.cpp) with replacing data type of InputA, InputB, and MMA
+ - Block Scaled GEMM for MXFP8/MXFP4, example [12_xe35_block_scaled_gemm](examples/12_xe35_block_scaled_gemm/)
+ - Block Scaled Grouped GEMM for MXFP8/MXFP4, example [13_xe35_block_scaled_grouped_gemm](examples/13_xe35_block_scaled_grouped_gemm/)
+ - Flash Attention v2 kernels, example [06_xe_fmha_fwd.cpp](examples/06_bmg_flash_attention/06_xe_fmha_fwd.cpp)
 
 ### Performance (Internal Only)
-  - BF16/FP16 GEMM example kernel performance at 71% of target (goal: 60%)
-  - BF16/FP16 attention kernel example performance at 37% (target for half of BMG efficiency) (goal:40%)
+ - BF16/FP16 GEMM example kernel performance at **73%** of peak (goal: 60% of peak)
+ - BF16/FP16 Flash Attention v2 kernel performance at **55%** of BMG efficiency (goal: 60% of BMG efficiency)
 
-  **See the [CHANGELOG](CHANGELOG-SYCL.md) for details of all past releases and updates.**
+### Known Issues
+- Focused on functionality enabling in this release
+- More performance tuning is working in progress
+
+**See the [CHANGELOG](CHANGELOG-SYCL.md) for details of all past releases and updates.**
 
 # CuTe
 
