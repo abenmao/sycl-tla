@@ -76,9 +76,9 @@ int main(int argc, const char **argv) {
 #ifdef PREFILL
 #if HEAD_DIM == 16
   /* Tiny config for testing */
-  using ShapeQK = Shape<_1, _16, _16>;       // (q,k,d)
-  using ShapePV = Shape<_1, _16, _16>;       // (q,v,k)
-  using ShapeOut = Shape<_1, _16>;           // (q,v)
+  using ShapeQK = Shape<_8, _16, _16>;       // (q,k,d)
+  using ShapePV = Shape<_8, _16, _16>;       // (q,v,k)
+  using ShapeOut = Shape<_8, _16>;           // (q,v)
   using SubgroupLayoutQK = Layout<Shape<_1, _1, _1>>;
 
 #elif HEAD_DIM == 64
@@ -144,8 +144,10 @@ int main(int argc, const char **argv) {
 
 #ifdef DECODE
   constexpr int PipelineStages = 1;
+  constexpr bool UseScale = false;
 #else
   constexpr int PipelineStages = 2;
+  constexpr bool UseScale = true;
 #endif
 #ifdef IS_FLOAT_E5M2
   using ElementQ = cutlass::float_e5m2_t;
@@ -180,8 +182,8 @@ int main(int argc, const char **argv) {
 #endif
 
 #if defined(IS_MX_FLOAT_E5M2) || defined(IS_MX_FLOAT_E4M3) || defined(IS_MX_FLOAT_E2M1)
-  return options.is_causal ? FMHAConfig<true, true, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV, ElementScale>::run(options)
-  : FMHAConfig<false, true, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV, ElementScale>::run(options);
+  return options.is_causal ? FMHAConfig<true, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV, ElementScale>::run(options)
+  : FMHAConfig<false, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV, ElementScale>::run(options);
 #else
   return options.is_causal ? FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV>::run(options)
   : FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV>::run(options);

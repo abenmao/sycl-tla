@@ -96,6 +96,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_,
   using TileShapePV = decltype(TiledMMAPV{}.tile_mnk());
   static constexpr int VTiles = VTiles_;
   using SubgroupLayoutQK = decltype(TiledMMAQK{}.get_atom_layout_mnk());
+  using SubgroupLayoutPV = decltype(TiledMMAPV{}.get_atom_layout_mnk());
   using SGPerWG = decltype(product(take<1,4>(shape(typename TiledMMAQK::ThrLayoutVMNK{}))));
 
   static constexpr int GroupSize = 32;
@@ -105,10 +106,17 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_,
       get<2>(TileShapeQK{})));
   using ScaleTileLayoutQK = Layout<ScaleTileShapeQK>;
   using ScaleTiledMMAQK = typename TiledMMAHelper<typename TiledMMAQK::Atom, ScaleTileLayoutQK, SubgroupLayoutQK>::TiledMMA;
-
+  using ScaleTileShapePV = decltype(make_shape(
+      get<0>(TileShapePV{}),
+      cute::ceil_div(get<1>(TileShapePV{}), Int<GroupSize>{}),
+      get<2>(TileShapePV{})));
+  using ScaleTileLayoutPV = Layout<ScaleTileShapePV>;
+  using ScaleTiledMMAPV = typename TiledMMAHelper<typename TiledMMAPV::Atom, ScaleTileLayoutPV, SubgroupLayoutPV>::TiledMMA;
   using TensorQ = TensorQ_;
   using TensorK = TensorK_;
   using TensorV = TensorV_;
+  using ElementQ = typename TensorQ::element_type;
+  static constexpr bool FP4Input = cute::is_same_v<ElementQ, cutlass::float_e2m1_t>;
   using TensorQ2D = decltype(TensorQ_{}(append<rank_v<TensorQ_>>(make_coord(_,_),0)));
   using TensorK2D = decltype(TensorK_{}(append<rank_v<TensorK_>>(make_coord(_,_),0)));
   using TensorV2D = decltype(TensorV_{}(append<rank_v<TensorV_>>(make_coord(_,_),0)));
@@ -126,7 +134,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_,
   using ElementScale = typename TensorScaleQ::element_type;
   using TiledCopyScaleQ = decltype(make_block_2d_copy_A(ScaleTiledMMAQK{}, TensorScaleQ2D{}));
   using TiledCopyScaleK = decltype(make_block_2d_copy_B(ScaleTiledMMAQK{}, TensorScaleK2D{}));
-  using TiledCopyScaleV = decltype(make_block_2d_copy_B(TiledMMAPV{}, TensorScaleV2D{}));
+  using TiledCopyScaleV = decltype(make_block_2d_copy_B(ScaleTiledMMAPV{}, TensorScaleV2D{}));
   // TODO: static_asserts on TiledMMAPV here...
 
   //
@@ -413,9 +421,13 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_,
       for (int D = 0; D < size<4>(tKgK); D++) {
         copy(copy_q, tQgQ(_,_,_,D),   tQrQ);
         copy(copy_k, tKgK(_,_,_,K,D), tKrK);
-
-        reorder(tQrQ, tSrQ);
-        reorder(tKrK, tSrK);
+        if constexpr (FP4Input) {
+          copy(tQrQ, tSrQ);
+          copy(tKrK, tSrK);
+        } else {
+          reorder(tQrQ, tSrQ);
+          reorder(tKrK, tSrK);
+        }
         if constexpr (UseScale) {
           copy(copy_scale_q, tQgScaleQ(_,_,_,D), tQrQScaleQ);
           copy(copy_scale_k, tKgScaleK(_,_,_,K,D), tKrKScaleK);
