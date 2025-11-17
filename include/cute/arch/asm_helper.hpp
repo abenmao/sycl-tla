@@ -20,6 +20,7 @@ template <> struct fixed_s<256> { static constexpr fixstr::fixed_string value {"
 template <typename> struct fixed_type;
 template <> struct fixed_type<float> { static constexpr fixstr::fixed_string value {"F32"};};
 template <> struct fixed_type<sycl::half> { static constexpr fixstr::fixed_string value {"F16"};};
+template <> struct fixed_type<sycl::ext::oneapi::bfloat16> { static constexpr fixstr::fixed_string value {"BF16"};};
 
 // Major enumeration
 template <AMMA::Major> struct ammajor;
