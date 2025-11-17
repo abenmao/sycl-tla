@@ -60,6 +60,9 @@ struct XE_DPAS_TT_Base
   using CRegisters = CVector[1];
 };
 
+template <int M, typename TypeD, typename TypeA, typename TypeB = TypeA, typename TypeC = TypeD>
+struct XE_BDPAS_TT;
+
 namespace dpas_type {
 
 using f = float;
@@ -72,6 +75,9 @@ using u8 = uint8_t;
 using s8 = int8_t;
 using u4 = uint4_t;
 using s4 = int4_t;
+using bf8 = float_e5m2_t;
+using hf8 = float_e4m3_t;
+using e2m1 = float_e2m1_t;
 
 }; /* namespace dpas_type */
 
@@ -114,6 +120,100 @@ template <int M> struct XE_DPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::T
   } \
 };
 
+// TODO(Zhitao): Remove sfa_offset and sfb_offset and move the calculation to
+// earlier stages.
+#define CUTE_DECLARE_XE_BDPAS_TT(TD, TA, TB, TC) \
+template <int M> struct XE_BDPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::TB, dpas_type::TC> \
+    : public XE_DPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::TB, dpas_type::TC> { \
+  static_assert(M == 8, "BDPAS instruction requires that repeat count must be 8"); \
+  using Base = XE_DPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::TB, dpas_type::TC>; \
+  using AVector = typename Base::AVector; \
+  using BVector = typename Base::BVector; \
+  using CVector = typename Base::CVector; \
+  using DVector = typename Base::DVector; \
+  template <typename CVector_, \
+            typename SFAVector, \
+            typename SFBVector> \
+  CUTE_DEVICE static void \
+  fma(DVector& d, AVector const& a, BVector const& b, CVector_ const& c, SFAVector const& sfa, SFBVector const& sfb, uint8_t sfa_offset, uint8_t sfb_offset) { \
+    if constexpr (std::is_same_v<dpas_type::TA, float_e2m1_t>) { \
+      auto sfa_off = (sfa_offset / 2) * 32 + (sfa_offset % 2) * 8; \
+      auto sfb_off = sfb_offset * 32; \
+      if constexpr (std::is_same_v<CVector_, DVector>) { \
+        d = c; \
+        asm ( \
+          "{\n" \
+          ".decl DST     v_type=G type=" #TD " num_elts=128 alias=<%0,0>\n" \
+          ".decl SRC2_UD v_type=G type=UD num_elts=64 align=wordx32 alias=<%1,0>\n" \
+          ".decl SRC1_UD v_type=G type=UD num_elts=128 align=wordx32 alias=<%2,0>\n" \
+          ".decl SRC4_UB v_type=G type=UB num_elts=32 align=wordx32 alias=<%3,%5>\n" \
+          ".decl SRC3_UB v_type=G type=UB num_elts=32 align=wordx32 alias=<%4,%6>\n" \
+          ".decl SRC4_UB_PADDED v_type=G type=UB num_elts=40 align=wordx32\n" \
+          ".decl SRC3_UB_PADDED v_type=G type=UB num_elts=48 align=wordx32\n" \
+          "mov (M1_NM, 16) SRC3_UB_PADDED(0,0)<1> SRC3_UB(0,0)<1;1,0>\n" \
+          "mov (M1_NM, 16) SRC3_UB_PADDED(0,32)<1> SRC3_UB(0,16)<1;1,0>\n" \
+          "mov (M1_NM, 8) SRC4_UB_PADDED(0,0)<1> SRC4_UB(0,0)<1;1,0>\n" \
+          "mov (M1_NM, 8) SRC4_UB_PADDED(0,32)<1> SRC4_UB(0,16)<1;1,0>\n" \
+          "bdpas." #TB "." #TA ".8.8 (M1, 16) DST.0 DST.0 SRC1_UD.0 SRC2_UD.0 SRC3_UB_PADDED(0,0) SRC4_UB_PADDED(0,0)\n" \
+          "}\n" \
+          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(sfa_off), "P"(sfb_off) \
+        ); \
+      } else { \
+        asm ( \
+          "{\n" \
+          ".decl DST     v_type=G type=" #TD " num_elts=128 alias=<%0,0>\n" \
+          ".decl SRC0    v_type=G type=" #TC " num_elts=128 alias=<%7,0>\n" \
+          ".decl SRC2_UD v_type=G type=UD num_elts=64 align=wordx32 alias=<%1,0>\n" \
+          ".decl SRC1_UD v_type=G type=UD num_elts=128 align=wordx32 alias=<%2,0>\n" \
+          ".decl SRC4_UB v_type=G type=UB num_elts=32 align=wordx32 alias=<%3,%5>\n" \
+          ".decl SRC3_UB v_type=G type=UB num_elts=32 align=wordx32 alias=<%4,%6>\n" \
+          ".decl SRC4_UB_PADDED v_type=G type=UB num_elts=40 align=wordx32\n" \
+          ".decl SRC3_UB_PADDED v_type=G type=UB num_elts=48 align=wordx32\n" \
+          "mov (M1_NM, 16) SRC3_UB_PADDED(0,0)<1> SRC3_UB(0,0)<1;1,0>\n" \
+          "mov (M1_NM, 16) SRC3_UB_PADDED(0,32)<1> SRC3_UB(0,16)<1;1,0>\n" \
+          "mov (M1_NM, 8) SRC4_UB_PADDED(0,0)<1> SRC4_UB(0,0)<1;1,0>\n" \
+          "mov (M1_NM, 8) SRC4_UB_PADDED(0,32)<1> SRC4_UB(0,16)<1;1,0>\n" \
+          "bdpas." #TB "." #TA ".8.8 (M1, 16) DST.0 SRC0.0 SRC1_UD.0 SRC2_UD.0 SRC3_UB_PADDED(0,0) SRC4_UB_PADDED(0,0)\n" \
+          "}\n" \
+          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(sfa_off), "P"(sfb_off), "rw"(c) \
+        ); \
+      } \
+    } else { \
+      constexpr auto SFASize = sizeof(sfa); \
+      auto SFAOffset = sfa_offset * 8; \
+      constexpr auto SFBSize = sizeof(sfb); \
+      auto SFBOffset = sfb_offset * 16; \
+      if constexpr (std::is_same_v<CVector_, DVector>) { \
+        d = c; \
+        asm ( \
+          "{\n" \
+          ".decl DST     v_type=G type=" #TD " num_elts=128 alias=<%0,0>\n" \
+          ".decl SRC1_UD v_type=G type=UD num_elts=128 alias=<%2,0>\n" \
+          ".decl SRC2_UD v_type=G type=UD num_elts=64 alias=<%1,0>\n" \
+          ".decl SRC3_UB v_type=G type=UB num_elts=%8 alias=<%4,0>\n" \
+          ".decl SRC4_UB v_type=G type=UB num_elts=%7 alias=<%3,0>\n" \
+          "bdpas." #TB "." #TA ".8.8 (M1, 16) DST.0 DST.0 SRC1_UD.0 SRC2_UD.0 SRC3_UB(0,%6) SRC4_UB(0,%5)\n" \
+          "}\n" \
+          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(SFAOffset), "P"(SFBOffset), "P"(SFASize * 16), "P"(SFBSize * 16) \
+        ); \
+      } else { \
+        asm ( \
+          "{\n" \
+          ".decl DST     v_type=G type=" #TD " num_elts=128 alias=<%0,0>\n" \
+          ".decl SRC0    v_type=G type=" #TC " num_elts=128 alias=<%9,0>\n" \
+          ".decl SRC1_UD v_type=G type=UD num_elts=128 alias=<%2,0>\n" \
+          ".decl SRC2_UD v_type=G type=UD num_elts=64 alias=<%1,0>\n" \
+          ".decl SRC3_UB v_type=G type=UB num_elts=%8 alias=<%4,0>\n" \
+          ".decl SRC4_UB v_type=G type=UB num_elts=%7 alias=<%3,0>\n" \
+          "bdpas." #TB "." #TA ".8.8 (M1, 16) DST.0 SRC0.0 SRC1_UD.0 SRC2_UD.0 SRC3_UB(0,%6) SRC4_UB(0,%5)\n" \
+          "}\n" \
+          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(SFAOffset), "P"(SFBOffset), "P"(SFASize * 16), "P"(SFBSize * 16), "rw"(c) \
+        ); \
+      } \
+    } \
+  } \
+};
+
 #else /* !defined(CUTE_ARCH_MMA_XE_ENABLED) */
 
 #define CUTE_DECLARE_XE_DPAS_TT(TD, TA, TB, TC) \
@@ -129,8 +229,23 @@ template <int M> struct XE_DPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::T
     CUTE_INVALID_CONTROL_PATH("Cannot use Xe DPAS MMA atom on non-Xe hardware"); \
   } \
 };
-#endif
 
+#define CUTE_DECLARE_XE_BDPAS_TT(TD, TA, TB, TC) \
+template <int M> struct XE_BDPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::TB, dpas_type::TC> \
+  : public XE_DPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::TB, dpas_type::TC> { \
+  using Base = XE_DPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::TB, dpas_type::TC>; \
+  using AVector = typename Base::AVector; \
+  using BVector = typename Base::BVector; \
+  using CVector = typename Base::CVector; \
+  using DVector = typename Base::DVector; \
+  template <typename SFAVector, \
+            typename SFBVector> \
+  CUTE_HOST_DEVICE static void \
+  fma(DVector& d, AVector const& a, BVector const& b, CVector const& c, SFAVector const& sfa, SFBVector const& sfb, uint8_t sfa_idx, uint8_t sfb_idx) { \
+    CUTE_INVALID_CONTROL_PATH("Cannot use Xe BDPAS MMA atom on non-Xe hardware"); \
+  } \
+};
+#endif
 
 CUTE_DECLARE_XE_DPAS_TT(f,   tf32, tf32, f)
 
@@ -150,6 +265,46 @@ CUTE_DECLARE_XE_DPAS_TT(d,   u8,   s8,   d)
 CUTE_DECLARE_XE_DPAS_TT(d,   s8,   u8,   d)
 CUTE_DECLARE_XE_DPAS_TT(d,   s8,   s8,   d)
 
+CUTE_DECLARE_XE_DPAS_TT(ud,  u4,   u4,   ud)
+CUTE_DECLARE_XE_DPAS_TT(d,   u4,   u4,   d)
+CUTE_DECLARE_XE_DPAS_TT(d,   u4,   s4,   d)
+CUTE_DECLARE_XE_DPAS_TT(d,   s4,   u4,   d)
+CUTE_DECLARE_XE_DPAS_TT(d,   s4,   s4,   d)
+
+#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+
+CUTE_DECLARE_XE_DPAS_TT(f,   bf8,   bf8,   f)
+CUTE_DECLARE_XE_DPAS_TT(bf,  bf8,   bf8,   bf)
+CUTE_DECLARE_XE_DPAS_TT(f,   hf8,   hf8,   f)
+CUTE_DECLARE_XE_DPAS_TT(bf,  hf8,   hf8,   bf)
+CUTE_DECLARE_XE_DPAS_TT(bf,  hf8,   bf8,   bf)
+CUTE_DECLARE_XE_DPAS_TT(bf,  bf8,   hf8,   bf)
+CUTE_DECLARE_XE_DPAS_TT(f,  hf8,   bf8,   f)
+CUTE_DECLARE_XE_DPAS_TT(f,  bf8,   hf8,   f)
+
+CUTE_DECLARE_XE_DPAS_TT(f,  e2m1,   e2m1,   f)
+CUTE_DECLARE_XE_DPAS_TT(bf,  e2m1,   e2m1,   bf)
+
+CUTE_DECLARE_XE_BDPAS_TT(f,   bf,   bf,   f)
+CUTE_DECLARE_XE_BDPAS_TT(bf,  bf,   bf,   bf)
+CUTE_DECLARE_XE_BDPAS_TT(f,   hf,   hf,   f)
+CUTE_DECLARE_XE_BDPAS_TT(hf,  hf,   hf,   hf)
+
+CUTE_DECLARE_XE_BDPAS_TT(f,   bf8,   bf8,   f)
+CUTE_DECLARE_XE_BDPAS_TT(bf,  bf8,   bf8,   bf)
+CUTE_DECLARE_XE_BDPAS_TT(f,   hf8,   hf8,   f)
+CUTE_DECLARE_XE_BDPAS_TT(bf,  hf8,   hf8,   bf)
+CUTE_DECLARE_XE_BDPAS_TT(bf,  hf8,   bf8,   bf)
+CUTE_DECLARE_XE_BDPAS_TT(bf,  bf8,   hf8,   bf)
+CUTE_DECLARE_XE_BDPAS_TT(f,  hf8,   bf8,   f)
+CUTE_DECLARE_XE_BDPAS_TT(f,  bf8,   hf8,   f)
+
+CUTE_DECLARE_XE_BDPAS_TT(f,  e2m1,   e2m1,   f)
+CUTE_DECLARE_XE_BDPAS_TT(bf,  e2m1,   e2m1,   bf)
+
+#else
+
+// Skip int8 x int4 for CRI as the dpas is removed.
 CUTE_DECLARE_XE_DPAS_TT(ud,  u8,   u4,   ud)
 CUTE_DECLARE_XE_DPAS_TT(d,   u8,   u4,   d)
 CUTE_DECLARE_XE_DPAS_TT(d,   u8,   s4,   d)
@@ -162,12 +317,9 @@ CUTE_DECLARE_XE_DPAS_TT(d,   u4,   s8,   d)
 CUTE_DECLARE_XE_DPAS_TT(d,   s4,   u8,   d)
 CUTE_DECLARE_XE_DPAS_TT(d,   s4,   s8,   d)
 
-CUTE_DECLARE_XE_DPAS_TT(ud,  u4,   u4,   ud)
-CUTE_DECLARE_XE_DPAS_TT(d,   u4,   u4,   d)
-CUTE_DECLARE_XE_DPAS_TT(d,   u4,   s4,   d)
-CUTE_DECLARE_XE_DPAS_TT(d,   s4,   u4,   d)
-CUTE_DECLARE_XE_DPAS_TT(d,   s4,   s4,   d)
+#endif
 
 #undef CUTE_DECLARE_XE_DPAS_TT
+#undef CUTE_DECLARE_XE_BDPAS_TT
 
 } //namespace cute

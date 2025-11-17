@@ -35,7 +35,7 @@
 
 // TODO(Codeplay): These builtins are not available on SPIRV
 SYCL_EXTERNAL extern "C"
-cute::intel::uchar __builtin_IB_subgroup_block_read_flat_u8_m1k16v1(
+cute::intel::uchar2 __builtin_IB_subgroup_block_read_flat_u8_m1k16v1(
   long baseoffset, int width_minus_one, int height_minus_one,
   int pitch_minus_one, cute::intel::coord_t coord);
 
@@ -322,8 +322,13 @@ struct XeSubgroup2DBlockLoad<1, 16, 1, 1> {
   CUTE_HOST_DEVICE void
   operator()(const void* srcBasePointer, int memoryWidth, int memoryHeight, int memoryPitch,
           cute::intel::coord_t coordinate, T* dstPointer) {
-    *reinterpret_cast<intel::uchar *>(dstPointer) =  __builtin_IB_subgroup_block_read_flat_u8_m1k16v1(
+       // To resolve the GRF alignment issue when the data is smaller than the
+       // register size, we use a temporary local variable of which the size is
+       // a full GRF and memcpy it to the dst.
+       intel::uchar2 dst;
+       dst =  __builtin_IB_subgroup_block_read_flat_u8_m1k16v1(
        (intptr_t)(srcBasePointer), memoryWidth - 1, memoryHeight - 1, memoryPitch - 1, coordinate);
+       std::memcpy(dstPointer, &dst, 1);
   }
 };
 

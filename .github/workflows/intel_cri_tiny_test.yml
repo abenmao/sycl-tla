@@ -20,7 +20,7 @@ jobs:
           - compiler: RELEASE
             gpu: CRI
             intel_graphics: ROLLING
-            sycl_target: spir64
+            sycl_target: intel_gpu_cri
             runner: [self-hosted, shanghai-cri, Linux, X64]
 
     name: Run Intel ${{ matrix.compiler }} tests on ${{ matrix.gpu }} with intel-graphics ${{ matrix.intel_graphics }}
@@ -37,8 +37,6 @@ jobs:
         shell: bash
         run: |
           source ./.github/scripts/cri_simulator_compile.sh
-          tmux new-session -d -s session_simulator -n "Simulator"
-          tmux send-keys -t session_simulator:0 "echo 'Starting simulator...'; cd /home/gta/jiexinzh/crisim && ./runsim.sh" Enter
       - name: Clean sessions and collect logs
         working-directory: build
         shell: bash

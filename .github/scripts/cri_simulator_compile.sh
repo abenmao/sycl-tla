@@ -4,8 +4,8 @@
 tmux new-session -d -s session_simulator -n "Simulator"
 tmux send-keys -t session_simulator:0 \
     "echo 'Starting simulator...'; \
-     cd /home/gta/jiexinzh/crisim && \
-     ./runsim.sh" Enter
+     cd /opt/intel/crisim/ && \
+     ./runsim.sh 6117" Enter
 
 tmux new-session -d -s session_compile -n "Compile"
 
@@ -18,8 +18,8 @@ tmux send-keys -t session_compile:0 "sleep 5" Enter
 
 # --- setup environment ---
 tmux send-keys -t session_compile:0 \
-    "source /home/gta/jiexinzh/crisim/env.sh && \
-     source /opt/intel/oneapi/setvars.sh && \   
+    "source /opt/intel/crisim/env.sh 6117 && \
+     source /opt/intel/oneapi/setvars.sh && \
      export ONEAPI_DEVICE_SELECTOR=level_zero:gpu && \
      export CMAKE_BUILD_TYPE=Release && \
      export IGC_VISAOptions=\"-perfmodel\" && \
@@ -48,7 +48,7 @@ tmux send-keys -t session_compile:0 \
 
 # --- build library ---
 tmux send-keys -t session_compile:0 \
-    "cmake --build . > build.log 2>&1; \
+    "cmake --build . -j10 > build.log 2>&1; \
      BUILD_EXIT_CODE=\$?; \
      echo \$BUILD_EXIT_CODE > test_exit_code.log; \
      if [ \$BUILD_EXIT_CODE -ne 0 ]; then \

@@ -73,14 +73,12 @@ if(NOT SYCL_INTEL_TARGET EQUAL 40)
       BMG_ARGS
     )
 
-    if(CUTLASS_TEST_FOR_CRI)
-      # TODO: Not add the Xe gemm for now as it requires additional tuning. 
-    else()
-      cutlass_example_add_executable(
-        cute_tutorial_xe_gemm
-        xe_gemm.cpp
-      )
-    endif()
+    cutlass_example_add_executable(
+      cute_tutorial_xe_gemm
+      xe_gemm.cpp
+      TEST_COMMAND_OPTIONS
+      BMG_ARGS
+    )
 
   endif()
 

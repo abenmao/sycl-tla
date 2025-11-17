@@ -33,6 +33,7 @@
 
 #include <cute/arch/mma_xe.hpp>
 #include <cute/atom/mma_traits.hpp>
+#include "cute/arch/util.hpp"
 
 #include <cute/layout.hpp>
 
@@ -92,6 +93,63 @@ struct MMA_Traits<XE_DPAS_TT<M, TD, TA, TB, TC>>
   // C layout: (T,V) -> (M,N)
   //   M x 16 row major, work-items interleaved.
   using CLayout = Layout<Shape<_16, _M>, Stride<_M, _1>>;
+};
+
+template <int M, typename TD, typename TA, typename TB, typename TC>
+struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT<M, TD, TA, TB, TC>>
+{
+  using MMAOp = XE_BDPAS_TT<M, TD, TA, TB, TC>;
+
+  template <class TD1, class DLayout,
+            class TA1, class ALayout,
+            class TB1, class BLayout,
+            class TC1, class CLayout>
+  CUTE_HOST_DEVICE constexpr friend void
+  mma_unpack(MMA_Traits<MMAOp>    const& traits,
+            Tensor<TD1, DLayout>      & D,
+            Tensor<TA1, ALayout> const& A_zipped,
+            Tensor<TB1, BLayout> const& B_zipped,
+            Tensor<TC1, CLayout> const& C)
+  {
+    static_assert(is_rmem<TD>::value, "Expected registers in MMA_Atom::call");
+    static_assert(is_rmem<TA>::value, "Expected registers in MMA_Atom::call");
+    static_assert(is_rmem<TB>::value, "Expected registers in MMA_Atom::call");
+    static_assert(is_rmem<TC>::value, "Expected registers in MMA_Atom::call");
+
+    // Register value types from the MMA_Operation register arrays
+    using          RegTypeD = typename remove_extent<typename MMAOp::DRegisters>::type;
+    using          RegTypeA = typename remove_extent<typename MMAOp::ARegisters>::type;
+    using          RegTypeB = typename remove_extent<typename MMAOp::BRegisters>::type;
+    using          RegTypeC = typename remove_extent<typename MMAOp::CRegisters>::type;
+
+    constexpr int   RegNumD = extent<typename MMAOp::DRegisters>::value;
+    constexpr int   RegNumA = extent<typename MMAOp::ARegisters>::value;
+    constexpr int   RegNumB = extent<typename MMAOp::BRegisters>::value;
+    constexpr int   RegNumC = extent<typename MMAOp::CRegisters>::value;
+
+    auto  [A, SFA, SFA_OFFSET] = unzip_tensor(A_zipped);
+    auto  [B, SFB, SFB_OFFSET] = unzip_tensor(B_zipped);
+
+    Tensor rA = recast<RegTypeA>(A);
+    Tensor rB = recast<RegTypeB>(B);
+    CUTE_STATIC_ASSERT_V(size(rA) == Int<RegNumA>{});
+    CUTE_STATIC_ASSERT_V(size(rB) == Int<RegNumB>{});
+
+    Tensor rD = recast<RegTypeD>(D);
+    Tensor rC = recast<RegTypeC>(C);
+    CUTE_STATIC_ASSERT_V(size(rD) == Int<RegNumD>{});
+    CUTE_STATIC_ASSERT_V(size(rC) == Int<RegNumC>{});
+
+    cute::detail::explode_mma<MMAOp>(
+            rD,   make_int_sequence<RegNumD>{},
+            rA,   make_int_sequence<RegNumA>{},
+            rB,   make_int_sequence<RegNumB>{},
+            rC,   make_int_sequence<RegNumC>{},
+            SFA, make_int_sequence<1>{},
+            SFB, make_int_sequence<1>{},
+            SFA_OFFSET[0], SFB_OFFSET[0]);
+  }
+
 };
 
 } /* namespace cute */
