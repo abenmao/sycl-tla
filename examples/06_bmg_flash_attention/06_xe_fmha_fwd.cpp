@@ -76,9 +76,9 @@ int main(int argc, const char **argv) {
 #ifdef PREFILL
 #if HEAD_DIM == 16
   /* Tiny config for testing */
-  using ShapeQK = Shape<_8, _16, _16>;       // (q,k,d)
-  using ShapePV = Shape<_8, _16, _16>;       // (q,v,k)
-  using ShapeOut = Shape<_8, _16>;           // (q,v)
+  using ShapeQK = Shape<_16, _16, _32>;       // (q,k,d)
+  using ShapePV = Shape<_16, _32, _16>;       // (q,v,k)
+  using ShapeOut = Shape<_16, _16>;           // (q,v)
   using SubgroupLayoutQK = Layout<Shape<_1, _1, _1>>;
 
 #elif HEAD_DIM == 64
@@ -94,16 +94,16 @@ int main(int argc, const char **argv) {
   using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
 
 #elif HEAD_DIM == 128
-  using ShapeQK = Shape<_128, _64, _32>;
-  using ShapePV = Shape<_128, _32, _64>;
-  using ShapeOut = Shape<_128, _128>;
+  using ShapeQK = Shape<_256, _64, _32>;
+  using ShapePV = Shape<_256, _32, _64>;
+  using ShapeOut = Shape<_256, _128>;
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 
 #elif HEAD_DIM == 192
   using ShapeQK = Shape<_256, _64, _32>;
   using ShapePV = Shape<_256, _32, _64>;
   using ShapeOut = Shape<_256, _192>;
-  using SubgroupLayoutQK = Layout<Shape<_32, _1, _1>>;
+  using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 
 #endif
 #elif defined(DECODE)

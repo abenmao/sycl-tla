@@ -106,7 +106,8 @@ public:
   using TileShapeO = typename CollectiveEpilogue::TileShapeO;
   using ElementO = typename CollectiveEpilogue::TensorO::element_type;
   using StrideO = decltype(stride(typename CollectiveEpilogue::TensorO{}));
-
+  using Copy_ScaleQ = typename CollectiveMainloop::Copy_ScaleQ;
+  using Copy_ScaleK = typename CollectiveMainloop::Copy_ScaleK;
   // Kernel level shared memory storage
   using MainloopSharedStorage = typename CollectiveMainloop::SharedStorage;
   using EpilogueSharedStorage = typename CollectiveEpilogue::SharedStorage;
@@ -300,24 +301,28 @@ public:
         Tensor ScaleQ = make_tensor(make_gmem_ptr(dcScaleQ), make_layout(shape_scale_Q, stride_scaleQ));
         Tensor ScaleK = make_tensor(make_gmem_ptr(dcScaleK), make_layout(shape_scale_K, stride_scaleK));
         Tensor ScaleV = make_tensor(make_gmem_ptr(dcScaleV), make_layout(shape_scale_V, stride_scaleV));
-
+        Copy_ScaleQ tiled_copy_scaleQ;
+        Copy_ScaleK tiled_copy_scaleK;
+        auto ScaleQ_head = ScaleQ(_, _, head_q, l_coord);
+        auto ScaleK_head = ScaleK(_, _, head, l_coord);
+        tiled_copy_scaleQ = {Copy_ScaleQ{}.with(ScaleQ_head)};
+        tiled_copy_scaleK = {Copy_ScaleK{}.with(ScaleK_head)};
         mainloop(Q(_,_,head_q,l_coord),
                  K(_,_,head,l_coord),
                  V(_,_,head,l_coord),
                  tArA, tA_max, tA_sum,
                  blk_qv, 0, k_blocks,
-                 thr_id, seq_len,
+                 thr_id, seq_len, l_coord,
                  full_tile_offset, discard_seq_coord,
-                 ScaleQ(_,_,head_q,l_coord),
-                 ScaleK(_,_,head,l_coord),
-                 ScaleV(_,_,head,l_coord));
+                 tiled_copy_scaleQ,
+                 tiled_copy_scaleK);
       } else {
         mainloop(Q(_,_,head_q,l_coord),
                  K(_,_,head,l_coord),
                  V(_,_,head,l_coord),
                  tArA, tA_max, tA_sum,
                  blk_qv, 0, k_blocks,
-                 thr_id, seq_len,
+                 thr_id, seq_len, l_coord,
                  full_tile_offset, discard_seq_coord);
       }
       if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
