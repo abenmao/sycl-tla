@@ -1,4 +1,31 @@
 # SYCL*TLA (previously referred to as cutlass-sycl) Changelog
+## [SYCL*TLA 0.6-jgs](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.6-jgs) (2025-11-17)
+
+### APIs & Core Features
+- CuTe MMA and Copy Atoms for JGS (16bit support) - PR: [#113](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/113)
+- Tensor Pipe APIs - PR: [#138](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/138)
+- Cluster Launch APIs - PR: [#126](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/126)
+
+### Examples 
+- GEMM example (with cluster launch) updated with new APIs PR: [#113](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/113)
+
+### Tests
+- Unit tests for Load and Store 
+- Tensor Pipe API unit tests
+- Updated GEMM tests for new APIs
+
+### Infrastructure and Clean up
+- Updated GitHub workflows for new architectures and tests
+- Merged with CRI branch and public repo
+- Code clean up and refactoring from xe4_develop branch
+
+### Flash Attention Readiness
+- 16bit Flash attnetion kernels can be developed but without Register <-> SLM load/store APIs. This gaps is planned to be addressed in upcoming releases.
+
+### Known issues and Gaps
+- Lack of Register <-> SLM load/store APIs
+- Missing tensor pipe APIs (other than tensor exp2 and tensor red)
+- GEMM kernel performance is not tuned or analyzed yet.
 
 ## [SYCL*TLA 0.6-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.6-cri) (2025-11-16)
 ### New Features (Notes: all the tests based on CRI simulator)
