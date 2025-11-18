@@ -70,7 +70,7 @@ jobs:
           cmake .. -G Ninja \
           -DCUTLASS_ENABLE_SYCL=ON \
           -DCUTLASS_ENABLE_BENCHMARKS=OFF \
-          -DCUTLASS_ENABLE_GTEST_UNIT_TESTS=OFF \
+          -DCUTLASS_ENABLE_GTEST_UNIT_TESTS=ON \
           -DDPCPP_SYCL_TARGET=intel_gpu_jgs \
           -DCMAKE_CXX_COMPILER=${CXX} \
           -DCMAKE_C_COMPILER=${CC} \
@@ -91,7 +91,17 @@ jobs:
           ninja xe4_gemm_cluster
           ./examples/xe4/gemm/xe4_gemm_cluster
           echo #--------------------------------------"
-
+      
+      - name: Run Xe4 UTs 
+        working-directory: build
+        shell: bash
+        run: |
+          source ~/xe4_toolkit/source_oneapi_env.sh
+          source ~/xe4_toolkit/source_simulator_env.sh
+          echo "Running Xe4 UTs"
+          ninja cutlass_test_unit_cute_xe4
+          ./test/unit/cute/xe4/cutlass_test_unit_cute_xe4_reduce_exp
+          
       - name: Stop Xe4 Simulator
         if: always()
         continue-on-error: true

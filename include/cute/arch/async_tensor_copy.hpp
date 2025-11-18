@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cute/arch/asm_helper.hpp>
+
 namespace sycl {
 #ifdef __SYCL_DEVICE_ONLY__
   template <class T, int N> using vec_t = T __attribute__((ext_vector_type(N)));
@@ -50,7 +52,20 @@ enum FillMethod {
 }
 }
 
-#include <cute/arch/asm_helper.hpp>
+template <cute::detail::CacheCtrl> struct cachectrl;
+template <> struct cachectrl<cute::detail::CacheCtrl::L2c_L3uc> {
+  static constexpr fixstr::fixed_string value {".l2c.L3uc"};};
+template <> struct cachectrl<cute::detail::CacheCtrl::L2wb_L3uc> {
+  static constexpr fixstr::fixed_string value {".l2wb.L3uc"};};
+
+template <cute::detail::FillMethod> struct padfill;
+template <> struct padfill<cute::detail::FillMethod::Zero> {
+  static constexpr fixstr::fixed_string value {".zero"};};
+template <> struct padfill<cute::detail::FillMethod::Nan> {
+  static constexpr fixstr::fixed_string value {".nan"};};
+
+template <cute::detail::CacheCtrl CC> constexpr auto _cc = cachectrl<CC>::value;
+template <cute::detail::FillMethod FM> constexpr auto _fl = padfill<FM>::value;
 
 namespace cute {
 namespace detail {

@@ -27,66 +27,19 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-if (CUTLASS_ENABLE_SYCL)
-  add_subdirectory(core)
-  add_subdirectory(layout)
-  add_subdirectory(msvc_compilation)
-  
-  if(NOT SYCL_INTEL_TARGET EQUAL 40)
-    add_subdirectory(intel_xe)
-  else()
-    add_subdirectory(xe4)
-  endif()
+add_custom_target(
+  cutlass_test_unit_cute_xe4
+  DEPENDS
+  cutlass_test_unit_cute_xe4_reduce_exp
+)
 
-  if(SYCL_NVIDIA_TARGET)
-    add_subdirectory(volta)
-    add_subdirectory(turing)
-    add_subdirectory(ampere)
-    # add_subdirectory(hopper) // Hopper test support to come later once complete support in DPCPP
-  endif()
+add_custom_target(
+  test_unit_cute_xe4
+  DEPENDS
+  test_unit_cute_xe4_reduce_exp
+)
 
-  if(SYCL_NVIDIA_TARGET)
-    add_custom_target(
-      cutlass_test_unit_cute
-      DEPENDS
-      cutlass_test_unit_cute_layout
-      cutlass_test_unit_cute_core
-      cutlass_test_unit_cute_volta
-      cutlass_test_unit_cute_turing
-      cutlass_test_unit_cute_ampere
-      #cutlass_test_unit_cute_hopper
-      cutlass_test_unit_cute_msvc_compilation
-      )
-
-    add_custom_target(
-      test_unit_cute
-      DEPENDS
-      test_unit_cute_layout
-      test_unit_cute_core
-      test_unit_cute_volta
-      test_unit_cute_ampere
-      test_unit_cute_turing
-      #test_unit_cute_hopper
-      test_unit_cute_msvc_compilation
-      )
-  else()
-    add_custom_target(
-      cutlass_test_unit_cute
-      DEPENDS
-      cutlass_test_unit_cute_layout
-      cutlass_test_unit_cute_core
-      cutlass_test_unit_cute_msvc_compilation
-      cutlass_test_unit_cute_intel_xe
-      )
-
-    add_custom_target(
-      test_unit_cute
-      DEPENDS
-      test_unit_cute_layout
-      test_unit_cute_core
-      test_unit_cute_msvc_compilation
-      #Intel Tests
-      test_unit_cute_intel_xe
-      )
-  endif()
-endif()
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_reduce_exp
+  tensor_algs.cpp
+)

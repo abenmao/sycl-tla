@@ -18,6 +18,29 @@ template <Tracking Method> struct TrackMethod {
 };
 }
 
+// Major enumeration
+template <AMMA::Major> struct ammajor;
+
+template <> struct ammajor<AMMA::Major::MN> {
+  static constexpr fixstr::fixed_string value {".am"};
+};
+
+template <> struct ammajor<AMMA::Major::K> {
+  static constexpr fixstr::fixed_string value {""};
+};
+
+template <cute::AMMA::Major> struct bkmajor;
+template <> struct bkmajor<AMMA::Major::MN> {
+  static constexpr fixstr::fixed_string value {""};
+};
+
+template <> struct bkmajor<AMMA::Major::K> {
+  static constexpr fixstr::fixed_string value {".bk"};
+};
+
+template <cute::AMMA::Major major> constexpr auto _am = ammajor<major>::value;
+template <cute::AMMA::Major major> constexpr auto _bk = bkmajor<major>::value;
+
 // Async-MMA barriers track none
 template <class d_type, class a_type, class b_type, class c_type,
          int M, int N, int K, AMMA::Major a_major, AMMA::Major b_major>
