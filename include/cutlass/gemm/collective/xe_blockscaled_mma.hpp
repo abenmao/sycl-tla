@@ -118,23 +118,18 @@ public:
 
     // A and B matrices
   using ElementA = remove_cvref_t<decltype(get<0>(ElementPairA{}))>;
-  using StrideA  = remove_cvref_t<decltype(get<0>(StridePairA{}))>;
+  using StrideA  = cute::remove_pointer_t<remove_cvref_t<decltype(get<0>(StridePairA{}))>>;
 
   using ElementB = remove_cvref_t<decltype(get<0>(ElementPairB{}))>;
-  using StrideB  = remove_cvref_t<decltype(get<0>(StridePairB{}))>;
+  using StrideB  = cute::remove_pointer_t<remove_cvref_t<decltype(get<0>(StridePairB{}))>>;
 
     // SFA and SFB
   using ElementSF = remove_cvref_t<decltype(get<1>(ElementPairA{}))>;
-  using LayoutSFA = remove_cvref_t<decltype(get<1>(StridePairA{}))>;
-  using LayoutSFB = remove_cvref_t<decltype(get<1>(StridePairB{}))>;
+  using StrideScaleA = cute::remove_pointer_t<remove_cvref_t<decltype(get<1>(StridePairA{}))>>;
+  using StrideScaleB = cute::remove_pointer_t<remove_cvref_t<decltype(get<1>(StridePairB{}))>>;
 
-
-  // TODO(Codeplay): Create a ScaledTensor class to encapsulate scale logic
   using ElementScaleA = ElementSF;
-  using StrideScaleA = LayoutSFA;
-
   using ElementScaleB = ElementSF;
-  using StrideScaleB = LayoutSFB;
 
   using ElementAccumulator = typename TiledMma::ValTypeC;
 
