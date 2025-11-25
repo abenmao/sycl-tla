@@ -2,12 +2,11 @@ name: "Intel CRI Tiny Test"
 
 on:
   push:
-    branches: [ "cri" ]
+    branches: [ "cri","cri_pathfinding","v0.1.0_next" ]
   pull_request:
-    branches: [ "cri" ]
+    branches: [ "cri","cri_pathfinding","v0.1.0_next" ]
   merge_group:
-    branches: [ "cri" ]
-
+    branches: [ "cri","cri_pathfinding","v0.1.0_next" ]
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true

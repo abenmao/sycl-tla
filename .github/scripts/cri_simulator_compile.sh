@@ -58,7 +58,7 @@ tmux send-keys -t session_compile:0 \
 
 # --- test example ---
 tmux send-keys -t session_compile:0 \
-    "ctest -V -R '^(ctest_examples_03_bmg_gemm_streamk|ctest_examples_04_bmg_grouped_gemm|ctest_examples_05_bmg_gemm_with_epilogue_relu|ctest_examples_06_bmg_prefill_attention_cachedkv_hdim64|ctest_examples_08_bmg_gemm_f8|ctest_examples_cute_tutorial_tiled_copy|ctest_examples_cute_tutorial_bmg)$' --output-on-failure > test_example.log 2>&1; \
+    "ctest -V -R '^(ctest_examples_03_bmg_gemm_streamk|ctest_examples_04_bmg_grouped_gemm|ctest_examples_05_bmg_gemm_with_epilogue_relu|ctest_examples_06_bmg_prefill_attention_cachedkv_hdim64|ctest_examples_08_bmg_gemm_f8|ctest_examples_cute_tutorial_tiled_copy|ctest_examples_cute_tutorial_bmg|ctest_examples_cute_tutorial_xe_gemm|ctest_examples_12_xe35_block_scaled_gemm_e2m1|ctest_examples_13_xe35_block_scaled_grouped_gemm_e5m2|ctest_examples_06_xe_fmha_fwd_decode_mx_float_e4m3_t_hdim64|ctest_examples_06_xe_fmha_fwd_decode_mx_float_e2m1_t_hdim64)$' --output-on-failure > test_example.log 2>&1; \
      TEST_EXAMPLE_EXIT_CODE=\$?; \
      echo \$TEST_EXAMPLE_EXIT_CODE > test_exit_code.log; \
      if [ \$TEST_EXAMPLE_EXIT_CODE -ne 0 ]; then \
