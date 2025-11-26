@@ -5,7 +5,7 @@ tmux new-session -d -s session_simulator -n "Simulator"
 tmux send-keys -t session_simulator:0 \
     "echo 'Starting simulator...'; \
      cd /opt/intel/crisim/ && \
-     ./runsim.sh 6117" Enter
+     sudo -S ./runsim.sh 6117 < /home/support/secret_password.log" Enter
 
 tmux new-session -d -s session_compile -n "Compile"
 
@@ -68,7 +68,7 @@ tmux send-keys -t session_compile:0 \
 
 # --- test UT ---
 tmux send-keys -t session_compile:0 \
-    "ctest -V -R '^(ctest_unit_flash_attention_decode_h128_xe|ctest_unit_cute_core|ctest_unit_flash_attention_prefill_fp8e4m3_fp32_fp32_h96_xe|ctest_unit_flash_attention_prefill_fp8e4m3_fp32_fp8e4m3_h96_xe|ctest_unit_gemm_device_tensorop_xe|ctest_unit_gemm_device_tensorop_cooperative_xe|ctest_unit_gemm_device_tensorop_epilogue_fusion_xe|ctest_unit_gemm_device_mixed_input_tensorop_xe|ctest_unit_gemm_device_tensorop_xe_group_gemm|ctest_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm)$' --output-on-failure > test_ut.log 2>&1; \
+    "ctest -V -R '^(ctest_unit_flash_attention_decode_h128_xe|ctest_unit_cute_core|ctest_unit_flash_attention_prefill_fp8e4m3_fp32_fp32_h96_xe|ctest_unit_flash_attention_prefill_fp8e4m3_fp32_fp8e4m3_h96_xe|ctest_unit_gemm_device_tensorop_cooperative_xe|ctest_unit_gemm_device_tensorop_epilogue_fusion_xe|ctest_unit_gemm_device_mixed_input_tensorop_xe|ctest_unit_gemm_device_tensorop_xe_group_gemm|ctest_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm)$' --output-on-failure > test_ut.log 2>&1; \
      TEST_UT_EXIT_CODE=\$?; \
      echo \$TEST_UT_EXIT_CODE > test_exit_code.log; \
      touch finish_compilation_job.log; \
