@@ -508,14 +508,12 @@ struct ExampleRunner {
       initialize_block(block_C.at(i), seed + 2021 + i);
 
       convert_dtype<ElementA, ElementMMAVerify, ExampleRunner>(
-          block_A.at(i).get(),
-          block_A_dq.at(i).get(),
-          block_A.at(i).size()
+          block_A.at(i),
+          block_A_dq.at(i)
       );
       convert_dtype<ElementB, ElementMMAVerify, ExampleRunner>(
-          block_B.at(i).get(),
-          block_B_dq.at(i).get(),
-          block_B.at(i).size()
+          block_B.at(i),
+          block_B_dq.at(i)
       );
 
       initialize_scale(block_scaleA.at(i), options);

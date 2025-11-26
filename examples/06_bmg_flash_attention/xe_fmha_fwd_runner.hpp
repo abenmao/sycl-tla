@@ -659,9 +659,9 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     block_K_dq.reset(block_K.size());
     block_V_dq.reset(block_V.size());
 
-    convert_dtype<ElementQ, ElementMMAVerify, ExampleRunner>(block_Q.get(), block_Q_dq.get(), block_Q.size());
-    convert_dtype<ElementK, ElementMMAVerify, ExampleRunner>(block_K.get(), block_K_dq.get(), block_K.size());
-    convert_dtype<ElementV, ElementMMAVerify, ExampleRunner>(block_V.get(), block_V_dq.get(), block_V.size());
+    convert_dtype<ElementQ, ElementMMAVerify, ExampleRunner>(block_Q, block_Q_dq);
+    convert_dtype<ElementK, ElementMMAVerify, ExampleRunner>(block_K, block_K_dq);
+    convert_dtype<ElementV, ElementMMAVerify, ExampleRunner>(block_V, block_V_dq);
 
     if constexpr (UseScale) {
       auto scale_q = cute::ceil_div(head_size_qk, GROUP_SIZE);
