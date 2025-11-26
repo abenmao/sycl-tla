@@ -169,7 +169,7 @@ if (CUTLASS_ENABLE_SYCL)
 
   foreach(ITEM IN LISTS DPCPP_SYCL_TARGET_LIST)
     if(ITEM IN_LIST INTEL_SYCL_TARGETS)
-      set(SYCL_INTEL_TARGET ON)
+      #set(SYCL_INTEL_TARGET ON)
     else()
       message(FATAL_ERROR "In SYCL target list '${DPCPP_SYCL_TARGET}' ${ITEM} is invalid.")
     endif()
