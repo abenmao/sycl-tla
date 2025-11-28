@@ -37,6 +37,20 @@ cutlass_example_add_executable(
 )
 
 cutlass_example_add_executable(
+  12_xe35_block_scaled_gemm_fp32_e5m2
+  12_xe35_block_scaled_gemm_fp32_e5m2.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_BASE
+)
+
+cutlass_example_add_executable(
+  12_xe35_block_scaled_gemm_fp16_e4m3
+  12_xe35_block_scaled_gemm_fp16_e4m3.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_BASE
+)
+
+cutlass_example_add_executable(
   12_xe35_block_scaled_gemm_e4m3
   12_xe35_block_scaled_gemm_e4m3.cpp
   TEST_COMMAND_OPTIONS

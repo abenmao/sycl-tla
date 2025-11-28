@@ -151,14 +151,16 @@ public:
   using MmaType = typename TiledMma::ValTypeA; // ValTypeA and ValTypeB are always same and reflects MMA type on intel Xe
 
   static constexpr bool kSupportedElementA =
+      cute::is_same_v<ElementA, float> ||
+      cute::is_same_v<ElementA, cutlass::half_t> ||
       cute::is_same_v<ElementA, cutlass::float_e5m2_t> ||
       cute::is_same_v<ElementA, cutlass::float_e4m3_t> ||
       cute::is_same_v<ElementA, cutlass::float_e2m1_t>;
 
   static constexpr bool kSupportedElementB =
-      cute::is_same_v<ElementA, cutlass::float_e5m2_t> ||
-      cute::is_same_v<ElementA, cutlass::float_e4m3_t> ||
-      cute::is_same_v<ElementA, cutlass::float_e2m1_t>;
+      cute::is_same_v<ElementB, cutlass::float_e5m2_t> ||
+      cute::is_same_v<ElementB, cutlass::float_e4m3_t> ||
+      cute::is_same_v<ElementB, cutlass::float_e2m1_t>;
 
    static constexpr bool kScaleALeftmostUnitStride = [] {
     if constexpr (cute::is_same_v<StrideScaleA, void>) {
@@ -535,8 +537,6 @@ public:
       // reorder
       reorder(tArA, tCrA);
       reorder(tBrB, tCrB);
-
-
 
       Tensor scaleA = recast<intel::vector_t<ElementScaleA, scaleASize::value * 2>>(make_tensor(fragment_scaleA.data(), Shape<scaleASize>{}));
       Tensor scaleB = recast<intel::vector_t<ElementScaleB, scaleBSize::value * 2>>(make_tensor(fragment_scaleB.data(), Shape<scaleBSize>{}));

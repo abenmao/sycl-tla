@@ -69,6 +69,7 @@ struct Options {
 
   int mode;
   int m, n, k, l, iterations, verify;
+  int const_scale;
   float alpha, beta;
 
   Options():
@@ -76,7 +77,8 @@ struct Options {
     error(false),
     m(5120), n(4096), k(4096), l(1), iterations(20),
     mode(0),
-    alpha(1.f), beta(0.f)
+    alpha(1.f), beta(0.f),
+    const_scale(0)
   { }
 
   // Parses the command line
@@ -97,6 +99,7 @@ struct Options {
     cmd.get_cmd_line_argument("beta", beta, 0.f);
     cmd.get_cmd_line_argument("iterations", iterations, 100);
     cmd.get_cmd_line_argument("verify", verify, 1);
+    cmd.get_cmd_line_argument("const_scale", const_scale, 0);
   }
 
   /// Prints the usage statement.
@@ -113,7 +116,8 @@ struct Options {
       << "  --alpha=<s32>               Epilogue scalar alpha\n"
       << "  --beta=<s32>                Epilogue scalar beta\n\n"
       << "  --iterations=<int>          Iterations\n\n"
-      << "  --verify=<int>              Specify whether to verify.\n\n";
+      << "  --verify=<int>              Specify whether to verify.\n\n"
+      << "  --const_scale=<int>         If not specified, a random scale value will be generated.\n\n";
 
     return out;
   }
@@ -222,7 +226,15 @@ struct ExampleRunner {
     ElementOutput const non_zero_floor(1e-4f);
     bool passed = cutlass::reference::device::BlockCompareRelativelyEqual(
       block_ref_D.get(), block_D.get(), block_D.size(), epsilon, non_zero_floor);
-
+    if (!passed) {  
+      std::vector<ElementOutput> block_ref_D_host(block_ref_D.size());
+      std::vector<ElementOutput> block_D_host(block_D.size());
+      compat::memcpy(block_ref_D_host.data(), block_ref_D.get(), block_ref_D_host.size() * sizeof(ElementOutput));
+      compat::memcpy(block_D_host.data(), block_D.get(), block_D_host.size() * sizeof(ElementOutput));
+      for (int i = 0; i < block_D_host.size(); i++) {
+        printf("i: %d , ref: %f, comp: %f\n", i, block_ref_D_host[i], block_D_host[i]);
+      }
+    }
     return passed;
   }
 
@@ -234,8 +246,8 @@ struct ExampleRunner {
     // Need to fix max_dequant_val and min_dequant_val?
     const float max_dequant_val = elt_max_f * 0.25f;
     const float min_dequant_val = 0.5f;
-    const float scale_max = max_dequant_val / elt_max_f;
-    const float scale_min = min_dequant_val / elt_max_f;
+    const float scale_max = options.const_scale ? 1.0 : max_dequant_val / elt_max_f;
+    const float scale_min = options.const_scale ? 1.0 : min_dequant_val / elt_max_f;
     cutlass::reference::device::BlockFillRandomUniform(
         block.get(), block.size(), seed, Element(scale_max), Element(scale_min));
     return true;
@@ -252,9 +264,6 @@ struct ExampleRunner {
                        Layout const operand_layout,
                        ElementScale const* scale_buffer,
                        ScaleLayout const scale_layout) {
-    if constexpr (std::is_same_v<DstElement, SrcElement>) {
-      return;
-    }
 
     std::vector<uint8_t> dst(size(operand_layout) * sizeof_bits_v<DstElement> / 8, 0);
     cutlass::device_memory::copy_to_host(dst.data(), (uint8_t*)dq_buffer, dst.size());
@@ -336,8 +345,11 @@ struct ExampleRunner {
     block_ref_D.reset(static_cast<std::size_t>(M) * N * L);
     block_scaleA.reset(static_cast<std::size_t>(scale_k) * L * M);
     block_scaleB.reset(static_cast<std::size_t>(scale_k) * L * N);
-
-    initialize_block(block_A, seed + 2023);
+    if constexpr (std::is_same_v<ElementA, half_t> || std::is_same_v<ElementA, float>) {
+      initialize_block(block_A, seed + 2023, ElementA(0.f), ElementA(1.f));
+    } else {
+      initialize_block(block_A, seed + 2023);
+    }
     initialize_block(block_B, seed + 2022);
     initialize_block(block_C, seed + 2021);
 
