@@ -178,7 +178,8 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   using ElementV = typename FMHAKernel::ElementV;
   using ElementO = typename FMHAKernel::ElementO;
   using ElementScale = typename FMHAKernel::ElementScale;
-  using ElementMMAVerify = cute::conditional_t<(sizeof_bits_v<ElementQ> <= 8), half_t, ElementQ>;
+  using ElementQKMMAVerify = cute::conditional_t<(sizeof_bits_v<ElementQ> <= 8), half_t, ElementQ>;
+  using ElementPVMMAVerify = cute::conditional_t<(sizeof_bits_v<ElementV> >= 16), ElementV, ElementQKMMAVerify>;
   using CollectiveMainloop = typename FMHAKernel::CollectiveMainloop;
   using ElementS = typename CollectiveMainloop::ElementS;
   static constexpr bool UseScale = FMHAKernel::UseScale;
@@ -212,9 +213,9 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   cutlass::DeviceAllocation<int> device_cumulative_seqlen_q;
   cutlass::DeviceAllocation<int> device_cumulative_seqlen_kv;
 
-  cutlass::DeviceAllocation<ElementMMAVerify> block_Q_dq; // Dequantized copy of Q for validation
-  cutlass::DeviceAllocation<ElementMMAVerify> block_K_dq; // Dequantized copy of K for validation
-  cutlass::DeviceAllocation<ElementMMAVerify> block_V_dq; // Dequantized copy of V for validation
+  cutlass::DeviceAllocation<ElementQKMMAVerify> block_Q_dq; // Dequantized copy of Q for validation
+  cutlass::DeviceAllocation<ElementQKMMAVerify> block_K_dq; // Dequantized copy of K for validation
+  cutlass::DeviceAllocation<ElementPVMMAVerify> block_V_dq; // Dequantized copy of V for validation
   cutlass::DeviceAllocation<ElementScale> block_scaleQ;
   cutlass::DeviceAllocation<ElementScale> block_scaleK;
   cutlass::DeviceAllocation<ElementScale> block_scaleV;
@@ -327,7 +328,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
 #if 0
     auto block_V_ = UseScale ? block_V_dq : in_memory(block_V);
     using ElementV_ = std::conditional_t<UseScale, 
-                                    ElementMMAVerify, 
+                                    ElementPVMMAVerify,
                                     std::remove_pointer_t<decltype(block_V_.get())>>;
 #else
     auto block_V_ = in_memory(block_V);
@@ -574,7 +575,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
 
             auto scale_data = (ret_type)(scale_tensor(mn, k / 32, h, b));
 
-            dst_tensor(mn, k, h, b) = (src_data) * scale_data;
+            dst_tensor(mn, k, h, b) = static_cast<DstElement>((src_data) * scale_data);
           }
         }
       }
@@ -659,9 +660,9 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     block_K_dq.reset(block_K.size());
     block_V_dq.reset(block_V.size());
 
-    convert_dtype<ElementQ, ElementMMAVerify, ExampleRunner>(block_Q, block_Q_dq);
-    convert_dtype<ElementK, ElementMMAVerify, ExampleRunner>(block_K, block_K_dq);
-    convert_dtype<ElementV, ElementMMAVerify, ExampleRunner>(block_V, block_V_dq);
+    convert_dtype<ElementQ, ElementQKMMAVerify, ExampleRunner>(block_Q, block_Q_dq);
+    convert_dtype<ElementK, ElementQKMMAVerify, ExampleRunner>(block_K, block_K_dq);
+    convert_dtype<ElementV, ElementPVMMAVerify, ExampleRunner>(block_V, block_V_dq);
 
     if constexpr (UseScale) {
       auto scale_q = cute::ceil_div(head_size_qk, GROUP_SIZE);
@@ -693,9 +694,9 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
       auto layout_scale_K = cute::make_layout(shape_scale_K, stride_SK);
       auto layout_scale_V = cute::make_layout(shape_scale_V, stride_SV);
 
-      apply_scale<ElementMMAVerify, ElementQ>(block_Q_dq.get(), block_Q.get(), layout_Q, block_scaleQ.get(), layout_scale_Q);
-      apply_scale<ElementMMAVerify, ElementK>(block_K_dq.get(), block_K.get(), layout_K, block_scaleK.get(), layout_scale_K);
-      apply_scale<ElementMMAVerify, ElementV>(block_V_dq.get(), block_V.get(), layout_V, block_scaleV.get(), layout_scale_V);
+      apply_scale<ElementQKMMAVerify, ElementQ>(block_Q_dq.get(), block_Q.get(), layout_Q, block_scaleQ.get(), layout_scale_Q);
+      apply_scale<ElementQKMMAVerify, ElementK>(block_K_dq.get(), block_K.get(), layout_K, block_scaleK.get(), layout_scale_K);
+      apply_scale<ElementPVMMAVerify, ElementV>(block_V_dq.get(), block_V.get(), layout_V, block_scaleV.get(), layout_scale_V);
     }
 
     return shape;
