@@ -1,4 +1,5 @@
 # Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
+# Copyright (C) 2025 Intel Corporation, All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -26,40 +27,25 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-if (CUTLASS_TEST_FOR_CRI)
-  set(TEST_CRI_ARGS "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=0 --verify=0")
-
-  set(GEMM_ARGS TEST_CRI_ARGS)
-else()
-  set(TEST_BATCHES --l=2)
-  set(TEST_LARGE "--l=513 --m=8 --n=16384 --k=512") # B matrix capacity > uint32_max
-  set(TEST_SMALL_SHAPE --m=4 --n=8 --k=8 --l=2)
-  set(TEST_SMALL_SHAPE_PADDABLE --m=1 --n=1 --k=2 --l=2)
-
-  set(GEMM_ARGS TEST_BATCHES TEST_LARGE TEST_SMALL_SHAPE)
-endif()
+set(TEST_BATCHES --l=2)
 
 cutlass_example_add_executable(
-  00_bmg_gemm_legacy
-  00_bmg_gemm.cpp
+  05_bmg_gemm_with_epilogue_gelu_legacy
+  05_bmg_gemm_with_epilogue_gelu.cpp
   TEST_COMMAND_OPTIONS
   TEST_BATCHES
-  TEST_LARGE
-  TEST_SMALL_SHAPE
-)
-
-set(TEST_SMALL_SHAPE_PADDABLE --m=1 --n=1 --k=2 --l=2)
-cutlass_example_add_executable(
-  00_bmg_gemm_padded_legacy
-  00_bmg_gemm_padded.cpp
-  TEST_COMMAND_OPTIONS
-  TEST_BATCHES
-  TEST_SMALL_SHAPE_PADDABLE
 )
 
 cutlass_example_add_executable(
-  00_bmg_gemm_with_sycl_queue_legacy
-  00_bmg_gemm_with_sycl_queue.cpp
+  05_bmg_gemm_with_epilogue_relu_legacy
+  05_bmg_gemm_with_epilogue_relu.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_BATCHES
+)
+
+cutlass_example_add_executable(
+  05_bmg_gemm_with_epilogue_silu_legacy
+  05_bmg_gemm_with_epilogue_silu.cpp
   TEST_COMMAND_OPTIONS
   TEST_BATCHES
 )
