@@ -120,7 +120,7 @@ template <int M> struct XE_DPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::T
   } \
 };
 
-// TODO(Zhitao): Remove sfa_offset and sfb_offset and move the calculation to
+// TODO(Zhitao): Remove m_offset, n_offset, ka_offset and kb_offset, move the calculation to
 // earlier stages.
 #define CUTE_DECLARE_XE_BDPAS_TT(TD, TA, TB, TC) \
 template <int M> struct XE_BDPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::TB, dpas_type::TC> \
@@ -135,10 +135,10 @@ template <int M> struct XE_BDPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::
             typename SFAVector, \
             typename SFBVector> \
   CUTE_DEVICE static void \
-  fma(DVector& d, AVector const& a, BVector const& b, CVector_ const& c, SFAVector const& sfa, SFBVector const& sfb, uint8_t sfa_offset, uint8_t sfb_offset) { \
+  fma(DVector& d, AVector const& a, BVector const& b, CVector_ const& c, SFAVector const& sfa, SFBVector const& sfb, uint16_t m_offset, uint16_t n_offset, uint16_t ka_offset, uint16_t kb_offset) { \
     if constexpr (std::is_same_v<dpas_type::TA, float_e2m1_t>) { \
-      auto sfa_off = (sfa_offset / 2) * 32 + (sfa_offset % 2) * 8; \
-      auto sfb_off = sfb_offset * 32; \
+      auto m_off = m_offset + ka_offset; \
+      auto n_off = n_offset + kb_offset; \
       if constexpr (std::is_same_v<CVector_, DVector>) { \
         d = c; \
         asm ( \
@@ -156,7 +156,7 @@ template <int M> struct XE_BDPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::
           "mov (M1_NM, 8) SRC4_UB_PADDED(0,32)<1> SRC4_UB(0,16)<1;1,0>\n" \
           "bdpas." #TB "." #TA ".8.8 (M1, 16) DST.0 DST.0 SRC1_UD.0 SRC2_UD.0 SRC3_UB_PADDED(0,0) SRC4_UB_PADDED(0,0)\n" \
           "}\n" \
-          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(sfa_off), "P"(sfb_off) \
+          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(m_off), "P"(n_off) \
         ); \
       } else { \
         asm ( \
@@ -175,14 +175,14 @@ template <int M> struct XE_BDPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::
           "mov (M1_NM, 8) SRC4_UB_PADDED(0,32)<1> SRC4_UB(0,16)<1;1,0>\n" \
           "bdpas." #TB "." #TA ".8.8 (M1, 16) DST.0 SRC0.0 SRC1_UD.0 SRC2_UD.0 SRC3_UB_PADDED(0,0) SRC4_UB_PADDED(0,0)\n" \
           "}\n" \
-          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(sfa_off), "P"(sfb_off), "rw"(c) \
+          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(m_off), "P"(n_off), "rw"(c) \
         ); \
       } \
     } else { \
       constexpr auto SFASize = sizeof(sfa); \
-      auto SFAOffset = sfa_offset * 8; \
+      auto m_off = m_offset + ka_offset; \
       constexpr auto SFBSize = sizeof(sfb); \
-      auto SFBOffset = sfb_offset * 16; \
+      auto n_off = n_offset + kb_offset; \
       if constexpr (std::is_same_v<CVector_, DVector>) { \
         d = c; \
         asm ( \
@@ -194,7 +194,7 @@ template <int M> struct XE_BDPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::
           ".decl SRC4_UB v_type=G type=UB num_elts=%7 alias=<%3,0>\n" \
           "bdpas." #TB "." #TA ".8.8 (M1, 16) DST.0 DST.0 SRC1_UD.0 SRC2_UD.0 SRC3_UB(0,%6) SRC4_UB(0,%5)\n" \
           "}\n" \
-          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(SFAOffset), "P"(SFBOffset), "P"(SFASize * 16), "P"(SFBSize * 16) \
+          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(m_off), "P"(n_off), "P"(SFASize * 16), "P"(SFBSize * 16) \
         ); \
       } else { \
         asm ( \
@@ -207,7 +207,7 @@ template <int M> struct XE_BDPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::
           ".decl SRC4_UB v_type=G type=UB num_elts=%7 alias=<%3,0>\n" \
           "bdpas." #TB "." #TA ".8.8 (M1, 16) DST.0 SRC0.0 SRC1_UD.0 SRC2_UD.0 SRC3_UB(0,%6) SRC4_UB(0,%5)\n" \
           "}\n" \
-          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(SFAOffset), "P"(SFBOffset), "P"(SFASize * 16), "P"(SFBSize * 16), "rw"(c) \
+          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(m_off), "P"(n_off), "P"(SFASize * 16), "P"(SFBSize * 16), "rw"(c) \
         ); \
       } \
     } \
@@ -241,7 +241,7 @@ template <int M> struct XE_BDPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::
   template <typename SFAVector, \
             typename SFBVector> \
   CUTE_HOST_DEVICE static void \
-  fma(DVector& d, AVector const& a, BVector const& b, CVector const& c, SFAVector const& sfa, SFBVector const& sfb, uint8_t sfa_idx, uint8_t sfb_idx) { \
+  fma(DVector& d, AVector const& a, BVector const& b, CVector const& c, SFAVector const& sfa, SFBVector const& sfb, uint16_t m_offset, uint16_t n_offset, uint16_t ka_offset, uint16_t kb_offset) { \
     CUTE_INVALID_CONTROL_PATH("Cannot use Xe BDPAS MMA atom on non-Xe hardware"); \
   } \
 };

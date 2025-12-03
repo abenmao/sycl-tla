@@ -127,8 +127,8 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
     constexpr int   RegNumB = extent<typename MMAOp::BRegisters>::value;
     constexpr int   RegNumC = extent<typename MMAOp::CRegisters>::value;
 
-    auto  [A, SFA, SFA_OFFSET] = unzip_tensor(A_zipped);
-    auto  [B, SFB, SFB_OFFSET] = unzip_tensor(B_zipped);
+    auto  [A, SFA, M_OFFSET, AK_OFFSET] = unzip_tensor(A_zipped);
+    auto  [B, SFB, N_OFFSET, BK_OFFSET] = unzip_tensor(B_zipped);
 
     Tensor rA = recast<RegTypeA>(A);
     Tensor rB = recast<RegTypeB>(B);
@@ -147,7 +147,7 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
             rC,   make_int_sequence<RegNumC>{},
             SFA, make_int_sequence<1>{},
             SFB, make_int_sequence<1>{},
-            SFA_OFFSET[0], SFB_OFFSET[0]);
+            M_OFFSET[0], N_OFFSET[0], AK_OFFSET[0], BK_OFFSET[0]);
   }
 
 };

@@ -202,6 +202,10 @@ public:
   static constexpr int ATOM_N = get<2>(typename TiledMma::ThrLayoutVMNK{}.shape());
   static constexpr int ATOM_K = get<3>(typename TiledMma::ThrLayoutVMNK{}.shape());
 
+  static constexpr int MMA_M = get<0>(typename TiledMma::Shape_MNK{});
+  static constexpr int MMA_N = get<1>(typename TiledMma::Shape_MNK{});
+  static constexpr int MMA_K = get<2>(typename TiledMma::Shape_MNK{});
+
   static constexpr int SG_M = ceil_div(BLK_M, ATOM_M);
   static constexpr int SG_N = ceil_div(BLK_N, ATOM_N);
   static constexpr int SG_K = ceil_div(BLK_K, ATOM_K);
@@ -231,8 +235,8 @@ public:
 
   static_assert(sizeof_bits_v<NonVoidElementScaleA> == 8 && sizeof_bits_v<NonVoidElementScaleB> == 8);
 
-  using GmemTiledCopyNonVoidScaleA = typename scale_copy_traits<NonVoidElementScaleA, SG_K / GROUP_K, SG_M>::type;
-  using GmemTiledCopyNonVoidScaleB = typename scale_copy_traits<NonVoidElementScaleB, SG_K / GROUP_K, SG_N>::type;
+  using GmemTiledCopyNonVoidScaleA = typename scale_copy_traits<NonVoidElementScaleA, MMA_K / GROUP_K, SG_M>::type;
+  using GmemTiledCopyNonVoidScaleB = typename scale_copy_traits<NonVoidElementScaleB, MMA_K / GROUP_K, SG_N>::type;
 
 // Conditionally select the TiledCopy type for ScaleA
   using SelectedGmemTiledCopyScaleA = cute::conditional_t<
@@ -365,8 +369,9 @@ public:
   CUTLASS_DEVICE static auto
   make_scale_copy_iterator(int coord, int l_coord, int k_tile_count) {
       return make_tensor(make_inttuple_iter(make_coord(coord, 0, l_coord)),
-                         make_layout(make_shape(Int<scale_traits_size>{}, Int<scale_traits_num>{}, _1{}, k_tile_count),
-                                     make_stride(E<0>{} * _16{}, E<0>{} * size<1>(typename SelectedGmemTiledCopyScale::BlockShape{}), _0{}, E<1>{} * (SG_K / GROUP_K))));
+                         make_layout(make_shape(Int<scale_traits_size>{}, Int<scale_traits_num>{}, SG_K / MMA_K, k_tile_count),
+                                     make_stride(E<0>{} * _16{}, E<0>{} * size<1>(typename SelectedGmemTiledCopyScale::BlockShape{}),
+                                                 E<1>{} * size<0>(typename SelectedGmemTiledCopyScale::BlockShape{}), E<1>{} * (SG_K / GROUP_K))));
   }
 
   /// Perform a subgroup-scoped matrix multiply-accumulate
@@ -431,13 +436,14 @@ public:
     // If IsATransformed, we need modes M_atom, and M_iter from fragment_A layout else we need mode N_iter from fragment_B layout.
     static constexpr auto scaleA_traits_size = decltype(size(typename SelectedGmemTiledCopyScaleA::BlockShape{}))::value / SubgroupSize;
     static constexpr auto scaleA_traits_num = SG_M / size<1>(typename SelectedGmemTiledCopyScaleA::BlockShape{});
-    using FragScaleALayout = Layout<Shape<Int<scaleA_traits_size>, Int<scaleA_traits_num>, _1>>;
+    using FragScaleALayout = Layout<Shape<Int<scaleA_traits_size>, Int<scaleA_traits_num>, Int<SG_K / MMA_K>>>;
     Tensor fragment_scaleA = make_tensor<ElementScaleA>(FragScaleALayout{});
 
     static constexpr int scaleB_traits_size = decltype(size(typename SelectedGmemTiledCopyScaleB::BlockShape{}))::value / SubgroupSize;
     static constexpr int scaleB_traits_num = SG_N / size<1>(typename SelectedGmemTiledCopyScaleB::BlockShape{});
-    using FragScaleBLayout = Layout<Shape<Int<scaleB_traits_size>, Int<scaleB_traits_num>, _1>>;
+    using FragScaleBLayout = Layout<Shape<Int<scaleB_traits_size>, Int<scaleB_traits_num>, Int<SG_K / MMA_K>>>;
     Tensor fragment_scaleB = make_tensor<ElementScaleB>(FragScaleBLayout{});
+
     auto [m_idx, n_idx, k_idx, l_idx] = blk_coord;
     const int m_coord = m_idx * BLK_M + (get_sub_group_id() / ATOM_N) * SG_M;
     const int n_coord = n_idx * BLK_N + (get_sub_group_id() % ATOM_N) * SG_N;
@@ -470,8 +476,44 @@ public:
 #undef PRINT
   #endif
 
-    const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K_start));
+    using mma_M = Int<decltype(size<1>(tCrA.shape()))::value>;
+    using mma_N = Int<decltype(size<1>(tCrB.shape()))::value>;
+    using mma_K = Int<decltype(size<2>(tCrB.shape()))::value>;
+
+    using scaleASize = decltype(size(fragment_scaleA));
+    using scaleBSize = decltype(size(fragment_scaleB));
+
+    // TODO: "scaleASize::value * 2" to workaround visa alignment issue, should remove " * 2" in the future
+    using scaleA_vec_t = intel::vector_t<ElementScaleA, scaleASize::value * 2>;
+    using scaleB_vec_t = intel::vector_t<ElementScaleB, scaleBSize::value * 2>;
+    Tensor scaleA = make_tensor(recast<scaleA_vec_t>(fragment_scaleA).data(), make_layout(Shape<_1, mma_M, _1>{}, Stride<_1, _0, _0>{}));
+    Tensor scaleB = make_tensor(recast<scaleB_vec_t>(fragment_scaleB).data(), make_layout(Shape<_1, mma_N, _1>{}, Stride<_1, _0, _0>{}));
+
+    auto gemm_m_offsets = make_tensor<uint8_t>(Layout<Shape<_1, mma_M, _1>, Stride<_0, _1, _0>>{});
+    CUTLASS_PRAGMA_UNROLL
+    for (int m = 0; m < mma_M::value; ++m) {
+      gemm_m_offsets(m) = sizeof_bits_v<ElementA> < 8 ? (m / 2) * 32 + (m % 2) * 8 : m * 8;
+    }
+
+    auto gemm_n_offsets = make_tensor<uint8_t>(Layout<Shape<_1, mma_N, _1>, Stride<_0, _1, _0>>{});
+    CUTLASS_PRAGMA_UNROLL
+    for (int n = 0; n < mma_N::value; ++n) {
+      gemm_n_offsets(n) = sizeof_bits_v<ElementB> < 8 ? n * 32 : n * 16;
+    }
+
+    auto gemm_ak_offsets = make_tensor<uint16_t>(Layout<Shape<_1, _1, mma_K>, Stride<_0, _0, _1>>{});
+    auto gemm_bk_offsets = make_tensor<uint16_t>(Layout<Shape<_1, _1, mma_K>, Stride<_0, _0, _1>>{});
+    CUTLASS_PRAGMA_UNROLL
+    for (int k = 0; k < mma_K::value; ++k) {
+      gemm_ak_offsets(k) = static_cast<uint16_t>(k * size(typename SelectedGmemTiledCopyScaleA::BlockShape{}) * (SG_M / 16));
+      gemm_bk_offsets(k) = static_cast<uint16_t>(k * size(typename SelectedGmemTiledCopyScaleB::BlockShape{}) * (SG_N / 16));
+    }
+
     constexpr int barrier_scope = 2;
+
+    constexpr int k_reload_factor = cute::max(GROUP_K / BLK_K, 1);
+
+    const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K_start));
     int prefetch_k = k_start_idx;
 
     CUTLASS_PRAGMA_UNROLL
@@ -480,49 +522,12 @@ public:
         prefetch(prefetch_b, pBgB(_, _, _, prefetch_k));
     }
 
-    constexpr int k_reload_factor = cute::max(GROUP_K / BLK_K, 1);
-    using mma_M = Int<decltype(size<1>(tCrA.shape()))::value>;
-    using mma_N = Int<decltype(size<1>(tCrB.shape()))::value>;
-    using scaleASize = decltype(size(fragment_scaleA));
-    using scaleBSize = decltype(size(fragment_scaleB));
-    auto const scaleA_layout = make_layout(make_shape(size<0>(tCrA.shape()),
-                                                      size<1>(tCrA.shape()),
-                                                      size<2>(tCrA.shape())),
-                                          make_stride(Int<1>{}, Int<0>{}, Int<0>{}));
-    auto const scaleB_layout = make_layout(make_shape(size<0>(tCrB.shape()),
-                                                      size<1>(tCrB.shape()),
-                                                      size<2>(tCrB.shape())),
-                                          make_stride(Int<1>{}, Int<0>{}, Int<0>{}));
-
-    auto const gemm_m_offsets_layout = make_layout(make_shape(size<0>(tCrA.shape()),
-                                                      size<1>(tCrA.shape()),
-                                                      size<2>(tCrA.shape())),
-                                          make_stride(Int<0>{}, Int<1>{}, Int<0>{}));
-    auto const gemm_n_offsets_layout = make_layout(make_shape(size<0>(tCrB.shape()),
-                                                      size<1>(tCrB.shape()),
-                                                      size<2>(tCrB.shape())),
-                                          make_stride(Int<0>{}, Int<1>{}, Int<0>{}));
-    auto gemm_m_indices = make_tensor<uint8_t>(make_shape(mma_M{}));
-    CUTLASS_PRAGMA_UNROLL
-    for (int m = 0; m < mma_M::value; ++m) {
-      gemm_m_indices(m) = static_cast<uint8_t>(m);
-    }
-
-    auto gemm_n_indices = make_tensor<uint8_t>(make_shape(mma_N{}));
-    CUTLASS_PRAGMA_UNROLL
-    for (int n = 0; n < mma_N::value; ++n) {
-      gemm_n_indices(n) = static_cast<uint8_t>(n);
-    }
-
-    auto gemm_m_offsets = make_tensor(gemm_m_indices.data(), gemm_m_offsets_layout);
-    auto gemm_n_offsets = make_tensor(gemm_n_indices.data(), gemm_n_offsets_layout);
     //
     // Mainloop
     //
     for (int k_tile = k_start_idx; k_tile < k_tile_count + k_start_idx; k_tile++, prefetch_k++) {
       barrier_arrive(barrier_scope);
 
-      // Copy gmem to rmem for the first k_tile
       copy(copy_a, tAgA(_,_,_,k_tile), tArA);
       copy(copy_b, tBgB(_,_,_,k_tile), tBrB);
 
@@ -534,22 +539,11 @@ public:
         prefetch(prefetch_b, pBgB(_, _, _, prefetch_k));
       }
 
-      // reorder
       reorder(tArA, tCrA);
       reorder(tBrB, tCrB);
 
-      Tensor scaleA = recast<intel::vector_t<ElementScaleA, scaleASize::value * 2>>(make_tensor(fragment_scaleA.data(), Shape<scaleASize>{}));
-      Tensor scaleB = recast<intel::vector_t<ElementScaleB, scaleBSize::value * 2>>(make_tensor(fragment_scaleB.data(), Shape<scaleBSize>{}));
-
-
-      auto scaleA_view = make_tensor(scaleA.data(), scaleA_layout);
-      auto scaleB_view = make_tensor(scaleB.data(), scaleB_layout);
-
-      cute::gemm(
-        tiled_mma,
-        make_zip_tensor(tCrA, scaleA_view, gemm_m_offsets),
-        make_zip_tensor(tCrB, scaleB_view, gemm_n_offsets),
-        accum);
+      cute::gemm(tiled_mma, make_zip_tensor(tCrA, scaleA, gemm_m_offsets, gemm_ak_offsets),
+                 make_zip_tensor(tCrB, scaleB, gemm_n_offsets, gemm_bk_offsets), accum);
 
       barrier_wait(barrier_scope);
     }

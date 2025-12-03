@@ -324,9 +324,9 @@ explode_mma(PtrD&& d, int_sequence<Id...>,
         PtrC&& c, int_sequence<Ic...>,
         PtrE&& e, int_sequence<Ie...>,
         PtrF&& f, int_sequence<If...>,
-        uint8_t sfa_idx, uint8_t sfb_idx)
+        uint16_t m, uint16_t n, uint16_t ka, uint16_t kb)
 {
-  return MMA_Op::fma(d[Id]..., a[Ia]..., b[Ib]..., c[Ic]..., e[Ie]..., f[If]..., sfa_idx, sfb_idx);
+  return MMA_Op::fma(d[Id]..., a[Ia]..., b[Ib]..., c[Ic]..., e[Ie]..., f[If]..., m, n, ka, kb);
 }
 #endif
 

@@ -111,21 +111,21 @@ public:
                     SmemCopyAtomB_,
                     TransformB_>;
 
-    using BaseArguments = Base::Arguments;
-    using BaseParams = Base::Params;
+    using BaseArguments = typename Base::Arguments;
+    using BaseParams = typename Base::Params;
 
-    using ElementA = Base::ElementA;
-    using ElementB = Base::ElementB;
+    using ElementA = typename Base::ElementA;
+    using ElementB = typename Base::ElementB;
     using StrideA  = remove_cvref_t<decltype(get<0>(StridePairA_{}))>;
     using StrideB  = remove_cvref_t<decltype(get<0>(StridePairB_{}))>;
     using InternalStrideA = cute::remove_pointer_t<StrideA>;
     using InternalStrideB = cute::remove_pointer_t<StrideB>;
 
-    using ElementScaleA = Base::ElementScaleA;
-    using ElementScaleB = Base::ElementScaleB;
-    using InternalStrideScaleA = Base::StrideScaleA;
-    using InternalStrideScaleB = Base::StrideScaleB;
-    using ElementSF = Base::ElementSF;
+    using ElementScaleA = typename Base::ElementScaleA;
+    using ElementScaleB = typename Base::ElementScaleB;
+    using InternalStrideScaleA = typename Base::StrideScaleA;
+    using InternalStrideScaleB = typename Base::StrideScaleB;
+    using ElementSF = typename Base::ElementSF;
 
     using StrideScaleA = remove_cvref_t<decltype(get<1>(StridePairA_{}))>;
     using StrideScaleB = remove_cvref_t<decltype(get<1>(StridePairB_{}))>;

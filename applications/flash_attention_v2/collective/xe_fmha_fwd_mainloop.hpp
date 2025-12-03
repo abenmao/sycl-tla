@@ -58,9 +58,9 @@ struct scale_copy_traits {
 };
 
 // 8 bits
-template<class datatype, size_t width, class stride>
-struct scale_copy_traits<datatype, 1, width, stride,
-          std::enable_if_t<sizeof_bits_v<datatype> == 8>> {
+template<class datatype, size_t height, size_t width, class stride>
+struct scale_copy_traits<datatype, height, width, stride,
+          std::enable_if_t<sizeof_bits_v<datatype> == 8 && height <= 1>> {
   using type = XE_2D_U8x1x16_LD_N;
 };
 template<class datatype, size_t width, class stride>
@@ -174,6 +174,10 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_,
   static constexpr int ATOM_N = get<2>(typename TiledMMAQK::ThrLayoutVMNK{}.shape());
   static constexpr int ATOM_K = get<3>(typename TiledMMAQK::ThrLayoutVMNK{}.shape());
 
+  static constexpr int MMA_M = get<0>(typename TiledMMAQK::Shape_MNK{});
+  static constexpr int MMA_N = get<1>(typename TiledMMAQK::Shape_MNK{});
+  static constexpr int MMA_K = get<2>(typename TiledMMAQK::Shape_MNK{});
+
   static constexpr int SG_M = ceil_div(BLK_M, ATOM_M);
   static constexpr int SG_N = ceil_div(BLK_N, ATOM_N);
   static constexpr int SG_K = ceil_div(BLK_K, ATOM_K);
@@ -189,8 +193,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_,
   using DefScaleType = cutlass::float_ue8m0_t;
   using NonVoidElementScaleQ = cute::conditional_t<UseScale, ElementScaleQ, DefScaleType>;
   using NonVoidElementScaleK = cute::conditional_t<UseScale, ElementScaleK, DefScaleType>;
-  using GmemTiledCopyScaleQ = typename scale_copy_traits<NonVoidElementScaleQ, SG_K / GROUP_K, SG_M>::type;
-  using GmemTiledCopyScaleK = typename scale_copy_traits<NonVoidElementScaleK, SG_K / GROUP_K, SG_N>::type;
+  using GmemTiledCopyScaleQ = typename scale_copy_traits<NonVoidElementScaleQ, MMA_K / GROUP_K, SG_M>::type;
+  using GmemTiledCopyScaleK = typename scale_copy_traits<NonVoidElementScaleK, MMA_K / GROUP_K, SG_N>::type;
   
   template<
   class SelectedGmemTiledCopyScale,
@@ -210,11 +214,11 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_,
   // If IsATransformed, we need modes M_atom, and M_iter from fragment_A layout else we need mode N_iter from fragment_B layout.
   static constexpr auto scaleQ_traits_size = decltype(size(typename GmemTiledCopyScaleQ::BlockShape{}))::value / intel::sg_size;
   static constexpr auto scaleQ_traits_num = SG_M / size<1>(typename GmemTiledCopyScaleQ::BlockShape{});
-  using FragScaleQLayout = Layout<Shape<Int<scaleQ_traits_size>, Int<scaleQ_traits_num>, _1>>;
+  using FragScaleQLayout = Layout<Shape<Int<scaleQ_traits_size>, Int<scaleQ_traits_num>, Int<SG_K / MMA_K>>>;
 
   static constexpr int scaleK_traits_size = decltype(size(typename GmemTiledCopyScaleK::BlockShape{}))::value / intel::sg_size;
   static constexpr int scaleK_traits_num = SG_N / size<1>(typename GmemTiledCopyScaleK::BlockShape{});
-  using FragScaleKLayout = Layout<Shape<Int<scaleK_traits_size>, Int<scaleK_traits_num>, _1>>;
+  using FragScaleKLayout = Layout<Shape<Int<scaleK_traits_size>, Int<scaleK_traits_num>, Int<SG_K / MMA_K>>>;
   // User-facing arguments
   struct Arguments {
     ElementS const scale;
@@ -254,8 +258,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_,
   CUTLASS_DEVICE static auto
   make_scale_copy_iterator(int coord, int l_coord, int k_tile_count) {
       return make_tensor(make_inttuple_iter(make_coord(coord, 0, l_coord)),
-                         make_layout(make_shape(Int<scale_traits_size>{}, Int<scale_traits_num>{}, _1{}, k_tile_count),
-                                     make_stride(E<0>{} * _16{}, E<0>{} * size<1>(typename SelectedGmemTiledCopyScale::BlockShape{}), _0{}, E<1>{} * (SG_K / GROUP_K))));
+                         make_layout(make_shape(Int<scale_traits_size>{}, Int<scale_traits_num>{}, SG_K / MMA_K, k_tile_count),
+                                     make_stride(E<0>{} * _16{}, E<0>{} * size<1>(typename SelectedGmemTiledCopyScale::BlockShape{}),
+                                                 E<1>{} * size<0>(typename SelectedGmemTiledCopyScale::BlockShape{}), E<1>{} * (SG_K / GROUP_K))));
   }
 
   template <typename QVCoord>
@@ -366,27 +371,38 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_,
     using scaleQSize = decltype(size(fragment_scaleQ));
     using scaleKSize = decltype(size(fragment_scaleK));
 
-    using MmaRowQ = decltype(size<1>(tSrQ.shape()));
-    auto gemm_q_indices = make_tensor<uint8_t>(make_shape(MmaRowQ{}));
+    using MmaRowQM = decltype(size<1>(tSrQ.shape()));
+    auto gemm_qm_indices = make_tensor<uint8_t>(make_shape(MmaRowQM{}));
     CUTLASS_PRAGMA_UNROLL
-    for (int m = 0; m < MmaRowQ::value; ++m) {
-      gemm_q_indices(m) = static_cast<uint8_t>(m);
+    for (int m = 0; m < MmaRowQM::value; ++m) {
+      gemm_qm_indices(m) = sizeof_bits_v<ElementQ> < 8 ? (m / 2) * 32 + (m % 2) * 8 : m * 8;
     }
-    auto gemm_q_offsets = make_tensor(
-        gemm_q_indices.data(),
+    auto gemm_qm_offsets = make_tensor(
+        gemm_qm_indices.data(),
         make_layout(make_shape(size<0>(tSrQ.shape()), size<1>(tSrQ.shape()), size<2>(tSrQ.shape())),
                     make_stride(Int<0>{}, Int<1>{}, Int<0>{})));
     
-    using MmaColK = decltype(size<1>(tSrK.shape()));
-    auto gemm_k_indices = make_tensor<uint8_t>(make_shape(MmaColK{}));
+    using MmaColKN = decltype(size<1>(tSrK.shape()));
+    auto gemm_kn_indices = make_tensor<uint8_t>(make_shape(MmaColKN{}));
     CUTLASS_PRAGMA_UNROLL
-    for (int n = 0; n < MmaColK::value; ++n) {
-      gemm_k_indices(n) = static_cast<uint8_t>(n);
+    for (int n = 0; n < MmaColKN::value; ++n) {
+      gemm_kn_indices(n) = sizeof_bits_v<ElementQ> < 8 ? n * 32 : n * 16;
     }
-    auto gemm_k_offsets = make_tensor(
-        gemm_k_indices.data(),
+    auto gemm_kn_offsets = make_tensor(
+        gemm_kn_indices.data(),
         make_layout(make_shape(size<0>(tSrK.shape()), size<1>(tSrK.shape()), size<2>(tSrK.shape())),
                     make_stride(Int<0>{}, Int<1>{}, Int<0>{})));
+
+    using MmaK = decltype(size<2>(tSrK.shape()));
+    auto gemm_qk_offsets = make_tensor<uint16_t>(Layout<Shape<_1, _1, MmaK>, Stride<_0, _0, _1>>{});
+    auto gemm_kk_offsets = make_tensor<uint16_t>(Layout<Shape<_1, _1, MmaK>, Stride<_0, _0, _1>>{});
+    CUTLASS_PRAGMA_UNROLL
+    for (int k = 0; k < MmaK::value; ++k) {
+      gemm_qk_offsets(k) = static_cast<uint16_t>(k * size(typename GmemTiledCopyScaleQ::BlockShape{}) * (SG_M / 16));
+      gemm_kk_offsets(k) = static_cast<uint16_t>(k * size(typename GmemTiledCopyScaleK::BlockShape{}) * (SG_N / 16));
+    }
+
+
 #if 0
     Tensor cScaleV = make_identity_tensor(ScaleV_2D.shape());   // (v,k)
     Tensor gScaleV   = local_tile(cScaleV, tile_shape_v,  make_coord(get<1>(blk_qv),_));                 // (v,k,K)
@@ -485,8 +501,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_,
 
           auto scaleQ_view = make_tensor(scaleQ.data(), scaleQ_layout);
           auto scaleK_view = make_tensor(scaleK.data(), scaleK_layout);
-          auto zipped_q = make_zip_tensor(tSrQ, scaleQ_view, gemm_q_offsets);
-          auto zipped_k = make_zip_tensor(tSrK, scaleK_view, gemm_k_offsets);
+          auto zipped_q = make_zip_tensor(tSrQ, scaleQ_view, gemm_qm_offsets, gemm_qk_offsets);
+          auto zipped_k = make_zip_tensor(tSrK, scaleK_view, gemm_kn_offsets, gemm_kk_offsets);
           cute::gemm(mma_qk, zipped_q, zipped_k, tSrS);
         } else {
           cute::gemm(mma_qk, tSrQ, tSrK, tSrS);

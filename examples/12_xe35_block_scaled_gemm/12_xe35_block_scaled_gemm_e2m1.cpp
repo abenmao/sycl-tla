@@ -89,7 +89,7 @@ int main(int argc, const char** argv) {
   using GmemTiledCopyScaleA = void;
   using GmemTiledCopyScaleB = void;
   
-  using TileShape = Shape<_512, _512, _64>;
+  using TileShape = Shape<_512, _256, _128>;
 
   using TiledMma = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, ElementInputA>>, Layout<TileShape>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
 

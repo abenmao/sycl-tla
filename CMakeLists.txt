@@ -182,7 +182,7 @@ if (CUTLASS_ENABLE_SYCL)
   endif()
 
   if(SYCL_INTEL_TARGET)
-      add_compile_definitions(SYCL_INTEL_TARGET)
+      #add_compile_definitions(SYCL_INTEL_TARGET)
       add_compile_options(
         -Wall
         -Wno-unused-variable
