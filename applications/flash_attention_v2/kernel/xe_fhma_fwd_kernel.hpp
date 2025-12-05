@@ -109,6 +109,7 @@ public:
   using StrideO = decltype(stride(typename CollectiveEpilogue::TensorO{}));
   using Copy_ScaleQ = typename CollectiveMainloop::Copy_ScaleQ;
   using Copy_ScaleK = typename CollectiveMainloop::Copy_ScaleK;
+  using Copy_ScaleV = typename CollectiveMainloop::Copy_ScaleV;
   // Kernel level shared memory storage
   using MainloopSharedStorage = typename CollectiveMainloop::SharedStorage;
   using EpilogueSharedStorage = typename CollectiveEpilogue::SharedStorage;
@@ -304,10 +305,14 @@ public:
         Tensor ScaleV = make_tensor(make_gmem_ptr(dcScaleV), make_layout(shape_scale_V, stride_scaleV));
         Copy_ScaleQ tiled_copy_scaleQ;
         Copy_ScaleK tiled_copy_scaleK;
+        Copy_ScaleV tiled_copy_scaleV;
         auto ScaleQ_head = ScaleQ(_, _, head_q, l_coord);
         auto ScaleK_head = ScaleK(_, _, head, l_coord);
+        auto ScaleV_head = ScaleV(_, _, head, l_coord);
+
         tiled_copy_scaleQ = {Copy_ScaleQ{}.with(ScaleQ_head)};
         tiled_copy_scaleK = {Copy_ScaleK{}.with(ScaleK_head)};
+        tiled_copy_scaleV = {Copy_ScaleV{}.with(ScaleV_head)};
         mainloop(Q(_,_,head_q,l_coord),
                  K(_,_,head,l_coord),
                  V(_,_,head,l_coord),
@@ -316,7 +321,8 @@ public:
                  thr_id, seq_len, l_coord,
                  full_tile_offset, discard_seq_coord,
                  tiled_copy_scaleQ,
-                 tiled_copy_scaleK);
+                 tiled_copy_scaleK,
+                 tiled_copy_scaleV);
       } else {
         mainloop(Q(_,_,head_q,l_coord),
                  K(_,_,head,l_coord),
@@ -646,7 +652,7 @@ public:
               V(_,_,head_kv,idx_b),
               tArA, tA_max, tA_sum,
               blk_qv, start_blk, end_blk, local_k_blocks,
-              thr_id, s.seq_len_kv, /*for causal*/0, 0);
+              thr_id, s.seq_len_kv, /*for causal*/0, 0, 0);
 
         // partition id of start batch head id in current wg
         int partition_id = get_partition_id(wg_id, batch_head_id, num_blocks_per_wg, local_k_blocks);

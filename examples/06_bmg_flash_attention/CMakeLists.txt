@@ -65,19 +65,35 @@ foreach(HEAD_DIM 64 96 128 192)
       set(INPUT_MACRO "IS_MX_FLOAT_E2M1")
     endif()
 
-    cutlass_example_add_executable(
-      06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM}
-      06_xe_fmha_fwd.cpp
-      TEST_COMMAND_OPTIONS
-      TEST_NO_PAGED_PREFILL
-    )
+   if (INPUT_TYPE STREQUAL "mx_float_e5m2_t" OR  INPUT_TYPE STREQUAL "mx_float_e4m3_t" OR INPUT_TYPE STREQUAL "mx_float_e2m1_t")
+      cutlass_example_add_executable(
+        06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM}
+        06_xe_fmha_fwd_mxfp.cpp
+        TEST_COMMAND_OPTIONS
+        TEST_NO_PAGED_PREFILL
+      )
 
-    cutlass_example_add_executable(
-      06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM}
-      06_xe_fmha_fwd.cpp
-      TEST_COMMAND_OPTIONS
-      TEST_NO_PAGED_DECODE
-    )
+      cutlass_example_add_executable(
+        06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM}
+        06_xe_fmha_fwd_mxfp.cpp
+        TEST_COMMAND_OPTIONS
+        TEST_NO_PAGED_DECODE
+      )
+    else()
+      cutlass_example_add_executable(
+        06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM}
+        06_xe_fmha_fwd.cpp
+        TEST_COMMAND_OPTIONS
+        TEST_NO_PAGED_PREFILL
+      )
+
+      cutlass_example_add_executable(
+        06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM}
+        06_xe_fmha_fwd.cpp
+        TEST_COMMAND_OPTIONS
+        TEST_NO_PAGED_DECODE
+      )
+    endif()
 
     target_compile_definitions(06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
     target_compile_definitions(06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})

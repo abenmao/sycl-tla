@@ -183,6 +183,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   using CollectiveMainloop = typename FMHAKernel::CollectiveMainloop;
   using ElementS = typename CollectiveMainloop::ElementS;
   static constexpr bool UseScale = FMHAKernel::UseScale;
+  static constexpr bool FP4Input = sizeof_bits_v<ElementQ> < 8;
 
   using ProblemShapeType = cutlass::fmha::kernel::FMHAProblemShape<isVarLen>;
 
@@ -325,15 +326,10 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
 
     auto block_Q_ = UseScale ? block_Q_dq : in_memory(block_Q);
     auto block_K_ = UseScale ? block_K_dq : in_memory(block_K);
-#if 0
-    auto block_V_ = UseScale ? block_V_dq : in_memory(block_V);
-    using ElementV_ = std::conditional_t<UseScale, 
+    auto block_V_ = (UseScale && !FP4Input) ? block_V_dq : in_memory(block_V);
+    using ElementV_ = std::conditional_t<UseScale && !FP4Input, 
                                     ElementPVMMAVerify,
                                     std::remove_pointer_t<decltype(block_V_.get())>>;
-#else
-    auto block_V_ = in_memory(block_V);
-    using ElementV_ = std::remove_pointer_t<decltype(block_V_.get())>;
-#endif
     int offset_q = 0;
     int offset_k = 0;
     int offset_v = 0;
@@ -496,21 +492,21 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   template <class Element>
   bool initialize_scale(
     cutlass::DeviceAllocation<Element>& block,
-    Options const& options) {
+    Options const& options, bool const_scale = false) {
     const float elt_max_f = float(cutlass::platform::numeric_limits<Element>::max());
     // Need to fix max_dequant_val and min_dequant_val?
     const float max_dequant_val = elt_max_f * 0.25f;
     const float min_dequant_val = 0.5f;
     const float scale_max = max_dequant_val / elt_max_f;
     const float scale_min = min_dequant_val / elt_max_f;
-#if 1
-    cutlass::reference::device::BlockFillRandomUniform(
+    if (const_scale) {
+      std::vector<Element> host(block.size(), Element(1));
+      cutlass::device_memory::copy_to_device(block.get(), host.data(), host.size());
+      compat::wait();
+    } else {
+      cutlass::reference::device::BlockFillRandomUniform(
         block.get(), block.size(), seed, Element(scale_max), Element(scale_min));
-#else
-    std::vector<Element> host(block.size(), Element(1));
-    cutlass::device_memory::copy_to_device(block.get(), host.data(), host.size());
-    compat::wait();
-#endif
+    }
     return true;
   }
 
@@ -525,10 +521,6 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
                        Layout const operand_layout,
                        ElementScale const* scale_buffer,
                        ScaleLayout const scale_layout) {
-    if constexpr (std::is_same_v<DstElement, SrcElement>) {
-      return;
-    }
-
     std::vector<uint8_t> dst(size(operand_layout) * sizeof_bits_v<DstElement> / 8, 0);
     cutlass::device_memory::copy_to_host(dst.data(), (uint8_t*)dq_buffer, dst.size());
 
@@ -862,7 +854,11 @@ struct FMHAConfig {
   using DefaultDpasOp = XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, ElementQ>;
   using DefaultBdpasOp = XE_BDPAS_TT<cute::gcd(SGTileQ, 8), float, ElementQ>;
   using DefaultMMA = cute::conditional_t<UseScale, DefaultBdpasOp, DefaultDpasOp>;
-  using MMAOperationPV = XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, ElementV>;
+  using MMAOperationPV = typename cute::conditional_t<
+      cute::is_same_v<ElementV, cutlass::float_e5m2_t> || cute::is_same_v<ElementV, cutlass::float_e4m3_t>,
+      DefaultMMA,
+      XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, ElementV>
+  >;
 #endif
 
   using MMAOperation = cute::conditional_t<is_void_v<MMAOperation_>,
