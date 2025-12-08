@@ -184,6 +184,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   using ElementS = typename CollectiveMainloop::ElementS;
   static constexpr bool UseScale = FMHAKernel::UseScale;
   static constexpr bool FP4Input = sizeof_bits_v<ElementQ> < 8;
+  static constexpr bool F8kvF16mma = CollectiveMainloop::F8kvF16mma;
 
   using ProblemShapeType = cutlass::fmha::kernel::FMHAProblemShape<isVarLen>;
 
@@ -224,6 +225,9 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   std::vector<int> cumulative_scale_kv;
   cutlass::DeviceAllocation<int> device_cumulative_scale_q;
   cutlass::DeviceAllocation<int> device_cumulative_scale_kv;
+
+  ElementScale scale_k;
+  ElementScale scale_v;
 
   //
   // Methods
@@ -325,11 +329,12 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     int seq_len_qo, seq_len_kv;
 
     auto block_Q_ = UseScale ? block_Q_dq : in_memory(block_Q);
-    auto block_K_ = UseScale ? block_K_dq : in_memory(block_K);
-    auto block_V_ = (UseScale && !FP4Input) ? block_V_dq : in_memory(block_V);
+    auto block_K_ = (UseScale || F8kvF16mma) ? block_K_dq : in_memory(block_K);
+    auto block_V_ = ((UseScale && !FP4Input) || F8kvF16mma) ? block_V_dq : in_memory(block_V);
     using ElementV_ = std::conditional_t<UseScale && !FP4Input, 
                                     ElementPVMMAVerify,
                                     std::remove_pointer_t<decltype(block_V_.get())>>;
+
     int offset_q = 0;
     int offset_k = 0;
     int offset_v = 0;
@@ -576,6 +581,30 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     cutlass::device_memory::copy_to_device(dq_buffer, (DstElement*)(raw_pointer_cast(dst_tensor.data())), dst_tensor.size());
     compat::wait();
   }
+
+  template <typename LowpT, typename DeqT>
+  void apply_dequantization(const cutlass::DeviceAllocation<LowpT>& lowp, cutlass::DeviceAllocation<DeqT>& deq, float& scale) {
+    const float lowp_max = float(cutlass::platform::numeric_limits<LowpT>::max());
+    const float highp_max = float(cutlass::platform::numeric_limits<DeqT>::max());
+    auto s = highp_max / lowp_max;
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dis(1.0f, s/2.0f);
+    scale = dis(gen);
+
+    auto deq_buff = std::vector<DeqT>(deq.size());
+    compat::memcpy<DeqT>(deq_buff.data(), deq.get(), deq.size());
+    compat::wait();
+
+    for (auto i = 0; i < deq.size(); ++i) {
+      deq_buff[i] = static_cast<DeqT>(scale * static_cast<float>(deq_buff[i]));
+    }
+
+    compat::memcpy<DeqT>(deq.get(), deq_buff.data(), deq.size());
+    compat::wait();
+  }
+
   /// Initialize operands to be used in the GEMM and reference GEMM
   ProblemShapeType initialize(const Options &options) {
     auto problem_shape_in = cute::make_tuple(options.batch, options.num_heads_q, options.num_heads_kv, options.seq_len_qo, options.seq_len_kv, options.head_size_qk, options.head_size_vo);
@@ -656,7 +685,10 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     convert_dtype<ElementK, ElementQKMMAVerify, ExampleRunner>(block_K, block_K_dq);
     convert_dtype<ElementV, ElementPVMMAVerify, ExampleRunner>(block_V, block_V_dq);
 
-    if constexpr (UseScale) {
+    if constexpr (F8kvF16mma) {
+      apply_dequantization(block_K, block_K_dq, scale_k);
+      apply_dequantization(block_V, block_V_dq, scale_v);
+    } else if constexpr (UseScale) {
       auto scale_q = cute::ceil_div(head_size_qk, GROUP_SIZE);
       auto scale_k = cute::ceil_div(head_size_qk, GROUP_SIZE);
       int scale_v = cute::ceil_div(seq_len_kv, GROUP_SIZE);
@@ -738,6 +770,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
         block_scaleQ.get(), stride_SQ,
         block_scaleK.get(), stride_SK,
         block_scaleV.get(), stride_SV,
+        scale_k, scale_v,
         GROUP_SIZE
       },
       {options.softmax_scale},
@@ -843,6 +876,12 @@ struct FMHAConfig {
 
   static constexpr int SGTileQ = get<0>(shape_div(TileShapeQK{}, shape(SubgroupLayoutQK{})))();
 
+  template <typename T>
+  static constexpr bool is_f8_v = cute::is_any_of_v<T, cute::float_e5m2_t, cute::float_e4m3_t>;
+  template <typename T>
+  static constexpr bool is_f16_v = cute::is_any_of_v<T, cute::half_t, cute::bfloat16_t>;
+  static constexpr bool F8kvF16mma = is_f16_v<ElementQ> && is_f8_v<ElementK> && cute::is_same_v<ElementScale, float> && !UseScale;
+
 #if !(defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
   using DefaultMMA = typename cute::conditional_t<
       cute::is_same_v<ElementQ, cutlass::float_e5m2_t> || cute::is_same_v<ElementQ, cutlass::float_e4m3_t>,
@@ -903,7 +942,7 @@ struct FMHAConfig {
     // Mainloop
     using MainloopDispatchPolicy = cutlass::fmha::XeDefault<PipelineStages>;
     using CollectiveMainloop = cutlass::fmha::collective::FMHAFwdMainloop<
-        MainloopDispatchPolicy, Causal, UseScale,
+        MainloopDispatchPolicy, Causal, UseScale, F8kvF16mma,
         TiledMMAQK, TiledMMAPV, VTiles,
         TensorQ, TensorK, TensorV,
         TensorScaleQ, TensorScaleK, TensorScaleV,

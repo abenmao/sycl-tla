@@ -73,6 +73,7 @@ struct scale_copy_traits<datatype, 2, width, stride,
 template <class DispatchPolicy_,
           bool CausalMask_,
           bool UseScale_,
+          bool F8kvF16mma_,
           class TiledMMAQK_,          // Tiling for Q*K GEMM
           class TiledMMAPV_,          // Tiling for P*V GEMM
           int VTiles_,                // # of tiles in V dimension
@@ -92,12 +93,12 @@ struct FMHAFwdMainloop {
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <int Stages,
-          bool CausalMask_, bool UseScale_,
+          bool CausalMask_, bool UseScale_, bool F8kvF16mma_,
           class TiledMMAQK_, class TiledMMAPV_, int VTiles_,
           class TensorQ_, class TensorK_, class TensorV_,
           class TensorScaleQ_, class TensorScaleK_, class TensorScaleV_,
           class TiledCopyQ_, class TiledCopyK_, class TiledCopyV_>
-struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_,
+struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
                        TiledMMAQK_, TiledMMAPV_, VTiles_,
                        TensorQ_, TensorK_, TensorV_,
                        TensorScaleQ_, TensorScaleK_, TensorScaleV_,
@@ -125,6 +126,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_,
   using TiledCopyK = conditional_t<is_void_v<TiledCopyK_>, decltype(make_block_2d_copy_B(TiledMMAQK{}, TensorK2D{})), TiledCopyK_>;
   using TiledCopyV = conditional_t<is_void_v<TiledCopyV_>, decltype(make_block_2d_copy_B(TiledMMAPV{}, TensorV2D{})), TiledCopyV_>;
   static constexpr bool UseScale = UseScale_;
+  static constexpr bool F8kvF16mma = F8kvF16mma_;
 
   using TensorScaleQ = TensorScaleQ_;
   using TensorScaleK = TensorScaleK_;
@@ -306,6 +308,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_,
              int              l_coord,
              int              full_tile_offset,
              int              discard_seq_coord,
+             float            scale_k = 1.0f,
+             float            scale_v = 1.0f,
              Copy_ScaleQ const& tiled_copy_scaleQ = Copy_ScaleQ{},
              Copy_ScaleK const& tiled_copy_scaleK = Copy_ScaleK{},
              Copy_ScaleV const& tiled_copy_scaleV = Copy_ScaleV{}) {
@@ -526,6 +530,10 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_,
           auto zipped_k = make_zip_tensor(tSrK, scaleK_view, gemm_kn_offsets, gemm_kk_offsets);
           cute::gemm(mma_qk, zipped_q, zipped_k, tSrS);
         } else {
+          if constexpr (F8kvF16mma) {
+            for (int i = 0; i < tSrK.size(); i++)
+              tSrK(i) = static_cast<typename TiledMMAQK::ValTypeB>(scale_k * static_cast<float>(tSrK(i)));
+          }
           cute::gemm(mma_qk, tSrQ, tSrK, tSrS);
         }
       }
@@ -585,6 +593,10 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_,
           auto zipped_p = make_zip_tensor(tArP, scaleP_view, gemm_p_offsets, gemm_pk_offsets);
           cute::gemm(mma_pv, zipped_p, zipped_v, tArA(_,_,_,VV));
         } else {
+          if constexpr (F8kvF16mma) {
+            for (int i = 0; i < tArV.size(); i++)
+              tArV(i) = static_cast<typename TiledMMAQK::ValTypeB>(scale_v * static_cast<float>(tArV(i)));
+          }
           cute::gemm(mma_pv, tArP, tArV, tArA(_,_,_,VV));
         }
       }

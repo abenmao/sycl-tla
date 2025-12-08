@@ -138,6 +138,8 @@ public:
     StrideScaleK dScaleK{};
     const ElementScale *scaleV = nullptr;
     StrideScaleV dScaleV{};
+    float scale_k;
+    float scale_v;
     int group_size = 32;
   };
   using KernelParams = KernelArguments;
@@ -320,6 +322,7 @@ public:
                  blk_qv, 0, k_blocks,
                  thr_id, seq_len, l_coord,
                  full_tile_offset, discard_seq_coord,
+                 p.scale_k, p.scale_v,
                  tiled_copy_scaleQ,
                  tiled_copy_scaleK,
                  tiled_copy_scaleV);
@@ -330,7 +333,8 @@ public:
                  tArA, tA_max, tA_sum,
                  blk_qv, 0, k_blocks,
                  thr_id, seq_len, l_coord,
-                 full_tile_offset, discard_seq_coord);
+                 full_tile_offset, discard_seq_coord,
+                 p.scale_k, p.scale_v);
       }
       if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
         sycl::group_barrier(get_work_group<3>());
