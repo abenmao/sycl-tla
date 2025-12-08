@@ -1,6 +1,6 @@
 #pragma once
 
-#include <cute/arch/mma_sm90_gmma.hpp>
+#include "xe4_inline_pisa.hpp"
 #include <cute/arch/mma_xe4_desc.hpp>
 
 #include <cute/arch/asm_helper.hpp>

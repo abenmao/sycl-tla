@@ -4,7 +4,7 @@
 #include "asm_helper.hpp"
 
 #ifdef AMMA_GENERATED
-#include "async_gmma.hpp"
+#include "xe4_async_gmma.hpp"
 #endif
 
 #ifdef TP_GENERATED

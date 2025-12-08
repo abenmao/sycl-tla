@@ -36,7 +36,7 @@
 #include <cute/tensor_impl.hpp>
 #include <cute/algorithm/functional.hpp>
 #include <cute/algorithm/fill.hpp>
-#include <cute/arch/inline_pisa.hpp>
+#include <cute/arch/xe4_inline_pisa.hpp>
 #include <cute/numeric/integral_constant.hpp>
 
 namespace cute

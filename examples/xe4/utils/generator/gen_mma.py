@@ -852,7 +852,7 @@ class EmitMMA:
         if output_file.endswith(".hpp") or output_file.endswith(".h"):
             self.output_file = output_file
         else:
-            self.output_file = os.path.join(output_file, "async_gmma.hpp")
+            self.output_file = os.path.join(output_file, "xe4_async_gmma.hpp")
 
     def __enter__(self):
         output_dir = os.path.dirname(self.output_file)
@@ -978,8 +978,8 @@ def define_parser():
     parser.add_argument(
         "--output",
         type=str,
-        default="./output/async_gmma.hpp",
-        help="Specify the output file path (default: ./output/async_gmma.hpp)",
+        default="./output/xe4_async_gmma.hpp",
+        help="Specify the output file path (default: ./output/xe4_async_gmma.hpp)",
     )
     return parser
 

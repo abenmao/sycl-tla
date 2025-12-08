@@ -3,6 +3,7 @@
 #include "cute/config.hpp"
 #include "cute/numeric/math.hpp"
 #include "cute/layout.hpp"
+#include "xe4_inline_pisa.hpp"
 #include "mma_xe4_amma.hpp"
 
 namespace cute {

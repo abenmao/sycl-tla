@@ -1,7 +1,7 @@
 #pragma once
 
 #include <random>
-#include "base_datatype.hpp"
+#include "xe4_base_datatype.hpp"
 #include <sycl/multi_ptr.hpp> // for address_space_cast
 #include <sycl/sycl.hpp>
 

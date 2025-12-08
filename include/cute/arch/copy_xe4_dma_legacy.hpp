@@ -1,6 +1,6 @@
 #pragma once
 
-#include "inline_pisa.hpp"
+#include "xe4_inline_pisa.hpp"
 #include "util.hpp"
 
 namespace cute {

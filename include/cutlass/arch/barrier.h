@@ -38,10 +38,12 @@
 #include <cute/arch/cluster_sm90.hpp>
 #include <cute/arch/copy_sm100_tma.hpp> 
 #include <cutlass/arch/config.h>
-#if defined(SYCL_INTEL_XE4_TARGET)
-#include <cute/arch/inline_pisa.hpp>
-#endif
+#if defined(SYCL_INTEL_TARGET)
 #include <cute/arch/copy_xe.hpp>
+#if (SYCL_INTEL_TARGET == 40 )
+#include <cute/arch/xe4_inline_pisa.hpp>
+#endif
+#endif
 
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900 && (__CUDACC_VER_MAJOR__ >= 12)
 #define CUDA_BARRIER_ENABLED 1
