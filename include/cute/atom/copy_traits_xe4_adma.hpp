@@ -536,7 +536,11 @@ make_adma_copy_tiled(
     Layout<TShape,TStride>  const& cta_t_map,   // T: CTA thr idx -> logical TMA tid
     Layout<VShape,VStride>  const& cta_v_map)   // V: CTA val idx -> gmem mode
 {
-  auto matrix_desc = make_matrix_descriptor(coalesce(slayout));
+  MatrixDescriptor matrix_desc{};
+  if constexpr(decltype(rank(flatten(slayout.shape())))::value > 2)
+    matrix_desc = make_matrix_descriptor(coalesce(slayout));
+  else
+    matrix_desc = make_matrix_descriptor(slayout);
   Copy_Atom atom = make_adma_copy_atom<InternalType>(
       copy_op, gtensor, slayout, cosize(cta_t_map), matrix_desc, cta_v_map);
 

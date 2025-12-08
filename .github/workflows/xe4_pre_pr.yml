@@ -101,6 +101,7 @@ jobs:
           echo "Running Xe4 UTs"
           ninja cutlass_test_unit_cute_xe4
           ./test/unit/cute/xe4/cutlass_test_unit_cute_xe4_reduce_exp
+          ./test/unit/cute/xe4/cutlass_test_unit_cute_xe4_adma_load_store
           
       - name: Stop Xe4 Simulator
         if: always()

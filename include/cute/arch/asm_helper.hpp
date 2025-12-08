@@ -27,7 +27,7 @@ template <> struct fixed_type<sycl::ext::oneapi::bfloat16> { static constexpr fi
 template <typename> struct pisa_type;
 template <> struct pisa_type<float> { static constexpr fixstr::fixed_string value {".f32"};};
 template <> struct pisa_type<fp16> { static constexpr fixstr::fixed_string value {".f16"};};
-template <> struct pisa_type<bfloat16_t> { static constexpr fixstr::fixed_string value {".bf16"};};
+template <> struct pisa_type<cutlass::bfloat16_t> { static constexpr fixstr::fixed_string value {".bf16"};};
 
 // For TensorPipe
 enum class tred_red_dim {
@@ -94,6 +94,7 @@ template <> struct tensor_exp_xch<false> { static constexpr fixstr::fixed_string
 
 template <typename> struct rd_type;
 template <> struct rd_type<sycl::half> {static constexpr fixstr::fixed_string value {".16b.fp"};};
+template <> struct rd_type<cutlass::half_t> {static constexpr fixstr::fixed_string value {".16b.fp"};};
 template <> struct rd_type<sycl::ext::oneapi::bfloat16> {
   static constexpr fixstr::fixed_string value {".16b.fp"};
 };

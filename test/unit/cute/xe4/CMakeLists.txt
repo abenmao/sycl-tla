@@ -31,15 +31,22 @@ add_custom_target(
   cutlass_test_unit_cute_xe4
   DEPENDS
   cutlass_test_unit_cute_xe4_reduce_exp
+  cutlass_test_unit_cute_xe4_adma_load_store
 )
 
 add_custom_target(
   test_unit_cute_xe4
   DEPENDS
   test_unit_cute_xe4_reduce_exp
+  test_unit_cute_xe4_adma_load_store
 )
 
 cutlass_test_unit_add_executable(
   cutlass_test_unit_cute_xe4_reduce_exp
   tensor_algs.cpp
+)
+
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_adma_load_store
+  adma_load_store.cpp
 )
