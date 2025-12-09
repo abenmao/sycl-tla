@@ -34,7 +34,7 @@
 
 #include "cutlass_unit_test.h"
 
-#include <cute/arch/inline_pisa.hpp>
+#include <cute/arch/xe4_inline_pisa.hpp>
 
 #include <iostream>
 #include <cstdint>
