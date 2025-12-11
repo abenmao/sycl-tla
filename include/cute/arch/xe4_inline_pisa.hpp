@@ -3757,6 +3757,104 @@ inline float tensor_pipe_exp2_red_pisa(const sycl::marray<dtype_reg, N * sizeof(
   return ret;
 }
 
+template <typename dtype_to, typename dtype_from, uint32_t N_math, typename dtype_reg>
+inline float gtp_texp_red_sum(dtype_reg *dst_ptr, const dtype_reg *src_ptr, float sum_src = 0.0f) {
+
+  constexpr uint32_t N_reg_from = N_math * sizeof(dtype_from) / sizeof(dtype_reg);
+  constexpr uint32_t N_reg_to = N_math * sizeof(dtype_to) / sizeof(dtype_reg);
+  constexpr uint32_t N_u32_from = N_math * sizeof(dtype_from) / sizeof(uint32_t);
+  constexpr uint32_t N_u32_to = N_math * sizeof(dtype_to) / sizeof(uint32_t);
+
+  sycl::marray<dtype_reg, N_reg_from> src0;
+#pragma unroll
+  for (int i = 0; i < N_reg_from; i++) {
+    src0[i] = src_ptr[i];
+  }
+
+  using vtypefrom = vector_t<uint32_t, N_u32_from>;
+  using vtypeto = vector_t<uint32_t, N_u32_to>;
+
+  vtypefrom vsrc = sycl::bit_cast<vtypefrom>(src0);
+  vtypeto vdst;
+
+  if constexpr (std::is_same_v<dtype_from, float> && std::is_same_v<dtype_to, bf8>) {
+    if constexpr (N_math == 32) {
+      INLINE_PISA("texp.e5m2.f32.m32n32.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else if constexpr (N_math == 16) {
+      INLINE_PISA("texp.e5m2.f32.m32n16.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else {
+      static_assert(sizeof(dtype_from) == 0, "unsupported N");
+    }
+  } else if constexpr (std::is_same_v<dtype_from, float> && std::is_same_v<dtype_to, fp16>) {
+    if constexpr (N_math == 32) {
+      INLINE_PISA("texp.f16.f32.m32n32.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else if constexpr (N_math == 16) {
+      INLINE_PISA("texp.f16.f32.m32n16.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else {
+      static_assert(sizeof(dtype_from) == 0, "unsupported N");
+    }
+  } else if constexpr (std::is_same_v<dtype_from, float> && std::is_same_v<dtype_to, bf16>) {
+    if constexpr (N_math == 32) {
+      INLINE_PISA("texp.bf16.f32.m32n32.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else if constexpr (N_math == 16) {
+      INLINE_PISA("texp.bf16.f32.m32n16.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else {
+      static_assert(sizeof(dtype_from) == 0, "unsupported N");
+    }
+  } else if constexpr (std::is_same_v<dtype_from, float> && std::is_same_v<dtype_to, float>) {
+    if constexpr (N_math == 32) {
+      INLINE_PISA("texp.f32.f32.m32n32.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else if constexpr (N_math == 16) {
+      INLINE_PISA("texp.f32.f32.m32n16.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else if constexpr (N_math == 8) {
+      INLINE_PISA("texp.f32.f32.m32n8.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else {
+      static_assert(sizeof(dtype_from) == 0, "unsupported N");
+    }
+  }else if constexpr (std::is_same_v<dtype_from, fp16> && std::is_same_v<dtype_to, bf8>) {
+    if constexpr (N_math == 32) {
+      INLINE_PISA("texp.e5m2.f16.m32n32.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else if constexpr (N_math == 16) {
+      INLINE_PISA("texp.e5m2.f16.m32n16.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else {
+      static_assert(sizeof(dtype_from) == 0, "unsupported N");
+    }
+  } else if constexpr (std::is_same_v<dtype_from, fp16> && std::is_same_v<dtype_to, hf8>) {
+    if constexpr (N_math == 32) {
+      INLINE_PISA("texp.e4m3.f16.m32n32.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else if constexpr (N_math == 16) {
+      INLINE_PISA("texp.e4m3.f16.m32n16.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else {
+      static_assert(sizeof(dtype_from) == 0, "unsupported N");
+    }
+  } else if constexpr (std::is_same_v<dtype_from, fp16> && std::is_same_v<dtype_to, fp16>) {
+    if constexpr (N_math == 32) {
+      INLINE_PISA("texp.f16.f16.m32n32.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else if constexpr (N_math == 16) {
+      INLINE_PISA("texp.f16.f16.m32n16.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else if constexpr (N_math == 8) {
+      INLINE_PISA("texp.f16.f16.m32n8.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else {
+      static_assert(sizeof(dtype_from) == 0, "unsupported N");
+    }
+  } else if constexpr (std::is_same_v<dtype_from, bf16> && std::is_same_v<dtype_to, bf16>) {
+    if constexpr (N_math == 32) {
+      INLINE_PISA("texp.bf16.bf16.m32n32.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else if constexpr (N_math == 16) {
+      INLINE_PISA("texp.bf16.bf16.m32n16.rednd %0, %2, %1;" : "=r"(vdst), "+r"(sum_src) : "r"(vsrc));
+    } else {
+      static_assert(sizeof(dtype_from) == 0, "unsupported N");
+    }
+  } else {
+    static_assert(sizeof(dtype_from) == 0, "unsupported dtype");
+  }
+  sycl::marray<dtype_reg, N_reg_to> dst = sycl::bit_cast<sycl::marray<dtype_reg, N_reg_to>>(vdst);
+#pragma unroll
+  for (int i = 0; i < N_reg_to; i++) {
+    dst_ptr[i] = dst[i];
+  }
+  return sum_src;
+}
 
 template <typename dtype_dst, typename dtype_src, uint32_t N, typename dtype_reg>
 inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {

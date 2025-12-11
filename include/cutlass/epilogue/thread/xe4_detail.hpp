@@ -31,6 +31,14 @@ struct CoreMatrix {
     return swizzled_layout;
   }
 
+  template<typename ValType, typename EpilogueTile>
+  CUTLASS_HOST_DEVICE static constexpr auto retile_2d(EpilogueTile const& epilogue_tile) {
+    auto cm_layout = recast_layout<uint8_t, ValType>(kCmLayoutRaw);
+    auto retiled_layout = tile_to_shape(cm_layout, epilogue_tile, Step<_1,_0>{});
+    auto swizzled_layout = composition(make_swizzle<ValType>(), retiled_layout);
+    return swizzled_layout;
+  }
+
   template<typename ValType>
   CUTLASS_HOST_DEVICE static constexpr auto make_swizzle() {
     constexpr int kSwizzleB = 1;
