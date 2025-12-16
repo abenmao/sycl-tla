@@ -34,7 +34,7 @@
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/dispatch_policy.hpp"
 #include "cutlass/fp8_to_fp16.h"
-
+#include "cutlass/gemm/collective/xe_blockscaled_common.hpp"
 #include "cute/algorithm/functional.hpp"
 #include "cute/atom/mma_atom.hpp"
 #include "cute/algorithm/gemm.hpp"
@@ -44,22 +44,6 @@
 namespace cutlass::gemm::collective {
 using namespace cute;
 
-template <class datatype, size_t height, size_t width, class Stride = cute::Stride<_1, int64_t, int64_t>, class = void>
-struct scale_copy_traits {
-  static_assert(cute::dependent_false<cute::tuple<datatype, Int<height>, Int<width>, Stride>>, "scale_copy_traits not defined");
-};
-
-// 8 bits
-template<class datatype, size_t width, class stride>
-struct scale_copy_traits<datatype, 1, width, stride,
-          std::enable_if_t<sizeof_bits_v<datatype> == 8>> {
-  using type = XE_2D_U8x1x16_LD_N;
-};
-template<class datatype, size_t width, class stride>
-struct scale_copy_traits<datatype, 2, width, stride,
-          std::enable_if_t<sizeof_bits_v<datatype> == 8>> {
-  using type = XE_2D_U8x2x16_LD_N;
-};
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -250,19 +234,6 @@ public:
       GmemTiledCopyNonVoidScaleB,
       GmemTiledCopyScaleB
     >;
-  
-  template<
-  class SelectedGmemTiledCopyScale,
-  class StrideScale,
-  class ElementScale
-  >
-  struct TiledCopyScaleTraits {
-    using traits_load_scale = Copy_Traits<SelectedGmemTiledCopyScale, StrideScale>;
-    using atom_load_scale = Copy_Atom<traits_load_scale, ElementScale>;
-    using val_layout_load_scale = decltype(make_layout(shape_div(typename traits_load_scale::BlockShape{}, CopyThreadShapeRev{})));
-    using Copy_Scale = decltype(make_tiled_copy(atom_load_scale{}, Layout<CopyThreadShapeRev>{}, val_layout_load_scale{}));
-  };
-
 
   using Copy_ScaleA = typename TiledCopyScaleTraits<SelectedGmemTiledCopyScaleA, StrideScaleA, ElementScaleA>::Copy_Scale;
   using Copy_ScaleB = typename TiledCopyScaleTraits<SelectedGmemTiledCopyScaleB, StrideScaleB, ElementScaleB>::Copy_Scale;
@@ -361,19 +332,6 @@ public:
     return implementable;
   }
 
-  template <
-    int scale_traits_size,
-    int scale_traits_num,
-    class SelectedGmemTiledCopyScale
-  >
-  CUTLASS_DEVICE static auto
-  make_scale_copy_iterator(int coord, int l_coord, int k_tile_count) {
-      return make_tensor(make_inttuple_iter(make_coord(coord, 0, l_coord)),
-                         make_layout(make_shape(Int<scale_traits_size>{}, Int<scale_traits_num>{}, SG_K / MMA_K, k_tile_count),
-                                     make_stride(E<0>{} * _16{}, E<0>{} * size<1>(typename SelectedGmemTiledCopyScale::BlockShape{}),
-                                                 E<1>{} * size<0>(typename SelectedGmemTiledCopyScale::BlockShape{}), E<1>{} * (SG_K / GROUP_K))));
-  }
-
   /// Perform a subgroup-scoped matrix multiply-accumulate
   template <class FrgTensorD,
     class TensorA,
@@ -449,8 +407,8 @@ public:
     const int n_coord = n_idx * BLK_N + (get_sub_group_id() % ATOM_N) * SG_N;
     const int l_coord = l_idx;
 
-    auto copy_iter_sA = make_scale_copy_iterator<scaleA_traits_size, scaleA_traits_num, SelectedGmemTiledCopyScaleA>(m_coord, l_coord, k_tile_count);
-    auto copy_iter_sB = make_scale_copy_iterator<scaleB_traits_size, scaleB_traits_num, SelectedGmemTiledCopyScaleB>(n_coord, l_coord, k_tile_count);
+    auto copy_iter_sA = make_scale_copy_iterator<scaleA_traits_size, scaleA_traits_num, SelectedGmemTiledCopyScaleA>(m_coord, l_coord, k_tile_count, SG_K, MMA_K);
+    auto copy_iter_sB = make_scale_copy_iterator<scaleB_traits_size, scaleB_traits_num, SelectedGmemTiledCopyScaleB>(n_coord, l_coord, k_tile_count, SG_K, MMA_K);
 
 #define PRINT(x) print(#x ": "); print(x); print("\n");
 
@@ -489,25 +447,14 @@ public:
     Tensor scaleA = make_tensor(recast<scaleA_vec_t>(fragment_scaleA).data(), make_layout(Shape<_1, mma_M, _1>{}, Stride<_1, _0, _0>{}));
     Tensor scaleB = make_tensor(recast<scaleB_vec_t>(fragment_scaleB).data(), make_layout(Shape<_1, mma_N, _1>{}, Stride<_1, _0, _0>{}));
 
-    auto gemm_m_offsets = make_tensor<uint8_t>(Layout<Shape<_1, mma_M, _1>, Stride<_0, _1, _0>>{});
-    CUTLASS_PRAGMA_UNROLL
-    for (int m = 0; m < mma_M::value; ++m) {
-      gemm_m_offsets(m) = sizeof_bits_v<ElementA> < 8 ? (m / 2) * 32 + (m % 2) * 8 : m * 8;
-    }
+    auto gemm_m_indices = make_gemm_idx_by_m<ElementA, mma_M::value>();
+    auto gemm_m_offsets = make_tensor(gemm_m_indices.data(), Layout<Shape<_1, mma_M, _1>, Stride<_0, _1, _0>>{});
 
-    auto gemm_n_offsets = make_tensor<uint8_t>(Layout<Shape<_1, mma_N, _1>, Stride<_0, _1, _0>>{});
-    CUTLASS_PRAGMA_UNROLL
-    for (int n = 0; n < mma_N::value; ++n) {
-      gemm_n_offsets(n) = sizeof_bits_v<ElementB> < 8 ? n * 32 : n * 16;
-    }
+    auto gemm_n_indices = make_gemm_idx_by_n<ElementB, mma_N::value>();
+    auto gemm_n_offsets = make_tensor(gemm_n_indices.data(), Layout<Shape<_1, mma_N, _1>, Stride<_0, _1, _0>>{});
 
-    auto gemm_ak_offsets = make_tensor<uint16_t>(Layout<Shape<_1, _1, mma_K>, Stride<_0, _0, _1>>{});
-    auto gemm_bk_offsets = make_tensor<uint16_t>(Layout<Shape<_1, _1, mma_K>, Stride<_0, _0, _1>>{});
-    CUTLASS_PRAGMA_UNROLL
-    for (int k = 0; k < mma_K::value; ++k) {
-      gemm_ak_offsets(k) = static_cast<uint16_t>(k * size(typename SelectedGmemTiledCopyScaleA::BlockShape{}) * (SG_M / 16));
-      gemm_bk_offsets(k) = static_cast<uint16_t>(k * size(typename SelectedGmemTiledCopyScaleB::BlockShape{}) * (SG_N / 16));
-    }
+    auto gemm_ak_offsets = make_gemm_k_offsets<mma_K::value, typename SelectedGmemTiledCopyScaleA::BlockShape, SG_M>();
+    auto gemm_bk_offsets = make_gemm_k_offsets<mma_K::value, typename SelectedGmemTiledCopyScaleB::BlockShape, SG_N>();
 
     constexpr int barrier_scope = 2;
 
