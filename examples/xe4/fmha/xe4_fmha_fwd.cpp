@@ -94,7 +94,7 @@ int main(int argc, const char **argv) {
     return -1;
   }
 
-  FMHAConfig<Shape<_64 /*Q blk*/, _128 /*v head dim*/, _128 /*KV blk*/, _128 /*qk head dim*/>>::run<ProblemConfig_FP16FP16FP32FP32>(options);
+  // FMHAConfig<Shape<_64 /*Q blk*/, _128 /*v head dim*/, _128 /*KV blk*/, _128 /*qk head dim*/>>::run<ProblemConfig_FP16FP16FP32FP32>(options);
 
   // FMHAConfig<Shape<_64, _128, _128, _128>>::run<ProblemConfig_FP16FP16FP32FP16>(options);
   // FMHAConfig<Shape<_128, _128, _128, _128>>::run<ProblemConfig_FP16FP16FP32FP16>(options);
@@ -103,7 +103,7 @@ int main(int argc, const char **argv) {
   // FMHAConfig<Shape<_64, _128, _128, _128>>::run<ProblemConfig_FP16FP16FP16FP16>(options);
   // FMHAConfig<Shape<_64, _128, _256, _128>>::run<ProblemConfig_FP16FP16FP16FP16>(options);
   // FMHAConfig<Shape<_128, _128, _256, _128>>::run<ProblemConfig_FP16FP16FP16FP16>(options);
-  // FMHAConfig<Shape<_128, _128, _512, _128>>::run<ProblemConfig_FP16FP16FP16FP16>(options);
+  FMHAConfig<Shape<_128, _128, _512, _128>>::run<ProblemConfig_FP16FP16FP16FP16>(options);
 
 
   return 0;

@@ -33,6 +33,10 @@
 #include <sycl/sycl.hpp>
 #include "cutlass/cutlass.h"
 
+#define USE_PACKED_FMAD
+#define USE_LD_ST_MATRIX
+#define USE_UNORDERED_LOAD_STORE
+
 namespace cutlass::flash_attention::collective {
 
 // Selects the largest vectorized smem store atom available
@@ -115,10 +119,19 @@ public:
   // static_assert(SP_tile_M == O_tile_M);
 
   static constexpr int NumSoftmaxWarps = 16;
-  static constexpr int NumThreadPerRow = 8;
+  static constexpr int NumThreadPerRow = 16;
   static constexpr int numRowsPerWarp = cutlass::NumThreadsPerWarp / NumThreadPerRow;
   static constexpr int TotalRowsPerThread = SP_tile_M / (NumSoftmaxWarps * numRowsPerWarp);
   static constexpr int numRowsPerIteration = NumSoftmaxWarps * numRowsPerWarp;
+
+  static constexpr uint32_t TYPE1_CM_ELEM_Y = 32;
+  static constexpr uint32_t eu_num = 4;
+  static constexpr uint32_t eu_sg_num = NumSoftmaxWarps / eu_num;
+  static constexpr uint32_t type1_cm_y_per_eu = TYPE1_CM_ELEM_Y / eu_num; // 32 / 4 = 8
+  static constexpr uint32_t num_row_per_itr_per_eu = eu_sg_num * numRowsPerWarp;
+  static_assert((type1_cm_y_per_eu % num_row_per_itr_per_eu) == 0,
+                "current only support type1_cm_y_per_eu is multiply of num_row_per_itr_per_eu");
+  static constexpr uint32_t num_itr_per_cm = type1_cm_y_per_eu / num_row_per_itr_per_eu;
 
   using TiledCopyS2R_Update = decltype(make_tiled_copy</*S2R*/true, ElementS, NumSoftmaxWarps, NumThreadPerRow, TotalRowsPerThread>(TileShapeQK_MNK{}));
   using TiledCopyR2S_Update = decltype(make_tiled_copy</*S2R*/false, ElementS, NumSoftmaxWarps, NumThreadPerRow, TotalRowsPerThread>(TileShapeQK_MNK{}));
@@ -192,36 +205,41 @@ public:
 
   template <int numRowsPerSubgroup, typename FragRmem>
   CUTLASS_DEVICE ElementS reduce_max(sycl::sub_group sg, uint32_t worker_id, 
-                                 FragRmem& tRS_rS, ElementS max_prev, int local_row_id) {
+                                 FragRmem const& tRS_rS, ElementS max_prev, int local_row_id) {
     ElementS max = max_prev;
     // Get the max of current thread
-    CUTLASS_PRAGMA_UNROLL
-    for (int k = 0; k < size(tRS_rS); ++k) {
-      max = sycl::max(max, tRS_rS[k]);
+    if constexpr (std::is_same_v<ElementS, float>) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int k = 0; k < size(tRS_rS); ++k) {
+        max = sycl::max(max, tRS_rS[k]);
+      }
+    } else {
+      // For 16 bits or lower precision dtype, use tensor pipe
+      constexpr auto vecLen = CUTE_STATIC_V(size(tRS_rS));
+      max = gtp_tred_max<ElementS, vecLen>(tRS_rS.data(), max);
     }
 
-    ElementS row_max[numRowsPerSubgroup];
     for (int k = 0; k < numRowsPerSubgroup; k++){
       auto mask = generate_reduce_mask<numRowsPerSubgroup>(k);
+      // max register value won't be modified if this lane is masked out
       if constexpr (std::is_same_v<ElementS, float>) {
-        INLINE_PISA("fred.max.sync.f %0, %1, %2;" : "=r"(row_max[k]) : "r"(max), "r"(mask));
+        INLINE_PISA("fred.max.f %0, %0, %1;" : "+r"(max) : "i"(mask));
       } else if constexpr (std::is_same_v<ElementS, fp16>) {
-        INLINE_PISA("fred.max.sync.hf %0, %1, %2;" : "=r"(row_max[k]) : "r"(max), "r"(mask));
+        INLINE_PISA("fred.max.hf %0, %0, %1;" : "+r"(max) : "i"(mask));
       } else {
         static_assert(sizeof(ElementS) == 0, "unsupported case");
       }
     }
-    return row_max[local_row_id];
+    return max;
   }
 
   template <int numRowsPerSubgroup>
   CUTLASS_DEVICE float reduce_sum(sycl::sub_group sg, uint32_t worker_id, float sum, int local_row_id) {
-    float row_sum[numRowsPerSubgroup];
-    for (int k = 0; k < numRowsPerSubgroup; k++){
-      auto mask = generate_reduce_mask<numRowsPerSubgroup>(k);
-      row_sum[k] = sycl::reduce_over_group(sg, (mask & (1 << worker_id % 32)) ? sum : 0.0f, sycl::plus<float>{});
+    float row_sum = sum;
+    for (int i = numRowsPerSubgroup; i < cutlass::NumThreadsPerWarp; i *= 2) {
+      row_sum += permute_group_by_xor(sg, row_sum, i);
     }
-    return row_sum[local_row_id];
+    return row_sum;
   }
 
   template <int numRowsPerSubgroup, typename FragRmem>
@@ -231,6 +249,29 @@ public:
     const ElementS src1 = static_cast<ElementS>(params.softmax_scale);
     const ElementS src2 = -(max_curr * params.softmax_scale);
 
+#ifdef USE_PACKED_FMAD
+    using dtype_packed = uint32_t;
+
+    constexpr auto packedNum = sizeof(dtype_packed) / sizeof(ElementS);
+    ElementS tmp_src1[packedNum];
+    ElementS tmp_src2[packedNum];
+    for (int k = 0; k < packedNum; k++) {
+      tmp_src1[k] = src1;
+      tmp_src2[k] = src2;
+    }
+
+    dtype_packed packed_src1, packed_src2;
+    pack_data<packedNum>(&packed_src1, tmp_src1);
+    pack_data<packedNum>(&packed_src2, tmp_src2);
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int k = 0; k < size(tRS_rS); k+=packedNum) {
+      dtype_packed packed_src0, packed_dst;
+      pack_data<packedNum>(&packed_src0, &tRS_rS[k]);
+      packed_dst = packed_fmad<ElementS>(packed_src0, packed_src1, packed_src2);
+      unpack_data<packedNum>(&tRS_rS[k], &packed_dst);
+    }
+#else
     CUTLASS_PRAGMA_UNROLL
     for (int k = 0; k < size(tRS_rS); ++k) {
       if constexpr (std::is_same_v<ElementS, float>) {
@@ -241,6 +282,7 @@ public:
         static_assert(sizeof(ElementS) == 0, "unsupported case");
       }
     }
+#endif
 
     constexpr int SP_tile_N = CUTE_STATIC_V(get<1>(TileShapeQK_MNK{}));
     constexpr int numElemPerThread = SP_tile_N / NumThreadPerRow; // 128/16=8
@@ -255,21 +297,32 @@ public:
     return sum;
   }
 
-  template <bool Init, typename FragSmemS, typename FragRmemS, typename FragMax, typename FragSum, typename FragExp, typename mat_desc_t = uint32_t>
+  template <bool Init, typename FragSmemS, typename FragMax, typename FragSum, typename FragExp, typename mat_desc_t = uint32_t>
   CUTLASS_DEVICE void update(sycl::sub_group sg, uint32_t worker_id, 
-                             FragSmemS const& tSR_sS, FragRmemS& tRS_rS,
+                             FragSmemS const& tSR_sS,
+                             const mat_desc_t& s_desc,
                              FragMax& max_reg,
                              FragSum& sum_reg,
                              FragExp& exp_reg,
                              const mat_desc_t& p_desc) {
     constexpr auto numRowsPerSubgroup = numRowsPerWarp;
 
+    constexpr int SP_tile_N = CUTE_STATIC_V(get<1>(TileShapeQK_MNK{}));
+    constexpr int numElemPerThread = SP_tile_N / NumThreadPerRow;
+    constexpr int maxElemPerStore = cute::min(32 / sizeof(ElementP), numElemPerThread);
+    constexpr int numStore = numElemPerThread / maxElemPerStore;
+    constexpr int maxElemPerLoad = cute::min(32 / sizeof(ElementS), numElemPerThread);
+    constexpr int numLoad = numElemPerThread / maxElemPerLoad;
+
     auto sg_id = worker_id / cutlass::NumThreadsPerWarp;
     auto local_lane_id = worker_id % cutlass::NumThreadsPerWarp;
     auto local_row_id = local_lane_id % numRowsPerSubgroup;
 
+#ifndef USE_LD_ST_MATRIX
+    Tensor tRS_rS = make_tensor<ElementS>(tSR_sS(_, 0).shape());
+
     for (int i = 0; i < size<1>(tSR_sS); ++i) {
-      // TODO: to use ld_matrix to reduce the address calculation
+      // Load data from slm to reg
       copy(params.tiled_copy_s2r_update, tSR_sS(_, i), tRS_rS);
 
       ElementS max_prev = max_reg[i];
@@ -314,12 +367,196 @@ public:
         cm_vrow_store<ElementP, maxElemPerStore>(p_desc, st_vec, coord);
       }
     }
+#else
+    static_assert(sizeof(ElementS) == 2, "Only support 16 bits S now");
+    static_assert(std::is_same_v<ElementS, ElementP>, "S and P must be same type now");
+
+    uint32_t wi_id = worker_id % cutlass::NumThreadsPerWarp;
+
+    uint32_t eu_id = sg_id % eu_num;
+    uint32_t eu_sg_id = sg_id / eu_num;
+    
+    // Tensor tRS_rS = make_tensor<ElementS>(tSR_sS(_, 0).shape());
+    using dtype_packed = uint32_t;
+    constexpr auto packedNum = sizeof(dtype_packed) / sizeof(ElementS);
+    constexpr auto packedArrLen = numElemPerThread / packedNum;
+
+    constexpr auto unroll = 2;
+
+    constexpr auto num_stage = 2;
+
+    dtype_packed tRS_rS[num_stage][unroll][packedArrLen];
+
+    int32_t curr_stage = 0;
+
+#ifndef USE_UNORDERED_LOAD_STORE
+    uint32_t col_base = (local_lane_id / numRowsPerSubgroup) * numElemPerThread / packedNum;
+    uint32_t row_base = sg_id * numRowsPerSubgroup + (worker_id % numRowsPerSubgroup);
+#else 
+    uint32_t idx_x_base = (wi_id / numRowsPerSubgroup) * numElemPerThread / packedNum;
+    uint32_t idx_y = eu_sg_id * numRowsPerSubgroup + eu_id * type1_cm_y_per_eu + (wi_id % numRowsPerSubgroup);
+#endif
+
+    // load data for the 0-th iteration
+    int outer = 0;
+    for (int inner = 0; inner < unroll; inner++){
+      int i = outer * unroll + inner;
+
+      // Load data from slm to reg
+#ifndef USE_UNORDERED_LOAD_STORE
+      CUTLASS_PRAGMA_UNROLL
+      for (int j = 0; j < numLoad; j++) {
+        auto per_load_offset = j * maxElemPerLoad / packedNum;;
+        sycl::marray<uint16_t, 2> coord = {static_cast<uint16_t>(col_base + per_load_offset), static_cast<uint16_t>(i* numRowsPerIteration + row_base)};
+        cm_vrow_load<dtype_packed, maxElemPerLoad / packedNum>(&tRS_rS[curr_stage][inner][per_load_offset], s_desc, coord);
+      }
+#else
+      uint16_t curr_idx_x = idx_x_base;
+      uint32_t cur_row_i = i;
+      uint16_t curr_idx_y =
+          idx_y + (cur_row_i % num_itr_per_cm) * num_row_per_itr_per_eu + (cur_row_i / num_itr_per_cm) * TYPE1_CM_ELEM_Y;
+      sycl::marray<uint16_t, 2> coord = {curr_idx_x, curr_idx_y};
+      cm_vrow_load_unordered<dtype_packed, maxElemPerLoad / packedNum, numLoad>(tRS_rS[curr_stage][inner], s_desc.get(), coord);
+#endif
+    }
+
+    for (int outer = 0; outer < size<1>(tSR_sS) / unroll; outer++) {
+      ElementS max_prev[unroll];
+
+      for (int inner = 0; inner < unroll; inner++){
+        int i = outer * unroll + inner;
+
+        max_prev[inner] = max_reg[i];
+
+        /////////////////////////////////////////////////////////////////////////
+        // the global max of the row of current tile
+        // max_curr = reduce_max<numRowsPerSubgroup>(sg, worker_id, tRS_rS, max_prev, local_row_id);
+        ElementS max = max_prev[inner];
+        // Get the max of current thread
+        // For 16 bits or lower precision dtype, use tensor pipe
+        max = gtp_tred_max<ElementS, numElemPerThread>(tRS_rS[curr_stage][inner], max);
+
+        for (int k = 0; k < numRowsPerSubgroup; k++){
+          auto mask = generate_reduce_mask<numRowsPerSubgroup>(k);
+          // max register value won't be modified if this lane is masked out
+          if constexpr (std::is_same_v<ElementS, float>) {
+            INLINE_PISA("fred.max.f %0, %0, %1;" : "+r"(max) : "i"(mask));
+          } else if constexpr (std::is_same_v<ElementS, fp16>) {
+            INLINE_PISA("fred.max.hf %0, %0, %1;" : "+r"(max) : "i"(mask));
+          } else {
+            static_assert(sizeof(ElementS) == 0, "unsupported case");
+          }
+        }
+        /////////////////////////////////////////////////////////////////
+
+        max_reg[i] = max;
+      }
+
+      for (int inner = 0; inner < unroll; inner++){
+        int i = outer * unroll + inner;
+
+        float sum_prev = sum_reg[i];
+
+        if constexpr (!Init){
+          const float exp_scale = sycl::native::exp2((max_prev[inner] - max_reg[i]) * params.scale);
+          exp_reg[i] = exp_scale;
+          sum_prev *= exp_scale;
+        }
+
+        const ElementS src1 = static_cast<ElementS>(params.softmax_scale);
+        const ElementS src2 = -(max_reg[i] * params.softmax_scale);
+    
+        ElementS tmp_src1[packedNum];
+        ElementS tmp_src2[packedNum];
+        for (int k = 0; k < packedNum; k++) {
+          tmp_src1[k] = src1;
+          tmp_src2[k] = src2;
+        }
+    
+        dtype_packed packed_src1, packed_src2;
+        pack_data<packedNum>(&packed_src1, tmp_src1);
+        pack_data<packedNum>(&packed_src2, tmp_src2);
+    
+        CUTLASS_PRAGMA_UNROLL
+        for (int k = 0; k < packedArrLen; k++) {
+          tRS_rS[curr_stage][inner][k] = packed_fmad<ElementS>(tRS_rS[curr_stage][inner][k], packed_src1, packed_src2);
+        }
+
+        constexpr int maxElemPerCall = cute::min(32, numElemPerThread);
+        constexpr int numCall = numElemPerThread / maxElemPerCall;
+
+        float sum = 0.0;
+        for (int j = 0; j < numCall; j++) {
+          auto per_packed_call_offset = j * maxElemPerCall / packedNum;
+          sum += gtp_texp_red_sum<ElementS, ElementS, maxElemPerCall, dtype_packed>(&tRS_rS[curr_stage][inner][per_packed_call_offset], &tRS_rS[curr_stage][inner][per_packed_call_offset]);
+        }
+
+        sum_reg[i] = sum_prev + sum;
+      }
+
+      // load data for the next iteration
+      auto next_stage = (curr_stage == num_stage - 1)? 0: curr_stage + 1;
+      if (outer < size<1>(tSR_sS) / unroll - 1) {
+        for (int inner = 0; inner < unroll; inner++){
+          int i = (outer + 1) * unroll + inner;
+
+          // Load data from slm to reg
+#ifndef USE_UNORDERED_LOAD_STORE
+          CUTLASS_PRAGMA_UNROLL
+          for (int j = 0; j < numLoad; j++) {
+            auto per_load_offset = j * maxElemPerLoad / packedNum;;
+            sycl::marray<uint16_t, 2> coord = {static_cast<uint16_t>(col_base + per_load_offset), static_cast<uint16_t>(i* numRowsPerIteration + row_base)};
+            cm_vrow_load<dtype_packed, maxElemPerLoad / packedNum>(&tRS_rS[next_stage][inner][per_load_offset], s_desc, coord);
+          }
+#else
+          uint16_t curr_idx_x = idx_x_base;
+          uint32_t cur_row_i = i;
+          uint16_t curr_idx_y =
+              idx_y + (cur_row_i % num_itr_per_cm) * num_row_per_itr_per_eu + (cur_row_i / num_itr_per_cm) * TYPE1_CM_ELEM_Y;
+          sycl::marray<uint16_t, 2> coord = {curr_idx_x, curr_idx_y};
+          cm_vrow_load_unordered<dtype_packed, maxElemPerLoad / packedNum, numLoad>(tRS_rS[next_stage][inner], s_desc.get(), coord);
+#endif
+        }
+      }
+
+      // Store data for the current iteration
+      for (int inner = 0; inner < unroll; inner++){
+        int i = outer * unroll + inner;
+
+        // Convert type and store reg data to slm
+#ifndef USE_UNORDERED_LOAD_STORE
+        CUTLASS_PRAGMA_UNROLL
+        for (int j = 0; j < numStore; j++) {
+          auto per_store_offset = j * maxElemPerStore / packedNum;
+          sycl::marray<uint16_t, 2> coord = {static_cast<uint16_t>(col_base + per_store_offset), static_cast<uint16_t>(i * numRowsPerIteration + row_base)};
+          cm_vrow_store<dtype_packed, maxElemPerStore / packedNum>(p_desc, &tRS_rS[curr_stage][inner][per_store_offset], coord);
+        }
+#else
+        uint16_t curr_idx_x = idx_x_base;
+        uint32_t cur_row_i = i;
+        uint16_t curr_idx_y =
+            idx_y + (cur_row_i % num_itr_per_cm) * num_row_per_itr_per_eu + (cur_row_i / num_itr_per_cm) * TYPE1_CM_ELEM_Y;
+        sycl::marray<uint16_t, 2> coord = {curr_idx_x, curr_idx_y};
+        cm_vrow_store_unordered<dtype_packed, maxElemPerStore / packedNum, numStore>(p_desc.get(), tRS_rS[curr_stage][inner], coord);
+#endif
+      }
+
+      curr_stage = next_stage;
+    }
+#endif
   }
 
-  template <typename FragSmemO, typename FragExp>
+  template <typename FragSmemO, typename FragExp, typename mat_desc_t = uint32_t>
   CUTLASS_DEVICE void rescale_O(sycl::sub_group sg, uint32_t worker_id, 
                                FragSmemO& tSR_sOacc,
+                               const mat_desc_t& o_acc_desc,
                                FragExp& exp_reg) {
+    constexpr int O_tile_N = CUTE_STATIC_V(get<1>(TileShapePV_MNK{}));
+    constexpr int numElemPerThread = O_tile_N / NumThreadPerRow;
+    constexpr int maxElemPerLoadStore = cute::min(32 / sizeof(ElementAccum), numElemPerThread);
+    constexpr int numLoadStore = numElemPerThread / maxElemPerLoadStore;
+
+#ifndef USE_LD_ST_MATRIX
     Tensor rOacc = make_tensor<ElementAccum>(tSR_sOacc(_, 0).shape());
     
     for (int i = 0; i < size<1>(tSR_sOacc); ++i) {
@@ -331,13 +568,80 @@ public:
       }
       copy(params.tiled_copy_r2s_rescale_o, rOacc, tSR_sOacc(_, i));
     }
+#else
+    auto sg_id = worker_id / cutlass::NumThreadsPerWarp;
+    uint32_t wi_id = worker_id % cutlass::NumThreadsPerWarp;
+
+    uint32_t eu_id = sg_id % eu_num;
+    uint32_t eu_sg_id = sg_id / eu_num;
+
+#ifndef USE_UNORDERED_LOAD_STORE
+    uint32_t row_base = (worker_id / cutlass::NumThreadsPerWarp) * numRowsPerWarp + (worker_id % numRowsPerWarp);
+    uint32_t col_base = ((worker_id % cutlass::NumThreadsPerWarp) / numRowsPerWarp) * numElemPerThread;
+#else
+    uint32_t idx_x_base = (wi_id / numRowsPerWarp) * numElemPerThread;
+    uint32_t idx_y = eu_sg_id * numRowsPerWarp + eu_id * type1_cm_y_per_eu + (wi_id % numRowsPerWarp);
+#endif
+
+    ElementAccum rOacc[TotalRowsPerThread][numElemPerThread];
+    
+    for (int i = 0; i < size<1>(tSR_sOacc); ++i) {
+#ifndef USE_UNORDERED_LOAD_STORE
+      CUTLASS_PRAGMA_UNROLL
+      for (int j = 0; j < numLoadStore; j++) {
+        auto per_load_offset = j * maxElemPerLoadStore;
+        sycl::marray<uint16_t, 2> coord = {static_cast<uint16_t>(col_base + per_load_offset), static_cast<uint16_t>(i * numRowsPerIteration + row_base)};
+        // TODO: Add Xe4 copy atom for ld_matrix/st_matrix
+        cm_vrow_load<ElementAccum, maxElemPerLoadStore>(&rOacc[i][per_load_offset], o_acc_desc, coord);
+      }
+#else
+      uint16_t curr_idx_x = idx_x_base;
+      uint16_t curr_idx_y =
+          idx_y + (i % num_itr_per_cm) * num_row_per_itr_per_eu + (i / num_itr_per_cm) * TYPE1_CM_ELEM_Y;
+      sycl::marray<uint16_t, 2> coord = {curr_idx_x, curr_idx_y};
+      cm_vrow_load_unordered<ElementAccum, maxElemPerLoadStore, numLoadStore>(rOacc[i], o_acc_desc.get(), coord);
+#endif
+    }
+
+    for (int i = 0; i < size<1>(tSR_sOacc); ++i) {
+      float exp_scale = exp_reg[i];
+      for (int k = 0; k < numElemPerThread; ++k) {
+        rOacc[i][k] *= exp_scale;
+      }
+    }
+
+    for (int i = 0; i < size<1>(tSR_sOacc); ++i) {
+#ifndef USE_UNORDERED_LOAD_STORE
+      CUTLASS_PRAGMA_UNROLL
+      for (int j = 0; j < numLoadStore; j++) {
+        auto per_load_offset = j * maxElemPerLoadStore;
+        sycl::marray<uint16_t, 2> coord = {static_cast<uint16_t>(col_base + per_load_offset), static_cast<uint16_t>(i * numRowsPerIteration + row_base)};
+        // TODO: Add Xe4 copy atom for ld_matrix/st_matrix
+        cm_vrow_store<ElementAccum, maxElemPerLoadStore>(o_acc_desc, &rOacc[i][per_load_offset], coord);
+      }
+#else
+      uint16_t curr_idx_x = idx_x_base;
+      uint16_t curr_idx_y =
+          idx_y + (i % num_itr_per_cm) * num_row_per_itr_per_eu + (i / num_itr_per_cm) * TYPE1_CM_ELEM_Y;
+      sycl::marray<uint16_t, 2> coord = {curr_idx_x, curr_idx_y};
+      cm_vrow_store_unordered<ElementAccum, maxElemPerLoadStore, numLoadStore>(o_acc_desc.get(), rOacc[i], coord);
+#endif
+    }
+#endif
   }
 
-  template <typename FragSmemOacc, typename FragSmemO, typename FragSum>
+  template <typename FragSmemOacc, typename FragSmemO, typename FragSum, typename mat_desc_t = uint32_t>
   CUTLASS_DEVICE void final_rescale_O(sycl::sub_group sg, uint32_t worker_id,
                                      FragSmemOacc& tSR_sOacc, FragSmemO& tRS_sO, 
+                                     const mat_desc_t& o_acc_desc, const mat_desc_t& o_desc,
                                      FragSum& sum_reg) {
     constexpr auto numRowsPerSubgroup = numRowsPerWarp;
+    constexpr int O_tile_N = CUTE_STATIC_V(get<1>(TileShapePV_MNK{}));
+    constexpr int numElemPerThread = O_tile_N / NumThreadPerRow;
+    constexpr int maxElemPerLoad = cute::min(32 / sizeof(ElementAccum), numElemPerThread);
+    constexpr int numLoad = numElemPerThread / maxElemPerLoad;
+    constexpr int maxElemPerStore = cute::min(32 / sizeof(ElementOutput), numElemPerThread);
+    constexpr int numStore = numElemPerThread / maxElemPerStore;
 
     auto sg_id = worker_id / cutlass::NumThreadsPerWarp;
     auto local_lane_id = worker_id % cutlass::NumThreadsPerWarp;
@@ -345,7 +649,8 @@ public:
 
     static_assert(CUTE_STATIC_V(size<0>(tSR_sOacc)) == CUTE_STATIC_V(size<0>(tRS_sO)), "tSR_sOacc and tRS_sO should have same size");
     static_assert(CUTE_STATIC_V(size<1>(tSR_sOacc)) == CUTE_STATIC_V(size<1>(tRS_sO)), "tSR_sOacc and tRS_sO should have same size");
-    
+
+#if !defined(USE_LD_ST_MATRIX) || !defined(USE_UNORDERED_LOAD_STORE)
     Tensor rOacc = make_tensor<ElementAccum>(tSR_sOacc(_, 0).shape());
     Tensor rO = make_tensor<ElementOutput>(tRS_sO(_, 0).shape());
 
@@ -361,6 +666,42 @@ public:
       }
       copy(params.tiled_copy_r2s_final_rescale_o, rO, tRS_sO(_, i));
     }
+#else
+    uint32_t wi_id = worker_id % cutlass::NumThreadsPerWarp;
+
+    uint32_t eu_id = sg_id % eu_num;
+    uint32_t eu_sg_id = sg_id / eu_num;
+
+    uint32_t idx_x_base = (wi_id / numRowsPerWarp) * numElemPerThread;
+    uint32_t idx_y = eu_sg_id * numRowsPerWarp + eu_id * type1_cm_y_per_eu + (wi_id % numRowsPerWarp);
+
+    ElementAccum rOacc[numElemPerThread];
+    ElementOutput rO[numElemPerThread];
+    
+    for (int i = 0; i < size<1>(tSR_sOacc); ++i) {
+      uint16_t curr_idx_x = idx_x_base;
+      uint16_t curr_idx_y =
+          idx_y + (i % num_itr_per_cm) * num_row_per_itr_per_eu + (i / num_itr_per_cm) * TYPE1_CM_ELEM_Y;
+      sycl::marray<uint16_t, 2> coord = {curr_idx_x, curr_idx_y};
+      
+      cm_vrow_load_unordered<ElementAccum, maxElemPerLoad, numLoad>(rOacc, o_acc_desc.get(), coord);
+    
+      // reduce the local sum cross threads in same row to get the global sum
+      float global_sum = reduce_sum<numRowsPerSubgroup>(sg, worker_id, sum_reg[i], local_row_id);
+
+      float scale = (global_sum == 0.f || global_sum != global_sum) ? 1.f : 1.f / global_sum;
+      for (int k = 0; k < numElemPerThread; ++k) {
+        rO[k] = static_cast<ElementOutput>(rOacc[k] * scale);
+      }
+
+      if constexpr (sizeof(ElementOutput) * maxElemPerStore >= 32) {
+        cm_vrow_store_unordered<ElementOutput, maxElemPerStore, numStore>(o_desc.get(), rO, coord);
+      } else {
+        static_assert(numStore == 1, "Invalid case");
+        cm_vrow_store<ElementOutput, maxElemPerStore>(o_desc.get(), rO, coord);
+      }
+    }
+#endif
   }
 
 private:

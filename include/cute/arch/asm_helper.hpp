@@ -17,6 +17,7 @@ template <> struct fixed_s<32>  { static constexpr fixstr::fixed_string value {"
 template <> struct fixed_s<64>  { static constexpr fixstr::fixed_string value {"64"}; };
 template <> struct fixed_s<128> { static constexpr fixstr::fixed_string value {"128"};};
 template <> struct fixed_s<256> { static constexpr fixstr::fixed_string value {"256"};};
+template <> struct fixed_s<512> { static constexpr fixstr::fixed_string value {"512"};};
 
 // Type name enumeration
 template <typename> struct fixed_type;

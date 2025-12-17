@@ -64,6 +64,7 @@ public:
   using PipelineState = typename CollectiveMainloop::PipelineState;
   static constexpr int NumProducerWarps = CollectiveMainloop::NumProducerWarps;
   static constexpr int NumMMAWarps = CollectiveMainloop::NumMMAWarps;
+  static constexpr int NumControlerWarps = CollectiveMainloop::NumControlerWarps;
   static constexpr int SgSize = CollectiveMainloop::sg_size;
 
   // Epilogue derived types
@@ -130,7 +131,7 @@ public:
   }
 
   static dim3 get_block_shape() {
-    return dim3(SgSize, NumProducerWarps + NumMMAWarps + NumSoftmaxWarps, 1);
+    return dim3(SgSize, NumControlerWarps + NumSoftmaxWarps, 1);
   }
 
   CUTLASS_DEVICE
@@ -189,23 +190,23 @@ public:
     if (sg_id == 1) {
       pipeline_s_params.role = MainloopPipeline::ThreadCategory::Producer;
     }
-    else if (sg_id > 1) {
+    else if (sg_id >= NumControlerWarps) {
       pipeline_s_params.role = MainloopPipeline::ThreadCategory::Consumer;
     }
     pipeline_s_params.is_leader = lane_predicate && sg_id == 1;
     pipeline_s_params.num_producers = 1;
-    pipeline_s_params.num_consumers = NumSoftmaxWarps;
+    pipeline_s_params.num_consumers = NumSoftmaxWarps * cutlass::NumThreadsPerWarp;
 
     typename MainloopPipeline::Params pipeline_p_params;
     pipeline_p_params.transaction_bytes = 0; // no dma/mma in p producer side
-    if (sg_id > 1) {
+    if (sg_id >= NumControlerWarps) {
       pipeline_p_params.role = MainloopPipeline::ThreadCategory::Producer;
     }
     else if (sg_id == 1) {
       pipeline_p_params.role = MainloopPipeline::ThreadCategory::Consumer;
     }
     pipeline_p_params.is_leader = 0; // no leader for softmax
-    pipeline_p_params.num_producers = NumSoftmaxWarps;
+    pipeline_p_params.num_producers = NumSoftmaxWarps * cutlass::NumThreadsPerWarp;
     pipeline_p_params.num_consumers = 1;
 
     MainloopPipeline pipeline_s = MainloopPipeline(shared_pipelines.mainloop.storage_S, pipeline_s_params, /*cluster_shape=*/Shape<_1, _1, _1>{});
@@ -220,11 +221,12 @@ public:
         shared_pipelines.mainloop.barrier_Q.init(1);
         shared_pipelines.epilogue.barrier_O.init(/*arrival_count=*/1);
         shared_pipelines.mainloop.barrier_O.init(/*arrival_count=*/1);
-        shared_pipelines.mainloop.barrier_O_empty.init(/*arrival_count=*/NumSoftmaxWarps);
-        shared_pipelines.mainloop.barrier_worker.init(/*arrival_count=*/NumSoftmaxWarps);
+        shared_pipelines.mainloop.barrier_O_empty.init(/*arrival_count=*/NumSoftmaxWarps * cutlass::NumThreadsPerWarp);
 
         // TODO: Add async_gmma PISA with only .dtm.btm, without .atm
         shared_pipelines.mainloop.barrier_q_dummy.init(/*arrival_count=*/1);
+
+        shared_pipelines.epilogue.barrier_O_final.init(/*arrival_count=*/NumSoftmaxWarps * cutlass::NumThreadsPerWarp);
       }
     }
     item.barrier(sycl::access::fence_space::local_space);
@@ -275,8 +277,23 @@ public:
           collective_softmax
         );
       }
+    } 
+    else if (sg_id == 2) { // ADMA store
+      TileScheduler tile_scheduler{params.scheduler};
+
+      for (; tile_scheduler.is_valid(); ++tile_scheduler) {
+        auto block_coord = tile_scheduler.get_block_coord();
+
+        collective_epilogue.store(
+          params.epilogue,
+          shared_tensors.epilogue,
+          shared_pipelines.epilogue,
+          make_tuple(tdesc_o),
+          block_coord
+        );
+      }
     }
-    else { // Softmax
+    else if (sg_id >= NumControlerWarps) { // Softmax
       TileScheduler tile_scheduler{params.scheduler};
 
       PipelineState smem_pipe_read_s;
@@ -290,18 +307,11 @@ public:
           shared_tensors.mainloop,
           shared_tensors.epilogue,
           shared_pipelines.mainloop,
+          shared_pipelines.epilogue,
           num_kv_tiles,
           pipeline_s, smem_pipe_read_s,
           pipeline_p, smem_pipe_write_p,
           collective_softmax
-        );
-        
-        collective_epilogue.store(
-          params.epilogue,
-          shared_tensors.epilogue,
-          shared_pipelines.epilogue,
-          make_tuple(tdesc_o),
-          block_coord
         );
       }
     }

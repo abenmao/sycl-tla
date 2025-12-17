@@ -75,6 +75,7 @@ public:
     };
     struct PipelineStorage {
       cutlass::arch::ClusterTransactionBarrier barrier_O;
+      cutlass::arch::ClusterTransactionBarrier barrier_O_final;
     };
   };
 
@@ -131,9 +132,8 @@ public:
   {
     
     bool lane_predicate = cute::elect_one_sync();
-    uint32_t sg_id = get_sg_id();
 
-    if (lane_predicate && sg_id == 2) {
+    if (lane_predicate) {
       auto [batch, num_heads, seq_len_qo, seq_len_kv, head_size_qk, head_size_vo] = params.problem_shape;
 
       auto blk_m_coord = get<1>(block_coord); // seq_len_blk_idx
@@ -156,6 +156,8 @@ public:
 
       auto [tOgO, tOsO] = tma_partition(params.tma_store_O, _0{}, Layout<_1>{},
                                         group_modes<0, 2>(sO), group_modes<0, 2>(gO)); // (TMA), (TMA)
+
+      shared_pipelines.barrier_O_final.wait(0);
 
       shared_pipelines.barrier_O.arrive_and_expect_tx(TmaTransactionBytesO);
       copy(params.tma_store_O.with(

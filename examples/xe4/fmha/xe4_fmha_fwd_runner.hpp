@@ -66,8 +66,8 @@ struct Options {
 
     cmd.get_cmd_line_argument("batch", batch, 1);
     cmd.get_cmd_line_argument("num_heads", num_heads, 1);
-    cmd.get_cmd_line_argument("seq_len_qo", seq_len_qo, 512);
-    cmd.get_cmd_line_argument("seq_len_kv", seq_len_kv, seq_len_qo);
+    cmd.get_cmd_line_argument("seq_len_qo", seq_len_qo, 128);
+    cmd.get_cmd_line_argument("seq_len_kv", seq_len_kv, 8192);
     cmd.get_cmd_line_argument("head_size_vo", head_size_vo, 128);
     cmd.get_cmd_line_argument("head_size_qk", head_size_qk, head_size_vo);
     cmd.get_cmd_line_argument("iterations", iterations, 100);
@@ -162,7 +162,7 @@ struct ExampleRunner {
     for (size_t i = 0; i < num_elements; ++i) {
       bool ok = relatively_equal(host_A[i], host_B[i], epsilon, nonzero_floor);
       if (!ok) {
-        std::cout << "ref: " << host_A[i] << ", res: " << host_B[i] << ", diff abs: " << std::abs(host_A[i] - host_B[i]) << std::endl;
+        std::cout << "ref: " << host_A[i] << ", res: " << host_B[i] << ", diff abs: " << std::abs(host_A[i] - host_B[i]) << ", rate: " << host_A[i] / host_B[i] <<std::endl;
         total_mismatch++;
       }
     }

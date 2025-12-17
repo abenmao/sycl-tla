@@ -3013,10 +3013,59 @@ inline void cm_vrow_store(const mat_desc_t &mat_desc, dtype *data_ptr, const syc
   }
 }
 
-template <typename dtype, uint32_t vs, typename mat_desc_t = uint32_t>
-inline void cm_vrow_load_unordered(dtype *data_ptr, const mat_desc_t &mat_desc, const sycl::marray<uint16_t, 2> &pos) {
+template <typename dtype>
+constexpr uint32_t sizeof_regBits() {
+  if constexpr (std::is_same_v<dtype, fp6_e3m2>) {
+    return 8;
+  } else if constexpr (std::is_same_v<dtype, fp6_e2m3>) {
+    return 8;
+  } else {
+    return sizeof_bits<dtype>();
+  }
+}
+
+#if defined(__PISA__)
+static inline constexpr int get_vlen_enum(uint32_t vlen) {
+  switch (vlen) {
+    case 1: return __PISA_VECTOR_LENGTH_1;
+    case 2: return __PISA_VECTOR_LENGTH_2;
+    case 4: return __PISA_VECTOR_LENGTH_4;
+    case 8: return __PISA_VECTOR_LENGTH_8;
+    case 16: return __PISA_VECTOR_LENGTH_16;
+    case 32: return __PISA_VECTOR_LENGTH_32;
+  }
+  return -1; // Invalid vector length
+}
+#endif // defined(__PISA__)
+
+#if defined(__PISA__)
+static inline constexpr int get_alen_enum(uint32_t alen) {
+  switch (alen) {
+    case 1: return __PISA_ARRAY_LENGTH_1;
+    case 2: return __PISA_ARRAY_LENGTH_2;
+    case 4: return __PISA_ARRAY_LENGTH_4;
+    case 8: return __PISA_ARRAY_LENGTH_8;
+  }
+  return -1; // Invalid vector length
+}
+#endif // defined(__PISA__)
+
+#if defined(__PISA__)
+static inline constexpr int get_astride_enum(uint32_t astride) {
+  switch (astride) {
+    case 1: return __PISA_ARRAY_STRIDE_1;
+    case 2: return __PISA_ARRAY_STRIDE_2;
+    case 4: return __PISA_ARRAY_STRIDE_4;
+    case 8: return __PISA_ARRAY_STRIDE_8;
+  }
+  return -1; // Invalid vector length
+}
+#endif // defined(__PISA__)
+
+template <typename dtype, uint32_t vs, uint32_t arr_size = 1>
+inline void cm_vrow_load_unordered(dtype *data_ptr, uint32_t mat_desc, const sycl::marray<uint16_t, 2> &pos) {
   static_assert(((vs & (vs - 1)) == 0), "vs needs to be power of 2");
-  constexpr uint32_t dbits = sizeof_bits<dtype>();
+  constexpr uint32_t dbits = sizeof_regBits<dtype>();
   if constexpr (dbits < 8) {
     static_assert(vs <= 32, "for sub-byte type, the maximum vs is 32");
   } else {
@@ -3024,129 +3073,119 @@ inline void cm_vrow_load_unordered(dtype *data_ptr, const mat_desc_t &mat_desc, 
   }
   constexpr uint32_t dbits_u32 = sizeof(uint32_t) * BITS_PER_BYTE;
   constexpr uint32_t vs_u32 = (dbits * vs + dbits_u32 - 1) / dbits_u32;
-  using vtype = vector_t<uint32_t, vs_u32>;
+  using vtype = vector_t<uint32_t, arr_size * vs_u32>;
   vtype temp;
+  auto vpos = sycl::bit_cast<vector_t<uint16_t, 2>>(pos);
+
+#if defined(__PISA__)
+  __builtin_pisa_matrix_load_unordered(reinterpret_cast<int *>(&temp), mat_desc, vpos, dbits, get_vlen_enum(vs),
+                                       __PISA_VECTOR_DIRECTION_COOPERATIVE_ROW, get_alen_enum(arr_size),
+                                       __PISA_ARRAY_STRIDE_1, __PISA_ARRAY_DIRECTION_ROW);
+#else // !defined(__PISA__)
   if constexpr (dbits == 64) {
-    if constexpr (vs == 1) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl1.cooprow.64b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 2) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl2.cooprow.64b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 4) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl4.cooprow.64b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    if constexpr (vs == 4) {
+      if constexpr (arr_size == 1) {
+        INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl4.cooprow.64b %0, %1, %2;"
+                    : "=r"(temp)
+                    : "r"(mat_desc), "r"(vpos));
+      } else if constexpr (arr_size == 2) {
+        INLINE_PISA("ld_matrix.unordered.al2.as1.arow.vl4.cooprow.64b %0, %1, %2;"
+                    : "=r"(temp)
+                    : "r"(mat_desc), "r"(vpos));
+      } else if constexpr (arr_size == 4) {
+        INLINE_PISA("ld_matrix.unordered.al4.as1.arow.vl4.cooprow.64b %0, %1, %2;"
+                    : "=r"(temp)
+                    : "r"(mat_desc), "r"(vpos));
+      } else {
+        static_assert(false, "Unsupported array size for 64-bit data with 4-bit vector size");
+      }
     } else {
       static_assert(false, "Unsupported vector size for 64-bit data");
     }
   } else if constexpr (dbits == 32) {
-    if constexpr (vs == 1) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl1.cooprow.32b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 2) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl2.cooprow.32b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 4) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl4.cooprow.32b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 8) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl8.cooprow.32b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    if constexpr (vs == 8) {
+      if constexpr (arr_size == 1) {
+        INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl8.cooprow.32b %0, %1, %2;"
+                    : "=r"(temp)
+                    : "r"(mat_desc), "r"(vpos));
+      } else if constexpr (arr_size == 2) {
+        INLINE_PISA("ld_matrix.unordered.al2.as1.arow.vl8.cooprow.32b %0, %1, %2;"
+                    : "=r"(temp)
+                    : "r"(mat_desc), "r"(vpos));
+      } else if constexpr (arr_size == 4) {
+        INLINE_PISA("ld_matrix.unordered.al4.as1.arow.vl8.cooprow.32b %0, %1, %2;"
+                    : "=r"(temp)
+                    : "r"(mat_desc), "r"(vpos));
+      } else {
+        static_assert(false, "Unsupported array size for 32-bit data with 8-bit vector size");
+      }
     } else {
       static_assert(false, "Unsupported vector size for 32-bit data");
     }
   } else if constexpr (dbits == 16) {
-    if constexpr (vs == 1) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl1.cooprow.16b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 2) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl2.cooprow.16b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 4) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl4.cooprow.16b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 8) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl8.cooprow.16b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 16) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl16.cooprow.16b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    if constexpr (vs == 16) {
+      if constexpr (arr_size == 1) {
+        INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl16.cooprow.16b %0, %1, %2;"
+                    : "=r"(temp)
+                    : "r"(mat_desc), "r"(vpos));
+      } else if constexpr (arr_size == 2) {
+        INLINE_PISA("ld_matrix.unordered.al2.as1.arow.vl16.cooprow.16b %0, %1, %2;"
+                    : "=r"(temp)
+                    : "r"(mat_desc), "r"(vpos));
+      } else if constexpr (arr_size == 4) {
+        INLINE_PISA("ld_matrix.unordered.al4.as1.arow.vl16.cooprow.16b %0, %1, %2;"
+                    : "=r"(temp)
+                    : "r"(mat_desc), "r"(vpos));
+      } else {
+        static_assert(false, "Unsupported array size for 16-bit data with 16-bit vector size");
+      }
     } else {
       static_assert(false, "Unsupported vector size for 16-bit data");
     }
-  } else if constexpr (dbits == 8) {
-    if constexpr (vs == 1) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl1.cooprow.8b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 2) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl2.cooprow.8b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 4) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl4.cooprow.8b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 8) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl8.cooprow.8b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 16) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl16.cooprow.8b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 32) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl32.cooprow.8b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else {
-      static_assert(false, "Unsupported vector size for 8-bit data");
-    }
   } else if constexpr (dbits == 4) {
-    if constexpr (vs == 1) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl1.cooprow.4b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 2) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl2.cooprow.4b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 4) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl4.cooprow.4b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 8) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl8.cooprow.4b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 16) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl16.cooprow.4b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
-    } else if constexpr (vs == 32) {
-      INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl32.cooprow.4b %0, %1, %2;"
-                  : "=r"(temp)
-                  : "r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)));
+    if constexpr (vs == 32) {
+      if constexpr (arr_size == 1) {
+        INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl32.cooprow.4b %0, %1, %2;"
+                    : "=r"(temp)
+                    : "r"(mat_desc), "r"(vpos));
+      } else if constexpr (arr_size == 2) {
+        INLINE_PISA("ld_matrix.unordered.al2.as1.arow.vl32.cooprow.4b %0, %1, %2;"
+                    : "=r"(temp)
+                    : "r"(mat_desc), "r"(vpos));
+      } else if constexpr (arr_size == 4) {
+        INLINE_PISA("ld_matrix.unordered.al4.as1.arow.vl32.cooprow.4b %0, %1, %2;"
+                    : "=r"(temp)
+                    : "r"(mat_desc), "r"(vpos));
+      } else {
+        static_assert(false, "Unsupported array size for 4-bit data with 32-bit vector size");
+      }
     } else {
       static_assert(false, "Unsupported vector size for 4-bit data");
     }
-
+  } else if constexpr (dbits == 8 || sizeof_bits<dtype>() == 2) {
+    if constexpr (vs == 32) {
+      if constexpr (arr_size == 1) {
+        INLINE_PISA("ld_matrix.unordered.al1.as1.arow.vl32.cooprow.8b %0, %1, %2;"
+                    : "=r"(temp)
+                    : "r"(mat_desc), "r"(vpos));
+      } else if constexpr (arr_size == 2) {
+        INLINE_PISA("ld_matrix.unordered.al2.as1.arow.vl32.cooprow.8b %0, %1, %2;"
+                    : "=r"(temp)
+                    : "r"(mat_desc), "r"(vpos));
+      } else if constexpr (arr_size == 4) {
+        INLINE_PISA("ld_matrix.unordered.al4.as1.arow.vl32.cooprow.8b %0, %1, %2;"
+                    : "=r"(temp)
+                    : "r"(mat_desc), "r"(vpos));
+      } else {
+        static_assert(false, "Unsupported array size for 8-bit data with 32-bit vector size");
+      }
+    } else {
+      static_assert(false, "Unsupported vector size for 8-bit data");
+    }
   } else {
     static_assert(false, "Unsupported data size");
   }
-
+#endif // defined(__PISA__)
   constexpr uint32_t vs_u8 = (dbits * vs + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
   // for sub-byte type, will cvt to uint8_t first.
   using dtype_reg = std::conditional_t<(dbits < 8), uint8_t, dtype>;
@@ -3154,18 +3193,18 @@ inline void cm_vrow_load_unordered(dtype *data_ptr, const mat_desc_t &mat_desc, 
   constexpr uint32_t vs_dst = (dbits < 8) ? vs_u8 : vs;
   // to make it u32 aligned
   constexpr uint32_t vs_reg = vs_u32 * dbits_u32 / sizeof_bits<dtype_reg>();
-  sycl::marray<dtype_reg, vs_reg> dst = sycl::bit_cast<sycl::marray<dtype_reg, vs_reg>>(temp);
+  sycl::marray<dtype_reg, arr_size *vs_reg> dst = sycl::bit_cast<sycl::marray<dtype_reg, arr_size * vs_reg>>(temp);
   dtype_reg *data_reg_ptr = reinterpret_cast<dtype_reg *>(data_ptr);
 #pragma unroll
-  for (uint32_t i = 0; i < vs_dst; i++) {
+  for (uint32_t i = 0; i < arr_size * vs_dst; i++) {
     data_reg_ptr[i] = dst[i];
   }
 }
 
-template <typename dtype, uint32_t vs, typename mat_desc_t = uint32_t>
-inline void cm_vrow_store_unordered(const mat_desc_t &mat_desc, dtype *data_ptr, const sycl::marray<uint16_t, 2> &pos) {
+template <typename dtype, uint32_t vs, uint32_t arr_size = 1>
+inline void cm_vrow_store_unordered(uint32_t mat_desc, dtype *data_ptr, const sycl::marray<uint16_t, 2> &pos) {
   static_assert(((vs & (vs - 1)) == 0), "vs needs to be power of 2");
-  constexpr uint32_t dbits = sizeof_bits<dtype>();
+  constexpr uint32_t dbits = sizeof_regBits<dtype>();
   if constexpr (dbits < 8) {
     static_assert(vs <= 32, "for sub-byte type, the maximum vs is 32");
   } else {
@@ -3174,7 +3213,7 @@ inline void cm_vrow_store_unordered(const mat_desc_t &mat_desc, dtype *data_ptr,
   constexpr uint32_t dbits_u32 = sizeof(uint32_t) * BITS_PER_BYTE;
   constexpr uint32_t vs_u32 = (dbits * vs + dbits_u32 - 1) / dbits_u32;
   constexpr uint32_t vs_u8 = (dbits * vs + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
-  using vtype = vector_t<uint32_t, vs_u32>;
+  using vtype = vector_t<uint32_t, arr_size * vs_u32>;
   // for sub-byte type, will cvt to uint8_t first.
   using dtype_reg = std::conditional_t<(dbits < 8), uint8_t, dtype>;
   // to make it u8/element aligned
@@ -3182,106 +3221,108 @@ inline void cm_vrow_store_unordered(const mat_desc_t &mat_desc, dtype *data_ptr,
   // to make it u32 aligned
   constexpr uint32_t vs_reg = vs_u32 * dbits_u32 / sizeof_bits<dtype_reg>();
   dtype_reg *data_reg_ptr = reinterpret_cast<dtype_reg *>(data_ptr);
-  sycl::marray<dtype_reg, vs_reg> src;
+  sycl::marray<dtype_reg, arr_size * vs_reg> src;
 #pragma unroll
-  for (uint32_t i = 0; i < vs_src; i++) {
+  for (uint32_t i = 0; i < arr_size * vs_src; i++) {
     src[i] = data_reg_ptr[i];
   }
+#if defined(__PISA__)
+  dtype_reg *src_ptr = &src[0];
+  auto vpos = sycl::bit_cast<vector_t<uint16_t, 2>>(pos);
+  __builtin_pisa_matrix_store_unordered(mat_desc, vpos, reinterpret_cast<int *>(src_ptr), dbits, get_vlen_enum(vs),
+                                        __PISA_VECTOR_DIRECTION_COOPERATIVE_ROW, get_alen_enum(arr_size),
+                                        __PISA_ARRAY_STRIDE_1, __PISA_ARRAY_DIRECTION_ROW);
+#else // !defined(__PISA__)
   if constexpr (dbits == 64) {
-    if constexpr (vs == 1) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl1.cooprow.64b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 2) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl2.cooprow.64b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 4) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl4.cooprow.64b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    if constexpr (vs == 4) {
+      if constexpr (arr_size == 1) {
+        INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl4.cooprow.64b %0, %1, %2;" ::"r"(mat_desc),
+                    "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+      } else if constexpr (arr_size == 2) {
+        INLINE_PISA("st_matrix.unordered.al2.as1.arow.vl4.cooprow.64b %0, %1, %2;" ::"r"(mat_desc),
+                    "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+      } else if constexpr (arr_size == 4) {
+        INLINE_PISA("st_matrix.unordered.al4.as1.arow.vl4.cooprow.64b %0, %1, %2;" ::"r"(mat_desc),
+                    "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+      } else {
+        static_assert(false, "Unsupported vector size for 64-bit data");
+      }
     } else {
       static_assert(false, "Unsupported vector size for 64-bit data");
     }
   } else if constexpr (dbits == 32) {
-    if constexpr (vs == 1) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl1.cooprow.32b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 2) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl2.cooprow.32b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 4) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl4.cooprow.32b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 8) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl8.cooprow.32b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    if constexpr (vs == 8) {
+      if constexpr (arr_size == 1) {
+        INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl8.cooprow.32b %0, %1, %2;" ::"r"(mat_desc),
+                    "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+      } else if constexpr (arr_size == 2) {
+        INLINE_PISA("st_matrix.unordered.al2.as1.arow.vl8.cooprow.32b %0, %1, %2;" ::"r"(mat_desc),
+                    "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+      } else if constexpr (arr_size == 4) {
+        INLINE_PISA("st_matrix.unordered.al4.as1.arow.vl8.cooprow.32b %0, %1, %2;" ::"r"(mat_desc),
+                    "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+      } else {
+        static_assert(false, "Unsupported array size for 32-bit data with 8-bit vector size");
+      }
     } else {
       static_assert(false, "Unsupported vector size for 32-bit data");
     }
   } else if constexpr (dbits == 16) {
-    if constexpr (vs == 1) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl1.cooprow.16b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 2) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl2.cooprow.16b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 4) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl4.cooprow.16b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 8) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl8.cooprow.16b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 16) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl16.cooprow.16b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    if constexpr (vs == 16) {
+      if constexpr (arr_size == 1) {
+        INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl16.cooprow.16b %0, %1, %2;" ::"r"(mat_desc),
+                    "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+      } else if constexpr (arr_size == 2) {
+        INLINE_PISA("st_matrix.unordered.al2.as1.arow.vl16.cooprow.16b %0, %1, %2;" ::"r"(mat_desc),
+                    "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+      } else if constexpr (arr_size == 4) {
+        INLINE_PISA("st_matrix.unordered.al4.as1.arow.vl16.cooprow.16b %0, %1, %2;" ::"r"(mat_desc),
+                    "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+      } else {
+        static_assert(false, "Unsupported array size for 16-bit data with 16-bit vector size");
+      }
+
     } else {
       static_assert(false, "Unsupported vector size for 16-bit data");
     }
   } else if constexpr (dbits == 8) {
-    if constexpr (vs == 1) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl1.cooprow.8b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 2) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl2.cooprow.8b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 4) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl4.cooprow.8b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 8) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl8.cooprow.8b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 16) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl16.cooprow.8b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 32) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl32.cooprow.8b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    if constexpr (vs == 32) {
+      if constexpr (arr_size == 1) {
+        INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl32.cooprow.8b %0, %1, %2;" ::"r"(mat_desc),
+                    "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+      } else if constexpr (arr_size == 2) {
+        INLINE_PISA("st_matrix.unordered.al2.as1.arow.vl32.cooprow.8b %0, %1, %2;" ::"r"(mat_desc),
+                    "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+      } else if constexpr (arr_size == 4) {
+        INLINE_PISA("st_matrix.unordered.al4.as1.arow.vl32.cooprow.8b %0, %1, %2;" ::"r"(mat_desc),
+                    "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+      } else {
+        static_assert(false, "Unsupported array size for 8-bit data with 32-bit vector size");
+      }
     } else {
       static_assert(false, "Unsupported vector size for 8-bit data");
     }
   } else if constexpr (dbits == 4) {
-    if constexpr (vs == 1) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl1.cooprow.4b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 2) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl2.cooprow.4b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 4) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl4.cooprow.4b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 8) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl8.cooprow.4b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 16) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl16.cooprow.4b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
-    } else if constexpr (vs == 32) {
-      INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl32.cooprow.4b %0, %1, %2;" ::"r"(mat_desc),
-                  "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+    if constexpr (vs == 32) {
+      if constexpr (arr_size == 1) {
+        INLINE_PISA("st_matrix.unordered.al1.as1.arow.vl32.cooprow.4b %0, %1, %2;" ::"r"(mat_desc),
+                    "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+      } else if constexpr (arr_size == 2) {
+        INLINE_PISA("st_matrix.unordered.al2.as1.arow.vl32.cooprow.4b %0, %1, %2;" ::"r"(mat_desc),
+                    "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+      } else if constexpr (arr_size == 4) {
+        INLINE_PISA("st_matrix.unordered.al4.as1.arow.vl32.cooprow.4b %0, %1, %2;" ::"r"(mat_desc),
+                    "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)), "r"(sycl::bit_cast<vtype>(src)));
+      } else {
+        static_assert(false, "Unsupported array size for 4-bit data with 32-bit vector size");
+      }
     } else {
       static_assert(false, "Unsupported vector size for 8-bit data");
     }
   } else {
     static_assert(false, "Unsupported data size");
   }
+#endif // defined(__PISA__)
 }
 
 template <typename dtype, uint32_t vs, typename mat_desc_t = uint32_t>
@@ -3640,6 +3681,46 @@ template <uint32_t M, uint32_t N>
 struct round_up {
   constexpr static uint32_t value = (M + N -1) / N;
 };
+
+template <typename dtype_math, uint32_t N_math, typename dtype_reg>
+inline dtype_math gtp_tred_max(const dtype_reg *src_ptr, dtype_math acc) {
+  dtype_math ret;
+  constexpr uint32_t N_reg = N_math * sizeof(dtype_math) / sizeof(dtype_reg);
+  constexpr uint32_t N_u32 = N_math * sizeof(dtype_math) / sizeof(uint32_t);
+  sycl::marray<dtype_reg, N_reg> src0;
+  using vtype = vector_t<uint32_t, N_u32>;
+#pragma unroll
+  for (int i = 0; i < N_reg; i++) {
+    src0[i] = src_ptr[i];
+  }
+  uint32_t tmp;
+  uint32_t acc_tmp;
+  auto vsrc = sycl::bit_cast<vtype>(src0);
+  if constexpr (std::is_same_v<dtype_math, fp16>) {
+    INLINE_PISA("zext.32b.16b %0, %1;" : "=r"(acc_tmp) : "r"(acc));
+    if constexpr (N_math == 32) {
+      INLINE_PISA("tred.f16.f16.m32n32.rednd.max.acc %0, %1, %2;" : "=r"(tmp) : "r"(vsrc), "r"(acc_tmp));
+    } else if constexpr (N_math == 16) {
+      INLINE_PISA("tred.f16.f16.m32n16.rednd.max.acc %0, %1, %2;" : "=r"(tmp) : "r"(vsrc), "r"(acc_tmp));
+    } else {
+      static_assert(sizeof(dtype_math) == 0, "unsupported N");
+    }
+    INLINE_PISA("trunc.16b.32b %0, %1;" : "=r"(ret) : "r"(tmp));
+  } else if constexpr (std::is_same_v<dtype_math, bf16>) {
+    INLINE_PISA("zext.32b.16b %0, %1;" : "=r"(acc_tmp) : "r"(acc));
+    if constexpr (N_math == 32) {
+      INLINE_PISA("tred.bf16.bf16.m32n32.rednd.max.acc %0, %1, %2;" : "=r"(tmp) : "r"(vsrc), "r"(acc_tmp));
+    } else if constexpr (N_math == 16) {
+      INLINE_PISA("tred.bf16.bf16.m32n16.rednd.max.acc %0, %1, %2;" : "=r"(tmp) : "r"(vsrc), "r"(acc_tmp));
+    } else {
+      static_assert(sizeof(dtype_math) == 0, "unsupported N");
+    }
+    INLINE_PISA("trunc.16b.32b %0, %1;" : "=r"(ret) : "r"(tmp));
+  } else {
+    static_assert(sizeof(dtype_math) == 0, "unsupported dtype");
+  }
+  return ret;
+}
 
 template <typename src_type, typename dst_type, uint32_t N, typename dtype_reg=uint32_t, cute::tred_red_dim red_dim, cute::tred_algo algo, cute::tred_round_mode tr_mode=cute::tred_round_mode::none, bool dsat=false, bool with_acc=false>
 inline dst_type tensor_pipe_tred_pisa(const sycl::marray<dtype_reg, round_up<N * sizeof(src_type), sizeof(dtype_reg)>::value>& src0, const dst_type src1 = 0) {
