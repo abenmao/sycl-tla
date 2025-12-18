@@ -49,6 +49,11 @@ struct XE_DPAS_TT_Base
 {
   static constexpr int K = 256 / cute::max(sizeof_bits_v<TypeA>, sizeof_bits_v<TypeB>);
 
+  using DType = TypeD;
+  using AType = TypeA;
+  using BType = TypeB;
+  using CType = TypeC;
+
   using DVector = intel::vector_t<TypeD, M>;
   using AVector = intel::vector_t<TypeA, (M * K + 15) / 16>;
   using BVector = intel::vector_t<TypeB, K>;
@@ -120,6 +125,13 @@ template <int M> struct XE_DPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::T
   } \
 };
 
+#define DECL_BDPAS_PARAMS(TD) \
+        ".decl DST     v_type=G type=" #TD " num_elts=128 alias=<%0,0>\n" \
+        ".decl SRC1_UD v_type=G type=UD num_elts=128 alias=<%2,0>\n" \
+        ".decl SRC2_UD v_type=G type=UD num_elts=64 alias=<%1,0>\n" \
+        ".decl SRC3_UB v_type=G type=UB num_elts=%8 alias=<%4,%6>\n" \
+        ".decl SRC4_UB v_type=G type=UB num_elts=%7 alias=<%3,%5>\n"
+
 // TODO(Zhitao): Remove m_offset, n_offset, ka_offset and kb_offset, move the calculation to
 // earlier stages.
 #define CUTE_DECLARE_XE_BDPAS_TT(TD, TA, TB, TC) \
@@ -135,81 +147,27 @@ template <int M> struct XE_BDPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::
             typename SFAVector, \
             typename SFBVector> \
   CUTE_DEVICE static void \
-  fma(DVector& d, AVector const& a, BVector const& b, CVector_ const& c, SFAVector const& sfa, SFBVector const& sfb, uint16_t m_offset, uint16_t n_offset, uint16_t ka_offset, uint16_t kb_offset) { \
-    if constexpr (std::is_same_v<dpas_type::TA, float_e2m1_t>) { \
-      auto m_off = m_offset + ka_offset; \
-      auto n_off = n_offset + kb_offset; \
-      if constexpr (std::is_same_v<CVector_, DVector>) { \
-        d = c; \
-        asm ( \
-          "{\n" \
-          ".decl DST     v_type=G type=" #TD " num_elts=128 alias=<%0,0>\n" \
-          ".decl SRC2_UD v_type=G type=UD num_elts=64 align=wordx32 alias=<%1,0>\n" \
-          ".decl SRC1_UD v_type=G type=UD num_elts=128 align=wordx32 alias=<%2,0>\n" \
-          ".decl SRC4_UB v_type=G type=UB num_elts=32 align=wordx32 alias=<%3,%5>\n" \
-          ".decl SRC3_UB v_type=G type=UB num_elts=32 align=wordx32 alias=<%4,%6>\n" \
-          ".decl SRC4_UB_PADDED v_type=G type=UB num_elts=40 align=wordx32\n" \
-          ".decl SRC3_UB_PADDED v_type=G type=UB num_elts=48 align=wordx32\n" \
-          "mov (M1_NM, 16) SRC3_UB_PADDED(0,0)<1> SRC3_UB(0,0)<1;1,0>\n" \
-          "mov (M1_NM, 16) SRC3_UB_PADDED(0,32)<1> SRC3_UB(0,16)<1;1,0>\n" \
-          "mov (M1_NM, 8) SRC4_UB_PADDED(0,0)<1> SRC4_UB(0,0)<1;1,0>\n" \
-          "mov (M1_NM, 8) SRC4_UB_PADDED(0,32)<1> SRC4_UB(0,16)<1;1,0>\n" \
-          "bdpas." #TB "." #TA ".8.8 (M1, 16) DST.0 DST.0 SRC1_UD.0 SRC2_UD.0 SRC3_UB_PADDED(0,0) SRC4_UB_PADDED(0,0)\n" \
-          "}\n" \
-          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(m_off), "P"(n_off) \
-        ); \
-      } else { \
-        asm ( \
-          "{\n" \
-          ".decl DST     v_type=G type=" #TD " num_elts=128 alias=<%0,0>\n" \
-          ".decl SRC0    v_type=G type=" #TC " num_elts=128 alias=<%7,0>\n" \
-          ".decl SRC2_UD v_type=G type=UD num_elts=64 align=wordx32 alias=<%1,0>\n" \
-          ".decl SRC1_UD v_type=G type=UD num_elts=128 align=wordx32 alias=<%2,0>\n" \
-          ".decl SRC4_UB v_type=G type=UB num_elts=32 align=wordx32 alias=<%3,%5>\n" \
-          ".decl SRC3_UB v_type=G type=UB num_elts=32 align=wordx32 alias=<%4,%6>\n" \
-          ".decl SRC4_UB_PADDED v_type=G type=UB num_elts=40 align=wordx32\n" \
-          ".decl SRC3_UB_PADDED v_type=G type=UB num_elts=48 align=wordx32\n" \
-          "mov (M1_NM, 16) SRC3_UB_PADDED(0,0)<1> SRC3_UB(0,0)<1;1,0>\n" \
-          "mov (M1_NM, 16) SRC3_UB_PADDED(0,32)<1> SRC3_UB(0,16)<1;1,0>\n" \
-          "mov (M1_NM, 8) SRC4_UB_PADDED(0,0)<1> SRC4_UB(0,0)<1;1,0>\n" \
-          "mov (M1_NM, 8) SRC4_UB_PADDED(0,32)<1> SRC4_UB(0,16)<1;1,0>\n" \
-          "bdpas." #TB "." #TA ".8.8 (M1, 16) DST.0 SRC0.0 SRC1_UD.0 SRC2_UD.0 SRC3_UB_PADDED(0,0) SRC4_UB_PADDED(0,0)\n" \
-          "}\n" \
-          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(m_off), "P"(n_off), "rw"(c) \
-        ); \
-      } \
+  fma(DVector& d, AVector const& a, BVector const& b, CVector_ const& c, SFAVector const& sfa, SFBVector const& sfb, uint16_t sfa_offset, uint16_t sfb_offset) { \
+    constexpr auto SFASize = sizeof(sfa); \
+    constexpr auto SFBSize = sizeof(sfb); \
+    if constexpr (std::is_same_v<CVector_, DVector>) { \
+      d = c; \
+      asm ( \
+        "{\n" \
+        DECL_BDPAS_PARAMS(TD) \
+        "bdpas." #TB "." #TA ".8.8 (M1, 16) DST.0 DST.0 SRC1_UD.0 SRC2_UD.0 SRC3_UB(0,0) SRC4_UB(0,0)\n" \
+        "}\n" \
+        : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(sfa_offset), "P"(sfb_offset), "P"(SFASize * 16), "P"(SFBSize * 16) \
+      ); \
     } else { \
-      constexpr auto SFASize = sizeof(sfa); \
-      auto m_off = m_offset + ka_offset; \
-      constexpr auto SFBSize = sizeof(sfb); \
-      auto n_off = n_offset + kb_offset; \
-      if constexpr (std::is_same_v<CVector_, DVector>) { \
-        d = c; \
-        asm ( \
-          "{\n" \
-          ".decl DST     v_type=G type=" #TD " num_elts=128 alias=<%0,0>\n" \
-          ".decl SRC1_UD v_type=G type=UD num_elts=128 alias=<%2,0>\n" \
-          ".decl SRC2_UD v_type=G type=UD num_elts=64 alias=<%1,0>\n" \
-          ".decl SRC3_UB v_type=G type=UB num_elts=%8 alias=<%4,0>\n" \
-          ".decl SRC4_UB v_type=G type=UB num_elts=%7 alias=<%3,0>\n" \
-          "bdpas." #TB "." #TA ".8.8 (M1, 16) DST.0 DST.0 SRC1_UD.0 SRC2_UD.0 SRC3_UB(0,%6) SRC4_UB(0,%5)\n" \
-          "}\n" \
-          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(m_off), "P"(n_off), "P"(SFASize * 16), "P"(SFBSize * 16) \
-        ); \
-      } else { \
-        asm ( \
-          "{\n" \
-          ".decl DST     v_type=G type=" #TD " num_elts=128 alias=<%0,0>\n" \
-          ".decl SRC0    v_type=G type=" #TC " num_elts=128 alias=<%9,0>\n" \
-          ".decl SRC1_UD v_type=G type=UD num_elts=128 alias=<%2,0>\n" \
-          ".decl SRC2_UD v_type=G type=UD num_elts=64 alias=<%1,0>\n" \
-          ".decl SRC3_UB v_type=G type=UB num_elts=%8 alias=<%4,0>\n" \
-          ".decl SRC4_UB v_type=G type=UB num_elts=%7 alias=<%3,0>\n" \
-          "bdpas." #TB "." #TA ".8.8 (M1, 16) DST.0 SRC0.0 SRC1_UD.0 SRC2_UD.0 SRC3_UB(0,%6) SRC4_UB(0,%5)\n" \
-          "}\n" \
-          : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(m_off), "P"(n_off), "P"(SFASize * 16), "P"(SFBSize * 16), "rw"(c) \
-        ); \
-      } \
+      asm ( \
+        "{\n" \
+        DECL_BDPAS_PARAMS(TD) \
+        ".decl SRC0    v_type=G type=" #TC " num_elts=128 alias=<%9,0>\n" \
+        "bdpas." #TB "." #TA ".8.8 (M1, 16) DST.0 SRC0.0 SRC1_UD.0 SRC2_UD.0 SRC3_UB(0,0) SRC4_UB(0,0)\n" \
+        "}\n" \
+        : "+rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(sfa_offset), "P"(sfb_offset), "P"(SFASize * 16), "P"(SFBSize * 16), "rw"(c) \
+      ); \
     } \
   } \
 };
@@ -241,7 +199,7 @@ template <int M> struct XE_BDPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::
   template <typename SFAVector, \
             typename SFBVector> \
   CUTE_HOST_DEVICE static void \
-  fma(DVector& d, AVector const& a, BVector const& b, CVector const& c, SFAVector const& sfa, SFBVector const& sfb, uint16_t m_offset, uint16_t n_offset, uint16_t ka_offset, uint16_t kb_offset) { \
+  fma(DVector& d, AVector const& a, BVector const& b, CVector const& c, SFAVector const& sfa, SFBVector const& sfb, uint16_t sfa_offset, uint16_t sfb_offset) { \
     CUTE_INVALID_CONTROL_PATH("Cannot use Xe BDPAS MMA atom on non-Xe hardware"); \
   } \
 };

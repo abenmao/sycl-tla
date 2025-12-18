@@ -107,9 +107,7 @@ public:
   using TileShapeO = typename CollectiveEpilogue::TileShapeO;
   using ElementO = typename CollectiveEpilogue::TensorO::element_type;
   using StrideO = decltype(stride(typename CollectiveEpilogue::TensorO{}));
-  using Copy_ScaleQ = typename CollectiveMainloop::Copy_ScaleQ;
-  using Copy_ScaleK = typename CollectiveMainloop::Copy_ScaleK;
-  using Copy_ScaleV = typename CollectiveMainloop::Copy_ScaleV;
+
   // Kernel level shared memory storage
   using MainloopSharedStorage = typename CollectiveMainloop::SharedStorage;
   using EpilogueSharedStorage = typename CollectiveEpilogue::SharedStorage;
@@ -305,16 +303,11 @@ public:
         Tensor ScaleQ = make_tensor(make_gmem_ptr(dcScaleQ), make_layout(shape_scale_Q, stride_scaleQ));
         Tensor ScaleK = make_tensor(make_gmem_ptr(dcScaleK), make_layout(shape_scale_K, stride_scaleK));
         Tensor ScaleV = make_tensor(make_gmem_ptr(dcScaleV), make_layout(shape_scale_V, stride_scaleV));
-        Copy_ScaleQ tiled_copy_scaleQ;
-        Copy_ScaleK tiled_copy_scaleK;
-        Copy_ScaleV tiled_copy_scaleV;
+
         auto ScaleQ_head = ScaleQ(_, _, head_q, l_coord);
         auto ScaleK_head = ScaleK(_, _, head, l_coord);
         auto ScaleV_head = ScaleV(_, _, head, l_coord);
 
-        tiled_copy_scaleQ = {Copy_ScaleQ{}.with(ScaleQ_head)};
-        tiled_copy_scaleK = {Copy_ScaleK{}.with(ScaleK_head)};
-        tiled_copy_scaleV = {Copy_ScaleV{}.with(ScaleV_head)};
         mainloop(Q(_,_,head_q,l_coord),
                  K(_,_,head,l_coord),
                  V(_,_,head,l_coord),
@@ -323,9 +316,9 @@ public:
                  thr_id, seq_len, l_coord,
                  full_tile_offset, discard_seq_coord,
                  p.scale_k, p.scale_v,
-                 tiled_copy_scaleQ,
-                 tiled_copy_scaleK,
-                 tiled_copy_scaleV);
+                 ScaleQ_head,
+                 ScaleK_head,
+                 ScaleV_head);
       } else {
         mainloop(Q(_,_,head_q,l_coord),
                  K(_,_,head,l_coord),

@@ -65,6 +65,12 @@ struct scale_copy_traits<datatype, 2, width, stride,
   using type = XE_2D_U8x2x16_LD_N;
 };
 
+template<class datatype, size_t width, class stride>
+struct scale_copy_traits<datatype, 4, width, stride,
+          std::enable_if_t<sizeof_bits_v<datatype> == 8>> {
+  using type = XE_2D_U8x4x16_LD_N;
+};
+
 // -----------------------------------------------------------------------------
 // Tiled Copy for Scale
 // -----------------------------------------------------------------------------
@@ -88,53 +94,86 @@ struct TiledCopyScaleTraits {
 // Helper Functions
 // -----------------------------------------------------------------------------
 
+
 // Helper to create scale copy iterator
 template <
     int scale_traits_size,
     int scale_traits_num,
-    class SelectedGmemTiledCopyScale
+    int sg_k,
+    class TiledCopyScale
   >
 CUTLASS_DEVICE static auto
-make_scale_copy_iterator(int coord, int l_coord, int k_tile_count, int sg_d, int mma_d) {
+make_scale_copy_iterator(int coord, int l_coord, int k_tile_count) {
     constexpr int GROUP_K = 32;
     return make_tensor(make_inttuple_iter(make_coord(coord, 0, l_coord)),
-                        make_layout(make_shape(Int<scale_traits_size>{}, Int<scale_traits_num>{}, sg_d / mma_d, k_tile_count),
-                                    make_stride(E<0>{} * _16{}, E<0>{} * size<1>(typename SelectedGmemTiledCopyScale::BlockShape{}), E<1>{} * size<0>(typename SelectedGmemTiledCopyScale::BlockShape{}), E<1>{} * (sg_d / GROUP_K))));
+                       make_layout(make_shape(Int<scale_traits_size>{}, Int<scale_traits_num>{}, _1{}, k_tile_count),
+                                   make_stride(E<0>{} * _16{}, E<0>{} * size<1>(typename TiledCopyScale::BlockShape{}),
+                                               E<1>{} * size<0>(typename TiledCopyScale::BlockShape{}), E<1>{} * (sg_k / GROUP_K))));
 }
 
 // Helper to generate index data for GEMM offsets (M/N/Q dimension)
-template <typename Element, int Count>
+template <int GemmIterM, typename BlockShape>
 CUTLASS_DEVICE static auto
-make_gemm_idx_by_m() {
-    auto indices = make_tensor<uint8_t>(make_shape(Int<Count>{}));
-    CUTLASS_PRAGMA_UNROLL
-    for (int m = 0; m < Count; ++m) {
-      indices(m) = sizeof_bits_v<Element> < 8 ? (m / 2) * 32 + (m % 2) * 8 : m * 8;
-    }
-    return indices;
+make_scaled_offsets_m() {
+  auto offsets = make_tensor<uint16_t>(Layout<Shape<_1, Int<GemmIterM>, _1>, Stride<_0, _1, _0>>{});
+  CUTLASS_PRAGMA_UNROLL
+  for (int m = 0; m < GemmIterM; ++m) {
+    offsets(m) = (m / 2) * decltype(size(BlockShape{}))::value + (m % 2) * 8;
+  }
+  return offsets;
 }
 
-template <typename Element, int Count>
+template <int GemmIterN, typename BlockShape>
 CUTLASS_DEVICE static auto
-make_gemm_idx_by_n() {
-    auto indices = make_tensor<uint8_t>(make_shape(Int<Count>{}));
-    CUTLASS_PRAGMA_UNROLL
-    for (int n = 0; n < Count; ++n) {
-      indices(n) = sizeof_bits_v<Element> < 8 ? n * 32 : n * 16;
-    }
-    return indices;
+make_scaled_offsets_n() {
+  auto offsets = make_tensor<uint16_t>(Layout<Shape<_1, Int<GemmIterN>, _1>, Stride<_0, _1, _0>>{});
+  CUTLASS_PRAGMA_UNROLL
+  for (int n = 0; n < GemmIterN; ++n) {
+    offsets(n) = n * decltype(size(BlockShape{}))::value;
+  }
+  return offsets;
 }
 
 // Helper to generate K offsets
-template <int Count, class BlockShape, int SG_Dim>
+template <int GemmIterK, int MMA_K, int GROUP_K, typename BlockShape>
 CUTLASS_DEVICE static auto
-make_gemm_k_offsets() {
-    auto offsets = make_tensor<uint16_t>(Layout<Shape<_1, _1, Int<Count>>, Stride<_0, _0, _1>>{});
-    CUTLASS_PRAGMA_UNROLL
-    for (int k = 0; k < Count; ++k) {
-      offsets(k) = static_cast<uint16_t>(k * size(BlockShape{}) * (SG_Dim / 16));
-    }
-    return offsets;
+make_scaled_offsets_k() {
+  auto offsets = make_tensor<uint16_t>(Layout<Shape<_1, _1, Int<GemmIterK>>, Stride<_0, _0, _1>>{});
+  CUTLASS_PRAGMA_UNROLL
+  for (int k = 0; k < GemmIterK; ++k) {
+    offsets(k) = (MMA_K / GROUP_K) * decltype(size<1>(BlockShape{}))::value * k;
+  }
+  return offsets;
+}
+
+template <typename ScaleCopy, typename Element, int SG_MN, int SG_K, int GROUP_K, typename Tensor>
+CUTLASS_DEVICE static auto
+make_scaled_copy(Tensor const& tensor, int mn_coord, int l_coord, int k_tile_count) {
+  using Stride = cute::remove_cvref_t<decltype(tensor.stride())>;
+  using NonVoidScaleCopy = typename scale_copy_traits<Element, SG_K / GROUP_K, SG_MN>::type;
+  using SelectedCopyScale = cute::conditional_t<cute::is_void_v<ScaleCopy>, NonVoidScaleCopy, ScaleCopy>;
+  using Copy_Scale = typename TiledCopyScaleTraits<SelectedCopyScale, Stride, Element>::Copy_Scale;
+
+  constexpr auto SubgroupSize = 16;
+  static constexpr auto scale_traits_size = decltype(size(typename SelectedCopyScale::BlockShape{}))::value / SubgroupSize;
+  static constexpr auto scale_traits_num = SG_MN / size<1>(typename SelectedCopyScale::BlockShape{});
+
+  auto tiled_copy = Copy_Scale{}.with(tensor);
+
+  auto copy_iter = make_scale_copy_iterator<scale_traits_size, scale_traits_num, SG_K, SelectedCopyScale>(mn_coord, l_coord, k_tile_count);
+
+  auto fragment = make_tensor<Element>(Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>>{});
+
+  return cute::make_tuple(tiled_copy, copy_iter, fragment);
+}
+
+template <int GemmIterM, int GemmIterN, int GemmIterK, int MMA_K, int GROUP_K, typename BlockShapeA, typename BlockShapeB>
+CUTLASS_DEVICE static auto
+make_scaled_offsets() {
+  return cute::make_tuple(make_scaled_offsets_m<GemmIterM, BlockShapeA>(),
+                          make_scaled_offsets_n<GemmIterN, BlockShapeB>(),
+                          make_scaled_offsets_k<GemmIterK, MMA_K, GROUP_K, BlockShapeA>(),
+                          make_scaled_offsets_k<GemmIterK, MMA_K, GROUP_K, BlockShapeB>());
 }
 
 } // namespace cutlass::gemm::collective
