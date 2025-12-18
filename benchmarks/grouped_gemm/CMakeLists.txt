@@ -28,40 +28,23 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 # Pass these configuration files for the CI
-set(CONFIG_FILE_INTEL_SMALL --config_file=${CMAKE_SOURCE_DIR}/benchmarks/device/bmg/input_files/input_small_gemm.in)
+set(CONFIG_FILE_INTEL_DEFAULT --config_file=${CMAKE_SOURCE_DIR}/benchmarks/device/bmg/input_files/input_small_group_gemm.in)
 
-cutlass_benchmark_add_suite(cutlass_benchmarks_gemm)
+cutlass_benchmark_add_suite(cutlass_benchmarks_grouped_gemm)
 
 if(CUTLASS_ENABLE_SYCL)
 
-if(SYCL_INTEL_TARGET)
+# TODO: support grouped gemm benchmark on more platforms
+if(SYCL_INTEL_TARGET EQUAL 35)
 
 cutlass_benchmark_add_executable(
-    cutlass_benchmarks_gemm_sycl
+    cutlass_benchmarks_grouped_gemm_sycl
     main.cpp
-    SUITE cutlass_benchmarks_gemm
+    SUITE cutlass_benchmarks_grouped_gemm
     TEST_COMMAND_OPTIONS
-    CONFIG_FILE_INTEL_SMALL
+    CONFIG_FILE_INTEL_DEFAULT
 )
 
-else()
-cutlass_benchmark_add_executable(
-    cutlass_benchmarks_gemm_sycl
-    main.cpp
-    SUITE cutlass_benchmarks_gemm
-    TEST_COMMAND_OPTIONS
-    CONFIG_FILE_CUDA
-)
 endif()
-
-else()
-
-cutlass_benchmark_add_executable(
-    cutlass_benchmarks_gemm_cuda
-    main.cu
-    SUITE cutlass_benchmarks_gemm
-    TEST_COMMAND_OPTIONS
-    CONFIG_FILE_CUDA
-)
 
 endif()
