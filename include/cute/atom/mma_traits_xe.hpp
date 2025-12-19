@@ -130,9 +130,6 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
     auto  [A, SFA, SFA_M_OFFSET, SFA_K_OFFSET] = unzip_tensor(A_zipped);
     auto  [B, SFB, SFB_N_OFFSET, SFB_K_OFFSET] = unzip_tensor(B_zipped);
 
-    using          RegTypeSFA = typename decltype(SFA)::value_type;
-    using          RegTypeSFB = typename decltype(SFB)::value_type;
-
     Tensor rA = recast<RegTypeA>(A);
     Tensor rB = recast<RegTypeB>(B);
     CUTE_STATIC_ASSERT_V(size(rA) == Int<RegNumA>{});
@@ -146,53 +143,15 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
     auto sfa_offset = SFA_M_OFFSET[0] + SFA_K_OFFSET[0];
     auto sfb_offset = SFB_N_OFFSET[0] + SFB_K_OFFSET[0];
 
-    if constexpr (sizeof_bits_v<typename MMAOp::AType> < 8) {
-      constexpr auto scaleA_size = 3;
-      constexpr auto scaleB_size = 3;
-
-      auto tensor_sfa = make_tensor<cutlass::float_ue8m0_t>(Shape<Int<scaleA_size>>{});
-      auto tensor_sfb = make_tensor<cutlass::float_ue8m0_t>(Shape<Int<scaleB_size>>{});
-
-      auto rSFA = make_tensor(recast<intel::vector_t<cutlass::float_ue8m0_t, scaleA_size>>(tensor_sfa).data(), Shape<_1>{});
-      auto rSFB = make_tensor(recast<intel::vector_t<cutlass::float_ue8m0_t, scaleB_size>>(tensor_sfb).data(), Shape<_1>{});
-
-      #if defined(CUTE_ARCH_MMA_XE_ENABLED)
-        asm ( \
-            "{\n" \
-            ".decl A_UB v_type=G type=UB num_elts=32 alias=<%1,%2>\n" \
-            "mov (M1_NM, 16) %0(0,0)<1> A_UB(0,0)<1;1,0>\n" \
-            "mov (M1_NM, 16) %0(0,32)<1> A_UB(0,16)<1;1,0>\n" \
-            "}\n" : "=rw"(rSFA[0]) : "rw"(SFA[0]), "P"(sfa_offset) \
-        );
-        asm ( \
-            "{\n" \
-            ".decl B_UB v_type=G type=UB num_elts=32 alias=<%1,%2>\n" \
-            "mov (M1_NM, 16) %0(0,0)<1> B_UB(0,0)<1;1,0>\n" \
-            "mov (M1_NM, 16) %0(0,32)<1> B_UB(0,16)<1;1,0>\n" \
-            "}\n" : "=rw"(rSFB[0]) : "rw"(SFB[0]), "P"(sfb_offset) \
-        ); 
-      #endif
-
-      cute::detail::explode_mma<MMAOp>(
-              rD,   make_int_sequence<RegNumD>{},
-              rA,   make_int_sequence<RegNumA>{},
-              rB,   make_int_sequence<RegNumB>{},
-              rC,   make_int_sequence<RegNumC>{},
-              rSFA, make_int_sequence<1>{},
-              rSFB, make_int_sequence<1>{},
-              0,
-              0);
-    } else {
-      cute::detail::explode_mma<MMAOp>(
-              rD,   make_int_sequence<RegNumD>{},
-              rA,   make_int_sequence<RegNumA>{},
-              rB,   make_int_sequence<RegNumB>{},
-              rC,   make_int_sequence<RegNumC>{},
-              SFA, make_int_sequence<1>{},
-              SFB, make_int_sequence<1>{},
-              sfa_offset,
-              sfb_offset);
-    }
+    cute::detail::explode_mma<MMAOp>(
+            rD,   make_int_sequence<RegNumD>{},
+            rA,   make_int_sequence<RegNumA>{},
+            rB,   make_int_sequence<RegNumB>{},
+            rC,   make_int_sequence<RegNumC>{},
+            SFA, make_int_sequence<1>{},
+            SFB, make_int_sequence<1>{},
+            sfa_offset,
+            sfb_offset);
   }
 
 };

@@ -354,27 +354,21 @@ public:
     auto pAgA = thr_prefetch_A.partition_S(gA);
     auto pBgB = thr_prefetch_B.partition_S(gB);
 
+    using GemmIterM = Int<decltype(size<1>(tCrA.shape()))::value>;
+    using GemmIterN = Int<decltype(size<1>(tCrB.shape()))::value>;
+    using GemmIterK = Int<decltype(size<2>(tCrB.shape()))::value>;
+
     auto [m_idx, n_idx, k_idx, l_idx] = blk_coord;
     const int m_coord = m_idx * BLK_M + (get_sub_group_id() / SG_NUMS_N) * SG_M;
     const int n_coord = n_idx * BLK_N + (get_sub_group_id() % SG_NUMS_N) * SG_N;
     const int l_coord = l_idx;
 
-    auto [tiled_copy_scaleA,
-          copy_iter_scaleA,
-          fragment_scaleA] = make_scaled_copy<GmemTiledCopyScaleA, NonVoidElementScaleA,
+    auto [tiled_copy_scaleA, copy_iter_scaleA, fragment_scaleA] = make_scaled_copy<GmemTiledCopyScaleA, NonVoidElementScaleA,
                                               SG_M, SG_K, GROUP_K>(mainloop.mAscale, m_coord, l_coord, k_tile_count);
-    auto [tiled_copy_scaleB,
-          copy_iter_scaleB,
-          fragment_scaleB] = make_scaled_copy<GmemTiledCopyScaleB, NonVoidElementScaleB,
+    auto [tiled_copy_scaleB, copy_iter_scaleB, fragment_scaleB] = make_scaled_copy<GmemTiledCopyScaleB, NonVoidElementScaleB,
                                               SG_N, SG_K, GROUP_K>(mainloop.mBscale, n_coord, l_coord, k_tile_count);
-
-    using GemmIterM = Int<decltype(size<1>(tCrA.shape()))::value>;
-    using GemmIterN = Int<decltype(size<1>(tCrB.shape()))::value>;
-    using GemmIterK = Int<decltype(size<2>(tCrB.shape()))::value>;
-    auto [scale_m_offsets,
-          scale_n_offsets,
-          scale_ak_offsets,
-          scale_bk_offsets] = make_scaled_offsets<GemmIterM::value, GemmIterN::value, GemmIterK::value, MMA_K, GROUP_K,
+    auto [scale_m_offsets, scale_n_offsets, scale_ak_offsets, scale_bk_offsets] = make_scaled_offsets<
+                                                  GemmIterM::value, GemmIterN::value, GemmIterK::value, MMA_K, GROUP_K,
                                                   typename decltype(tiled_copy_scaleA)::Base::BlockShape,
                                                   typename decltype(tiled_copy_scaleB)::Base::BlockShape>();
 
