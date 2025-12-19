@@ -8,7 +8,7 @@
 #include <cute/atom/copy_traits_xe4_adma.hpp>
 
 #include "cute/atom/mma_traits_xe4_amma.hpp"
-#include "cute/atom/mma_traits_sm100.hpp"
+#include "cute/atom/copy_traits_xe4_tma.hpp"
 
 namespace cutlass::gemm::collective {
 

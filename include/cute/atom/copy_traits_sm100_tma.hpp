@@ -37,6 +37,7 @@
 #include <cuda.h>
 #endif
 
+#if !defined(SYCL_INTEL_XE4_TARGET) 
 #include <cute/tensor.hpp>
 #include <cute/atom/copy_traits_sm90_tma.hpp>
 #include <cute/arch/copy_sm100_tma.hpp>
@@ -525,3 +526,4 @@ make_tma_atom_B_sm100(CopyOp                  const& copy_op,
 #endif // !defined(__CUDACC_RTC__)
 
 } // end namespace cute
+#endif //XE4

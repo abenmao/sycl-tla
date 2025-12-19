@@ -7,7 +7,7 @@
 #include <cute/atom/copy_traits.hpp>
 #include <cute/atom/copy_atom.hpp>
 
-#include <cute/atom/copy_traits_sm90_tma.hpp>
+#include <cute/atom/copy_traits_xe4_tma.hpp>
 
 #include <cute/layout.hpp>
 
