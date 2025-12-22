@@ -34,6 +34,7 @@
 #include "cutlass/cutlass.h"
 #include "cute/algorithm/functional.hpp"
 #include "cute/atom/mma_atom.hpp"
+#include "cute/atom/copy_traits_xe_2d.hpp"
 #include "cute/algorithm/gemm.hpp"
 #include "cute/layout.hpp"
 #include "cute/tensor.hpp"
@@ -55,44 +56,10 @@ namespace cutlass::gemm::collective
 
   // 8 bits specialization for height <= 1 (covers 1 and 0 if applicable)
   template <class Dtype, size_t Height, size_t Width, class Stride>
-  struct ScaleCopyTraits<Dtype, Height, Width, Stride,
-                         std::enable_if_t<sizeof_bits_v<Dtype> == 8 && Height <= 1>>
+  struct ScaleCopyTraits<Dtype, Height, Width, Stride, std::enable_if_t<sizeof_bits_v<Dtype> == 8>>
   {
-    using type = XE_2D_U8x1x32_LD_N;
-  };
-
-  // 8 bits specialization for height == 2
-  template <class Dtype, size_t Width, class Stride>
-  struct ScaleCopyTraits<Dtype, 2, Width, Stride,
-                         std::enable_if_t<sizeof_bits_v<Dtype> == 8>>
-  {
-    using type = XE_2D_U8x2x32_LD_N;
-  };
-
-  template <class Dtype, size_t Width, class Stride>
-  struct ScaleCopyTraits<Dtype, 4, Width, Stride,
-                         std::enable_if_t<sizeof_bits_v<Dtype> == 8>>
-  {
-    using type = XE_2D_U8x4x32_LD_N;
-  };
-
-  // -----------------------------------------------------------------------------
-  // Tiled Copy for Scale
-  // -----------------------------------------------------------------------------
-
-  template <
-      class TraitsCopy,
-      class Stride,
-      class Element>
-  struct TiledCopyScale
-  {
-    using CopyThreadShape = Shape<_1, Int<intel::sg_size>>;
-    using CopyThreadShapeRev = decltype(cute::reverse(CopyThreadShape{}));
-
-    using TraitsLoad = Copy_Traits<TraitsCopy, Stride>;
-    using AtomLoad = Copy_Atom<TraitsLoad, Element>;
-    using ValueLayout = decltype(make_layout(shape_div(typename TraitsLoad::BlockShape{}, CopyThreadShapeRev{})));
-    using Copy = decltype(make_tiled_copy(AtomLoad{}, Layout<CopyThreadShapeRev>{}, ValueLayout{}));
+    static_assert(Height > 0);
+    using Type = XE_LOAD_2D<8, Height, 32>;
   };
 
   // -----------------------------------------------------------------------------
@@ -105,14 +72,14 @@ namespace cutlass::gemm::collective
       int TraitsNum,
       int SgK,
       int GroupK,
-      class TiledCopy>
+      class BlockShape>
   CUTLASS_DEVICE static auto
   make_scale_copy_iterator(int mn_coord, int l_coord, int k_count)
   {
     return make_tensor(make_inttuple_iter(make_coord(mn_coord, 0, l_coord)),
                        make_layout(make_shape(Int<TraitsSize>{}, Int<TraitsNum>{}, _1{}, k_count),
-                                   make_stride(E<0>{} * _16{}, E<0>{} * size<1>(typename TiledCopy::BlockShape{}),
-                                               E<1>{} * size<0>(typename TiledCopy::BlockShape{}), E<1>{} * (SgK / GroupK))));
+                                   make_stride(E<0>{} * _16{}, E<0>{} * size<1>(BlockShape{}),
+                                               E<1>{} * size<0>(BlockShape{}), E<1>{} * (SgK / GroupK))));
   }
 
   // Helper to generate index data for GEMM offsets (M/N/Q dimension)
@@ -165,19 +132,20 @@ namespace cutlass::gemm::collective
   make_scaled_copy(Tensor const &tensor, int mn_coord = 0, int l_coord = 0, int k_count = 0)
   {
     using Stride = cute::remove_cvref_t<decltype(tensor.stride())>;
-    using NonVoidScaleTraits = typename ScaleCopyTraits<Element, SgK / GroupK, SgMN>::type;
-    using SelectedCopyTraits = cute::conditional_t<cute::is_void_v<ScaleCopy>, NonVoidScaleTraits, ScaleCopy>;
-    using TiledCopy = typename TiledCopyScale<SelectedCopyTraits, Stride, Element>::Copy;
+    using NonVoidScaleTraits = ScaleCopyTraits<Element, SgK / GroupK, SgMN>;
+    using NonVoidScaleCopy = typename NonVoidScaleTraits::Type;
+    using SelectedCopy = cute::conditional_t<cute::is_void_v<ScaleCopy>, NonVoidScaleCopy, ScaleCopy>;
+    using BlockShape = Shape<Int<SelectedCopy::AtomHeight>, Int<SelectedCopy::AtomWidth>>;
 
-    static_assert(size<1>(typename SelectedCopyTraits::BlockShape{}) <= 32);
+    static_assert(size<1>(BlockShape{}) == 32, "2D load width must be 32 to match BDPAS requirement for scale layout");
 
     constexpr auto SubgroupSize = 16;
-    static constexpr auto scale_traits_size = decltype(size(typename SelectedCopyTraits::BlockShape{}))::value / SubgroupSize;
-    static constexpr auto scale_traits_num = cute::ceil_div(SgMN , size<1>(typename SelectedCopyTraits::BlockShape{}));
+    static constexpr auto scale_traits_size = decltype(size(BlockShape{}))::value / SubgroupSize;
+    static constexpr auto scale_traits_num = cute::ceil_div(SgMN , size<1>(BlockShape{}));
 
-    auto tiled_copy = TiledCopy{}.with(tensor);
+    auto tiled_copy = make_block_2d_copy(SelectedCopy{}, tensor);
 
-    auto copy_iter = make_scale_copy_iterator<scale_traits_size, scale_traits_num, SgK, GroupK, SelectedCopyTraits>(mn_coord, l_coord, k_count);
+    auto copy_iter = make_scale_copy_iterator<scale_traits_size, scale_traits_num, SgK, GroupK, BlockShape>(mn_coord, l_coord, k_count);
 
     auto fragment = make_tensor<Element>(Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>>{});
 

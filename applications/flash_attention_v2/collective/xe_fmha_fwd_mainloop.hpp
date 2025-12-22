@@ -372,8 +372,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
                                                        decltype(size<2>(tSrK.shape()))::value,
                                                        MMA_QK_D,
                                                        GROUP_K,
-                                                       typename decltype(tiled_copy_scaleQ)::Base::BlockShape,
-                                                       typename decltype(tiled_copy_scaleK)::Base::BlockShape>();
+                                                       typename decltype(tiled_copy_scaleQ)::BlockShape,
+                                                       typename decltype(tiled_copy_scaleK)::BlockShape>();
 
           copy(tiled_copy_scaleQ, copy_iter_scaleQ(_, _, _, D), fragment_scaleQ);
           copy(tiled_copy_scaleK, copy_iter_scaleK(_, _, _, D), fragment_scaleK);
@@ -381,9 +381,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
           using scaleQSize = decltype(size(fragment_scaleQ));
           using scaleKSize = decltype(size(fragment_scaleK));
 
-          Tensor scaleQ_view = make_tensor(recast<intel::vector_t<ElementScaleQ, scaleQSize::value * 2>>(fragment_scaleQ).data(),
+          Tensor scaleQ_view = make_tensor(recast<intel::vector_t<ElementScaleQ, scaleQSize::value>>(fragment_scaleQ).data(),
                                            make_layout(Shape<_1, decltype(size<1>(tSrQ.shape())), _1>{}, Stride<_1, _0, _0>{}));
-          Tensor scaleK_view = make_tensor(recast<intel::vector_t<ElementScaleK, scaleKSize::value * 2>>(fragment_scaleK).data(),
+          Tensor scaleK_view = make_tensor(recast<intel::vector_t<ElementScaleK, scaleKSize::value>>(fragment_scaleK).data(),
                                            make_layout(Shape<_1, decltype(size<1>(tSrK.shape())), _1>{}, Stride<_1, _0, _0>{}));
 
           auto zipped_q = make_zip_tensor(tSrQ, scaleQ_view, gemm_qm_offsets, gemm_qk_offsets);
@@ -457,8 +457,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
                                                        decltype(size<2>(tArV.shape()))::value,
                                                        MMA_PV_D,
                                                        GROUP_K,
-                                                       typename decltype(tiled_copy_scaleP)::Base::BlockShape,
-                                                       typename decltype(tiled_copy_scaleV)::Base::BlockShape>();
+                                                       typename decltype(tiled_copy_scaleP)::BlockShape,
+                                                       typename decltype(tiled_copy_scaleV)::BlockShape>();
 
           fill(fragment_scaleP, ElementScaleV(1));
           copy(tiled_copy_scaleV, copy_iter_scaleV(_, _, _, K), fragment_scaleV);
@@ -466,10 +466,10 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
           using scalePSize = decltype(size(fragment_scaleP));
           using scaleVSize = decltype(size(fragment_scaleV));
 
-          Tensor scaleV_view = make_tensor(recast<intel::vector_t<ElementScaleV, scaleVSize::value * 2>>(fragment_scaleV).data(),
+          Tensor scaleV_view = make_tensor(recast<intel::vector_t<ElementScaleV, scaleVSize::value>>(fragment_scaleV).data(),
                                            make_layout(Shape<_1, decltype(size<1>(tArV.shape())), _1>{}, Stride<_1, _0, _0>{}));
 
-          Tensor scaleP_view = make_tensor(recast<intel::vector_t<ElementScaleV, scalePSize::value * 2>>(fragment_scaleP).data(),
+          Tensor scaleP_view = make_tensor(recast<intel::vector_t<ElementScaleV, scalePSize::value>>(fragment_scaleP).data(),
                                            make_layout(Shape<_1, decltype(size<1>(tArP.shape())), _1>{}, Stride<_1, _0, _0>{}));
 
           auto zipped_p = make_zip_tensor(tArP, scaleP_view, gemm_p_offsets, gemm_pk_offsets);

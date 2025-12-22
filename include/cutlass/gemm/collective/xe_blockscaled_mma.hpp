@@ -369,8 +369,8 @@ public:
                                               SG_N, SG_K, GROUP_K>(mainloop.mBscale, n_coord, l_coord, k_tile_count);
     auto [scale_m_offsets, scale_n_offsets, scale_ak_offsets, scale_bk_offsets] = make_scaled_offsets<
                                                   GemmIterM::value, GemmIterN::value, GemmIterK::value, MMA_K, GROUP_K,
-                                                  typename decltype(tiled_copy_scaleA)::Base::BlockShape,
-                                                  typename decltype(tiled_copy_scaleB)::Base::BlockShape>();
+                                                  typename decltype(tiled_copy_scaleA)::BlockShape,
+                                                  typename decltype(tiled_copy_scaleB)::BlockShape>();
 
 #define PRINT(x) print(#x ": "); print(x); print("\n");
 
@@ -399,8 +399,8 @@ public:
     using fragment_scaleA_t = decltype(fragment_scaleA);
     using fragment_scaleB_t = decltype(fragment_scaleB);
 
-    using scaleA_vec_t = intel::vector_t<ElementScaleA, decltype(size(fragment_scaleA_t{}))::value * 2>;
-    using scaleB_vec_t = intel::vector_t<ElementScaleB, decltype(size(fragment_scaleB_t{}))::value * 2>;
+    using scaleA_vec_t = intel::vector_t<ElementScaleA, decltype(size(fragment_scaleA_t{}))::value>;
+    using scaleB_vec_t = intel::vector_t<ElementScaleB, decltype(size(fragment_scaleB_t{}))::value>;
 
     const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K_start));
 
