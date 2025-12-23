@@ -1,4 +1,4 @@
-name: "Intel CRI and BMG Sim Test"
+name: "Full Coverage with Small Shapes Test"
 
 on:
   push:
@@ -23,7 +23,7 @@ jobs:
             sycl_target: intel_gpu_bmg_g21
             runner: [self-hosted, shanghai-bmg, Linux, X64]
 
-    name: Run Intel ${{ matrix.compiler }} tests on ${{ matrix.gpu }} with intel-graphics ${{ matrix.intel_graphics }}
+    name: Full Coverage with Small Shapes Test on ${{ matrix.gpu }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
 

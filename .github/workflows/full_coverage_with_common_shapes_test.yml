@@ -1,4 +1,4 @@
-name: "Intel PVC and BMG Full Test"
+name: "Full Coverage with Common Shapes Test"
 
 on:
   push:
@@ -27,7 +27,7 @@ jobs:
             sycl_target: intel_gpu_pvc
             runner: [self-hosted, shanghai-pvc, Linux, X64]
 
-    name: Run Intel ${{ matrix.compiler }} tests on ${{ matrix.gpu }} with intel-graphics ${{ matrix.intel_graphics }}
+    name: Full Coverage with Common Shapes Test on ${{ matrix.gpu }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
 

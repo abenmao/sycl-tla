@@ -1,4 +1,4 @@
-name: "Intel CRI Tiny Test"
+name: "Tiny Coverage with Small Shapes Test"
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
             sycl_target: intel_gpu_cri
             runner: [self-hosted, shanghai-cri, Linux, X64]
 
-    name: Run Intel ${{ matrix.compiler }} tests on ${{ matrix.gpu }} with intel-graphics ${{ matrix.intel_graphics }}
+    name: Tiny Coverage with Small Shapes Test on ${{ matrix.gpu }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
 
