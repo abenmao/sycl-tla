@@ -33,6 +33,8 @@
 #include <cute/config.hpp>
 #include <cute/numeric/numeric_types.hpp>
 
+#if !defined(SYCL_INTEL_XE4_TARGET)
+
 // Config
 #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900) && \
   ((__CUDACC_VER_MAJOR__ >= 12) || ((__CUDACC_VER_MAJOR__ == 11) && (__CUDACC_VER_MINOR__ >= 8))))
@@ -246,3 +248,5 @@ store_shared_remote(uint32_t value, uint32_t smem_addr, uint32_t mbarrier_addr, 
 }
 
 } // end namespace cute
+
+#endif

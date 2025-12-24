@@ -52,7 +52,7 @@
 #include "cutlass/gemm/collective/sm90_mma_array_tma_gmma_ss_warpspecialized_fp8.hpp"
 #include "cutlass/gemm/collective/sm90_mma_tma_gmma_ss_warpspecialized_fp8_blockwise_scaling.hpp"
 #include "cutlass/gemm/collective/sm90_mma_array_tma_gmma_ss_warpspecialized_fp8_blockwise_scaling.hpp"
-#if !defined(__CUDACC_RTC__)
+#if !defined(__CUDACC_RTC__) && !defined(SYCL_INTEL_XE4_TARGET)
 #include "cutlass/gemm/collective/sm100_mma_warpspecialized.hpp"
 #include "cutlass/gemm/collective/sm100_mma_array_warpspecialized.hpp"
 #include "cutlass/gemm/collective/sm100_mma_warpspecialized_emulated.hpp"
@@ -76,7 +76,7 @@
 #include "cutlass/gemm/collective/sm120_blockscaled_sparse_mma_tma.hpp"
 #include "cutlass/gemm/collective/sm120_mma_tma_blockwise_scaling.hpp"
 #include "cutlass/gemm/collective/sm120_mma_array_tma_blockwise_scaling.hpp"
-#endif // !defined(__CUDACC_RTC__)
+#endif // !defined(__CUDACC_RTC__) && !defined(SYCL_INTEL_XE4_TARGET)
 
 #if defined(SYCL_INTEL_XE4_TARGET)
 #include "cutlass/gemm/collective/xe4_mma_warpspecialized.hpp"

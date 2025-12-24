@@ -2,6 +2,7 @@
 
 #include "cutlass/gemm/dispatch_policy.hpp"
 #include "cutlass/pipeline/pipeline.hpp"
+#include "cutlass/gemm/kernel/tile_scheduler_detail.hpp"
 
 #include "cutlass/util/packed_stride.hpp"
 #include "cute/atom/copy_traits_xe4_dma_legacy.hpp"

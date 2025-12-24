@@ -30,14 +30,12 @@
  **************************************************************************************************/
 #pragma once
 
-#if !defined(SYCL_INTEL_XE4_TARGET)
-
 #include "cute/layout.hpp"
 #include "cute/layout_composed.hpp"  // cute::composition
 #include "cute/swizzle.hpp"             // cute::Swizzle
 #include "cute/swizzle_layout.hpp"      // cute::composition
 #include "cute/util/type_traits.hpp"
-#include "cute/arch/cluster_sm90.hpp"
+#include "cute/arch/cluster_xe4.hpp"
 #include "cute/container/array.hpp"
 #include "cute/numeric/integral_constant.hpp"
 
@@ -319,15 +317,13 @@ public:
     if (is_initializing_warp) {
       // Barrier FULL and EMPTY init
       uint32_t const producer_arv_cnt = params.num_producers;
-      uint32_t const num_consumer_warpgroups_per_cluster = cute::ceil_div(params.num_consumers, static_cast<uint32_t>(NumThreadsPerWarpGroup));
+      uint32_t const num_consumer_warpgroups_per_cluster = params.num_consumers / NumThreadsPerWarpGroup;
       uint32_t multicast_consumer_arrival_count = params.num_consumers; // If cluster_size is 1
 #if !defined(SYCL_INTEL_XE4_TARGET)
       if (cute::size(cluster_shape) > 1) {
         multicast_consumer_arrival_count = (cute::size<0>(cluster_shape) + cute::size<1>(cluster_shape) - 1) *
               num_consumer_warpgroups_per_cluster;
       }
-      CUTLASS_ASSERT(multicast_consumer_arrival_count > 0 && "Multicast consumer arrival count must be non-zero");
-      CUTLASS_ASSERT(producer_arv_cnt > 0 && "Producer arrival count must be non-zero");
 #endif
       cutlass::arch::detail::initialize_barrier_array_pair_aligned<decltype(storage.full_barrier_), decltype(storage.empty_barrier_), Stages>(
           storage.full_barrier_, storage.empty_barrier_, producer_arv_cnt, multicast_consumer_arrival_count);
@@ -862,8 +858,6 @@ public:
 
     if (is_initializing_warp) {
       // Barrier FULL and EMPTY init
-      CUTLASS_ASSERT(params.producer_arv_count > 0 && "Producer arrival count must be non-zero");
-      CUTLASS_ASSERT(params.consumer_arv_count > 0 && "Consumer arrival count must be non-zero");
       cutlass::arch::detail::initialize_barrier_array_pair_aligned<decltype(full_barrier_ptr), decltype(empty_barrier_ptr), Stages>(
           full_barrier_ptr, empty_barrier_ptr, params.producer_arv_count, params.consumer_arv_count);
     }
@@ -1103,8 +1097,6 @@ public:
     is_initializing_warp = (warp_idx == params.initializing_warp);
     if (is_initializing_warp) {
       // Barrier FULL and EMPTY init
-      CUTLASS_ASSERT(params.producer_arv_count > 0 && "Producer arrival count must be non-zero");
-      CUTLASS_ASSERT(params.consumer_arv_count > 0 && "Consumer arrival count must be non-zero");
       cutlass::arch::detail::initialize_barrier_array_pair_aligned<decltype(storage.full_barrier_), decltype(storage.empty_barrier_), Stages>(
           storage.full_barrier_, storage.empty_barrier_, params.producer_arv_count, params.consumer_arv_count);
     }
@@ -1361,7 +1353,6 @@ public:
     // Barrier FULL, EMPTY init
     if (warp_idx == params.initializing_warp) {
       int arv_cnt = params.group_size;
-      CUTLASS_ASSERT(arv_cnt > 0 && "Arrive count must be non-zero");
       constexpr int Stages = Depth * Length;
       cutlass::arch::detail::initialize_barrier_array_aligned<decltype(barrier_ptr_), Stages>(
           barrier_ptr_, arv_cnt);
@@ -1370,7 +1361,6 @@ public:
 
     int warp_idx = canonical_warp_idx_sync();
     int lane_predicate = cute::elect_one_sync();
-    CUTLASS_ASSERT(params.group_size > 0 && "Group size must be non-zero");
 
     // Barrier FULL, EMPTY init
     // Init is done only by the one elected thread of the block
@@ -1442,5 +1432,4 @@ pipeline_init_arrive_relaxed(int cluster_size) {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-}  // end namespace cutlass
-#endif
+} // namespace cutlass

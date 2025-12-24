@@ -2,7 +2,7 @@
 
 #include "xe4_inline_pisa.hpp"
 #include <cute/arch/mma_xe4_desc.hpp>
-#include "cute/arch/cluster_sm90.hpp"
+#include "cute/arch/cluster_xe4.hpp"
 #include <cute/arch/asm_helper.hpp>
 
 namespace cute {

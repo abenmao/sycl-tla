@@ -59,6 +59,7 @@ struct StaticPersistentScheduler { };
 } // namespace cutlass::gemm
 ////////////////////////////////////////////////////////////////////////////////
 
+#if !defined (SYCL_INTEL_XE4_TARGET)
 #include "cutlass/gemm/kernel/sm90_tile_scheduler.hpp"
 #include "cutlass/gemm/kernel/sm100_static_tile_scheduler.hpp" 
 
@@ -67,6 +68,8 @@ struct StaticPersistentScheduler { };
 #include "cutlass/gemm/kernel/sm100_tile_scheduler.hpp"            
 #include "cutlass/gemm/kernel/sm100_tile_scheduler_stream_k.hpp"   
 #include "cutlass/gemm/kernel/sm100_tile_scheduler_group.hpp"
+#endif
+
 #if defined (SYCL_INTEL_XE4_TARGET)
 #include "cutlass/gemm/kernel/xe4_tile_scheduler.hpp"
 #elif defined (SYCL_INTEL_TARGET)
@@ -94,6 +97,7 @@ struct TileSchedulerSelector {
       "Could not select a tile scheduler for given parameters.");
 };
 
+#if !defined (SYCL_INTEL_XE4_TARGET)
 template <
   class ArchTag,
   class TileShape,
@@ -109,6 +113,7 @@ struct TileSchedulerSelector<
   > {
   using Scheduler = PersistentTileSchedulerSm90;
 };
+#endif
 
 // Default (void) for Sm90 maps to PersistentTileSchedulerSm90
 template <
@@ -133,6 +138,7 @@ struct TileSchedulerSelector<
   >::Scheduler;
 };
 
+#if !defined (SYCL_INTEL_TARGET)
 template <
   class TileShape,
   class ClusterShape
@@ -181,7 +187,7 @@ struct TileSchedulerSelector<
   using Scheduler = PersistentTileSchedulerSm90Group<GroupProblemShape, SchedulerPipelineStageCount>;
 };
 
-#if defined (SYCL_INTEL_XE4_TARGET)
+#elif defined (SYCL_INTEL_XE4_TARGET)
 template <
   class TileShape,
   class ClusterShape,
@@ -242,6 +248,7 @@ struct TileSchedulerSelector<
 };
 #endif
 
+#if !defined (SYCL_INTEL_XE4_TARGET)
 template <class TileShape, class ClusterShape, uint32_t SchedulerPipelineStageCount>
 struct TileSchedulerSelector<
     PersistentScheduler,
@@ -482,6 +489,7 @@ struct TileSchedulerSelector<
   > {
   using Scheduler = PersistentTileSchedulerSm90Group<GroupProblemShape, SchedulerPipelineStageCount>;
 };
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 

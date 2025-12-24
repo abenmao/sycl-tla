@@ -1,5 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2025 INTEL CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,14 +30,54 @@
  *
  **************************************************************************************************/
 #pragma once
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
+#include <cute/config.hpp>
+#include <cute/numeric/numeric_types.hpp>
 
 #if defined(SYCL_INTEL_XE4_TARGET)
-#include "cutlass/pipeline/xe4_pipeline.hpp"
-#else
-#include "cutlass/pipeline/sm90_pipeline.hpp"
-#include "cutlass/pipeline/sm100_pipeline.hpp"
-#endif
+// Config
+namespace cute {
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
+CUTE_DEVICE void cluster_arrive_relaxed()
+{
+  CUTE_INVALID_CONTROL_PATH("CUTE_ARCH_CLUSTER_SM90_ENABLED is not defined");
+}
+
+CUTE_DEVICE void cluster_arrive()
+{
+  CUTE_INVALID_CONTROL_PATH("CUTE_ARCH_CLUSTER_SM90_ENABLED is not defined");
+}
+
+CUTE_DEVICE void cluster_wait()
+{
+  CUTE_INVALID_CONTROL_PATH("CUTE_ARCH_CLUSTER_SM90_ENABLED is not defined");
+}
+// Returns the relative dim3 block rank local to the cluster.
+CUTE_DEVICE dim3 block_id_in_cluster()
+{
+  return {0,0,0};
+}
+
+// Returns the dim3 cluster shape.
+CUTE_DEVICE dim3 cluster_shape()
+{
+  return {1,1,1};
+}
+// Get 1D ctaid in a cluster.
+CUTE_DEVICE uint32_t block_rank_in_cluster()
+{
+  return 0;
+}
+
+// Elect one thread in the warp. The elected thread gets its predicate set to true, all others obtain false.
+CUTE_HOST_DEVICE uint32_t elect_one_sync()
+{
+#if defined(SYCL_INTEL_TARGET)
+  return sycl::ext::oneapi::this_work_item::get_sub_group().leader();
+#else
+  return true;
+#endif
+}
+
+} // end namespace cute
+  //
+#endif
