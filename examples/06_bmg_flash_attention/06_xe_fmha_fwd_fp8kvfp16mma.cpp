@@ -48,8 +48,6 @@
       $ ./examples/06_bmg_flash_attention/06_xe_fmha_fwd_prefill_fp8kvcachefp16mma_hdim128
 
     Call with `--help` for information about available options
-
-    based on 06_xe_fmha_fwd.cpp on Dec. 2nd, 2025
 */
 
 #include "xe_fmha_fwd_runner.hpp"
@@ -96,9 +94,9 @@ int main(int argc, const char **argv) {
   using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
 
 #elif HEAD_DIM == 128
-  using ShapeQK = Shape<_256, _64, _32>;
-  using ShapePV = Shape<_256, _32, _64>;
-  using ShapeOut = Shape<_256, _128>;
+  using ShapeQK = Shape<_128, _64, _32>;
+  using ShapePV = Shape<_128, _32, _64>;
+  using ShapeOut = Shape<_128, _128>;
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 
 #elif HEAD_DIM == 192
