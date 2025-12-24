@@ -237,8 +237,7 @@ gemm_cute(sycl::queue &Q,
   namespace intelex = sycl::ext::intel::experimental;
 
   syclex::properties kernel_props {
-    syclex::sub_group_size<16>,
-    intelex::grf_size<256>
+    syclex::sub_group_size<16>
   };
 
   auto event = Q.parallel_for<GemmCuteName<TA, TB, TC, layoutA, layoutB>>(sycl::nd_range<2>(global, local), kernel_props,

@@ -262,8 +262,7 @@ void MoEGEMMLauncher(const ElementA *activations, const ElementB *weights,
   namespace syclex = sycl::ext::oneapi::experimental;
   namespace intelex = sycl::ext::intel::experimental;
 
-  syclex::properties kernel_props{syclex::sub_group_size<16>,
-                                  intelex::grf_size<256>};
+  syclex::properties kernel_props{syclex::sub_group_size<16>};
   sycl::queue Q = compat::get_default_queue();
 
   GPU_Clock timer;
