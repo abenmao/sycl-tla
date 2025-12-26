@@ -747,7 +747,12 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
       syclex::work_group_scratch_size(smem_size),
     };
     compat::experimental::kernel_properties kernel_props{
-      syclex::sub_group_size<cute::intel::sg_size>
+      syclex::sub_group_size<cute::intel::sg_size>,
+#if (SYCL_INTEL_TARGET == 35)
+      intelex::grf_size<512>
+#else
+      intelex::grf_size<256>
+#endif
     };
     compat::experimental::launch_policy policy{sycl_grid, sycl_block, launch_props, kernel_props};
     auto event = compat::experimental::launch<cutlass::device_kernel<FMHAKernel>, FMHAKernel>(policy, params);

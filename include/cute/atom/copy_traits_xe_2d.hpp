@@ -199,7 +199,8 @@ struct Xe2DLoadTraitsBase : Xe2DTraitsBase<Op, XMode, YMode, ValType, TiledStrid
   using Super = Xe2DTraitsBase<Op, XMode, YMode, ValType, TiledStrides>;
   using Traits = typename Super::Traits;
   using ThrID = typename Super::ThrID;
-  using BlockShape = Shape<Int<Op::AtomHeight>, Int<Op::AtomWidth>>;
+  using AtomShape = Shape<Int<Op::AtomHeight>, Int<Op::AtomWidth>>;
+  using BlockShape = Shape<Int<Op::AtomHeight>, Int<Op::AtomWidth / Op::BlockCount>>;
 
   using Super::Super;
 

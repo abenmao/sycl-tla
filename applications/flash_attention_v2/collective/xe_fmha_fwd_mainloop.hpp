@@ -341,6 +341,10 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
     /* Check if */
     bool check_remainder_k = (seq_len % get<1>(TileShapeQK{}) != 0);
 
+    static_assert(SG_Q == SG_P && SG_K == SG_PV_D && BLK_P == BLK_Q);
+
+    const auto subgroup_id = thr_id / intel::sg_size;
+
     /* Main loop, blocked in k. */
     for (int K = blk_k0; K < blk_k1; K++) {
       /* Split barrier to keep threads together */
@@ -359,24 +363,24 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
           reorder(tKrK, tSrK);
         }
         if constexpr (UseScale) {
-          const int q_coord = get<0>(blk_qv) * BLK_Q + ((thr_id / intel::sg_size) / ATOM_K)  * SG_Q;
-          const int k_coord = K * BLK_K + ((thr_id % intel::sg_size) / ATOM_K)  * SG_K;
+          const int q_coord = get<0>(blk_qv) * BLK_Q + (subgroup_id / ATOM_K)  * SG_Q;
+          const int k_coord = K * BLK_K + (subgroup_id % ATOM_K)  * SG_K;
 
-          auto [tiled_copy_scaleQ, copy_iter_scaleQ, fragment_scaleQ] = gemm::collective::make_scaled_copy<void, ElementScaleQ,
-                                              SG_Q, SG_QK_D, GROUP_K>(scaleQ, q_coord, l_coord, size<4>(tKgK));
-          auto [tiled_copy_scaleK, copy_iter_scaleK, fragment_scaleK] = gemm::collective::make_scaled_copy<void, ElementScaleK,
-                                              SG_K, SG_QK_D, GROUP_K>(scaleK, k_coord, l_coord, size<4>(tKgK));
+          using ScaleCopyQK = void;
+
+          auto [tiled_copy_scaleQ, copy_iter_scaleQ, fragment_scaleQ] = gemm::collective::make_scaled_copy<
+                                                        ScaleCopyQK, ElementScaleQ, SG_Q, SG_QK_D, GROUP_K>(
+                                                        scaleQ, 0, 0, size<4>(tKgK));
+          auto [tiled_copy_scaleK, copy_iter_scaleK, fragment_scaleK] = gemm::collective::make_scaled_copy<
+                                                        ScaleCopyQK, ElementScaleK, SG_K, SG_QK_D, GROUP_K>(
+                                                        scaleK, 0, 0, size<4>(tKgK));
           auto [gemm_qm_offsets, gemm_kn_offsets, gemm_qk_offsets, gemm_kk_offsets] = gemm::collective::make_scaled_offsets<
-                                                       decltype(size<1>(tSrQ.shape()))::value,
-                                                       decltype(size<1>(tSrK.shape()))::value,
-                                                       decltype(size<2>(tSrK.shape()))::value,
-                                                       MMA_QK_D,
-                                                       GROUP_K,
-                                                       typename decltype(tiled_copy_scaleQ)::BlockShape,
-                                                       typename decltype(tiled_copy_scaleK)::BlockShape>();
-
-          copy(tiled_copy_scaleQ, copy_iter_scaleQ(_, _, _, D), fragment_scaleQ);
-          copy(tiled_copy_scaleK, copy_iter_scaleK(_, _, _, D), fragment_scaleK);
+                                                        decltype(size<1>(tSrQ.shape()))::value,
+                                                        decltype(size<1>(tSrK.shape()))::value,
+                                                        decltype(size<2>(tSrK.shape()))::value,
+                                                        MMA_QK_D, GROUP_K,
+                                                        typename decltype(tiled_copy_scaleQ)::BlockShape,
+                                                        typename decltype(tiled_copy_scaleK)::BlockShape>();
 
           using scaleQSize = decltype(size(fragment_scaleQ));
           using scaleKSize = decltype(size(fragment_scaleK));
@@ -388,6 +392,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
 
           auto zipped_q = make_zip_tensor(tSrQ, scaleQ_view, gemm_qm_offsets, gemm_qk_offsets);
           auto zipped_k = make_zip_tensor(tSrK, scaleK_view, gemm_kn_offsets, gemm_kk_offsets);
+
+          copy_iter_scaleQ.data().coord_ = {q_coord, 0, l_coord};
+          copy_iter_scaleK.data().coord_ = {k_coord, 0, l_coord};
+
+          copy(tiled_copy_scaleQ, copy_iter_scaleQ(_, _, _, D), fragment_scaleQ);
+          copy(tiled_copy_scaleK, copy_iter_scaleK(_, _, _, D), fragment_scaleK);
 
           cute::gemm(mma_qk, zipped_q, zipped_k, tSrS);
         } else {
@@ -443,37 +453,40 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
         copy(copy_v, tVgV(_,_,_,VV,K), tVrV);
         reorder(tVrV, tArV);
         if constexpr (UseScale && !FP4Input) {
+          const int v_coord = get<1>(blk_qv) * VTiles * BLK_V + VV * BLK_V + (subgroup_id % ATOM_V)  * SG_V;
 
-          const int v_coord = get<1>(blk_qv) * VTiles * BLK_V + VV * BLK_V + ((thr_id % intel::sg_size) / ATOM_V)  * SG_V;
+          using ScaleCopyPV = void;
 
           // P is dummy scale, just the same as V
-          auto [tiled_copy_scaleP, copy_iter_scaleP, fragment_scaleP] = gemm::collective::make_scaled_copy<void, ElementScaleP,
-                                              SG_P, SG_PV_D, GROUP_K>(scaleV);
-          auto [tiled_copy_scaleV, copy_iter_scaleV, fragment_scaleV] = gemm::collective::make_scaled_copy<void, ElementScaleV,
-                                              SG_V, SG_PV_D, GROUP_K>(scaleV, v_coord, l_coord, blk_k1);
+          auto [tiled_copy_scaleP, copy_iter_scaleP, fragment_scaleP] = gemm::collective::make_scaled_copy<
+                                                        ScaleCopyPV, ElementScaleP, SG_P, SG_PV_D, GROUP_K>(scaleV);
+          auto [tiled_copy_scaleV, copy_iter_scaleV, fragment_scaleV] = gemm::collective::make_scaled_copy<
+                                                        ScaleCopyPV, ElementScaleV, SG_V, SG_PV_D, GROUP_K>(scaleV, 0, 0, blk_k1);
           auto [gemm_p_offsets, gemm_v_offsets, gemm_pk_offsets, gemm_vk_offsets] = gemm::collective::make_scaled_offsets<
-                                                       decltype(size<1>(tArP.shape()))::value,
-                                                       decltype(size<1>(tArV.shape()))::value,
-                                                       decltype(size<2>(tArV.shape()))::value,
-                                                       MMA_PV_D,
-                                                       GROUP_K,
-                                                       typename decltype(tiled_copy_scaleP)::BlockShape,
-                                                       typename decltype(tiled_copy_scaleV)::BlockShape>();
+                                                        decltype(size<1>(tArP.shape()))::value,
+                                                        decltype(size<1>(tArV.shape()))::value,
+                                                        decltype(size<2>(tArV.shape()))::value,
+                                                        MMA_PV_D, GROUP_K,
+                                                        typename decltype(tiled_copy_scaleP)::BlockShape,
+                                                        typename decltype(tiled_copy_scaleV)::BlockShape>();
 
           fill(fragment_scaleP, ElementScaleV(1));
-          copy(tiled_copy_scaleV, copy_iter_scaleV(_, _, _, K), fragment_scaleV);
 
           using scalePSize = decltype(size(fragment_scaleP));
           using scaleVSize = decltype(size(fragment_scaleV));
 
+          Tensor scaleP_view = make_tensor(recast<intel::vector_t<ElementScaleV, scalePSize::value>>(fragment_scaleP).data(),
+                                           make_layout(Shape<_1, decltype(size<1>(tArP.shape())), _1>{}, Stride<_1, _0, _0>{}));
           Tensor scaleV_view = make_tensor(recast<intel::vector_t<ElementScaleV, scaleVSize::value>>(fragment_scaleV).data(),
                                            make_layout(Shape<_1, decltype(size<1>(tArV.shape())), _1>{}, Stride<_1, _0, _0>{}));
 
-          Tensor scaleP_view = make_tensor(recast<intel::vector_t<ElementScaleV, scalePSize::value>>(fragment_scaleP).data(),
-                                           make_layout(Shape<_1, decltype(size<1>(tArP.shape())), _1>{}, Stride<_1, _0, _0>{}));
-
           auto zipped_p = make_zip_tensor(tArP, scaleP_view, gemm_p_offsets, gemm_pk_offsets);
           auto zipped_v = make_zip_tensor(tArV, scaleV_view, gemm_v_offsets, gemm_vk_offsets);
+
+          copy_iter_scaleV.data().coord_ = {v_coord, 0, l_coord};
+
+          fill(fragment_scaleP, ElementScaleV(1));
+          copy(tiled_copy_scaleV, copy_iter_scaleV(_, _, _, K), fragment_scaleV);
 
           cute::gemm(mma_pv, zipped_p, zipped_v, tArA(_,_,_,VV));
         } else {

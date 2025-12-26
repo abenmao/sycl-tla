@@ -59,7 +59,15 @@ namespace cutlass::gemm::collective
   struct ScaleCopyTraits<Dtype, Height, Width, Stride, std::enable_if_t<sizeof_bits_v<Dtype> == 8>>
   {
     static_assert(Height > 0);
-    using Type = XE_LOAD_2D<8, Height, 32>;
+    // Width2D must between 32/64 due to limitation
+    static constexpr auto Width2D = Width <= 32 ? 32 : 64;
+    using Type = XE_LOAD_2D<8, Height, Width2D, 32>;
+  };
+
+    template <class Dtype,class Stride>
+  struct ScaleCopyTraits<Dtype, 1, 64, Stride, std::enable_if_t<sizeof_bits_v<Dtype> == 8>>
+  {
+    using Type = XE_LOAD_2D<8, 1, 64>;
   };
 
   // -----------------------------------------------------------------------------
@@ -135,18 +143,22 @@ namespace cutlass::gemm::collective
     using NonVoidScaleTraits = ScaleCopyTraits<Element, SgK / GroupK, SgMN>;
     using NonVoidScaleCopy = typename NonVoidScaleTraits::Type;
     using SelectedCopy = cute::conditional_t<cute::is_void_v<ScaleCopy>, NonVoidScaleCopy, ScaleCopy>;
-    using BlockShape = Shape<Int<SelectedCopy::AtomHeight>, Int<SelectedCopy::AtomWidth>>;
 
-    static_assert(size<1>(BlockShape{}) == 32, "2D load width must be 32 to match BDPAS requirement for scale layout");
-
-    constexpr auto SubgroupSize = 16;
-    static constexpr auto scale_traits_size = decltype(size(BlockShape{}))::value / SubgroupSize;
-    static constexpr auto scale_traits_num = cute::ceil_div(SgMN , size<1>(BlockShape{}));
-
+    // tile copy
     auto tiled_copy = make_block_2d_copy(SelectedCopy{}, tensor);
 
-    auto copy_iter = make_scale_copy_iterator<scale_traits_size, scale_traits_num, SgK, GroupK, BlockShape>(mn_coord, l_coord, k_count);
+    using AtomShape = typename decltype(tiled_copy)::AtomShape;
+    static_assert(size<0>(typename decltype(tiled_copy)::BlockShape{}) == 1
+               || size<1>(typename decltype(tiled_copy)::BlockShape{}) == 32,
+                "2D load width must be 32 to match MXFP4 BDPAS requirement for scale layout");
 
+    // copy_iter
+    constexpr auto SubgroupSize = 16;
+    static constexpr auto scale_traits_size = decltype(size(AtomShape{}))::value / SubgroupSize;
+    static constexpr auto scale_traits_num = cute::ceil_div(SgMN , size<1>(AtomShape{}));
+    auto copy_iter = make_scale_copy_iterator<scale_traits_size, scale_traits_num, SgK, GroupK, AtomShape>(mn_coord, l_coord, k_count);
+
+    // fragment
     auto fragment = make_tensor<Element>(Layout<Shape<Int<scale_traits_size>, Int<scale_traits_num>, _1>>{});
 
     return cute::make_tuple(tiled_copy, copy_iter, fragment);
