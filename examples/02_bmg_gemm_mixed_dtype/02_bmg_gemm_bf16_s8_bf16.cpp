@@ -210,7 +210,7 @@ struct ExampleRunner {
 
   using ElementA = typename Gemm::ElementA;
   using ElementB = typename Gemm::ElementB;
-  using ElementAcc = typename Gemm::ElementAccumulator;
+  using ElementAccumulator = typename Gemm::ElementAccumulator;
   using ElementMMA = std::conditional_t<AIsNarrower, ElementB, ElementA>;
   using ElementQuant = std::conditional_t<AIsNarrower, ElementA, ElementB>;
 
@@ -223,7 +223,6 @@ struct ExampleRunner {
   using ElementC = typename Gemm::ElementC;
   using ElementOutput = typename CollectiveEpilogue::ElementOutput;
   using ElementCompute = typename CollectiveEpilogue::ElementCompute;
-  using ElementAccumulator = typename CollectiveEpilogue::ElementAccumulator;
 
   using ProblemShapeType = typename Gemm::GemmKernel::ProblemShape;
 
@@ -497,8 +496,9 @@ int main(int argc, const char** argv)
   using StrideScale = cute::Stride<_1, int64_t, int64_t>;
   using StrideZero = StrideScale;
 
-  using GmemTiledCopyA = XE_2D_U8x32x32_LD_N;  // U8  (1-byte) block copy for A (narrower type)
-  using GmemTiledCopyB = XE_2D_U16x32x32_LD_V; // U16 (2-byte) block copy for B (wider type)
+  // The 2D block copy operations used for the A and B matrices
+  using GmemTiledCopyA = XE_2D_U8x32x32_LD_N;   // U8  (1-byte) block copy for A (narrower type)
+  using GmemTiledCopyB = XE_2D_U16x32x32_LD_V;  // U16 (2-byte) block copy for B (wider type)
   static_assert(sizeof(ElementInputA) == 1, "ElementA width must match GmemTiledCopyA U8");
 
   // Workgroup-level tile

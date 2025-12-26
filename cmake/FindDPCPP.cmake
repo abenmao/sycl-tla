@@ -57,6 +57,8 @@ if(NOT "${DPCPP_USER_FLAGS}" STREQUAL "")
   list(APPEND DPCPP_FLAGS "${DPCPP_USER_FLAGS};")
 endif()
 
+string(REPLACE "," ";" DPCPP_SYCL_TARGET_LIST "${DPCPP_SYCL_TARGET}")
+
 if(NOT "${DPCPP_SYCL_ARCH}" STREQUAL "")
   if(SYCL_NVIDIA_TARGET)
     list(APPEND DPCPP_FLAGS "-fsycl-targets=nvptx64-nvidia-cuda;")
@@ -72,8 +74,6 @@ if (SYCL_INTEL_TARGET)
   endif()
 
   set(SYCL_DEVICES)
-
-  string(REPLACE "," ";" DPCPP_SYCL_TARGET_LIST "${DPCPP_SYCL_TARGET}")
 
   foreach(TGT IN LISTS DPCPP_SYCL_TARGET_LIST)
     if(TGT STREQUAL "intel_gpu_bmg_g21" OR TGT STREQUAL "bmg")
