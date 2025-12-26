@@ -172,7 +172,7 @@ int main(int argc, const char **argv) {
   constexpr bool UseScale = true;
 #endif
 #if defined(IS_MX_FLOAT_E5M2) || defined(IS_MX_FLOAT_E4M3) || defined(IS_MX_FLOAT_E2M1)
-  return options.is_causal ? FMHAConfig<true, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV, ElementScale>::run(options)
-  : FMHAConfig<false, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV, ElementScale>::run(options);
+  return options.is_causal ? FMHAConfig<true, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>::run(options)
+  : FMHAConfig<false, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>::run(options);
 #endif
 }

@@ -84,8 +84,6 @@ struct BlockScalingGemmConfiguration {
 
 /////////////////////////////////////////////////////////////////////////
 
-// bfloat16
-
 template<class ElementA, class LayoutA,
   class ElementB, class LayoutB, typename LayoutC,
   class TileShape, Scheduler TileScheduler,
