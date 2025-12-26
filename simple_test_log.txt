@@ -1,0 +1,2047 @@
+BMG GEMM Test Log
+Start Time: Thu Dec 25 07:12:21 PM PST 2025
+===============================
+Test Case 1: 12_xe35_block_scaled_gemm_e4m3 m=128 n=128 k=128
+Start: Thu Dec 25 07:12:21 PM PST 2025
+Non-default value of debug variable: ProductFamilyOverride = cri
+Non-default value of debug variable: HardwareInfoOverride = 4x8x8
+Non-default value of debug variable: BlitterEnableMaskOverride = 30
+Non-default value of debug variable: SetCommandStreamReceiver = 2
+Non-default value of debug variable: TbxPort = 51111
+Non-default value of debug variable: RebuildPrecompiledKernels = 1
+Non-default value of debug variable: ForceDeviceId = 674C
+Non-default value of debug variable: ContextGroupSize = 64
+Non-default value of debug variable: PrintDebugSettings = 1
+Non-default value of debug variable: DirectSubmissionControllerTimeout = 30000000
+Non-default value of debug variable: DirectSubmissionControllerBcsTimeoutDivisor = 6000000
+Non-default value of debug variable: DirectSubmissionControllerMaxTimeout = 30000000
+Loop 1 @ level 1: 2191 total, 0 fill, 0 spill, 0 subroutine calls
+Loop 2 @ level 2: 1089 total, 0 fill, 0 spill, 0 subroutine calls
+Kernel name: /home/taozha2/workspace/inner_cutlass/build/mm_dumps/OCL_asm7f44e37e8ba80f76_simd32_entry_0011
+ # BBs : 393
+ # Asm Insts: 3002
+ # RA Iters = 2
+ Spill Size = 0
+ # Spills: 0
+ # Fills : 0
+Total dyn inst: 120731
+Fill dyn inst: 0
+Spill dyn inst: 0
+Percent Fill/Total dyn inst: 0.000000
+LL1(#1): {S-0, F-0}, LL2(#1): {S-0, F-0}, 
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+Disposition is skipped.
+Problem Size: 128x128x128x1
+Datatype: float_e4m3_t
+Cutlass GEMM Performance:     (0.0111)ms, [0.377]TFlop/s  [8.839]GB/s
+End: Thu Dec 25 07:12:28 PM PST 2025
+Duration: 7 seconds
+Exit Code: 0
+------------------------
+Test Case 2: 12_xe35_block_scaled_gemm_e4m3 m=1024 n=1024 k=1024
+Start: Thu Dec 25 07:12:28 PM PST 2025
+Non-default value of debug variable: ProductFamilyOverride = cri
+Non-default value of debug variable: HardwareInfoOverride = 4x8x8
+Non-default value of debug variable: BlitterEnableMaskOverride = 30
+Non-default value of debug variable: SetCommandStreamReceiver = 2
+Non-default value of debug variable: TbxPort = 51111
+Non-default value of debug variable: RebuildPrecompiledKernels = 1
+Non-default value of debug variable: ForceDeviceId = 674C
+Non-default value of debug variable: ContextGroupSize = 64
+Non-default value of debug variable: PrintDebugSettings = 1
+Non-default value of debug variable: DirectSubmissionControllerTimeout = 30000000
+Non-default value of debug variable: DirectSubmissionControllerBcsTimeoutDivisor = 6000000
+Non-default value of debug variable: DirectSubmissionControllerMaxTimeout = 30000000
+Loop 1 @ level 1: 2191 total, 0 fill, 0 spill, 0 subroutine calls
+Loop 2 @ level 2: 1089 total, 0 fill, 0 spill, 0 subroutine calls
+Kernel name: /home/taozha2/workspace/inner_cutlass/build/mm_dumps/OCL_asm7f44e37e8ba80f76_simd32_entry_0011
+ # BBs : 393
+ # Asm Insts: 3002
+ # RA Iters = 2
+ Spill Size = 0
+ # Spills: 0
+ # Fills : 0
+Total dyn inst: 120731
+Fill dyn inst: 0
+Spill dyn inst: 0
+Percent Fill/Total dyn inst: 0.000000
+LL1(#1): {S-0, F-0}, LL2(#1): {S-0, F-0}, 
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+Disposition is skipped.
+Problem Size: 1024x1024x1024x1
+Datatype: float_e4m3_t
+Cutlass GEMM Performance:     (0.0221)ms, [97.268]TFlop/s  [284.965]GB/s
+End: Thu Dec 25 07:13:34 PM PST 2025
+Duration: 66 seconds
+Exit Code: 0
+------------------------
+Test Case 3: 12_xe35_block_scaled_gemm_e4m3 m=2048 n=2048 k=2048
+Start: Thu Dec 25 07:13:34 PM PST 2025
+Non-default value of debug variable: ProductFamilyOverride = cri
+Non-default value of debug variable: HardwareInfoOverride = 4x8x8
+Non-default value of debug variable: BlitterEnableMaskOverride = 30
+Non-default value of debug variable: SetCommandStreamReceiver = 2
+Non-default value of debug variable: TbxPort = 51111
+Non-default value of debug variable: RebuildPrecompiledKernels = 1
+Non-default value of debug variable: ForceDeviceId = 674C
+Non-default value of debug variable: ContextGroupSize = 64
+Non-default value of debug variable: PrintDebugSettings = 1
+Non-default value of debug variable: DirectSubmissionControllerTimeout = 30000000
+Non-default value of debug variable: DirectSubmissionControllerBcsTimeoutDivisor = 6000000
+Non-default value of debug variable: DirectSubmissionControllerMaxTimeout = 30000000
+Loop 1 @ level 1: 2191 total, 0 fill, 0 spill, 0 subroutine calls
+Loop 2 @ level 2: 1089 total, 0 fill, 0 spill, 0 subroutine calls
+Kernel name: /home/taozha2/workspace/inner_cutlass/build/mm_dumps/OCL_asm7f44e37e8ba80f76_simd32_entry_0011
+ # BBs : 393
+ # Asm Insts: 3002
+ # RA Iters = 2
+ Spill Size = 0
+ # Spills: 0
+ # Fills : 0
+Total dyn inst: 120731
+Fill dyn inst: 0
+Spill dyn inst: 0
+Percent Fill/Total dyn inst: 0.000000
+LL1(#1): {S-0, F-0}, LL2(#1): {S-0, F-0}, 
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+Disposition is skipped.
+Problem Size: 2048x2048x2048x1
+Datatype: float_e4m3_t
+Cutlass GEMM Performance:     (0.0573)ms, [299.980]TFlop/s  [439.424]GB/s
+End: Thu Dec 25 07:19:18 PM PST 2025
+Duration: 344 seconds
+Exit Code: 0
+------------------------
+Test Case 4: 12_xe35_block_scaled_gemm_e4m3 m=512 n=256 k=1024
+Start: Thu Dec 25 07:19:18 PM PST 2025
+Non-default value of debug variable: ProductFamilyOverride = cri
+Non-default value of debug variable: HardwareInfoOverride = 4x8x8
+Non-default value of debug variable: BlitterEnableMaskOverride = 30
+Non-default value of debug variable: SetCommandStreamReceiver = 2
+Non-default value of debug variable: TbxPort = 51111
+Non-default value of debug variable: RebuildPrecompiledKernels = 1
+Non-default value of debug variable: ForceDeviceId = 674C
+Non-default value of debug variable: ContextGroupSize = 64
+Non-default value of debug variable: PrintDebugSettings = 1
+Non-default value of debug variable: DirectSubmissionControllerTimeout = 30000000
+Non-default value of debug variable: DirectSubmissionControllerBcsTimeoutDivisor = 6000000
+Non-default value of debug variable: DirectSubmissionControllerMaxTimeout = 30000000
+Loop 1 @ level 1: 2191 total, 0 fill, 0 spill, 0 subroutine calls
+Loop 2 @ level 2: 1089 total, 0 fill, 0 spill, 0 subroutine calls
+Kernel name: /home/taozha2/workspace/inner_cutlass/build/mm_dumps/OCL_asm7f44e37e8ba80f76_simd32_entry_0011
+ # BBs : 393
+ # Asm Insts: 3002
+ # RA Iters = 2
+ Spill Size = 0
+ # Spills: 0
+ # Fills : 0
+Total dyn inst: 120731
+Fill dyn inst: 0
+Spill dyn inst: 0
+Percent Fill/Total dyn inst: 0.000000
+LL1(#1): {S-0, F-0}, LL2(#1): {S-0, F-0}, 
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+Disposition is skipped.
+Problem Size: 512x256x1024x1
+Datatype: float_e4m3_t
+Cutlass GEMM Performance:     (0.0219)ms, [12.251]TFlop/s  [59.817]GB/s
+End: Thu Dec 25 07:19:39 PM PST 2025
+Duration: 21 seconds
+Exit Code: 0
+------------------------
+Test Case 5: 12_xe35_block_scaled_gemm_e4m3 m=512 n=256 k=2048
+Start: Thu Dec 25 07:19:39 PM PST 2025
+Non-default value of debug variable: ProductFamilyOverride = cri
+Non-default value of debug variable: HardwareInfoOverride = 4x8x8
+Non-default value of debug variable: BlitterEnableMaskOverride = 30
+Non-default value of debug variable: SetCommandStreamReceiver = 2
+Non-default value of debug variable: TbxPort = 51111
+Non-default value of debug variable: RebuildPrecompiledKernels = 1
+Non-default value of debug variable: ForceDeviceId = 674C
+Non-default value of debug variable: ContextGroupSize = 64
+Non-default value of debug variable: PrintDebugSettings = 1
+Non-default value of debug variable: DirectSubmissionControllerTimeout = 30000000
+Non-default value of debug variable: DirectSubmissionControllerBcsTimeoutDivisor = 6000000
+Non-default value of debug variable: DirectSubmissionControllerMaxTimeout = 30000000
+Loop 1 @ level 1: 2191 total, 0 fill, 0 spill, 0 subroutine calls
+Loop 2 @ level 2: 1089 total, 0 fill, 0 spill, 0 subroutine calls
+Kernel name: /home/taozha2/workspace/inner_cutlass/build/mm_dumps/OCL_asm7f44e37e8ba80f76_simd32_entry_0011
+ # BBs : 393
+ # Asm Insts: 3002
+ # RA Iters = 2
+ Spill Size = 0
+ # Spills: 0
+ # Fills : 0
+Total dyn inst: 120731
+Fill dyn inst: 0
+Spill dyn inst: 0
+Percent Fill/Total dyn inst: 0.000000
+LL1(#1): {S-0, F-0}, LL2(#1): {S-0, F-0}, 
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+Disposition is skipped.
+Problem Size: 512x256x2048x1
+Datatype: float_e4m3_t
+Cutlass GEMM Performance:     (0.0300)ms, [17.868]TFlop/s  [69.798]GB/s
+End: Thu Dec 25 07:20:09 PM PST 2025
+Duration: 30 seconds
+Exit Code: 0
+------------------------
+Test Case 6: 12_xe35_block_scaled_gemm_e4m3 m=512 n=256 k=4096
+Start: Thu Dec 25 07:20:09 PM PST 2025
+Non-default value of debug variable: ProductFamilyOverride = cri
+Non-default value of debug variable: HardwareInfoOverride = 4x8x8
+Non-default value of debug variable: BlitterEnableMaskOverride = 30
+Non-default value of debug variable: SetCommandStreamReceiver = 2
+Non-default value of debug variable: TbxPort = 51111
+Non-default value of debug variable: RebuildPrecompiledKernels = 1
+Non-default value of debug variable: ForceDeviceId = 674C
+Non-default value of debug variable: ContextGroupSize = 64
+Non-default value of debug variable: PrintDebugSettings = 1
+Non-default value of debug variable: DirectSubmissionControllerTimeout = 30000000
+Non-default value of debug variable: DirectSubmissionControllerBcsTimeoutDivisor = 6000000
+Non-default value of debug variable: DirectSubmissionControllerMaxTimeout = 30000000
+Loop 1 @ level 1: 2191 total, 0 fill, 0 spill, 0 subroutine calls
+Loop 2 @ level 2: 1089 total, 0 fill, 0 spill, 0 subroutine calls
+Kernel name: /home/taozha2/workspace/inner_cutlass/build/mm_dumps/OCL_asm7f44e37e8ba80f76_simd32_entry_0011
+ # BBs : 393
+ # Asm Insts: 3002
+ # RA Iters = 2
+ Spill Size = 0
+ # Spills: 0
+ # Fills : 0
+Total dyn inst: 120731
+Fill dyn inst: 0
+Spill dyn inst: 0
+Percent Fill/Total dyn inst: 0.000000
+LL1(#1): {S-0, F-0}, LL2(#1): {S-0, F-0}, 
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+Disposition is skipped.
+Problem Size: 512x256x4096x1
+Datatype: float_e4m3_t
+Cutlass GEMM Performance:     (0.0466)ms, [23.019]TFlop/s  [78.678]GB/s
+End: Thu Dec 25 07:21:01 PM PST 2025
+Duration: 52 seconds
+Exit Code: 0
+------------------------
+Test Case 7: 12_xe35_block_scaled_gemm_e4m3 m=512 n=256 k=8192
+Start: Thu Dec 25 07:21:01 PM PST 2025
+Non-default value of debug variable: ProductFamilyOverride = cri
+Non-default value of debug variable: HardwareInfoOverride = 4x8x8
+Non-default value of debug variable: BlitterEnableMaskOverride = 30
+Non-default value of debug variable: SetCommandStreamReceiver = 2
+Non-default value of debug variable: TbxPort = 51111
+Non-default value of debug variable: RebuildPrecompiledKernels = 1
+Non-default value of debug variable: ForceDeviceId = 674C
+Non-default value of debug variable: ContextGroupSize = 64
+Non-default value of debug variable: PrintDebugSettings = 1
+Non-default value of debug variable: DirectSubmissionControllerTimeout = 30000000
+Non-default value of debug variable: DirectSubmissionControllerBcsTimeoutDivisor = 6000000
+Non-default value of debug variable: DirectSubmissionControllerMaxTimeout = 30000000
+Loop 1 @ level 1: 2191 total, 0 fill, 0 spill, 0 subroutine calls
+Loop 2 @ level 2: 1089 total, 0 fill, 0 spill, 0 subroutine calls
+Kernel name: /home/taozha2/workspace/inner_cutlass/build/mm_dumps/OCL_asm7f44e37e8ba80f76_simd32_entry_0011
+ # BBs : 393
+ # Asm Insts: 3002
+ # RA Iters = 2
+ Spill Size = 0
+ # Spills: 0
+ # Fills : 0
+Total dyn inst: 120731
+Fill dyn inst: 0
+Spill dyn inst: 0
+Percent Fill/Total dyn inst: 0.000000
+LL1(#1): {S-0, F-0}, LL2(#1): {S-0, F-0}, 
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+DST, EVEN
+SRC2_UD, EVEN
+Disposition is skipped.
+Problem Size: 512x256x8192x1
+Datatype: float_e4m3_t
+Cutlass GEMM Performance:     (0.0798)ms, [26.895]TFlop/s  [85.361]GB/s
+End: Thu Dec 25 07:22:43 PM PST 2025
+Duration: 102 seconds
+Exit Code: 0
+------------------------
