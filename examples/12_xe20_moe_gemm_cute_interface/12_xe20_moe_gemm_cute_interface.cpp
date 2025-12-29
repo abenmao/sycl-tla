@@ -263,7 +263,12 @@ void MoEGEMMLauncher(const ElementA *activations, const ElementB *weights,
   namespace intelex = sycl::ext::intel::experimental;
 
   syclex::properties kernel_props{syclex::sub_group_size<16>,
-                                  intelex::grf_size<256>};
+#if (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+                                  intelex::grf_size<512>
+#else
+                                  intelex::grf_size<256>
+#endif
+  };
   sycl::queue Q = compat::get_default_queue();
 
   GPU_Clock timer;
@@ -413,8 +418,7 @@ int main(int argc, const char **argv) {
       {6, 13, 123, 28, 197,  0, 202, 69,   0, 6,  0,  21, 1434, 1582, 11, 0, 6,
        0, 7,  190, 4,  1700, 6, 434, 1886, 0, 14, 28, 8,  30,   25,   18},
       {5,  27, 1442, 18, 0,  6, 0, 73,  6,    781, 0,  1915, 291, 649, 98,  4,
-       33, 77, 6,    22, 73, 9, 8, 587, 1486, 32,  10, 244,  37,  0,   100, 9}
-       };
+       33, 77, 6,    22, 73, 9, 8, 587, 1486, 32,  10, 244,  37,  0,   100, 9}};
 
   for (int i = 0; i < num_layers; i++) {
     launcher(total_rows_for_each_expert[i], 5760, 2880, num_experts);

@@ -44,7 +44,7 @@
     Call with `--help` for information about available options
 */
 
-#include "12_xe35_block_scaled_gemm_runner.hpp"
+#include "50_xe35_block_scaled_gemm_runner.hpp"
 
 int main(int argc, const char** argv) {
   //

@@ -30,7 +30,7 @@
  *
  **************************************************************************************************/
 /*! \file
-\brief CUTLASS Intel xe35 Block Scaled E2M1 Gemm.
+\brief CUTLASS Intel xe35 Block Scaled E5M2 Gemm.
 
   - Requirements:
       - Group scaled k size must be 32
@@ -38,14 +38,13 @@
 
     To build & run this example (from your build dir):
 
-      $ ninja 12_xe35_block_scaled_gemm_e2m1
-      $ ./examples/12_xe35_block_scaled_gemm/12_xe35_block_scaled_gemm_e2m1
+      $ ninja 12_xe35_block_scaled_gemm_e5m2
+      $ ./examples/12_xe35_block_scaled_gemm/12_xe35_block_scaled_gemm_e5m2
 
     Call with `--help` for information about available options
 */
 
-#include "12_xe35_block_scaled_gemm_runner.hpp"
-
+#include "50_xe35_block_scaled_gemm_runner.hpp"
 
 int main(int argc, const char** argv) {
   //
@@ -65,18 +64,17 @@ int main(int argc, const char** argv) {
     std::cerr << "Aborting execution." << std::endl;
     return -1;
   }
-
-  using ElementType = cutlass::mx_float4_t<float_e2m1_t>;
+  using ElementType = cutlass::mx_float8_t<float_e5m2_t>;
   using MmaType = typename ElementType::DataType;
 
   using ElementAccumulator = float;
   using ElementComputeEpilogue = float;
-  using ElementInputA = typename ElementType::DataType;
+  using ElementInputA = float;
   using ElementInputB = typename ElementType::DataType;
   using ElementOutput = float;
 
   using LayoutA = cutlass::layout::RowMajor;
-  using LayoutB = cutlass::layout::ColumnMajor;
+  using LayoutB = cutlass::layout::RowMajor;
   using LayoutC = cutlass::layout::RowMajor;
   using LayoutD = cutlass::layout::RowMajor;
 
@@ -89,9 +87,9 @@ int main(int argc, const char** argv) {
   using GmemTiledCopyScaleA = void;
   using GmemTiledCopyScaleB = void;
   
-  using TileShape = Shape<_512, _256, _128>;
+  using TileShape = Shape<_256, _256, _32>;
 
-  using TiledMma = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, ElementInputA>>, Layout<TileShape>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+  using TiledMma = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, ElementInputB>>, Layout<TileShape>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
 
   constexpr int PipelineStages = 2;
   using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages>;

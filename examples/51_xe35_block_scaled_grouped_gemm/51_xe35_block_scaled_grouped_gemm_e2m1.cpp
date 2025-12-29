@@ -29,7 +29,7 @@
  *
  **************************************************************************************************/
 /*! \file
-\brief CUTLASS Intel xe35 Block Scaled E4M3 Gemm.
+\brief CUTLASS Intel xe35 Block Scaled E2M1 Gemm.
 
   - Requirements:
       - Group scaled k size must be 32
@@ -37,13 +37,14 @@
 
     To build & run this example (from your build dir):
 
-      $ ninja 12_xe35_block_scaled_grouped_gemm_e4m3
-      $ ./examples/13_xe35_block_scaled_grouped_gemm/13_xe35_block_scaled_grouped_gemm_e4m3
+      $ ninja 13_xe35_block_scaled_grouped_gemm_e2m1
+      $ ./examples/13_xe35_block_scaled_grouped_gemm/13_xe35_block_scaled_grouped_gemm_e2m1
 
     Call with `--help` for information about available options
 */
 
-#include "13_xe35_block_scaled_grouped_gemm_runner.hpp"
+#include "51_xe35_block_scaled_grouped_gemm_runner.hpp"
+
 
 int main(int argc, const char** argv) {
   //
@@ -64,7 +65,7 @@ int main(int argc, const char** argv) {
     return -1;
   }
 
-  using ElementType = cutlass::mx_float8_t<float_e4m3_t>;
+  using ElementType = cutlass::mx_float4_t<float_e2m1_t>;
   using MmaType = typename ElementType::DataType;
 
   using ElementAccumulator = float;
@@ -74,7 +75,7 @@ int main(int argc, const char** argv) {
   using ElementOutput = float;
 
   using LayoutA = cutlass::layout::RowMajor;
-  using LayoutB = cutlass::layout::RowMajor;
+  using LayoutB = cutlass::layout::ColumnMajor;
   using LayoutC = cutlass::layout::RowMajor;
   using LayoutD = cutlass::layout::RowMajor;
 
@@ -87,7 +88,7 @@ int main(int argc, const char** argv) {
   using GmemTiledCopyScaleA = void;
   using GmemTiledCopyScaleB = void;
   
-  using TileShape = Shape<_512, _512, _32>;
+  using TileShape = Shape<_512, _512, _64>;
 
   using TiledMma = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, ElementInputA>>, Layout<TileShape>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
 

@@ -44,7 +44,7 @@
     Call with `--help` for information about available options
 */
 
-#include "12_xe35_block_scaled_gemm_runner.hpp"
+#include "50_xe35_block_scaled_gemm_runner.hpp"
 
 int main(int argc, const char** argv) {
   //
@@ -64,12 +64,13 @@ int main(int argc, const char** argv) {
     std::cerr << "Aborting execution." << std::endl;
     return -1;
   }
+
   using ElementType = cutlass::mx_float8_t<float_e5m2_t>;
   using MmaType = typename ElementType::DataType;
 
   using ElementAccumulator = float;
   using ElementComputeEpilogue = float;
-  using ElementInputA = float;
+  using ElementInputA = typename ElementType::DataType;
   using ElementInputB = typename ElementType::DataType;
   using ElementOutput = float;
 
@@ -87,9 +88,9 @@ int main(int argc, const char** argv) {
   using GmemTiledCopyScaleA = void;
   using GmemTiledCopyScaleB = void;
   
-  using TileShape = Shape<_256, _256, _32>;
+  using TileShape = Shape<_512, _256, _64>;
 
-  using TiledMma = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, ElementInputB>>, Layout<TileShape>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+  using TiledMma = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, ElementInputA>>, Layout<TileShape>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
 
   constexpr int PipelineStages = 2;
   using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages>;

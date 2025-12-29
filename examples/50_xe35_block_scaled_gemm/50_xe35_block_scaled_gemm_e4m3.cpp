@@ -30,7 +30,7 @@
  *
  **************************************************************************************************/
 /*! \file
-\brief CUTLASS Intel xe35 Block Scaled E5M2 Gemm.
+\brief CUTLASS Intel xe35 Block Scaled E4M3 Gemm.
 
   - Requirements:
       - Group scaled k size must be 32
@@ -38,13 +38,13 @@
 
     To build & run this example (from your build dir):
 
-      $ ninja 12_xe35_block_scaled_gemm_e5m2
-      $ ./examples/12_xe35_block_scaled_gemm/12_xe35_block_scaled_gemm_e5m2
+      $ ninja 12_xe35_block_scaled_gemm_e4m3
+      $ ./examples/12_xe35_block_scaled_gemm/12_xe35_block_scaled_gemm_e4m3
 
     Call with `--help` for information about available options
 */
 
-#include "12_xe35_block_scaled_gemm_runner.hpp"
+#include "50_xe35_block_scaled_gemm_runner.hpp"
 
 int main(int argc, const char** argv) {
   //
@@ -65,7 +65,7 @@ int main(int argc, const char** argv) {
     return -1;
   }
 
-  using ElementType = cutlass::mx_float8_t<float_e5m2_t>;
+  using ElementType = cutlass::mx_float8_t<float_e4m3_t>;
   using MmaType = typename ElementType::DataType;
 
   using ElementAccumulator = float;

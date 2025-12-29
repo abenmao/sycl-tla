@@ -30,22 +30,36 @@ if (DEFINED SYCL_INTEL_TARGET AND "${SYCL_INTEL_TARGET}" STREQUAL "35")
   set(TEST_BASE "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=0 --verify=0")
 
 cutlass_example_add_executable(
-  13_xe35_block_scaled_grouped_gemm_e5m2
-  13_xe35_block_scaled_grouped_gemm_e5m2.cpp
+  50_xe35_block_scaled_gemm_e5m2
+  50_xe35_block_scaled_gemm_e5m2.cpp
   TEST_COMMAND_OPTIONS
   TEST_BASE
 )
 
 cutlass_example_add_executable(
-  13_xe35_block_scaled_grouped_gemm_e4m3
-  13_xe35_block_scaled_grouped_gemm_e4m3.cpp
+  50_xe35_block_scaled_gemm_fp32_e5m2
+  50_xe35_block_scaled_gemm_fp32_e5m2.cpp
   TEST_COMMAND_OPTIONS
   TEST_BASE
 )
 
 cutlass_example_add_executable(
-  13_xe35_block_scaled_grouped_gemm_e2m1
-  13_xe35_block_scaled_grouped_gemm_e2m1.cpp
+  50_xe35_block_scaled_gemm_fp16_e4m3
+  50_xe35_block_scaled_gemm_fp16_e4m3.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_BASE
+)
+
+cutlass_example_add_executable(
+  50_xe35_block_scaled_gemm_e4m3
+  50_xe35_block_scaled_gemm_e4m3.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_BASE
+)
+
+cutlass_example_add_executable(
+  50_xe35_block_scaled_gemm_e2m1
+  50_xe35_block_scaled_gemm_e2m1.cpp
   TEST_COMMAND_OPTIONS
   TEST_BASE
 )

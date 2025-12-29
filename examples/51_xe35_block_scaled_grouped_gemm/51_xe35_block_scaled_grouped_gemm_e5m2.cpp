@@ -43,7 +43,7 @@
     Call with `--help` for information about available options
 */
 
-#include "13_xe35_block_scaled_grouped_gemm_runner.hpp"
+#include "51_xe35_block_scaled_grouped_gemm_runner.hpp"
 
 int main(int argc, const char** argv) {
   //
