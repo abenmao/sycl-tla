@@ -59,8 +59,8 @@ Base NVIDIA CUTLASS Versions for SYCL*TLA releases:
 ### Examples Enabling
  - General GEMM for FP8/FP4, example [00_bmg_gemm.cpp](examples/00_bmg_gemm/00_bmg_gemm.cpp) with replacing data type of InputA, InputB, and MMA
  - General Grouped GEMM for FP8/FP4, example [09_bmg_grouped_gemm_f8.cpp](examples/09_bmg_grouped_gemm_f8/09_bmg_grouped_gemm_f8.cpp) with replacing data type of InputA, InputB, and MMA
- - Block Scaled GEMM for MXFP8/MXFP4, example [12_xe35_block_scaled_gemm](examples/12_xe35_block_scaled_gemm/)
- - Block Scaled Grouped GEMM for MXFP8/MXFP4, example [13_xe35_block_scaled_grouped_gemm](examples/13_xe35_block_scaled_grouped_gemm/)
+ - Block Scaled GEMM for MXFP8/MXFP4, example [50_xe35_block_scaled_gemm](examples/50_xe35_block_scaled_gemm/)
+ - Block Scaled Grouped GEMM for MXFP8/MXFP4, example [51_xe35_block_scaled_grouped_gemm](examples/51_xe35_block_scaled_grouped_gemm/)
  - Flash Attention v2 kernels, example [06_xe_fmha_fwd.cpp](examples/06_bmg_flash_attention/06_xe_fmha_fwd.cpp)
 
 ### Performance (Internal Only)

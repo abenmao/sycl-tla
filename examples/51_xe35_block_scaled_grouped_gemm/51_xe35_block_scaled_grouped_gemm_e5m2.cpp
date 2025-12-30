@@ -37,8 +37,8 @@
 
     To build & run this example (from your build dir):
 
-      $ ninja 13_xe35_block_scaled_grouped_gemm_e5m2
-      $ ./examples/13_xe35_block_scaled_grouped_gemm/13_xe35_block_scaled_grouped_gemm_e5m2
+      $ ninja 51_xe35_block_scaled_grouped_gemm_e5m2
+      $ ./examples/51_xe35_block_scaled_grouped_gemm/51_xe35_block_scaled_grouped_gemm_e5m2
 
     Call with `--help` for information about available options
 */

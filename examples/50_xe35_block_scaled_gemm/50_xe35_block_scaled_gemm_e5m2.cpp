@@ -38,8 +38,8 @@
 
     To build & run this example (from your build dir):
 
-      $ ninja 12_xe35_block_scaled_gemm_e5m2
-      $ ./examples/12_xe35_block_scaled_gemm/12_xe35_block_scaled_gemm_e5m2
+      $ ninja 50_xe35_block_scaled_gemm_e5m2
+      $ ./examples/50_xe35_block_scaled_gemm/50_xe35_block_scaled_gemm_e5m2
 
     Call with `--help` for information about available options
 */
