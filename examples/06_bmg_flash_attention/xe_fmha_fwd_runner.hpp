@@ -89,7 +89,7 @@ struct Options {
 
     cmd.get_cmd_line_argument("scheduler", scheduler, std::string("Individual"));
 
-#ifdef PERSISTENT
+#if PERSISTENT
     cmd.get_cmd_line_argument("batch", batch, 1);
     cmd.get_cmd_line_argument("num_heads_q", num_heads_q, 8);
     cmd.get_cmd_line_argument("num_heads_kv", num_heads_kv, 1);
@@ -195,20 +195,15 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   using StrideK = typename FMHAKernel::StrideK;
   using StrideV = typename FMHAKernel::StrideV;
   using StrideO = typename FMHAKernel::StrideO;
-  using StrideScaleQ = typename FMHAKernel::StrideScaleQ;
-  using StrideScaleK = typename FMHAKernel::StrideScaleK;
-  using StrideScaleV = typename FMHAKernel::StrideScaleV;
 
   using ElementQ = typename FMHAKernel::ElementQ;
   using ElementK = typename FMHAKernel::ElementK;
   using ElementV = typename FMHAKernel::ElementV;
   using ElementO = typename FMHAKernel::ElementO;
-  using ElementScale = typename FMHAKernel::ElementScale;
   using ElementQKMMAVerify = cute::conditional_t<(sizeof_bits_v<ElementQ> <= 8), half_t, ElementQ>;
   using ElementPVMMAVerify = cute::conditional_t<(sizeof_bits_v<ElementV> >= 16), ElementV, ElementQKMMAVerify>;
   using CollectiveMainloop = typename FMHAKernel::CollectiveMainloop;
   using ElementS = typename CollectiveMainloop::ElementS;
-  static constexpr bool UseScale = FMHAKernel::UseScale;
   static constexpr bool FP4Input = sizeof_bits_v<ElementQ> < 8;
   static constexpr bool F8kvF16mma = CollectiveMainloop::F8kvF16mma;
 
@@ -226,9 +221,34 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   StrideV stride_V_cache;
   StrideO stride_O;
 
+#if PERSISTENT
+  static constexpr bool UseScale = false;
+#else
+  static constexpr bool UseScale = FMHAKernel::UseScale;
+
+  using ElementScale = typename FMHAKernel::ElementScale;
+
+  using StrideScaleQ = typename FMHAKernel::StrideScaleQ;
+  using StrideScaleK = typename FMHAKernel::StrideScaleK;
+  using StrideScaleV = typename FMHAKernel::StrideScaleV;
+
   StrideScaleQ stride_SQ;
   StrideScaleK stride_SK;
   StrideScaleV stride_SV;
+
+  cutlass::DeviceAllocation<ElementScale> block_scaleQ;
+  cutlass::DeviceAllocation<ElementScale> block_scaleK;
+  cutlass::DeviceAllocation<ElementScale> block_scaleV;
+
+  ElementScale scale_k;
+  ElementScale scale_v;
+#endif
+
+  std::vector<int> cumulative_scale_q;
+  std::vector<int> cumulative_scale_kv;
+
+  cutlass::DeviceAllocation<int> device_cumulative_scale_q;
+  cutlass::DeviceAllocation<int> device_cumulative_scale_kv;
 
   uint64_t seed = 0;
 
@@ -257,16 +277,6 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   cutlass::DeviceAllocation<ElementQKMMAVerify> block_Q_dq; // Dequantized copy of Q for validation
   cutlass::DeviceAllocation<ElementQKMMAVerify> block_K_dq; // Dequantized copy of K for validation
   cutlass::DeviceAllocation<ElementPVMMAVerify> block_V_dq; // Dequantized copy of V for validation
-  cutlass::DeviceAllocation<ElementScale> block_scaleQ;
-  cutlass::DeviceAllocation<ElementScale> block_scaleK;
-  cutlass::DeviceAllocation<ElementScale> block_scaleV;
-  std::vector<int> cumulative_scale_q;
-  std::vector<int> cumulative_scale_kv;
-  cutlass::DeviceAllocation<int> device_cumulative_scale_q;
-  cutlass::DeviceAllocation<int> device_cumulative_scale_kv;
-
-  ElementScale scale_k;
-  ElementScale scale_v;
 
   //
   // Methods
@@ -767,9 +777,6 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     stride_K = cutlass::make_cute_packed_stride(StrideK{}, shape_K);
     stride_V = cutlass::make_cute_packed_stride(StrideV{}, shape_V);
     stride_O = cutlass::make_cute_packed_stride(StrideO{}, shape_O);
-    stride_SQ = StrideScaleQ{};
-    stride_SK = StrideScaleK{};
-    stride_SV = StrideScaleV{};
     stride_K_cache = cutlass::make_cute_packed_stride(StrideK{}, shape_K_cache);
     stride_V_cache = cutlass::make_cute_packed_stride(StrideV{}, shape_V_cache);
 
@@ -860,6 +867,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     convert_dtype<ElementK, ElementQKMMAVerify, ExampleRunner>(block_K, block_K_dq);
     convert_dtype<ElementV, ElementPVMMAVerify, ExampleRunner>(block_V, block_V_dq);
 
+#if !PERSISTENT
     if constexpr (F8kvF16mma) {
       apply_dequantization(block_K, block_K_dq, scale_k);
       apply_dequantization(block_V, block_V_dq, scale_v);
@@ -897,7 +905,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
       apply_scale<ElementQKMMAVerify, ElementK>(block_K_dq.get(), block_K.get(), layout_K, block_scaleK.get(), layout_scale_K);
       apply_scale<ElementPVMMAVerify, ElementV>(block_V_dq.get(), block_V.get(), layout_V, block_scaleV.get(), layout_scale_V);
     }
-
+#endif
     return shape;
   }
 
@@ -939,6 +947,27 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
 
     ProblemShapeType shape = initialize(options);
 
+#if PERSISTENT
+    typename FMHAKernel::Arguments arguments{
+      {
+        shape,
+        block_Q.get(), stride_Q,
+        block_K.get(), stride_K,
+        block_V.get(), stride_V,
+        block_O.get(), stride_O,
+        block_K_cache.get(), stride_K_cache,
+        block_V_cache.get(), stride_V_cache,
+      },
+      {
+        options.softmax_scale,
+        options.use_paged_kv ? paged_kv_cache.page_table.get() : nullptr,
+        options.use_paged_kv ? paged_kv_cache.page_size : 0,
+        options.use_paged_kv ? paged_kv_cache.num_pages_per_seq.get() : nullptr
+      },
+      {},
+      hw_info
+    };
+#else
     typename FMHAKernel::Arguments arguments{
       {
         shape,
@@ -963,6 +992,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
       {},
       hw_info
     };
+#endif
 
     // Define device-global scratch memory
     size_t workspace_size = FMHAKernel::get_workspace_size(arguments);
