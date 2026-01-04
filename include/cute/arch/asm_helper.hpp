@@ -99,6 +99,7 @@ template <> struct rd_type<cutlass::half_t> {static constexpr fixstr::fixed_stri
 template <> struct rd_type<sycl::ext::oneapi::bfloat16> {
   static constexpr fixstr::fixed_string value {".16b.fp"};
 };
+template <> struct rd_type<float> {static constexpr fixstr::fixed_string value {".32b.fp"};};
 
 template <int N> constexpr auto _s = fixed_s<N>::value;
 template <typename T> constexpr auto _t = fixed_type<T>::value;
