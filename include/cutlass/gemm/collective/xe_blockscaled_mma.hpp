@@ -371,6 +371,10 @@ public:
                                                   GemmIterM::value, GemmIterN::value, GemmIterK::value, MMA_K, GROUP_K,
                                                   typename decltype(tiled_copy_scaleA)::BlockShape,
                                                   typename decltype(tiled_copy_scaleB)::BlockShape>();
+    auto [tiled_prefetch_scaleA, prefetch_iter_scaleA] = make_scaled_prefetch<decltype(tiled_copy_scaleA),
+                                                           SG_M, SG_K, GROUP_K>(tiled_copy_scaleA, m_coord, l_coord, k_tile_count);
+    auto [tiled_prefetch_scaleB, prefetch_iter_scaleB] = make_scaled_prefetch<decltype(tiled_copy_scaleB),
+                                                           SG_N, SG_K, GROUP_K>(tiled_copy_scaleB, n_coord, l_coord, k_tile_count);
 
 #define PRINT(x) print(#x ": "); print(x); print("\n");
 
@@ -396,27 +400,13 @@ public:
 #undef PRINT
   #endif
 
-    using fragment_scaleA_t = decltype(fragment_scaleA);
-    using fragment_scaleB_t = decltype(fragment_scaleB);
-
-    using scaleA_vec_t = intel::vector_t<ElementScaleA, decltype(size(fragment_scaleA_t{}))::value>;
-    using scaleB_vec_t = intel::vector_t<ElementScaleB, decltype(size(fragment_scaleB_t{}))::value>;
+    using scaleA_vec_t = intel::vector_t<ElementScaleA, decltype(size(fragment_scaleA))::value>;
+    using scaleB_vec_t = intel::vector_t<ElementScaleB, decltype(size(fragment_scaleB))::value>;
 
     const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K_start));
 
-    // enable double buffer for scale pre-load, 2 is best util now
-    static constexpr auto scale_preload_distance = (sizeof_bits_v<ElementA> < 8) ? 0 : 1;
-    static_assert(scale_preload_distance <= 1, "scale_preload_distance only support <= 1 now and it's best performance util now");
-    fragment_scaleA_t scalesA[scale_preload_distance + 1];
-    fragment_scaleB_t scalesB[scale_preload_distance + 1];
 
     constexpr int k_reload_factor = cute::max(GROUP_K / BLK_K, 1);
-    int k_tile_preload = k_start_idx;
-    CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < scale_preload_distance; i++, k_tile_preload++) {
-      copy(tiled_copy_scaleA, copy_iter_scaleA(_, _, _, k_tile_preload / k_reload_factor), scalesA[i]);
-      copy(tiled_copy_scaleB, copy_iter_scaleB(_, _, _, k_tile_preload / k_reload_factor), scalesB[i]);
-    }
 
     // pre-prefetch
     int prefetch_k = k_start_idx;
@@ -424,63 +414,32 @@ public:
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
         prefetch(prefetch_a, pAgA(_, _, _, prefetch_k));
         prefetch(prefetch_b, pBgB(_, _, _, prefetch_k));
+        prefetch(tiled_prefetch_scaleA, prefetch_iter_scaleA(_, _, _, prefetch_k / k_reload_factor));
+        prefetch(tiled_prefetch_scaleB, prefetch_iter_scaleB(_, _, _, prefetch_k / k_reload_factor));
     }
 
     //
     // Mainloop
-    // NOTE: unroll the "scale_preload_distance" inside the for-loop for better performance
     //
-    for (int k_tile = k_start_idx; k_tile < k_tile_count + k_start_idx;) {
-      constexpr int barrier_scope = 2;
+    for (int k_tile = k_start_idx; k_tile < k_tile_count + k_start_idx; k_tile++, prefetch_k++) {
+      copy(copy_a, tAgA(_,_,_,k_tile), tArA);
+      copy(copy_b, tBgB(_,_,_,k_tile), tBrB);
 
-      // first of the the "scale_preload_distance" unrolling
-      {
-        copy(copy_a, tAgA(_,_,_,k_tile), tArA);
-        copy(copy_b, tBgB(_,_,_,k_tile), tBrB);
+      copy(tiled_copy_scaleA, copy_iter_scaleA(_, _, _, k_tile / k_reload_factor), fragment_scaleA);
+      copy(tiled_copy_scaleB, copy_iter_scaleB(_, _, _, k_tile / k_reload_factor), fragment_scaleB);
 
-        copy(tiled_copy_scaleA, copy_iter_scaleA(_, _, _, k_tile_preload / k_reload_factor), scalesA[scale_preload_distance]);
-        copy(tiled_copy_scaleB, copy_iter_scaleB(_, _, _, k_tile_preload / k_reload_factor), scalesB[scale_preload_distance]);
+      prefetch(prefetch_a, pAgA(_, _, _, prefetch_k));
+      prefetch(prefetch_b, pBgB(_, _, _, prefetch_k));
+      prefetch(tiled_prefetch_scaleA, prefetch_iter_scaleA(_, _, _, prefetch_k / k_reload_factor));
+      prefetch(tiled_prefetch_scaleB, prefetch_iter_scaleB(_, _, _, prefetch_k / k_reload_factor));
+      reorder(tArA, tCrA);
+      reorder(tBrB, tCrB);
 
-        prefetch(prefetch_a, pAgA(_, _, _, prefetch_k));
-        prefetch(prefetch_b, pBgB(_, _, _, prefetch_k));
+      Tensor scaleA = make_tensor(recast<scaleA_vec_t>(fragment_scaleA).data(), make_layout(Shape<_1, GemmIterM, _1>{}, Stride<_1, _0, _0>{}));
+      Tensor scaleB = make_tensor(recast<scaleB_vec_t>(fragment_scaleB).data(), make_layout(Shape<_1, GemmIterN, _1>{}, Stride<_1, _0, _0>{}));
 
-        reorder(tArA, tCrA);
-        reorder(tBrB, tCrB);
-
-        Tensor scaleA = make_tensor(recast<scaleA_vec_t>(scalesA[0]).data(), make_layout(Shape<_1, GemmIterM, _1>{}, Stride<_1, _0, _0>{}));
-        Tensor scaleB = make_tensor(recast<scaleB_vec_t>(scalesB[0]).data(), make_layout(Shape<_1, GemmIterN, _1>{}, Stride<_1, _0, _0>{}));
-
-        cute::gemm(tiled_mma, make_zip_tensor(tCrA, scaleA, scale_m_offsets, scale_ak_offsets),
-                  make_zip_tensor(tCrB, scaleB, scale_n_offsets, scale_bk_offsets), accum);
-        k_tile++;
-        prefetch_k++;
-        k_tile_preload++;
-      }
-
-      // second of the the "scale_preload_distance" unrolling
-      if constexpr (scale_preload_distance >= 1)
-      {
-        copy(copy_a, tAgA(_,_,_,k_tile), tArA);
-        copy(copy_b, tBgB(_,_,_,k_tile), tBrB);
-
-        copy(tiled_copy_scaleA, copy_iter_scaleA(_, _, _, k_tile_preload / k_reload_factor), scalesA[0]);
-        copy(tiled_copy_scaleB, copy_iter_scaleB(_, _, _, k_tile_preload / k_reload_factor), scalesB[0]);
-
-        prefetch(prefetch_a, pAgA(_, _, _, prefetch_k));
-        prefetch(prefetch_b, pBgB(_, _, _, prefetch_k));
-
-        reorder(tArA, tCrA);
-        reorder(tBrB, tCrB);
-
-        Tensor scaleA = make_tensor(recast<scaleA_vec_t>(scalesA[1]).data(), make_layout(Shape<_1, GemmIterM, _1>{}, Stride<_1, _0, _0>{}));
-        Tensor scaleB = make_tensor(recast<scaleB_vec_t>(scalesB[1]).data(), make_layout(Shape<_1, GemmIterN, _1>{}, Stride<_1, _0, _0>{}));
-
-        cute::gemm(tiled_mma, make_zip_tensor(tCrA, scaleA, scale_m_offsets, scale_ak_offsets),
-                  make_zip_tensor(tCrB, scaleB, scale_n_offsets, scale_bk_offsets), accum);
-        k_tile++;
-        prefetch_k++;
-        k_tile_preload++;
-      }
+      cute::gemm(tiled_mma, make_zip_tensor(tCrA, scaleA, scale_m_offsets, scale_ak_offsets),
+                make_zip_tensor(tCrB, scaleB, scale_n_offsets, scale_bk_offsets), accum);
     }
   }
 };

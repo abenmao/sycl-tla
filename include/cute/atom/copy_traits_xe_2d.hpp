@@ -397,6 +397,9 @@ struct Copy_Traits<XE_PREFETCH_2D<CopyBits, Height, Width, BlockWidth>, XMode, Y
 
   using Super::Super;
 
+  using AtomShape = Shape<Int<Op::AtomHeight>, Int<Op::AtomWidth>>;
+  using BlockShape = AtomShape;
+
   // Execution.
   template <class SEngine, class SLayout,
             class DEngine, class DLayout>

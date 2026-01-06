@@ -164,6 +164,23 @@ namespace cutlass::gemm::collective
     return cute::make_tuple(tiled_copy, copy_iter, fragment);
   }
 
+  template <typename ScaleCopy, int SgMN, int SgK, int GroupK>
+  CUTLASS_DEVICE static auto
+  make_scaled_prefetch(ScaleCopy const &tiled_copy, int mn_coord, int l_coord, int k_count)
+  {
+    // Create prefetch from tiled copy
+    auto tiled_prefetch = make_block_2d_prefetch(tiled_copy);
+    using PrefetchAtomShape = typename decltype(tiled_prefetch)::AtomShape;
+    constexpr auto SubgroupSize = 16;
+    static constexpr auto prefetch_traits_size = decltype(size(PrefetchAtomShape{}))::value / SubgroupSize;
+    static constexpr auto prefetch_traits_num = cute::ceil_div(SgMN, int(size<1>(PrefetchAtomShape{})));
+
+    auto prefetch_iter = make_scale_copy_iterator<prefetch_traits_size, prefetch_traits_num, SgK, GroupK, PrefetchAtomShape>(
+        mn_coord, l_coord, k_count);
+
+    return cute::make_tuple(tiled_prefetch, prefetch_iter);
+  }
+
   template <int IterM, int IterN, int IterK, int MmaK, int GroupK, typename BlockShapeA, typename BlockShapeB>
   CUTLASS_DEVICE static auto
   make_scaled_offsets()
