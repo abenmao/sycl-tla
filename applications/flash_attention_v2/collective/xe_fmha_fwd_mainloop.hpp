@@ -59,6 +59,7 @@ template <class DispatchPolicy_,
           bool CausalMask_,
           bool UseScale_,
           bool F8kvF16mma_,
+          bool CachedKV_,
           bool PagedKV_,
           class TiledMMAQK_,          // Tiling for Q*K GEMM
           class TiledMMAPV_,          // Tiling for P*V GEMM
@@ -83,7 +84,7 @@ struct FMHAFwdMainloop {
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <int Stages,
-          bool CausalMask_, bool UseScale_, bool F8kvF16mma_, bool PagedKV_,
+          bool CausalMask_, bool UseScale_, bool F8kvF16mma_, bool CachedKV_, bool PagedKV_,
           class TiledMMAQK_, class TiledMMAPV_, int VTiles_,
           class TensorQ_, class TensorK_, class TensorV_,
           class TensorScaleQ_, class TensorScaleK_, class TensorScaleV_,
@@ -91,7 +92,7 @@ template <int Stages,
           class TiledCopyQ_, class TiledCopyK_, class TiledCopyV_,
           class TiledCopyK_cache_, class TiledCopyV_cache_>
 struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
-                       PagedKV_, TiledMMAQK_, TiledMMAPV_, VTiles_,
+                       CachedKV_, PagedKV_, TiledMMAQK_, TiledMMAPV_, VTiles_,
                        TensorQ_, TensorK_, TensorV_,
                        TensorScaleQ_, TensorScaleK_, TensorScaleV_,
                        TensorK_cache_, TensorV_cache_,
@@ -167,6 +168,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
   using ElementA = typename TiledMMAPV::ValTypeD;
 
   static constexpr bool CausalMask = CausalMask_;
+  static constexpr bool CachedKV = CachedKV_;
   static constexpr bool PagedKV = PagedKV_;
 
   static constexpr int BLK_Q = get<0>(TileShapeQK{});
