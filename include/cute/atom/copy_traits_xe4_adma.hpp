@@ -605,7 +605,18 @@ make_adma_atom_A_xe4(
   // cta val idx -> gmem mode
   auto cta_v_tile = layout<1>(mma.thrfrg_A(g_tile))(_, repeat<rank(g_tile)>(_));
 
-  auto matrix_desc = detail::make_matrix_descriptor(layout<0>(slayout), true);
+  // TODO: fix with better implementation to handle all shapes.
+  // Extract 2D layout for matrix descriptor:
+  // - If hierarchical (rank >= 3, from tile_to_mma_shape): use layout<0>
+  // - If flat 2D: use coalesce
+  auto slayout_2d = [&]() {
+    if constexpr (decltype(rank(slayout))::value >= 3) {
+      return layout<0>(slayout);  // Hierarchical: extract first mode
+    } else {
+      return coalesce(slayout);   // Flat 2D: coalesce to handle any trivial modes
+    }
+  }();
+  auto matrix_desc = detail::make_matrix_descriptor(slayout_2d, true);
 
 #if 0
   print("(tma_a) slayout:      "); print(slayout);      print("\n");
@@ -655,7 +666,18 @@ make_adma_atom_B_xe4(
   // cta val idx -> gmem mode
   auto cta_v_tile = layout<1>(mma.thrfrg_B(g_tile))(_, repeat<rank(g_tile)>(_));
 
-  auto matrix_desc = detail::make_matrix_descriptor(layout<0>(slayout), false);
+  // TODO: fix with better implementation to handle all shapes.
+  // Extract 2D layout for matrix descriptor:
+  // - If hierarchical (rank >= 3, from tile_to_mma_shape): use layout<0>
+  // - If flat 2D (rank == 2, from tile_to_shape): use coalesce
+  auto slayout_2d = [&]() {
+    if constexpr (decltype(rank(slayout))::value >= 3) {
+      return layout<0>(slayout);  // Hierarchical: extract first mode
+    } else {
+      return coalesce(slayout);   // Flat 2D: coalesce to handle any trivial modes
+    }
+  }();
+  auto matrix_desc = detail::make_matrix_descriptor(slayout_2d, false);
 
 #if 0
   print("(tma_b) slayout:      "); print(slayout);      print("\n");

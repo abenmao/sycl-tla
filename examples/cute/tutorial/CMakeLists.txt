@@ -97,6 +97,5 @@ if(NOT SYCL_INTEL_TARGET EQUAL 40)
   endif()
 
 else()
-  message(STATUS "CUTLASS_ENABLE_SYCL is OFF - CuTE tutorial examples will not be built")
-  message(STATUS "Enable SYCL support to build CuTE tutorial examples")
+  add_subdirectory(xe4)
 endif()

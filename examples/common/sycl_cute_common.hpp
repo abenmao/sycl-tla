@@ -94,6 +94,15 @@ zero_fill(InTensor &X)
     X(i) = T(0);
 }
 
+template <typename InTensor>
+void
+one_fill(InTensor &X)
+{
+  using T = typename InTensor::element_type;
+
+  for (int i = 0; i < size(X); i++)
+    X(i) = T(1);
+}
 // Pack sub-byte types in a gmem tensor.
 // On input, the backing array holds one sub-byte value per byte.
 // On exit, the backing array contains packed values.
@@ -137,8 +146,11 @@ const char *type_str()
   CASE(uint32_t, uint32)
   CASE(int8_t, int8)
   CASE(uint8_t, uint8)
-  CASE(int4_t, int4)
-  CASE(uint4_t, uint4)
+  // Note: base_datatype.hpp (included via xe4_util.hpp) introduces int4_t and uint4_t in another namespace,
+  // causing a name collision with cute::int4_t and cute::uint4_t. We explicitly qualify with cute:: here
+  // to resolve the ambiguity and ensure we use the intended CuTe types.
+  CASE(cute::int4_t, int4) 
+  CASE(cute::uint4_t, uint4)
 #undef CASE
   return "<unknown type>";
 }

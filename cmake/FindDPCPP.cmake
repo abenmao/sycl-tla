@@ -48,8 +48,6 @@ set(DPCPP_LINK_ONLY_FLAGS "")
 
 if("${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_cri")
   list(APPEND DPCPP_FLAGS "-fsycl-targets=spir64;")
-elseif ("${DPCPP_SYCL_TARGET}" STREQUAL "intel_gpu_jgs")
-  message(STATUS "jgs gpu")
 elseif(NOT "${DPCPP_SYCL_TARGET}" STREQUAL "")
   list(APPEND DPCPP_FLAGS "-fsycl-targets=${DPCPP_SYCL_TARGET};")
 endif()
