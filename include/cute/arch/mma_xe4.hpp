@@ -16,7 +16,7 @@ enum class OpType {
 
 template<typename T>
 constexpr uint32_t getMinMmaK() {
-  if constexpr (std::is_same_v<T, float>) {
+  if constexpr (std::is_same_v<T, tfloat32_t>) {
     return 8;
   }
   if constexpr (std::is_same_v<T, bf16> || std::is_same_v<T, fp16>) {
@@ -31,7 +31,7 @@ constexpr uint32_t getMinMmaK() {
 
 template<typename T>
 constexpr uint32_t getMaxMmaK() {
-  if constexpr (std::is_same_v<T, float>) {
+  if constexpr (std::is_same_v<T, tfloat32_t>) {
     return 64;
   }
   if constexpr (std::is_same_v<T, bf16> || std::is_same_v<T, fp16>) {

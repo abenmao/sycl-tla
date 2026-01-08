@@ -21,12 +21,14 @@ template <> struct fixed_s<512> { static constexpr fixstr::fixed_string value {"
 
 // Type name enumeration
 template <typename> struct fixed_type;
+template <> struct fixed_type<cutlass::tfloat32_t> { static constexpr fixstr::fixed_string value {"TF32"};};
 template <> struct fixed_type<float> { static constexpr fixstr::fixed_string value {"F32"};};
 template <> struct fixed_type<sycl::half> { static constexpr fixstr::fixed_string value {"F16"};};
 template <> struct fixed_type<sycl::ext::oneapi::bfloat16> { static constexpr fixstr::fixed_string value {"BF16"};};
 
 template <typename> struct pisa_type;
 template <> struct pisa_type<float> { static constexpr fixstr::fixed_string value {".f32"};};
+template <> struct pisa_type<cutlass::tfloat32_t> { static constexpr fixstr::fixed_string value {".tf32"};};
 template <> struct pisa_type<fp16> { static constexpr fixstr::fixed_string value {".f16"};};
 template <> struct pisa_type<cutlass::bfloat16_t> { static constexpr fixstr::fixed_string value {".bf16"};};
 
@@ -94,12 +96,13 @@ template <> struct tensor_exp_xch<false> { static constexpr fixstr::fixed_string
 
 
 template <typename> struct rd_type;
+template <> struct rd_type<cutlass::tfloat32_t> {static constexpr fixstr::fixed_string value {".32b.fp"};};
+template <> struct rd_type<float> {static constexpr fixstr::fixed_string value {".32b.fp"};};
 template <> struct rd_type<sycl::half> {static constexpr fixstr::fixed_string value {".16b.fp"};};
 template <> struct rd_type<cutlass::half_t> {static constexpr fixstr::fixed_string value {".16b.fp"};};
 template <> struct rd_type<sycl::ext::oneapi::bfloat16> {
   static constexpr fixstr::fixed_string value {".16b.fp"};
 };
-template <> struct rd_type<float> {static constexpr fixstr::fixed_string value {".32b.fp"};};
 
 template <int N> constexpr auto _s = fixed_s<N>::value;
 template <typename T> constexpr auto _t = fixed_type<T>::value;
