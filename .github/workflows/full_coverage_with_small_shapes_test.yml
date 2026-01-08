@@ -53,6 +53,12 @@ jobs:
       - name: Build
         shell: bash
         run: |
+          # Temporarily disable 06_bmg_flash_attention for BMG target:
+          # - Build time is too long and frequently causes OOM
+          # - These cases are already tested on PVC and in CRI pipeline
+          if [ "${{ matrix.sycl_target }}" = "intel_gpu_bmg_g21" ]; then
+            rm -rf examples/06_bmg_flash_attention
+          fi
           mkdir build && cd build
           cmake .. -G Ninja \
             -DCUTLASS_ENABLE_SYCL=ON \
