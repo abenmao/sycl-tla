@@ -43,6 +43,9 @@
 #if (SYCL_INTEL_TARGET == 40 )
 #include <cute/arch/xe4_inline_pisa.hpp>
 #endif
+#if defined(SYCL_INTEL_XE4_TARGET)
+#include <cute/util/xe_split_barrier.hpp>
+#endif
 #endif
 
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900 && (__CUDACC_VER_MAJOR__ >= 12)

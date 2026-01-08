@@ -30,10 +30,12 @@
  **************************************************************************************************/
 #pragma once
 
+#include <vector>
 #include <cute/arch/mma_xe4.hpp>
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
 #include "cutlass/util/command_line.h"
 #include "cutlass/util/reference/host/gemm_complex.h"
+#include "cutlass/util/reference/device/gemm_complex.h"
 #include "cutlass/util/reference/host/tensor_fill.h"
 #include "sycl_common.hpp"
 #include "cute/util/compat.hpp"
@@ -158,6 +160,7 @@ struct ExampleRunner {
     
     compat::wait();
 
+
     size_t total_mismatch = 0;
     for (size_t i = 0; i < num_elements; ++i) {
       bool ok = relatively_equal(host_A[i], host_B[i], epsilon, nonzero_floor);
@@ -184,22 +187,35 @@ struct ExampleRunner {
     int offset_v = 0;
     int offset_o = 0;
 
+    // Store all reference outputs
+    std::vector<ElementOutput> host_ref_all(batch * num_heads * seq_len_qo * head_size_vo);
+    int ref_offset = 0;
+
     for (int b = 0; b < batch; b++) {
       for (int h = 0; h < num_heads; h++) {
-        cutlass::DeviceAllocation<ElementAccum> block_S;
-        cutlass::DeviceAllocation<ElementV> block_P;
+        // Use host buffers for reference computation (not device)
+        std::vector<ElementAccum> host_S(seq_len_qo * seq_len_kv);
+        std::vector<ElementV> host_P(seq_len_qo * seq_len_kv);
+        
+        // Copy input data to host for reference computation
+        std::vector<ElementQ> host_Q_data(seq_len_qo * head_size_qk);
+        std::vector<ElementK> host_K_data(seq_len_kv * head_size_qk);
+        std::vector<ElementV> host_V_data(seq_len_kv * head_size_vo);
+        std::vector<ElementOutput> host_O_ref_data(seq_len_qo * head_size_vo);
+        
+        compat::memcpy(host_Q_data.data(), block_Q.get() + offset_q, host_Q_data.size() * sizeof(ElementQ));
+        compat::memcpy(host_K_data.data(), block_K.get() + offset_k, host_K_data.size() * sizeof(ElementK));
+        compat::memcpy(host_V_data.data(), block_V.get() + offset_v, host_V_data.size() * sizeof(ElementV));
+        compat::wait();
 
-        block_S.reset(seq_len_qo * seq_len_kv);
-        block_P.reset(seq_len_qo * seq_len_kv);
+        cutlass::TensorRef ref_Q(host_Q_data.data(), LayoutQ::packed({seq_len_qo, head_size_qk}));
+        cutlass::TensorRef ref_K(host_K_data.data(), LayoutK::packed({head_size_qk, seq_len_kv}));
+        cutlass::TensorRef ref_V(host_V_data.data(), LayoutV::packed({seq_len_kv, head_size_vo}));
+        cutlass::TensorRef ref_S(host_S.data(), LayoutQ::packed({seq_len_qo, seq_len_kv}));
+        cutlass::TensorRef ref_P(host_P.data(), LayoutQ::packed({seq_len_qo, seq_len_kv}));
+        cutlass::TensorRef ref_O(host_O_ref_data.data(), LayoutO::packed({seq_len_qo, head_size_vo}));
 
-        cutlass::TensorRef ref_Q(block_Q.get() + offset_q, LayoutQ::packed({seq_len_qo, head_size_qk}));
-        cutlass::TensorRef ref_K(block_K.get() + offset_k, LayoutK::packed({head_size_qk, seq_len_kv}));
-        cutlass::TensorRef ref_V(block_V.get() + offset_v, LayoutV::packed({seq_len_kv, head_size_vo}));
-        cutlass::TensorRef ref_S(block_S.get(), LayoutQ::packed({seq_len_qo, seq_len_kv}));
-        cutlass::TensorRef ref_P(block_P.get(), LayoutQ::packed({seq_len_qo, seq_len_kv}));
-        cutlass::TensorRef ref_O(block_ref_O.get() + offset_o, LayoutO::packed({seq_len_qo, head_size_vo}));
-
-        // Compute S = Q * K^T
+        // Compute S = Q * K^T 
         cutlass::reference::host::GemmComplex(
           {seq_len_qo, seq_len_kv, head_size_qk},
           1.f,
@@ -218,11 +234,6 @@ struct ExampleRunner {
           seq_len_qo * seq_len_kv    // batch_stride_S
         );
 
-        std::vector<ElementAccum> host_S(block_S.size());
-        compat::memcpy<ElementAccum>(host_S.data(), block_S.get(), host_S.size());
-        compat::wait();
-        
-        block_S.reset();
         
         // compute max element per row of S
         std::vector<ElementAccum> max_vec(seq_len_qo, -INFINITY);
@@ -263,13 +274,11 @@ struct ExampleRunner {
           }
         }
 
-        std::vector<ElementV> host_P(host_S.size());
-        for (int p = 0; p < host_P.size(); p++) {
-          host_P[p] = static_cast<ElementV>(host_S[p]);
+        std::vector<ElementV> host_P_converted(host_S.size());
+        for (int p = 0; p < host_P_converted.size(); p++) {
+          host_P_converted[p] = static_cast<ElementV>(host_S[p]);
+          host_P[p] = host_P_converted[p];  // Also update host_P for GemmComplex
         }
-
-        compat::memcpy<ElementV>(block_P.get(), host_P.data(), host_P.size());
-        compat::wait();
 
         // Compute O = P * V^T
         cutlass::reference::host::GemmComplex(
@@ -290,7 +299,10 @@ struct ExampleRunner {
           seq_len_qo * head_size_vo  // batch_stride_O
         );
 
-        block_P.reset();
+        // Copy reference output to accumulated array
+        std::copy(host_O_ref_data.begin(), host_O_ref_data.end(), 
+                  host_ref_all.begin() + ref_offset);
+        ref_offset += seq_len_qo * head_size_vo;
 
         offset_q += seq_len_qo * head_size_qk;
         offset_k += seq_len_kv * head_size_qk;
@@ -301,7 +313,13 @@ struct ExampleRunner {
 
     compat::wait();
     
-    bool passed = TensorCompareRelativelyEqual<ElementOutput>(block_ref_O.get(), block_O.get(), block_O.size(), 0.05, 0.05);
+    // Copy device output to host for comparison
+    size_t total_output_size = block_O.size();
+    std::vector<ElementOutput> host_device_output(total_output_size);
+    compat::memcpy(host_device_output.data(), block_O.get(), total_output_size * sizeof(ElementOutput));
+    compat::wait();
+    
+    bool passed = TensorCompareRelativelyEqual<ElementOutput>(host_ref_all.data(), host_device_output.data(), host_device_output.size(), 0.05, 0.05);
 
     return passed;
   }
@@ -319,16 +337,34 @@ struct ExampleRunner {
     stride_V = cutlass::make_cute_packed_stride(StrideV{}, cute::make_shape(head_size_vo, seq_len_kv, batch * num_heads));
     stride_O = cutlass::make_cute_packed_stride(StrideO{}, cute::make_shape(seq_len_qo, head_size_vo, batch * num_heads));
 
-    block_Q.reset(static_cast<std::size_t>(batch) * num_heads * seq_len_qo * head_size_qk);
-    block_K.reset(static_cast<std::size_t>(batch) * num_heads * seq_len_kv * head_size_qk);
-    block_V.reset(static_cast<std::size_t>(batch) * num_heads * seq_len_kv * head_size_vo);
-    block_O.reset(static_cast<std::size_t>(batch) * num_heads * seq_len_qo * head_size_vo);
-    block_ref_O.reset(static_cast<std::size_t>(batch) * num_heads * seq_len_qo * head_size_vo);
+    size_t size_Q = static_cast<std::size_t>(batch) * num_heads * seq_len_qo * head_size_qk;
+    size_t size_K = static_cast<std::size_t>(batch) * num_heads * seq_len_kv * head_size_qk;
+    size_t size_V = static_cast<std::size_t>(batch) * num_heads * seq_len_kv * head_size_vo;
+    size_t size_O = static_cast<std::size_t>(batch) * num_heads * seq_len_qo * head_size_vo;
+    
+    // Allocate device memory
+    block_Q.reset(size_Q);
+    block_K.reset(size_K);
+    block_V.reset(size_V);
+    block_O.reset(size_O);
+    block_ref_O.reset(size_O);
+    
+    // Create host buffers for initialization (BlockFillRandomUniform is a HOST function)
+    // Host memory allocation that can be written by host functions
+    std::vector<ElementQ> host_Q(size_Q);
+    std::vector<ElementK> host_K(size_K);
+    std::vector<ElementV> host_V(size_V);
     
     uint64_t seed = 2025;
-    cutlass::reference::host::BlockFillRandomUniform(block_Q.get(), block_Q.size(), seed, ElementQ(1), ElementQ(-1), 0);
-    cutlass::reference::host::BlockFillRandomUniform(block_K.get(), block_K.size(), seed + 1, ElementK(1), ElementK(-1), 0);
-    cutlass::reference::host::BlockFillRandomUniform(block_V.get(), block_V.size(), seed + 2, ElementV(1), ElementV(-1), 0);
+    // Fill host buffers with random data
+    cutlass::reference::host::BlockFillRandomUniform(host_Q.data(), host_Q.size(), seed, ElementQ(1), ElementQ(-1), 0);
+    cutlass::reference::host::BlockFillRandomUniform(host_K.data(), host_K.size(), seed + 1, ElementK(1), ElementK(-1), 0);
+    cutlass::reference::host::BlockFillRandomUniform(host_V.data(), host_V.size(), seed + 2, ElementV(1), ElementV(-1), 0);
+    
+    // Copy host data to device
+    compat::memcpy(block_Q.get(), host_Q.data(), size_Q * sizeof(ElementQ));
+    compat::memcpy(block_K.get(), host_K.data(), size_K * sizeof(ElementK));
+    compat::memcpy(block_V.get(), host_V.data(), size_V * sizeof(ElementV));
     
     return problem_shape;
   }

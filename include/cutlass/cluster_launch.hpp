@@ -40,7 +40,13 @@
 #endif
 #include "cutlass/cutlass.h"
 #include "cutlass/trace.h"
+
+#if defined(SYCL_INTEL_XE4_TARGET) && (CUTLASS_ENABLE_SYCL)
+#include <cute/arch/cluster_xe4.hpp> 
+#else
 #include <cute/arch/cluster_sm100.hpp> 
+#endif
+
 #include "cutlass/arch/synclog.hpp"
 
 #if defined(__CUDACC_RTC__)
