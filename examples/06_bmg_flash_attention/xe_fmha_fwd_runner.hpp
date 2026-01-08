@@ -1208,6 +1208,13 @@ struct FMHAConfig {
         return -1;
       }
       return run<false, false, false, cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options);
+    } else if constexpr (UseScale) {
+      // UseScale do not support CachedKV/PagedKV
+      if (options.varlen) {
+        return run<true, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler>(options);
+      } else {
+        return run<false, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler>(options);
+      }
     } else if (options.use_paged_kv && !options.varlen) {
       return run<false, true, true, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler>(options);
     } else if(!options.use_paged_kv && options.varlen && !cached_kv) {

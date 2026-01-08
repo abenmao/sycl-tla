@@ -366,6 +366,33 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
     auto pVgV = prefetch_v.get_slice(thr_id).partition_S(gV);
     auto pKgK_cache = prefetch_k_cache.get_slice(thr_id).partition_S(gK_cache);
     auto pVgV_cache = prefetch_v_cache.get_slice(thr_id).partition_S(gV_cache);
+    const auto subgroup_id = thr_id / intel::sg_size;
+
+    using ScaleCopyQK = void;
+    using ScaleCopyPV = void;
+    auto scale_context_qk = [&]() {
+      if constexpr (UseScale) {
+        auto scale_copy_Q = gemm::collective::make_scaled_copy<ScaleCopyQK, ElementScaleQ, SG_Q, SG_QK_D, GROUP_K>(
+                                                      scaleQ, 0, 0, size<4>(tKgK));
+        auto scale_copy_K = gemm::collective::make_scaled_copy<ScaleCopyQK, ElementScaleK, SG_K, SG_QK_D, GROUP_K>(
+                                                      scaleK, 0, 0, size<4>(tKgK));
+        return cute::make_tuple(scale_copy_Q, scale_copy_K);
+      } else {
+        return cute::tuple<>{};
+      }
+    }();
+
+    auto scale_context_pv = [&]() {
+      if constexpr (UseScale) {
+        auto scale_copy_P = gemm::collective::make_scaled_copy<ScaleCopyPV, ElementScaleP, SG_P, SG_PV_D, GROUP_K>(scaleV);
+        auto scale_copy_V = gemm::collective::make_scaled_copy<ScaleCopyPV, ElementScaleV, SG_V, SG_PV_D, GROUP_K>(
+                                                      scaleV, 0, 0, blk_k1);
+
+        return cute::make_tuple(scale_copy_P, scale_copy_V);
+      } else {
+        return cute::tuple<>{};
+      }
+    }();
 
     // ------
     // Kernel
@@ -402,31 +429,33 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
 
     /* Check if */
     bool check_remainder_k = (seq_len % get<1>(TileShapeQK{}) != 0);
-
-    const auto subgroup_id = thr_id / intel::sg_size;
-
-    auto mainloop_body = [&](auto cache, int K) {
+    
+    /* Main loop body */
+    auto mainloop_body = [&](auto cached_k, int K,
+                             auto& copy_k_cur, auto& copy_v_cur,
+                             auto& prefetch_v_cur, auto& tKgK_cur,
+                             auto& tVgV_cur, auto& pVgV_cur) {
       /* Split barrier to keep threads together */
       barrier_arrive(ScopeWorkgroup);
+      
+      constexpr bool is_cache = decltype(cached_k)::value;
 
-      constexpr bool is_cache = decltype(cache)::value;
-
-      int physical_K_tile = K;
-      if constexpr (PagedKV) {
-        if constexpr (is_cache) {
-          physical_K_tile = get_physical_k_tile(K, l_coord, seq_len_kv_cache);
+      int k_idx;
+      if constexpr (is_cache) {
+        k_idx = K;
+        if constexpr (PagedKV) {
+          k_idx = get_physical_k_tile(K, l_coord, seq_len_kv_cache);
         }
+      } else {
+        k_idx = K - kblocks_cache;
       }
 
       /* GEMM 1: S = K * Q */
-      clear(tSrS);    /* TODO: fuse w/ initial gemm call */
+      clear(tSrS);
+      CUTLASS_PRAGMA_UNROLL
       for (int D = 0; D < size<4>(tKgK); D++) {
-        copy(copy_q, tQgQ(_,_,_,D),   tQrQ);
-        if constexpr (is_cache) {
-          copy(copy_k_cache, tKgK_cache(_,_,_,physical_K_tile,D), tKrK);
-        } else {
-          copy(copy_k, tKgK(_,_,_,K - kblocks_cache,D), tKrK);
-        }
+        copy(copy_q, tQgQ(_,_,_,D), tQrQ);
+        copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
         if constexpr (FP4Input) {
           copy(tQrQ, tSrQ);
           copy(tKrK, tSrK);
@@ -445,21 +474,19 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
           const int q_coord = get<0>(blk_qv) * BLK_Q + (subgroup_id / ATOM_K)  * SG_Q;
           const int k_coord = K * BLK_K + (subgroup_id % ATOM_K)  * SG_K;
 
-          using ScaleCopyQK = void;
-
-          auto [tiled_copy_scaleQ, copy_iter_scaleQ, fragment_scaleQ] = gemm::collective::make_scaled_copy<
-                                                        ScaleCopyQK, ElementScaleQ, SG_Q, SG_QK_D, GROUP_K>(
-                                                        scaleQ, 0, 0, size<4>(tKgK));
-          auto [tiled_copy_scaleK, copy_iter_scaleK, fragment_scaleK] = gemm::collective::make_scaled_copy<
-                                                        ScaleCopyQK, ElementScaleK, SG_K, SG_QK_D, GROUP_K>(
-                                                        scaleK, 0, 0, size<4>(tKgK));
+          auto& tiled_copy_scaleQ = get<0>(get<0>(scale_context_qk));
+          auto  copy_iter_scaleQ = get<1>(get<0>(scale_context_qk));
+          auto  fragment_scaleQ = get<2>(get<0>(scale_context_qk));
+          auto& tiled_copy_scaleK = get<0>(get<1>(scale_context_qk));
+          auto  copy_iter_scaleK = get<1>(get<1>(scale_context_qk));
+          auto  fragment_scaleK = get<2>(get<1>(scale_context_qk));
           auto [gemm_qm_offsets, gemm_kn_offsets, gemm_qk_offsets, gemm_kk_offsets] = gemm::collective::make_scaled_offsets<
                                                         decltype(size<1>(tSrQ.shape()))::value,
                                                         decltype(size<1>(tSrK.shape()))::value,
                                                         decltype(size<2>(tSrK.shape()))::value,
                                                         MMA_QK_D, GROUP_K,
-                                                        typename decltype(tiled_copy_scaleQ)::BlockShape,
-                                                        typename decltype(tiled_copy_scaleK)::BlockShape>();
+                                                        typename cute::remove_cvref_t<decltype(tiled_copy_scaleQ)>::BlockShape,
+                                                        typename cute::remove_cvref_t<decltype(tiled_copy_scaleK)>::BlockShape>();
 
           using scaleQSize = decltype(size(fragment_scaleQ));
           using scaleKSize = decltype(size(fragment_scaleK));
@@ -489,16 +516,11 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       }
 
       /* V prefetch for GEMM 2 */
-      if constexpr (is_cache) {
-        prefetch(prefetch_v_cache, pVgV_cache(_,_,_,physical_K_tile));
-      } else {
-        prefetch(prefetch_v, pVgV(_,_,_,K-kblocks_cache));
-      }
+      prefetch(prefetch_v_cur, pVgV_cur(_,_,_,k_idx));
 
-      /* Causal masking */
-      if constexpr (CausalMask) {
+      /* Causal masking - only in non-cache mode */
+      if constexpr (!is_cache && CausalMask) {
         if (K == blk_k1 - 1) {
-          // Need to get global col and row indices to mask the elements
           Tensor cPgP = make_identity_tensor(make_shape(seq_len, seq_len));
           Tensor gP = local_tile(cPgP, take<0,2>(TileShapeQK{}), make_coord(get<0>(blk_qv), K));
           auto cS_thread = thr_mma_qk.partition_C(gP);
@@ -513,55 +535,47 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
         }
       }
       /* k masking for remainder tiles */
-      if (check_remainder_k && K == total_blk - 1) {
-        FragSRow k_rem_mask;
-        int k_val;
-        if constexpr (is_cache) k_val = get<0>(tKgK_cache(0,0,0,physical_K_tile,0));
-        else k_val = get<0>(tKgK(0,0,0,K-kblocks_cache,0)) + kblocks_cache * get<1>(TileShapeQK{}); // Adjust global index from relative
-
-        int k = k_val + get_sub_group().get_local_id()[0];
-        CUTLASS_PRAGMA_UNROLL
-        for (int i = 0; i < k_rem_mask.size(); i++, k += intel::sg_size) {
-          k_rem_mask(i) = (k < seq_len) ? ElementS(sycl::nan(0u)) : ElementS(-INFINITY);
-        }
-        CUTLASS_PRAGMA_UNROLL
-        for (int i = 0; i < tSrS.size(); i++) {
-          tSrS(i) = sycl::fmin(tSrS(i), broadcast<1>(k_rem_mask, tSrS, i));
+      if constexpr (!is_cache) {
+        if (check_remainder_k && K == total_blk - 1) {
+          FragSRow k_rem_mask;
+          int k_val = get<0>(tKgK_cur(0,0,0,k_idx,0)) + kblocks_cache * get<1>(TileShapeQK{});
+          int k = k_val + get_sub_group().get_local_id()[0];
+          CUTLASS_PRAGMA_UNROLL
+          for (int i = 0; i < k_rem_mask.size(); i++, k += intel::sg_size) {
+            k_rem_mask(i) = (k < seq_len) ? ElementS(sycl::nan(0u)) : ElementS(-INFINITY);
+          }
+          CUTLASS_PRAGMA_UNROLL
+          for (int i = 0; i < tSrS.size(); i++) {
+            tSrS(i) = sycl::fmin(tSrS(i), broadcast<1>(k_rem_mask, tSrS, i));
+          }
         }
       }
 
       /* Apply softmax and scaling */
-      softmax(K == 0, tSrS, tA_max, tA_sum, tArA);
+      softmax(K == blk_k0, tSrS, tA_max, tA_sum, tArA);
       reorder(tSrS, tArP);
 
       /* GEMM 2: A += P * V, split in v dimension */
       CUTLASS_PRAGMA_UNROLL
       for (int VV = 0; VV < VTiles; VV++) {
-        if constexpr (is_cache) {
-          copy(copy_v_cache, tVgV_cache(_,_,_,VV,physical_K_tile), tVrV);
-        } else {
-          copy(copy_v, tVgV(_,_,_,VV,K-kblocks_cache), tVrV);
-        }
+        copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
         reorder(tVrV, tArV);
         if constexpr (UseScale && !FP4Input) {
-          const int v_coord = get<1>(blk_qv) * VTiles * BLK_V + VV * BLK_V + (subgroup_id % ATOM_V)  * SG_V;
-
-          using ScaleCopyPV = void;
-
+          const int v_coord = get<1>(blk_qv) * VTiles * BLK_V + VV * BLK_V + (subgroup_id % ATOM_V) * SG_V;
+          auto& tiled_copy_scaleP = get<0>(get<0>(scale_context_pv));
           // P is dummy scale, just the same as V
-          auto [tiled_copy_scaleP, copy_iter_scaleP, fragment_scaleP] = gemm::collective::make_scaled_copy<
-                                                        ScaleCopyPV, ElementScaleP, SG_P, SG_PV_D, GROUP_K>(scaleV);
-          auto [tiled_copy_scaleV, copy_iter_scaleV, fragment_scaleV] = gemm::collective::make_scaled_copy<
-                                                        ScaleCopyPV, ElementScaleV, SG_V, SG_PV_D, GROUP_K>(scaleV, 0, 0, blk_k1);
+          auto  fragment_scaleP = get<2>(get<0>(scale_context_pv));
+          auto& tiled_copy_scaleV = get<0>(get<1>(scale_context_pv));
+          auto  copy_iter_scaleV = get<1>(get<1>(scale_context_pv));
+          auto  fragment_scaleV = get<2>(get<1>(scale_context_pv));
+
           auto [gemm_p_offsets, gemm_v_offsets, gemm_pk_offsets, gemm_vk_offsets] = gemm::collective::make_scaled_offsets<
                                                         decltype(size<1>(tArP.shape()))::value,
                                                         decltype(size<1>(tArV.shape()))::value,
                                                         decltype(size<2>(tArV.shape()))::value,
                                                         MMA_PV_D, GROUP_K,
-                                                        typename decltype(tiled_copy_scaleP)::BlockShape,
-                                                        typename decltype(tiled_copy_scaleV)::BlockShape>();
-
-          fill(fragment_scaleP, ElementScaleV(1));
+                                                        typename cute::remove_cvref_t<decltype(tiled_copy_scaleP)>::BlockShape,
+                                                        typename cute::remove_cvref_t<decltype(tiled_copy_scaleV)>::BlockShape>();
 
           using scalePSize = decltype(size(fragment_scaleP));
           using scaleVSize = decltype(size(fragment_scaleV));
@@ -613,15 +627,20 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
     };
 
     /* Main loop, blocked in k. */
-    /* unroll the first "kblocks_cache" here for performance*/
     if constexpr (CachedKV) {
       for (int K = blk_k0; K < kblocks_cache; K++) {
-        mainloop_body(std::bool_constant<true>{}, K);
+        mainloop_body(std::bool_constant<true>{}, K,
+                      copy_k_cache, copy_v_cache,
+                      prefetch_v_cache, tKgK_cache,
+                      tVgV_cache, pVgV_cache);
       }
     }
 
     for (int K = (blk_k0 > kblocks_cache ? blk_k0 : kblocks_cache); K < blk_k1; K++) {
-      mainloop_body(std::bool_constant<false>{}, K);
+      mainloop_body(std::bool_constant<false>{}, K,
+                    copy_k, copy_v,
+                    prefetch_v, tKgK,
+                    tVgV, pVgV);
     }
   }
 
