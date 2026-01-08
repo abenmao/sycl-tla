@@ -465,9 +465,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
           using scaleKSize = decltype(size(fragment_scaleK));
 
           Tensor scaleQ_view = make_tensor(recast<intel::vector_t<ElementScaleQ, scaleQSize::value>>(fragment_scaleQ).data(),
-                                            make_layout(Shape<_1, decltype(size<1>(tSrQ.shape())), _1>{}, Stride<_1, _0, _0>{}));
+                                           make_layout(Shape<_1, decltype(size<1>(tSrQ.shape())), _1>{}, Stride<_1, _0, _0>{}));
           Tensor scaleK_view = make_tensor(recast<intel::vector_t<ElementScaleK, scaleKSize::value>>(fragment_scaleK).data(),
-                                            make_layout(Shape<_1, decltype(size<1>(tSrK.shape())), _1>{}, Stride<_1, _0, _0>{}));
+                                           make_layout(Shape<_1, decltype(size<1>(tSrK.shape())), _1>{}, Stride<_1, _0, _0>{}));
 
           auto zipped_q = make_zip_tensor(tSrQ, scaleQ_view, gemm_qm_offsets, gemm_qk_offsets);
           auto zipped_k = make_zip_tensor(tSrK, scaleK_view, gemm_kn_offsets, gemm_kk_offsets);
