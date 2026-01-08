@@ -405,15 +405,15 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
 
     const auto subgroup_id = thr_id / intel::sg_size;
 
-    /* Main loop, blocked in k. */
-    for (int K = blk_k0; K < blk_k1; K++) {
+    auto mainloop_body = [&](auto cache, int K) {
       /* Split barrier to keep threads together */
       barrier_arrive(ScopeWorkgroup);
 
-      bool is_cache = K < kblocks_cache;
+      constexpr bool is_cache = decltype(cache)::value;
+
       int physical_K_tile = K;
       if constexpr (PagedKV) {
-        if (is_cache) {
+        if constexpr (is_cache) {
           physical_K_tile = get_physical_k_tile(K, l_coord, seq_len_kv_cache);
         }
       }
@@ -422,7 +422,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       clear(tSrS);    /* TODO: fuse w/ initial gemm call */
       for (int D = 0; D < size<4>(tKgK); D++) {
         copy(copy_q, tQgQ(_,_,_,D),   tQrQ);
-        if (is_cache) {
+        if constexpr (is_cache) {
           copy(copy_k_cache, tKgK_cache(_,_,_,physical_K_tile,D), tKrK);
         } else {
           copy(copy_k, tKgK(_,_,_,K - kblocks_cache,D), tKrK);
@@ -465,9 +465,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
           using scaleKSize = decltype(size(fragment_scaleK));
 
           Tensor scaleQ_view = make_tensor(recast<intel::vector_t<ElementScaleQ, scaleQSize::value>>(fragment_scaleQ).data(),
-                                           make_layout(Shape<_1, decltype(size<1>(tSrQ.shape())), _1>{}, Stride<_1, _0, _0>{}));
+                                            make_layout(Shape<_1, decltype(size<1>(tSrQ.shape())), _1>{}, Stride<_1, _0, _0>{}));
           Tensor scaleK_view = make_tensor(recast<intel::vector_t<ElementScaleK, scaleKSize::value>>(fragment_scaleK).data(),
-                                           make_layout(Shape<_1, decltype(size<1>(tSrK.shape())), _1>{}, Stride<_1, _0, _0>{}));
+                                            make_layout(Shape<_1, decltype(size<1>(tSrK.shape())), _1>{}, Stride<_1, _0, _0>{}));
 
           auto zipped_q = make_zip_tensor(tSrQ, scaleQ_view, gemm_qm_offsets, gemm_qk_offsets);
           auto zipped_k = make_zip_tensor(tSrK, scaleK_view, gemm_kn_offsets, gemm_kk_offsets);
@@ -489,7 +489,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       }
 
       /* V prefetch for GEMM 2 */
-      if (is_cache) {
+      if constexpr (is_cache) {
         prefetch(prefetch_v_cache, pVgV_cache(_,_,_,physical_K_tile));
       } else {
         prefetch(prefetch_v, pVgV(_,_,_,K-kblocks_cache));
@@ -516,7 +516,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       if (check_remainder_k && K == total_blk - 1) {
         FragSRow k_rem_mask;
         int k_val;
-        if (is_cache) k_val = get<0>(tKgK_cache(0,0,0,physical_K_tile,0));
+        if constexpr (is_cache) k_val = get<0>(tKgK_cache(0,0,0,physical_K_tile,0));
         else k_val = get<0>(tKgK(0,0,0,K-kblocks_cache,0)) + kblocks_cache * get<1>(TileShapeQK{}); // Adjust global index from relative
 
         int k = k_val + get_sub_group().get_local_id()[0];
@@ -537,7 +537,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       /* GEMM 2: A += P * V, split in v dimension */
       CUTLASS_PRAGMA_UNROLL
       for (int VV = 0; VV < VTiles; VV++) {
-        if (is_cache) {
+        if constexpr (is_cache) {
           copy(copy_v_cache, tVgV_cache(_,_,_,VV,physical_K_tile), tVrV);
         } else {
           copy(copy_v, tVgV(_,_,_,VV,K-kblocks_cache), tVrV);
@@ -592,22 +592,36 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       /* K prefetch */
       for (int D = 0; D < size<4>(pKgK); D++) {
         int K_next = K + Stages;
-        bool is_cache_next = K_next < kblocks_cache;
-        int physical_K_next = K_next;
-        if constexpr (PagedKV) {
-          if (is_cache_next) {
-            physical_K_next = get_physical_k_tile(K_next, l_coord, seq_len_kv_cache);
+        if constexpr (is_cache) {
+          bool is_cache_next = K_next < kblocks_cache;
+          int physical_K_next = K_next;
+          if constexpr (PagedKV) {
+            if (is_cache_next) {
+              physical_K_next = get_physical_k_tile(K_next, l_coord, seq_len_kv_cache);
+            }
           }
-        }
 
-        if (is_cache_next) {
-          prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_next,D));
+          if (is_cache_next) {
+            prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_next,D));
+          }
         } else {
           prefetch(prefetch_k, pKgK(_,_,_,K_next-kblocks_cache,D));
         }
       }
 
       barrier_wait(ScopeWorkgroup);
+    };
+
+    /* Main loop, blocked in k. */
+    /* unroll the first "kblocks_cache" here for performance*/
+    if constexpr (CachedKV) {
+      for (int K = blk_k0; K < kblocks_cache; K++) {
+        mainloop_body(std::bool_constant<true>{}, K);
+      }
+    }
+
+    for (int K = (blk_k0 > kblocks_cache ? blk_k0 : kblocks_cache); K < blk_k1; K++) {
+      mainloop_body(std::bool_constant<false>{}, K);
     }
   }
 
