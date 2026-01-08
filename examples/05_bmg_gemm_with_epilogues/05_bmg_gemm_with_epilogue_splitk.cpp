@@ -370,7 +370,7 @@ struct ExampleRunner {
       std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
       if (!passed) return cutlass::Status::kErrorInternal;
     } else {
-      std::cout << "Verification is skipped.\n";
+      std::cout << "Disposition is skipped.\n";
     }
 
     if (options.iterations > 0) {

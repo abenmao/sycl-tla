@@ -311,7 +311,7 @@ struct ExampleRunner {
 
       if (!passed) return cutlass::Status::kErrorInternal;
     } else {
-      std::cout << "Verification is skipped.\n";
+      std::cout << "Disposition is skipped.\n";
     }
 
     if (options.iterations > 0) {

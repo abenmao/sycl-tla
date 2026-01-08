@@ -478,7 +478,7 @@ int run(Options &options) {
       exit(-1);
     }
   } else {
-    std::cout << "Verification is skipped.\n";
+    std::cout << "Disposition is skipped.\n";
   }
 
   // Run profiling loop
