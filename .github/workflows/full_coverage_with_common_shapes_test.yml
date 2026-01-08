@@ -61,7 +61,7 @@ jobs:
           # - Build time is too long and frequently causes OOM
           # - These cases are already tested on PVC and in CRI pipeline
           if [ "${{ matrix.sycl_target }}" = "intel_gpu_bmg_g21" ]; then
-            rm -rf examples/06_bmg_flash_attention
+            cat /dev/null > examples/06_bmg_flash_attention/CMakeLists.txt
           fi
           mkdir build && cd build
           cmake .. -G Ninja \
