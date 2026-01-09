@@ -96,7 +96,9 @@ endfunction()
 # This CMakeLists.txt builds SYCL-based examples for CUTLASS.
 
 if (CUTLASS_TEST_FOR_CRI)
-  set(CRI_GEMM_DEFAULT_SIZE 256 CACHE INTERNAL "Default GEMM MNK size")
+  set(CRI_GEMM_DEFAULT_SIZE 256 CACHE INTERNAL "Default GEMM matrix dimensions (256, 256, 256) for CRI tests")
+  set(CRI_DEFAULT_ITERATIONS 0 CACHE INTERNAL "Number of iterations for CRI tests (0=single run)")
+  set(CRI_DEFAULT_VERIFY 0 CACHE STRING "Enable verification in CRI tests (0=skip, 1=verify)")
 endif()
 
 if (CUTLASS_ENABLE_SYCL)
