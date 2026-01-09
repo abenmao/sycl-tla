@@ -55,6 +55,9 @@ struct Xe_Reorder<ReorderKind::UU, T, T> {
   }
 };
 
+template <typename T>
+struct Xe_Reorder<ReorderKind::UU_Universal, T, T> : Xe_Reorder<ReorderKind::UU, T, T> {};
+
 // Optimized reorder for float -> float_e5m2_t/float_e4m3_t (BF8/FP8) when classified as UU_Universal (e.g. size 16)
 // This happens when the data chunk is smaller than a full GRF (e.g. 16 elements = 64B float -> 16B bf8)
 template <>

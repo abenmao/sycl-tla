@@ -109,7 +109,7 @@ struct Options {
     cmd.get_cmd_line_argument("head_size_vo", head_size_vo, HEAD_DIM);
     cmd.get_cmd_line_argument("head_size_qk", head_size_qk, head_size_vo);
     cmd.get_cmd_line_argument("iterations", iterations, 100);
-    cmd.get_cmd_line_argument("warmup", warmup, 100);
+    cmd.get_cmd_line_argument("warmup", warmup, 1);
     cmd.get_cmd_line_argument("verify", verify, 1);
 
     if (cmd.check_cmd_line_flag("use_paged_kv")) {
@@ -1175,7 +1175,8 @@ struct FMHAConfig {
         TensorQ, TensorK, TensorV,
         TensorScaleQ, TensorScaleK, TensorScaleV,
         TensorK_cache, TensorV_cache,
-        GmemTiledCopyQ, GmemTiledCopyK, GmemTiledCopyV
+        GmemTiledCopyQ, GmemTiledCopyK, GmemTiledCopyV,
+        GmemTiledCopyK_cache, GmemTiledCopyV_cache
     >;
 
     // Epilogue
