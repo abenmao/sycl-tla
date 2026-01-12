@@ -1,4 +1,36 @@
 #!/usr/bin/env python3
+
+#**************************************************************************************************
+# Copyright (c) 2026 Intel Corporation, All rights reserved.
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+# list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+# this list of conditions and the following disclaimer in the documentation
+# and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its
+# contributors may be used to endorse or promote products derived from
+# this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+#*************************************************************************************************
+
 """
 Kernel Performance Test Runner
 
@@ -134,23 +166,26 @@ class PerfTestRunner:
             else:
                 assert False, f"Error getting test list: {e}"
 
-    def run_single_test(self, test_name: str) -> bool:
-        """Run a single test and capture its output."""
-        # Generate XML filename based on test name
+    def _get_shortened_test_name(self, test_name: str):
+        """Get shortened test name with slashes and dots replaced by underscores."""
         if '#' in test_name:
             # Handle parameterized test names with '#'
-            xml_name = test_name.split('#')[0].strip()
-            xml_name = xml_name.replace('/', '_').replace('.', '_')
+            shortened_test_name = test_name.split('#')[0].strip()
+            shortened_test_name = shortened_test_name.replace('/', '_').replace('.', '_')
         else:
             # Handle regular test names without '#'
-            xml_name = test_name.replace('/', '_').replace('.', '_')
+            shortened_test_name = test_name.replace('/', '_').replace('.', '_')
 
-        xml_name = self.output_dir / f"{xml_name}_test_report.xml"
+        print(f"Shortened test name: {shortened_test_name}")
+        return shortened_test_name.strip()
+
+    def run_single_test(self, test_name: str) -> bool:
+        """Run a single test and capture its output."""
+        xml_name = self.output_dir / f"{self._get_shortened_test_name(test_name)}_test_report.xml"
         print(f"📄 XML report will be saved as: {xml_name.name}")
 
-        # clean test name
-        clean_test_name = test_name.split('#')[0].strip()
-        print(f"▶️ Running test (clean test name): {clean_test_name}")
+        runnable_test_name = test_name.split('#')[0].strip()
+        print(f"▶️ Running test ... : {runnable_test_name}")
 
         try:
             # delete existing JSON file before running test
@@ -158,7 +193,7 @@ class PerfTestRunner:
                 self.json_file.unlink()
 
             # Run the test
-            cmd = [str(self.perf_binary_path), f"--gtest_filter=*{clean_test_name}", f"--gtest_output=xml:{xml_name}", "--gtest_color=no"]
+            cmd = [str(self.perf_binary_path), f"--gtest_filter=*{runnable_test_name}", f"--gtest_output=xml:{xml_name}", "--gtest_color=no"]
 
             process = subprocess.Popen(
                 cmd,
@@ -364,9 +399,25 @@ class PerfTestRunner:
 
     def add_result_to_csv(self, test_name: str, success: bool, metrics: Dict[str, Optional[float]]):
         """Add test result to CSV file."""
+
+        # skipped test also has status as True. So, if `success` is True further check if test was skipped and mark it as Skipped in CSV
+        if success:
+            # search in output dir for xml file and check if test was skipped
+            xml_name = self.output_dir / f"{self._get_shortened_test_name(test_name)}_test_report.xml"
+            status = "PASS"  # Default to PASS if successful
+            if xml_name.exists():
+                with open(xml_name, 'r') as f:
+                    xml_content = f.read()
+                    # Check for skipped tag (handles variations: <skipped/>, <skipped />, <skipped message="..."/>)
+                    if '<skipped' in xml_content:
+                        print('skipped test found')
+                        status = "SKIPPED"
+        else:
+            status = 'FAIL'
+
         row = [
             test_name,
-            'PASS' if success else 'FAIL',
+            status,
             metrics.get('kernel_execution_time_us', ''),
             metrics.get('xecore_active_time_us', ''),
         ]
@@ -375,7 +426,7 @@ class PerfTestRunner:
             writer = csv.writer(csvfile)
             writer.writerow(row)
 
-        #print(f"📝 Added result to CSV: {test_name} -> {row[1]}")
+        print(f"📝 Added result to CSV: {test_name} -> {row[1]}")
 
     def run_single_specific_test(self, test_name: str):
         """Run a single specific test by name and generate the performance report."""

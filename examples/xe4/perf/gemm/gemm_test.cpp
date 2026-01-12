@@ -1,6 +1,33 @@
-/*
- * Copyright (c) 2025. All rights reserved.
- */
+/***************************************************************************************************
+ * Copyright (c) 2026 Intel Corporation, All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ **************************************************************************************************/
 
 #include "gemm_params.hpp"
 #include "testFixture.hpp"
@@ -35,6 +62,16 @@ struct GEMM_RUNTIME_CONFIG {
     static constexpr cute::array<int, 4> ProblemShape_MNKL = {1, 1, 1, 1};
 };
 
+#define DISPATCH_GEMM_CONFIG(cta_m_val, cta_n_val, cluster_m_val, cluster_n_val, cluster_k_val)                                       \
+    if (cta_m == cta_m_val && cta_n == cta_n_val &&                                                                                   \
+        cluster_m == cluster_m_val && cluster_n == cluster_n_val && cluster_k == cluster_k_val) {                                     \
+        using Config = GEMM_RUNTIME_CONFIG<ElementA, ElementB, ElementC, ElementD, ElementAccumulator,                                \
+                                           LayoutA, LayoutB, LayoutC,                                                                 \
+                                           activation, operation, cta_m_val, cta_n_val, cluster_m_val, cluster_n_val, cluster_k_val>; \
+        default_run_gemm<Config>();                                                                                                   \
+        return;                                                                                                                       \
+    }
+
 // Global parameter list for GEMM operations
 std::deque<TestParamInfo> GemmOpParamsList;
 
@@ -43,100 +80,36 @@ std::deque<TestParamInfo> GemmOpParamsList;
  */
 class GemmOperator : public testFixture {
    public:
-    // Combined function that handles both CTA and Cluster dispatch in one place
+
     template <typename ElementA, typename ElementB, typename ElementC, typename ElementD, typename ElementAccumulator,
               typename LayoutA, typename LayoutB, typename LayoutC,
               ActivationType activation, OperationCType operation>
     void executeGemm(int cta_m, int cta_n, int cluster_m, int cluster_n, int cluster_k) {
-        // Dispatch based on both CTA and Cluster configuration in one function
-        if (cta_m == 1 && cta_n == 1) {
-            // CTA (1,1) configurations with different cluster shapes
-            if (cluster_m == 1 && cluster_n == 1 && cluster_k == 1) {
-                using Config = GEMM_RUNTIME_CONFIG<ElementA, ElementB, ElementC, ElementD, ElementAccumulator,
-                                                   LayoutA, LayoutB, LayoutC,
-                                                   activation, operation, 1, 1, 1, 1, 1>;
-                default_run_gemm<Config>();
-            } else if (cluster_m == 2 && cluster_n == 1 && cluster_k == 1) {
-                using Config = GEMM_RUNTIME_CONFIG<ElementA, ElementB, ElementC, ElementD, ElementAccumulator,
-                                                   LayoutA, LayoutB, LayoutC,
-                                                   activation, operation, 1, 1, 2, 1, 1>;
-                default_run_gemm<Config>();
-            } else if (cluster_m == 1 && cluster_n == 2 && cluster_k == 1) {
-                using Config = GEMM_RUNTIME_CONFIG<ElementA, ElementB, ElementC, ElementD, ElementAccumulator,
-                                                   LayoutA, LayoutB, LayoutC,
-                                                   activation, operation, 1, 1, 1, 2, 1>;
-                default_run_gemm<Config>();
-            } else if (cluster_m == 2 && cluster_n == 2 && cluster_k == 1) {
-                using Config = GEMM_RUNTIME_CONFIG<ElementA, ElementB, ElementC, ElementD, ElementAccumulator,
-                                                   LayoutA, LayoutB, LayoutC,
-                                                   activation, operation, 1, 1, 2, 2, 1>;
-                default_run_gemm<Config>();
-            } else {
-                std::cout << "Unsupported Cluster configuration for CTA(1,1): M=" << cluster_m
-                          << ", N=" << cluster_n << ", K=" << cluster_k << std::endl;
-                FAIL() << "Cluster configuration not supported";
-            }
-        } else if (cta_m == 2 && cta_n == 1) {
-            // CTA (2,1) configurations with different cluster shapes
-            if (cluster_m == 1 && cluster_n == 1 && cluster_k == 1) {
-                using Config = GEMM_RUNTIME_CONFIG<ElementA, ElementB, ElementC, ElementD, ElementAccumulator,
-                                                   LayoutA, LayoutB, LayoutC,
-                                                   activation, operation, 2, 1, 1, 1, 1>;
-                default_run_gemm<Config>();
-            } else if (cluster_m == 2 && cluster_n == 1 && cluster_k == 1) {
-                using Config = GEMM_RUNTIME_CONFIG<ElementA, ElementB, ElementC, ElementD, ElementAccumulator,
-                                                   LayoutA, LayoutB, LayoutC,
-                                                   activation, operation, 2, 1, 2, 1, 1>;
-                default_run_gemm<Config>();
-            } else if (cluster_m == 1 && cluster_n == 2 && cluster_k == 1) {
-                using Config = GEMM_RUNTIME_CONFIG<ElementA, ElementB, ElementC, ElementD, ElementAccumulator,
-                                                   LayoutA, LayoutB, LayoutC,
-                                                   activation, operation, 2, 1, 1, 2, 1>;
-                default_run_gemm<Config>();
-            } else if (cluster_m == 2 && cluster_n == 2 && cluster_k == 1) {
-                using Config = GEMM_RUNTIME_CONFIG<ElementA, ElementB, ElementC, ElementD, ElementAccumulator,
-                                                   LayoutA, LayoutB, LayoutC,
-                                                   activation, operation, 2, 1, 2, 2, 1>;
-                default_run_gemm<Config>();
-            } else {
-                std::cout << "Unsupported Cluster configuration for CTA(2,1): M=" << cluster_m
-                          << ", N=" << cluster_n << ", K=" << cluster_k << std::endl;
-                FAIL() << "Cluster configuration not supported";
-            }
-        } else if (cta_m == 2 && cta_n == 2) {
-            // CTA (2,2) configurations with different cluster shapes
-            if (cluster_m == 1 && cluster_n == 1 && cluster_k == 1) {
-                using Config = GEMM_RUNTIME_CONFIG<ElementA, ElementB, ElementC, ElementD, ElementAccumulator,
-                                                   LayoutA, LayoutB, LayoutC,
-                                                   activation, operation, 2, 2, 1, 1, 1>;
-                default_run_gemm<Config>();
-            } else if (cluster_m == 2 && cluster_n == 1 && cluster_k == 1) {
-                using Config = GEMM_RUNTIME_CONFIG<ElementA, ElementB, ElementC, ElementD, ElementAccumulator,
-                                                   LayoutA, LayoutB, LayoutC,
-                                                   activation, operation, 2, 2, 2, 1, 1>;
-                default_run_gemm<Config>();
-            } else if (cluster_m == 1 && cluster_n == 2 && cluster_k == 1) {
-                using Config = GEMM_RUNTIME_CONFIG<ElementA, ElementB, ElementC, ElementD, ElementAccumulator,
-                                                   LayoutA, LayoutB, LayoutC,
-                                                   activation, operation, 2, 2, 1, 2, 1>;
-                default_run_gemm<Config>();
-            } else if (cluster_m == 2 && cluster_n == 2 && cluster_k == 1) {
-                using Config = GEMM_RUNTIME_CONFIG<ElementA, ElementB, ElementC, ElementD, ElementAccumulator,
-                                                   LayoutA, LayoutB, LayoutC,
-                                                   activation, operation, 2, 2, 2, 2, 1>;
-                default_run_gemm<Config>();
-            } else {
-                std::cout << "Unsupported Cluster configuration for CTA(2,2): M=" << cluster_m
-                          << ", N=" << cluster_n << ", K=" << cluster_k << std::endl;
-                FAIL() << "Cluster configuration not supported";
-            }
-        } else {
-            std::cout << "Unsupported CTA configuration: M=" << cta_m << ", N=" << cta_n << std::endl;
-            FAIL() << "CTA configuration not supported";
-        }
+        // Dispatch all supported configurations
+        DISPATCH_GEMM_CONFIG(1, 1, 1, 1, 1)
+        DISPATCH_GEMM_CONFIG(1, 1, 2, 2, 2)
+        DISPATCH_GEMM_CONFIG(1, 2, 1, 1, 1)
+        DISPATCH_GEMM_CONFIG(1, 2, 2, 2, 2)
+        DISPATCH_GEMM_CONFIG(2, 1, 1, 1, 1)
+        DISPATCH_GEMM_CONFIG(2, 1, 2, 2, 2)
+        DISPATCH_GEMM_CONFIG(2, 2, 1, 1, 1)
+        DISPATCH_GEMM_CONFIG(2, 2, 2, 1, 1)
+        DISPATCH_GEMM_CONFIG(2, 2, 2, 2, 2)
+        DISPATCH_GEMM_CONFIG(4, 4, 1, 1, 1)
+        DISPATCH_GEMM_CONFIG(4, 4, 2, 2, 2)
+        DISPATCH_GEMM_CONFIG(2, 4, 1, 1, 1)
+        DISPATCH_GEMM_CONFIG(2, 4, 2, 2, 2)
+        DISPATCH_GEMM_CONFIG(4, 2, 1, 1, 1)
+        DISPATCH_GEMM_CONFIG(4, 2, 2, 2, 2)
+
+        // If no configuration matched
+        std::cout << "Unsupported CTA/Cluster configuration: CTA(" << cta_m << "," << cta_n
+                  << ") Cluster(" << cluster_m << "," << cluster_n << "," << cluster_k << ")" << std::endl;
+        FAIL() << "Configuration not supported";
+        #undef DISPATCH_GEMM_CONFIG
     }
 
-private:
+   private:
     void printUnsupportedCombination(const GemmTestParams* params, const std::string& context = "") {
         std::cout << "Unsupported combination" << (context.empty() ? "" : (" for " + context)) << ": \n"
                   << "layoutA=" << params->layout_a << ", layoutB=" << params->layout_b << ", layoutC=" << params->layout_c << "\n"
@@ -153,9 +126,14 @@ public:
             return;
         }
 
+        // check if test is enabled
+        if (params->state != "enabled") {
+            GTEST_SKIP() << "Test is disabled. Skipping execution";
+            return;
+        }
+
         // Timing measurement
         auto start = std::chrono::high_resolution_clock::now();
-
         // Dispatch based on parameters - organized by layout combinations
         if (params->layout_a == "RowMajor" && params->layout_b == "RowMajor" && params->layout_c == "RowMajor") {
             if (params->dtype_a == "fp16" && params->dtype_b == "fp16" && params->dtype_c == "fp16" && params->dtype_d == "fp16" && params->dtype_acc == "float") {
@@ -191,6 +169,44 @@ public:
                 printUnsupportedCombination(params, "RowMajor-RowMajor-RowMajor");
                 FAIL() << "This combination is not supported";
             }
+        } else if (params->layout_a == "RowMajor" && params->layout_b == "ColumnMajor" && params->layout_c == "RowMajor") {
+            if (params->dtype_a == "fp16" && params->dtype_b == "fp16" && params->dtype_c == "fp16" && params->dtype_d == "fp16" && params->dtype_acc == "float") {
+                if (params->activation == "SiLu" && params->operation_c == "Mul") {
+                    executeGemm<fp16, fp16, fp16, fp16, float,
+                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
+                                ActivationType::SiLu, OperationCType::Mul>(
+                        params->cta_num_m, params->cta_num_n,
+                        params->cluster_m, params->cluster_n, params->cluster_k);
+                } else if (params->activation == "None" && params->operation_c == "Add") {
+                    executeGemm<fp16, fp16, fp16, fp16, float,
+                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
+                                ActivationType::None, OperationCType::Add>(
+                        params->cta_num_m, params->cta_num_n,
+                        params->cluster_m, params->cluster_n, params->cluster_k);
+                } else {
+                    printUnsupportedCombination(params, "RowMajor-ColumnMajor-RowMajor");
+                    FAIL() << "This combination is not supported";
+                }
+            } else if (params->dtype_a == "fp16" && params->dtype_b == "fp16" && params->dtype_c == "void" && params->dtype_d == "fp16" && params->dtype_acc == "float") {
+                if (params->activation == "None" && params->operation_c == "BiasAdd") {
+                    executeGemm<fp16, fp16, void, fp16, float,
+                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
+                                ActivationType::None, OperationCType::BiasAdd>(
+                        params->cta_num_m, params->cta_num_n,
+                        params->cluster_m, params->cluster_n, params->cluster_k);
+                } else {
+                    printUnsupportedCombination(params, "RowMajor-RowMajor-RowMajor");
+                    FAIL()
+                        << "This combination is not supported";
+                }
+            } else {
+                printUnsupportedCombination(params, "RowMajor-RowMajor-RowMajor");
+                FAIL() << "This combination is not supported";
+            }
+        } else if (params->layout_a == "ColumnMajor" && params->layout_b == "RowMajor" && params->layout_c == "RowMajor") {
+            GTEST_SKIP() << "ColumnMajor is giving compilation error. JIRA: JSW-1222";
+        } else if (params->layout_a == "ColumnMajor" && params->layout_b == "ColumnMajor" && params->layout_c == "RowMajor") {
+            GTEST_SKIP() << "ColumnMajor is giving compilation error. JIRA: JSW-1222";
         } else {
             std::cout << "Unsupported layout combination:\n";
             printUnsupportedCombination(params);
@@ -225,6 +241,7 @@ bool createGemmOpParamsList(std::deque<TestParamInfo>& GemmOpParamsList,
         std::string testname =
             "gemm" + std::string("_") +
             std::string(ptestParam[i].test_level) + std::string("_") +
+            std::string(ptestParam[i].state) + std::string("_") +
             std::string("M_") + std::to_string(ptestParam[i].M) + std::string("_") +
             std::string("N_") + std::to_string(ptestParam[i].N) + std::string("_") +
             std::string("K_") + std::to_string(ptestParam[i].K) + std::string("_") +
