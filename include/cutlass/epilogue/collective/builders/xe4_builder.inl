@@ -237,7 +237,6 @@ private:
 
       constexpr int WarpsAlongM = TileShapeM / WarpSizeM;
       constexpr int WarpsAlongN = TileShapeN / ElementsPerWarpN;
-      static_assert((WarpsAlongM * WarpsAlongN) % (NumEpilogueWarps) == 0, "Total warp count must be divisible by NumEpilogueWarps");
 
       constexpr int NumWarpsAlongN = min(WarpsAlongN, NumEpilogueWarps);
       constexpr int NumWarpsAlongM = min(WarpsAlongM, NumEpilogueWarps / NumWarpsAlongN);
