@@ -5,7 +5,7 @@ tmux new-session -d -s session_simulator -n "Simulator"
 tmux send-keys -t session_simulator:0 \
     "echo 'Starting simulator...'; \
      cd /opt/intel/crisim/ && \
-     sudo -S ./runsim.sh 6117 < /home/support/secret_password.log" Enter
+     sudo -S ./runsim.sh 6117" Enter
 
 tmux new-session -d -s session_compile -n "Compile"
 
@@ -22,9 +22,7 @@ tmux send-keys -t session_compile:0 \
      source /opt/intel/oneapi/setvars.sh && \
      export ONEAPI_DEVICE_SELECTOR=level_zero:gpu && \
      export CMAKE_BUILD_TYPE=Release && \
-     export IGC_VISAOptions=\"-perfmodel\" && \
-     export IGC_VectorAliasBBThreshold=100000000000 && \
-     export IGC_ExtraOCLOptions=\"-cl-intel-256-GRF-per-thread\" && \
+     export IGC_ExtraOCLOptions=\"-cl-intel-512-GRF-per-thread\" && \
      export CUTLASS_SYCL_PROFILING_ENABLED=ON && \
      export CC=icx && \
      export CXX=icpx" Enter
