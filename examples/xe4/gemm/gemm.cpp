@@ -1,4 +1,5 @@
 #include "gemm.hpp"
+#include <gtest/gtest.h>
 
 struct GEMM_TEST_CONFIG {
   using ElementA = fp16;
@@ -48,10 +49,6 @@ struct GEMM_COL_COL : public GEMM_TEST_CONFIG {
   using LayoutB = cutlass::layout::ColumnMajor;
 };
 
-struct GEMM_ROW_ROW_VOID_C : public GEMM_ROW_ROW {
-  using ElementC = void;
-};
-
 struct BATCH_GEMM_ROW_ROW : public GEMM_ROW_ROW {
   static constexpr cute::array<int, 4> ProblemShape_MNKL = {1024, 1024, 1024, 4};
 };
@@ -61,15 +58,32 @@ struct GEMM_ROW_ROW_ResidualAddC : public GEMM_ROW_ROW {
   static constexpr auto operationC_type = OperationCType::Add;
 };
 
-struct BF8_GEMM_ROW_ROW_VOID_C : public GEMM_ROW_ROW_VOID_C {
+struct BF8_GEMM_ROW_ROW : public GEMM_TEST_CONFIG {
   using ElementA = bf8;
   using ElementB = bf8;
   using ElementD = bf8;
   static constexpr auto activation_type = ActivationType::None;
 };
 
-int main()
-{
-  run_gemm<GEMM_ROW_ROW>();
-  return 0;
+template <typename T>
+class GemmTest : public ::testing::Test {};
+
+TYPED_TEST_SUITE_P(GemmTest);
+
+TYPED_TEST_P(GemmTest, simple_run) {
+  run_gemm<TypeParam>();
+}
+
+REGISTER_TYPED_TEST_SUITE_P(GemmTest, simple_run);
+using GemmTests = ::testing::Types<GEMM_ROW_ROW>; // GEMM_ROW_ROW_BiasAdd,  GEMM_ROW_ROW_PERF, GEMM_ROW_COL, BATCH_GEMM_ROW_ROW, GEMM_ROW_ROW_ResidualAddC not included to reduce perf test time
+INSTANTIATE_TYPED_TEST_SUITE_P(Gemm, GemmTest, GemmTests);
+
+int main(int argc, char **argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  int run_tests = RUN_ALL_TESTS();
+  if (!::testing::UnitTest::GetInstance()->test_to_run_count()) {
+    std::cout << "No tests were run.\n";
+    return 1;
+  }
+  return run_tests;
 }
