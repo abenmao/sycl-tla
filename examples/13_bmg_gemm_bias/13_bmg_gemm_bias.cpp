@@ -89,7 +89,7 @@ struct Options {
   bool help;
   bool error;
 
-  int m, n, k, l, iterations;
+  int m, n, k, l, iterations, verify;
   float alpha, beta;
 
   Options():
@@ -115,6 +115,7 @@ struct Options {
     cmd.get_cmd_line_argument("alpha", alpha, 1.f);
     cmd.get_cmd_line_argument("beta", beta, 1.f);
     cmd.get_cmd_line_argument("iterations", iterations, 100);
+    cmd.get_cmd_line_argument("verify", verify, 1);
   }
 
   /// Prints the usage statement.
@@ -128,7 +129,8 @@ struct Options {
       << "  --k=<int>                   Sets the K extent of the GEMM\n"
       << "  --l=<int>                   Sets the L extent (batch count) of the GEMM\n"
       << "  --alpha=<s32>               Epilogue scalar alpha\n"
-      << "  --beta=<s32>                Epilogue scalar beta\n\n"
+      << "  --beta=<s32>                Epilogue scalar beta\n"
+      << "  --verify=<int>              Verify\n"
       << "  --iterations=<int>          Iterations\n\n";
 
     return out;
@@ -273,9 +275,14 @@ struct ExampleRunner {
 
     compat::wait();
 
-    // Verify that the result is correct
-    bool passed = verify(problem_size, options.alpha, options.beta);
-    std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
+    bool passed = true;
+    if (options.verify != 0) {
+      passed = verify(problem_size, options.alpha, options.beta);
+      std::cout << (passed ? "passed" : "failed");
+      // TODO: Throw exception or error when verification fails, this requires refactor for the whole example.
+    } else {
+      std::cout << "verification skipped";
+    }
 
     if (passed && options.iterations > 0) {
       GPU_Clock timer;
