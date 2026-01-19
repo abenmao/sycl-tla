@@ -80,6 +80,12 @@ if(NOT SYCL_INTEL_TARGET EQUAL 40)
       BMG_ARGS
     )
 
+    cutlass_example_add_executable(
+      cute_tutorial_xe_gemm_slm
+      xe_gemm_slm.cpp
+      TEST_COMMAND_OPTIONS
+      BMG_ARGS
+    )
   endif()
 
   if (SYCL_NVIDIA_TARGET)
