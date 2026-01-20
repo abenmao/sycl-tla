@@ -26,18 +26,23 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-cutlass_example_add_executable(
-  xe4_fmha_fwd
-  xe4_fmha_fwd.cpp
-)
+function(xe4_add_fmha_example TARGET SOURCE)
+  cutlass_example_add_executable(
+    ${TARGET}
+    ${SOURCE}
+  )
 
-target_include_directories(xe4_fmha_fwd PRIVATE ${INCLUDE_DIRS})
-target_compile_options(xe4_fmha_fwd PUBLIC -fsycl-targets=spir64_gen)
-target_link_options(xe4_fmha_fwd PUBLIC -fsycl-targets=spir64_gen)
+  target_include_directories(${TARGET} PRIVATE ${INCLUDE_DIRS})
+  target_compile_options(${TARGET} PUBLIC -fsycl-targets=spir64_gen)
+  target_link_options(${TARGET} PUBLIC -fsycl-targets=spir64_gen)
 
-target_link_options(
-  xe4_fmha_fwd
-  PUBLIC
-  -Xs "-device jgs-a0 \
-  -options -ze-intel-xe-features=+set-abarrier-arrive-lmc,+disable-misched,+total-grf-num-96,+null-dst"
-)
+  target_link_options(
+    ${TARGET}
+    PUBLIC
+    -Xs "-device jgs-a0 \
+    -options -ze-intel-xe-features=+set-abarrier-arrive-lmc,+disable-misched,+total-grf-num-96,+null-dst"
+  )
+endfunction()
+
+xe4_add_fmha_example(xe4_fmha_fwd xe4_fmha_fwd.cpp)
+xe4_add_fmha_example(test_sdpa_bfloat16 test_sdpa_bfloat16.cpp)

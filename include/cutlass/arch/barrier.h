@@ -39,6 +39,7 @@
 #include <cute/arch/copy_sm100_tma.hpp> 
 #include <cutlass/arch/config.h>
 #if defined(SYCL_INTEL_TARGET)
+#include <cute/util/xe_split_barrier.hpp>
 #include <cute/arch/copy_xe.hpp>
 #if (SYCL_INTEL_TARGET == 40 )
 #include <cute/arch/xe4_inline_pisa.hpp>

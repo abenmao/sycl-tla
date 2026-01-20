@@ -121,6 +121,12 @@ struct ExampleRunner {
   cutlass::DeviceAllocation<ElementOutput> block_O;
   cutlass::DeviceAllocation<ElementOutput> block_ref_O;
 
+  std::vector<ElementQ> block_Q_h;
+  std::vector<ElementK> block_K_h;
+  std::vector<ElementV> block_V_h;
+  std::vector<ElementOutput> block_O_h;
+  std::vector<ElementOutput> block_ref_O_h;
+
   StrideQ stride_Q;
   StrideK stride_K;
   StrideV stride_V;
@@ -233,7 +239,6 @@ struct ExampleRunner {
           seq_len_qo * seq_len_kv,   // batch_stride_S
           seq_len_qo * seq_len_kv    // batch_stride_S
         );
-
         
         // compute max element per row of S
         std::vector<ElementAccum> max_vec(seq_len_qo, -INFINITY);
@@ -311,6 +316,7 @@ struct ExampleRunner {
       }
     }
 
+    compat::memcpy<ElementOutput>(block_ref_O.get(), block_ref_O_h.data(), block_ref_O_h.size());
     compat::wait();
     
     // Copy device output to host for comparison
@@ -426,7 +432,10 @@ struct ExampleRunner {
   }
 };
 
-template <typename TileShape> 
+template <typename TileShape, 
+          int NumSoftmaxWarps = 16, int NumThreadPerRow = 16, 
+          int SoftmaxUnroll = 2, int SoftmaxNumStage = 2, 
+          bool IsPersistent = false> 
 struct FMHAConfig {
 
   template <typename ProblemConfig>
@@ -450,9 +459,16 @@ struct FMHAConfig {
     constexpr auto majorV = cute::AMMA::Major::MN;
 
     constexpr int PipelineStages = 2;
+    constexpr int PipelineStagesQ = 2;
 
-    using SmemLayoutQ = decltype(make_layout(
+    using SmemLayoutAtomQ = decltype(make_layout(
       cute::select<0, 2>(TileShapeQK_MNK{}), GenRowMajor{}));
+
+    using SmemLayoutQ = decltype(tile_to_shape(
+      SmemLayoutAtomQ{},
+      make_shape(shape<0>(TileShapeQK_MNK{}),
+                 shape<2>(TileShapeQK_MNK{}),
+                 Int<PipelineStagesQ>{})));
 
     using SmemLayoutAtomK = decltype(make_layout(
       cute::select<1, 2>(TileShapeQK_MNK{}), GenRowMajor{}));
@@ -518,14 +534,19 @@ struct FMHAConfig {
       TiledMmaQK, TiledMmaPV,
       SmemLayoutQ, SmemLayoutK, SmemLayoutV,
       SmemLayoutOutputAccum, SmemLayoutOutput,
-      TMACopyAtomQ, TMACopyAtomK, TMACopyAtomV>;
+      TMACopyAtomQ, TMACopyAtomK, TMACopyAtomV,
+      PipelineStages, PipelineStagesQ>;
 
     using CollectiveSoftmaxEpilogue = cutlass::flash_attention::collective::CollectiveSoftmaxEpilogue<
       TileShape,
       ElementAccumulator,
       ElementOutput,
       ElementS,
-      ElementP>;
+      ElementP,
+      NumSoftmaxWarps,
+      NumThreadPerRow,
+      SoftmaxUnroll,
+      SoftmaxNumStage>;
 
     using CollectiveEpilogue = cutlass::flash_attention::collective::CollectiveEpilogueAttention<
       ProblemShape, TileShape,
@@ -534,7 +555,11 @@ struct FMHAConfig {
       SmemLayoutOutput,
       TMACopyAtomO>;
 
-    using TileScheduler = cutlass::flash_attention::kernel::XeFlashIndividualTileScheduler;
+
+    using TileScheduler = typename std::conditional<
+      IsPersistent, 
+      cutlass::flash_attention::kernel::XeFlashPersistentTileScheduler,
+      cutlass::flash_attention::kernel::XeFlashIndividualTileScheduler>::type;
 
     using GemmKernel = cutlass::flash_attention::kernel::GemmUniversalAttention<
       ProblemShape, 

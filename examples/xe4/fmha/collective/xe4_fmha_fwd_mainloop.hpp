@@ -32,6 +32,8 @@
 
 #include "cutlass/cutlass.h"
 #include "cutlass/arch/barrier.h"
+#include "cutlass/pipeline/xe4_pipeline.hpp"
+#include "cutlass/epilogue/thread/xe4_detail.hpp"
 
 #include "xe4_fmha_fwd_softmax_epilogue.hpp"
 
@@ -61,7 +63,9 @@ template <
   class SmemLayoutOutput_,
   class TMACopyAtomQ_,
   class TMACopyAtomK_,
-  class TMACopyAtomV_>
+  class TMACopyAtomV_,
+  uint32_t PipelineStages_,
+  uint32_t PipelineStagesQ_>
 struct CollectiveMmaAttention {
 
   using ProblemShape = ProblemShape_;
@@ -97,9 +101,13 @@ struct CollectiveMmaAttention {
 
   // TODO add assert to check unsupported configs
 
-  static constexpr uint32_t PipelineStages = 2;
+  static constexpr uint32_t PipelineStages = PipelineStages_;
   using MainloopPipeline = cutlass::PipelineTmaAsync<PipelineStages>;
   using PipelineState = typename cutlass::PipelineState<PipelineStages>;
+
+  static constexpr uint32_t PipelineStagesQ = PipelineStagesQ_;
+  using MainloopPipelineQ = cutlass::PipelineTmaAsync<PipelineStagesQ>;
+  using PipelineStateQ = typename cutlass::PipelineState<PipelineStagesQ>;
 
   static constexpr int NumProducerWarps = 1;
   static constexpr int NumMMAWarps = 1;
@@ -111,7 +119,7 @@ struct CollectiveMmaAttention {
     make_tensor(make_gmem_ptr(static_cast<ElementQ const*>(nullptr)),
                 repeat_like(StrideQ{}, int32_t(0)),
                 StrideQ{}),
-    SmemLayoutQ{},
+    SmemLayoutQ{}(_, _, cute::Int<0>{}),
     select<0, 2>(TileShapeQK_MNK{}),
     _1{}
   ));
@@ -167,6 +175,8 @@ struct CollectiveMmaAttention {
       cute::array_aligned<ElementAccum, cute::cosize_v<SmemLayoutOutputAccum>, SmemAlignment> smem_Oacc;
     };
     struct PipelineStorage {
+      typename MainloopPipelineQ::SharedStorage storage_Q;
+
       typename MainloopPipeline::SharedStorage storage_K;
       typename MainloopPipeline::SharedStorage storage_V;
 
@@ -185,7 +195,7 @@ struct CollectiveMmaAttention {
   using TensorStorage = typename SharedStorage::TensorStorage;
   using PipelineStorage = typename SharedStorage::PipelineStorage;
 
-  static constexpr uint32_t TmaTransactionBytesQ = sizeof(TensorStorage::smem_Q);
+  static constexpr uint32_t TmaTransactionBytesQ = sizeof(TensorStorage::smem_Q) / PipelineStagesQ;
   static constexpr uint32_t TmaTransactionBytesK = sizeof(TensorStorage::smem_K) / PipelineStages;
   static constexpr uint32_t TmaTransactionBytesV = sizeof(TensorStorage::smem_V) / PipelineStages;
 
@@ -223,7 +233,7 @@ struct CollectiveMmaAttention {
     TMA_Q tma_load_Q = make_tma_copy(
       TMACopyAtomQ{},
       mQ, 
-      SmemLayoutQ{},
+      SmemLayoutQ{}(_, _, _0{}),
       select<0, 2>(TileShapeQK_MNK{}), 
       _1{}
     );
@@ -264,20 +274,17 @@ struct CollectiveMmaAttention {
     PipelineStorage& shared_pipelines,
     DescTuple const& tdesc_tuple,
     BlockCoord const& block_coord,
+    BlockCoord const& block_coord_next,
     int const num_kv_tiles, 
+    MainloopPipelineQ pipeline_q, PipelineStateQ& smem_pipe_write_q,
     MainloopPipeline pipeline_k, PipelineState& smem_pipe_write_k,
-    MainloopPipeline pipeline_v, PipelineState& smem_pipe_write_v)
+    MainloopPipeline pipeline_v, PipelineState& smem_pipe_write_v,
+    bool is_first_wave, bool is_last_wave)
   {
     bool lane_predicate = cute::elect_one_sync();
 
     if (lane_predicate) {
       auto [batch, num_heads, seq_len_qo, seq_len_kv, head_size_qk, head_size_vo] = params.problem_shape;
-
-      auto blk_m_coord = get<1>(block_coord); // seq_len_blk_idx
-      auto blk_n_coord = get<0>(block_coord); // head_size_blk_idx
-      auto batch_coord = get<2>(block_coord); // batch_blk_idx
-      auto num_heads_coord = get<3>(block_coord); // num_heads_blk_idx
-      auto blk_l_coord = batch_coord * num_heads + num_heads_coord;
 
       // Initialize matrix descriptor
       auto [tdesc_q, tdesc_k, tdesc_v] = tdesc_tuple;
@@ -292,6 +299,16 @@ struct CollectiveMmaAttention {
       Tensor mV_nkl = params.tma_load_V.get_tma_tensor(
         make_shape(head_size_vo, seq_len_kv, batch * num_heads)); // (N,K,L)
     
+      Tensor sQ = make_tensor(make_smem_ptr(shared_tensors.smem_Q.data()), SmemLayoutQ{}); // (BLK_M,BLK_K,PIPE_Q)
+      Tensor sK = make_tensor(make_smem_ptr(shared_tensors.smem_K.data()), SmemLayoutK{}); // (BLK_N,BLK_K,PIPE)
+      Tensor sV = make_tensor(make_smem_ptr(shared_tensors.smem_V.data()), SmemLayoutV{}); // (BLK_N,BLK_K,PIPE)
+
+      auto blk_m_coord = get<1>(block_coord); // seq_len_blk_idx
+      auto blk_n_coord = get<0>(block_coord); // head_size_blk_idx
+      auto batch_coord = get<2>(block_coord); // batch_blk_idx
+      auto num_heads_coord = get<3>(block_coord); // num_heads_blk_idx
+      auto blk_l_coord = batch_coord * num_heads + num_heads_coord;
+
       Tensor gQ = local_tile(mQ_mkl(_, _, blk_l_coord), TileShapeQK_MNK{},
                              make_coord(blk_m_coord, _, blk_n_coord), Step<_1, X, _1>{}); // (BLK_M,BLK_K)
       Tensor gK = local_tile(mK_nkl(_, _, blk_l_coord), TileShapeQK_MNK{},
@@ -299,29 +316,31 @@ struct CollectiveMmaAttention {
       Tensor gV = local_tile(mV_nkl(_, _, blk_l_coord), TileShapePV_MNK{},
                              make_coord(_, blk_n_coord, _), Step<X, _1, _1>{});           // (BLK_N,BLK_K,k)
 
-      Tensor sQ = make_tensor(make_smem_ptr(shared_tensors.smem_Q.data()), SmemLayoutQ{}); // (BLK_M,BLK_K)
-      Tensor sK = make_tensor(make_smem_ptr(shared_tensors.smem_K.data()), SmemLayoutK{}); // (BLK_N,BLK_K,PIPE)
-      Tensor sV = make_tensor(make_smem_ptr(shared_tensors.smem_V.data()), SmemLayoutV{}); // (BLK_N,BLK_K,PIPE)
-
       auto [tQgQ, tQsQ] = tma_partition(params.tma_load_Q, _0{}, Layout<_1>{},
-                                        group_modes<0, 2>(sQ), group_modes<0, 2>(gQ)); // (TMA), (TMA)
+                                        group_modes<0, 2>(sQ), group_modes<0, 2>(gQ)); // (TMA), (TMA,PIPE_Q)
       auto [tKgK, tKsK] = tma_partition(params.tma_load_K, _0{}, Layout<_1>{},
                                         group_modes<0, 2>(sK), group_modes<0, 2>(gK)); // (TMA,k), (TMA,PIPE)
       auto [tVgV, tVsV] = tma_partition(params.tma_load_V, _0{}, Layout<_1>{},
                                         group_modes<0, 2>(sV), group_modes<0, 2>(gV)); // (TMA,k), (TMA,PIPE)
 
-      shared_pipelines.barrier_Q.arrive_and_expect_tx(TmaTransactionBytesQ);
-      copy(params.tma_load_Q.with(
-           reinterpret_cast<uint64_t*>(&shared_pipelines.barrier_Q), 0),
-           tQgQ, tQsQ
-      );
 
-      pipeline_k.producer_acquire(smem_pipe_write_k);
-      copy(params.tma_load_K.with(
-            pipeline_k.producer_get_barrier(smem_pipe_write_k), 0),
-            tKgK(_, 0), tKsK(_, smem_pipe_write_k.index())
-      );
-      ++smem_pipe_write_k;
+      // load Q and K tile for the iter_0 of the first wave
+      if (is_first_wave) {
+        // shared_pipelines.barrier_Q.arrive_and_expect_tx(TmaTransactionBytesQ);
+        pipeline_q.producer_acquire(smem_pipe_write_q);
+        copy(params.tma_load_Q.with(
+            pipeline_q.producer_get_barrier(smem_pipe_write_q), 0),
+            tQgQ, tQsQ(_, smem_pipe_write_q.index())
+        );
+        ++smem_pipe_write_q;
+
+        pipeline_k.producer_acquire(smem_pipe_write_k);
+        copy(params.tma_load_K.with(
+              pipeline_k.producer_get_barrier(smem_pipe_write_k), 0),
+              tKgK(_, 0), tKsK(_, smem_pipe_write_k.index())
+        );
+        ++smem_pipe_write_k;
+      }
 
       for (int i = 1; i < num_kv_tiles; ++i) {
         pipeline_k.producer_acquire(smem_pipe_write_k);
@@ -337,6 +356,39 @@ struct CollectiveMmaAttention {
              tVgV(_, i - 1), tVsV(_, smem_pipe_write_v.index())
         );
         ++smem_pipe_write_v;
+      }
+
+      // load Q and K tile for the iter_0 of the next wave
+      if (!is_last_wave) {
+        auto blk_m_coord_next = get<1>(block_coord_next); // seq_len_blk_idx
+        auto blk_n_coord_next = get<0>(block_coord_next); // head_size_blk_idx
+        auto batch_coord_next = get<2>(block_coord_next); // batch_blk_idx
+        auto num_heads_coord_next = get<3>(block_coord_next); // num_heads_blk_idx
+        auto blk_l_coord_next = batch_coord_next * num_heads + num_heads_coord_next;
+
+        Tensor gQ_next = local_tile(mQ_mkl(_, _, blk_l_coord_next), TileShapeQK_MNK{},
+                                make_coord(blk_m_coord_next, _, blk_n_coord_next), Step<_1, X, _1>{}); // (BLK_M,BLK_K)
+        Tensor gK_next = local_tile(mK_nkl(_, _, blk_l_coord_next), TileShapeQK_MNK{},
+                                make_coord(_, _, blk_n_coord_next), Step<X, _1, _1>{});           // (BLK_N,BLK_K,k)
+
+        auto [tQgQ_next, tQsQ_next] = tma_partition(params.tma_load_Q, _0{}, Layout<_1>{},
+                                          group_modes<0, 2>(sQ), group_modes<0, 2>(gQ_next)); // (TMA), (TMA,PIPE_Q)
+        auto [tKgK_next, tKsK_next] = tma_partition(params.tma_load_K, _0{}, Layout<_1>{},
+                                          group_modes<0, 2>(sK), group_modes<0, 2>(gK_next)); // (TMA,k), (TMA,PIPE)
+        
+        pipeline_q.producer_acquire(smem_pipe_write_q);
+        copy(params.tma_load_Q.with(
+            pipeline_q.producer_get_barrier(smem_pipe_write_q), 0),
+            tQgQ_next, tQsQ(_, smem_pipe_write_q.index())
+        );
+        ++smem_pipe_write_q;
+
+        pipeline_k.producer_acquire(smem_pipe_write_k);
+        copy(params.tma_load_K.with(
+              pipeline_k.producer_get_barrier(smem_pipe_write_k), 0),
+              tKgK_next(_, 0), tKsK(_, smem_pipe_write_k.index())
+        );
+        ++smem_pipe_write_k;
       }
 
       pipeline_v.producer_acquire(smem_pipe_write_v);
@@ -355,11 +407,13 @@ struct CollectiveMmaAttention {
     EpilogueTensorStorage& epi_shared_tensors,
     PipelineStorage& shared_pipelines,
     int const num_kv_tiles,
+    MainloopPipelineQ pipeline_q, PipelineStateQ& smem_pipe_read_q,
     MainloopPipeline pipeline_k, PipelineState& smem_pipe_read_k,
     MainloopPipeline pipeline_v, PipelineState& smem_pipe_read_v,
     MainloopPipeline pipeline_s, PipelineState& smem_pipe_write_s,
     MainloopPipeline pipeline_p, PipelineState& smem_pipe_read_p,
-    CollectiveSoftmax& collective_softmax)
+    CollectiveSoftmax& collective_softmax,
+    bool is_first_wave, bool is_last_wave)
   {
     bool lane_predicate = cute::elect_one_sync();
 
@@ -376,7 +430,7 @@ struct CollectiveMmaAttention {
       auto thr_mma_qk = tiled_mma_qk.get_thread_slice(thread_idx);
       auto thr_mma_pv = tiled_mma_pv.get_thread_slice(thread_idx);
 
-      Tensor sQ = make_tensor(make_smem_ptr(shared_tensors.smem_Q.data()), SmemLayoutQ{});      // (BLK_M,BLK_K)
+      Tensor sQ = make_tensor(make_smem_ptr(shared_tensors.smem_Q.data()), SmemLayoutQ{});      // (BLK_M,BLK_K,PIPE_Q)
       Tensor sK = make_tensor(make_smem_ptr(shared_tensors.smem_K.data()), SmemLayoutK{});      // (BLK_N,BLK_K,PIPE)
       Tensor sV = make_tensor(make_smem_ptr(shared_tensors.smem_V.data()), SmemLayoutV{});      // (BLK_N,BLK_K,PIPE)
       Tensor sS = make_tensor(make_smem_ptr(shared_tensors.smem_S.data()), SmemLayoutS{});  // (BLK_M,BLK_N,PIPE)
@@ -385,7 +439,7 @@ struct CollectiveMmaAttention {
       Tensor sO = make_tensor(make_smem_ptr(epi_shared_tensors.smem_O.data()), SmemLayoutOutput{}); // (BLK_M,BLK_N)
 
       // Matrix descriptors
-      Tensor tSsQ = thr_mma_qk.partition_fragment_A(sQ); // (MMA,MMA_M,MMA_K)
+      Tensor tSsQ = thr_mma_qk.partition_fragment_A(sQ); // (MMA,MMA_M,MMA_K,PIPE_Q)
       Tensor tSsK = thr_mma_qk.partition_fragment_B(sK); // (MMA,MMA_N,MMA_K,PIPE)
       Tensor tOsP = thr_mma_pv.partition_fragment_A(sP); // (MMA,MMA_M,MMA_K,PIPE)
       Tensor tOsV = thr_mma_pv.partition_fragment_B(sV); // (MMA,MMA_N,MMA_K,PIPE)
@@ -397,25 +451,28 @@ struct CollectiveMmaAttention {
       uint64_t pv_mma_ctrl = 0x100;
       constexpr uint32_t mcast_mask = 0;
 
-      // QK for iter_0
-      shared_pipelines.barrier_Q.wait(/*phase=*/0);
-      pipeline_k.consumer_wait(smem_pipe_read_k);
-      pipeline_s.producer_acquire(smem_pipe_write_s);
+      // QK for the iter_0 of the first wave
+      if (is_first_wave) {
+        // shared_pipelines.barrier_Q.wait(/*phase=*/0);
+        pipeline_q.consumer_wait(smem_pipe_read_q);
+        pipeline_k.consumer_wait(smem_pipe_read_k);
+        pipeline_s.producer_acquire(smem_pipe_write_s);
 
-      // Compute S = Q * K^T
-      cute::gemm(tiled_mma_qk.with(
-	      AMMA::TrackMethod<AMMA::Tracking::DAB>{},
-        qk_mma_ctrl,
-        pipeline_s.producer_get_barrier(smem_pipe_write_s),
-        reinterpret_cast<uint64_t*>(&shared_pipelines.barrier_q_dummy),
-        pipeline_k.consumer_get_barrier(smem_pipe_read_k),
-        mcast_mask, mcast_mask
-      ), tSsQ, tSsK(_, _, _, smem_pipe_read_k.index()), tSsS(_, _, _, smem_pipe_write_s.index()));
-      
-      pipeline_k.consumer_commit(smem_pipe_read_k, 1);
+        // Compute S = Q * K^T
+        cute::gemm(tiled_mma_qk.with(
+          AMMA::TrackMethod<AMMA::Tracking::DAB>{},
+          qk_mma_ctrl,
+          pipeline_s.producer_get_barrier(smem_pipe_write_s),
+          pipeline_q.consumer_get_barrier(smem_pipe_read_q),
+          pipeline_k.consumer_get_barrier(smem_pipe_read_k),
+          mcast_mask, mcast_mask
+        ), tSsQ(_, _, _, smem_pipe_read_q.index()), tSsK(_, _, _, smem_pipe_read_k.index()), tSsS(_, _, _, smem_pipe_write_s.index()));
+        
+        pipeline_k.consumer_commit(smem_pipe_read_k, 1);
 
-      ++smem_pipe_read_k;
-      ++smem_pipe_write_s;
+        ++smem_pipe_read_k;
+        ++smem_pipe_write_s;
+      }
 
       for (int i = 1; i < num_kv_tiles; ++i) {
         pipeline_k.consumer_wait(smem_pipe_read_k);
@@ -426,15 +483,21 @@ struct CollectiveMmaAttention {
           AMMA::TrackMethod<AMMA::Tracking::DAB>{},
           qk_mma_ctrl,
           pipeline_s.producer_get_barrier(smem_pipe_write_s),
-          reinterpret_cast<uint64_t*>(&shared_pipelines.barrier_q_dummy),
+          pipeline_q.consumer_get_barrier(smem_pipe_read_q),
           pipeline_k.consumer_get_barrier(smem_pipe_read_k),
           mcast_mask, mcast_mask
-        ), tSsQ, tSsK(_, _, _, smem_pipe_read_k.index()), tSsS(_, _, _, smem_pipe_write_s.index()));
+        ), tSsQ(_, _, _, smem_pipe_read_q.index()), tSsK(_, _, _, smem_pipe_read_k.index()), tSsS(_, _, _, smem_pipe_write_s.index()));
 
         pipeline_k.consumer_commit(smem_pipe_read_k, 1);
 
         ++smem_pipe_read_k;
         ++smem_pipe_write_s;
+
+        // Finish the use of Q tile for current wave
+        if (i == num_kv_tiles - 1) {
+          pipeline_q.consumer_commit(smem_pipe_read_q, num_kv_tiles);
+          ++smem_pipe_read_q;
+        }
 
         pipeline_v.consumer_wait(smem_pipe_read_v);
         pipeline_p.consumer_wait(smem_pipe_read_p);
@@ -464,7 +527,30 @@ struct CollectiveMmaAttention {
         ++smem_pipe_read_v;
         ++smem_pipe_read_p;
       }
-      
+
+      // QK for the iter_0 of the next wave
+      if (!is_last_wave) {
+        // shared_pipelines.barrier_Q.wait(/*phase=*/0);
+        pipeline_q.consumer_wait(smem_pipe_read_q);
+        pipeline_k.consumer_wait(smem_pipe_read_k);
+        pipeline_s.producer_acquire(smem_pipe_write_s);
+
+        // Compute S = Q * K^T
+        cute::gemm(tiled_mma_qk.with(
+          AMMA::TrackMethod<AMMA::Tracking::DAB>{},
+          qk_mma_ctrl,
+          pipeline_s.producer_get_barrier(smem_pipe_write_s),
+          pipeline_q.consumer_get_barrier(smem_pipe_read_q),
+          pipeline_k.consumer_get_barrier(smem_pipe_read_k),
+          mcast_mask, mcast_mask
+        ), tSsQ(_, _, _, smem_pipe_read_q.index()), tSsK(_, _, _, smem_pipe_read_k.index()), tSsS(_, _, _, smem_pipe_write_s.index()));
+        
+        pipeline_k.consumer_commit(smem_pipe_read_k, 1);
+
+        ++smem_pipe_read_k;
+        ++smem_pipe_write_s;
+      }
+
       pipeline_v.consumer_wait(smem_pipe_read_v);
       pipeline_p.consumer_wait(smem_pipe_read_p);
       
@@ -495,7 +581,8 @@ struct CollectiveMmaAttention {
     }
   }
 
-  template <typename EpilogueTensorStorage, typename EpiloguePipelineStorage, typename CollectiveSoftmax>
+  template <typename EpilogueTensorStorage, typename EpiloguePipelineStorage, typename CollectiveSoftmax,
+            typename FragMax, typename FragExp, typename FragSum>
   CUTLASS_DEVICE void softmax(
     Params const& params,
     TensorStorage& shared_tensors,
@@ -505,7 +592,9 @@ struct CollectiveMmaAttention {
     int const num_kv_tiles,
     MainloopPipeline pipeline_s, PipelineState& smem_pipe_read_s,
     MainloopPipeline pipeline_p, PipelineState& smem_pipe_write_p,
-    CollectiveSoftmax& collective_softmax)
+    CollectiveSoftmax& collective_softmax,
+    FragMax& max_reg, FragExp& exp_reg, FragSum& sum_reg,
+    bool is_first_wave, bool is_last_wave)
   {
     auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
     auto sg = item.get_sub_group();
@@ -572,34 +661,31 @@ struct CollectiveMmaAttention {
 
     constexpr uint32_t total_rows_per_wi = CollectiveSoftmax::TotalRowsPerThread;
 
-    Tensor max_reg = make_tensor<ElementS>(Shape<Int<total_rows_per_wi>>{});
-    Tensor sum_reg = make_tensor<ElementAccum>(Shape<Int<total_rows_per_wi>>{});
-    Tensor exp_reg = make_tensor<ElementAccum>(Shape<Int<total_rows_per_wi>>{});
+    // softmax for the iter_0 of the first wave
+    if (is_first_wave) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < total_rows_per_wi; ++i) {
+        max_reg[i] = -INFINITY;
+        sum_reg[i] = ElementAccum(0);
+      }
 
-    CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < total_rows_per_wi; ++i) {
-      max_reg[i] = -INFINITY;
-      sum_reg[i] = ElementAccum(0);
+      pipeline_s.consumer_wait(smem_pipe_read_s);
+      pipeline_p.producer_acquire(smem_pipe_write_p);
+
+      collective_softmax.template update</*init=*/true>(sg, worker_id, 
+                                                        tSR_sS(_, _, smem_pipe_read_s.index()), 
+                                                        // *tOsS(_, _, _, smem_pipe_read_s.index()).data(),
+                                                        tOsS + smem_pipe_read_s.index() * slm_bytes_per_s_stage,
+                                                        max_reg, sum_reg, exp_reg, 
+                                                        // *tOsP(_, _, _, smem_pipe_write_p.index()).data(),
+                                                        tOsP + smem_pipe_write_p.index() * slm_bytes_per_p_stage);
+
+      pipeline_s.consumer_release(smem_pipe_read_s);
+      pipeline_p.producer_commit(smem_pipe_write_p, 1);
+
+      ++smem_pipe_read_s;
+      ++smem_pipe_write_p;
     }
-
-
-    pipeline_s.consumer_wait(smem_pipe_read_s);
-    pipeline_p.producer_acquire(smem_pipe_write_p);
-
-    // softmax for the iter_0
-    collective_softmax.template update</*init=*/true>(sg, worker_id, 
-                                                      tSR_sS(_, _, smem_pipe_read_s.index()), 
-                                                      // *tOsS(_, _, _, smem_pipe_read_s.index()).data(),
-                                                      tOsS + smem_pipe_read_s.index() * slm_bytes_per_s_stage,
-                                                      max_reg, sum_reg, exp_reg, 
-                                                      // *tOsP(_, _, _, smem_pipe_write_p.index()).data(),
-                                                      tOsP + smem_pipe_write_p.index() * slm_bytes_per_p_stage);
-
-    pipeline_s.consumer_release(smem_pipe_read_s);
-    pipeline_p.producer_commit(smem_pipe_write_p, 1);
-
-    ++smem_pipe_read_s;
-    ++smem_pipe_write_p;
 
     for (int i = 1; i < num_kv_tiles; ++i) {
       pipeline_s.consumer_wait(smem_pipe_read_s);
@@ -626,12 +712,47 @@ struct CollectiveMmaAttention {
       ++smem_pipe_write_p;
     }
 
+    // softmax for the iter_0 of the next wave
+    Tensor sum_reg_next = make_tensor<ElementAccum>(Shape<Int<total_rows_per_wi>>{});
+    if (!is_last_wave) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < total_rows_per_wi; ++i) {
+        max_reg[i] = -INFINITY;
+        sum_reg_next[i] = ElementAccum(0);
+      }
+
+      pipeline_s.consumer_wait(smem_pipe_read_s);
+      pipeline_p.producer_acquire(smem_pipe_write_p);
+
+      collective_softmax.template update</*init=*/true>(sg, worker_id, 
+                                                        tSR_sS(_, _, smem_pipe_read_s.index()), 
+                                                        // *tOsS(_, _, _, smem_pipe_read_s.index()).data(),
+                                                        tOsS + smem_pipe_read_s.index() * slm_bytes_per_s_stage,
+                                                        max_reg, sum_reg_next, exp_reg, 
+                                                        // *tOsP(_, _, _, smem_pipe_write_p.index()).data(),
+                                                        tOsP + smem_pipe_write_p.index() * slm_bytes_per_p_stage);
+
+      pipeline_s.consumer_release(smem_pipe_read_s);
+      pipeline_p.producer_commit(smem_pipe_write_p, 1);
+
+      ++smem_pipe_read_s;
+      ++smem_pipe_write_p;
+    }
+
     shared_pipelines.barrier_O.wait(/*phase=*/(num_kv_tiles - 1) % 2);
 
     collective_softmax.final_rescale_O(sg, worker_id, tSR_sOacc, tSR_sO, 
                                        tOsOacc, tOsO, 
                                        sum_reg);
-    
+
+    if (!is_last_wave) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < total_rows_per_wi; ++i) {
+        sum_reg[i] = sum_reg_next[i];
+      }
+    }
+
+    shared_pipelines.barrier_O_empty.arrive();
     epi_shared_pipelines.barrier_O_final.arrive();
   }
 

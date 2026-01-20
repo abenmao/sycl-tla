@@ -1,6 +1,7 @@
 #pragma once
 
-#include "cute/tensor.hpp"
+#include <cute/tensor_impl.hpp>
+
 #include "cute/arch/copy_xe4_dma_legacy.hpp"
 #include "cutlass/pipeline/pipeline.hpp"
 #include "cutlass/gemm/kernel/tile_scheduler_params.h"

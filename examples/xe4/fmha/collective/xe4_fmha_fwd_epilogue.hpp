@@ -128,7 +128,8 @@ public:
     TensorStorage& shared_tensors,
     PipelineStorage& shared_pipelines,
     DescTuple const& tdesc_tuple,
-    BlockCoord const& block_coord)
+    BlockCoord const& block_coord,
+    uint32_t& phase)
   {
     
     bool lane_predicate = cute::elect_one_sync();
@@ -157,13 +158,15 @@ public:
       auto [tOgO, tOsO] = tma_partition(params.tma_store_O, _0{}, Layout<_1>{},
                                         group_modes<0, 2>(sO), group_modes<0, 2>(gO)); // (TMA), (TMA)
 
-      shared_pipelines.barrier_O_final.wait(0);
+      shared_pipelines.barrier_O_final.wait(phase);
 
       shared_pipelines.barrier_O.arrive_and_expect_tx(TmaTransactionBytesO);
       copy(params.tma_store_O.with(
            reinterpret_cast<uint64_t*>(&shared_pipelines.barrier_O), 0),
            tOsO, tOgO);
-      shared_pipelines.barrier_O.wait(0);
+      shared_pipelines.barrier_O.wait(phase);
+
+      phase = phase ^ 1;
     }
   }
 
