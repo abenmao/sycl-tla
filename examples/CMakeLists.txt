@@ -125,6 +125,7 @@ if (CUTLASS_ENABLE_SYCL)
       10_bmg_grouped_gemm_mixed_dtype
       11_xe20_cutlass_library
       12_xe20_moe_gemm_cute_interface
+      13_bmg_gemm_bias
       50_xe35_block_scaled_gemm
       51_xe35_block_scaled_grouped_gemm
       )
