@@ -74,6 +74,100 @@ struct GemmTestParams {
 static GemmTestParams gemm_test_params[] = {
     {/* test_level */ "L2",
      /* state */ "enabled",
+     /* M, N, K, L */ 2048, 2048, 2048, 1,
+     /* dtype_a, dtype_b, dtype_c, dtype_d, dtype_acc */
+     "bf16", "bf16", "bf16", "bf16", "float",
+     /* layout_a, layout_b, layout_c */ "RowMajor", "RowMajor", "RowMajor",
+     /* cta_tile_m, cta_tile_n, cta_tile_k */ 256, 512, 128,
+     /* cta_num_m, cta_num_n */ 2, 2,
+     /* cluster_m, cluster_n, cluster_k */ 1, 1, 1,
+     /* stages_a */ 2,
+     /* is_persistent */ true,
+     /* activation, operation_c */ "None", "Mul"},  // 0
+
+     {/* test_level */ "L2",
+     /* state */ "enabled",
+     /* M, N, K, L */ 2048, 2048, 2048, 1,
+     /* dtype_a, dtype_b, dtype_c, dtype_d, dtype_acc */
+     "bf16", "bf16", "bf16", "bf16", "float",
+     /* layout_a, layout_b, layout_c */ "RowMajor", "ColumnMajor", "RowMajor",
+     /* cta_tile_m, cta_tile_n, cta_tile_k */ 256, 512, 128,
+     /* cta_num_m, cta_num_n */ 2, 2,
+     /* cluster_m, cluster_n, cluster_k */ 1, 1, 1,
+     /* stages_a */ 2,
+     /* is_persistent */ true,
+     /* activation, operation_c */ "None", "Mul"},  // 1
+
+     {/* test_level */ "L2",
+     /* state */ "disabled",
+     /* M, N, K, L */ 2048, 2048, 2048, 1,
+     /* dtype_a, dtype_b, dtype_c, dtype_d, dtype_acc */
+     "bf16", "bf16", "bf16", "bf16", "float",
+     /* layout_a, layout_b, layout_c */ "ColumnMajor", "RowMajor", "RowMajor",
+     /* cta_tile_m, cta_tile_n, cta_tile_k */ 256, 512, 128,
+     /* cta_num_m, cta_num_n */ 2, 2,
+     /* cluster_m, cluster_n, cluster_k */ 1, 1, 1,
+     /* stages_a */ 2,
+     /* is_persistent */ true,
+     /* activation, operation_c */ "None", "Mul"},  // 2
+
+
+     {/* test_level */ "L2",
+     /* state */ "disabled",
+     /* M, N, K, L */ 4096, 3072, 4096, 1, 
+     /* dtype_a, dtype_b, dtype_c, dtype_d, dtype_acc */
+     "bf16", "bf16", "bf16", "bf16", "float",
+     /* layout_a, layout_b, layout_c */ "RowMajor", "RowMajor", "RowMajor",
+     /* cta_tile_m, cta_tile_n, cta_tile_k */ 256, 512, 128,
+     /* cta_num_m, cta_num_n */ 2, 2,
+     /* cluster_m, cluster_n, cluster_k */ 1, 1, 1,
+     /* stages_a */ 2,
+     /* is_persistent */ true,
+     /* activation, operation_c */ "None", "Mul"},  // 3
+
+     {/* test_level */ "L2",
+     /* state */ "disabled",
+     /* M, N, K, L */ 4096, 3072, 4096, 1, 
+     /* dtype_a, dtype_b, dtype_c, dtype_d, dtype_acc */
+     "bf16", "bf16", "bf16", "bf16", "float",
+     /* layout_a, layout_b, layout_c */ "RowMajor", "ColumnMajor", "RowMajor",
+     /* cta_tile_m, cta_tile_n, cta_tile_k */ 256, 512, 128,
+     /* cta_num_m, cta_num_n */ 2, 2,
+     /* cluster_m, cluster_n, cluster_k */ 1, 1, 1,
+     /* stages_a */ 2,
+     /* is_persistent */ true,
+     /* activation, operation_c */ "None", "Mul"},  // 4
+
+     {/* test_level */ "L2",
+     /* state */ "disabled",
+     /* M, N, K, L */ 4096, 3072, 4096, 1, 
+     /* dtype_a, dtype_b, dtype_c, dtype_d, dtype_acc */
+     "bf16", "bf16", "bf16", "bf16", "float",
+     /* layout_a, layout_b, layout_c */ "ColumnMajor", "RowMajor", "RowMajor",
+     /* cta_tile_m, cta_tile_n, cta_tile_k */ 256, 512, 128,
+     /* cta_num_m, cta_num_n */ 2, 2,
+     /* cluster_m, cluster_n, cluster_k */ 1, 1, 1,
+     /* stages_a */ 2,
+     /* is_persistent */ true,
+     /* activation, operation_c */ "None", "Mul"},  // 5
+
+     {/* test_level */ "L2",
+     /* state */ "disabled",
+     /* M, N, K, L */ 8192, 6144, 2048, 1, 
+     /* dtype_a, dtype_b, dtype_c, dtype_d, dtype_acc */
+     "bf16", "bf16", "bf16", "bf16", "float",
+     /* layout_a, layout_b, layout_c */ "RowMajor", "RowMajor", "RowMajor",
+     /* cta_tile_m, cta_tile_n, cta_tile_k */ 256, 512, 128,
+     /* cta_num_m, cta_num_n */ 2, 2,
+     /* cluster_m, cluster_n, cluster_k */ 1, 1, 1,
+     /* stages_a */ 2,
+     /* is_persistent */ true,
+     /* activation, operation_c */ "None", "Mul"},  // 6
+
+
+
+    {/* test_level */ "L3",
+     /* state */ "enabled",
      /* M, N, K, L */ 512, 768, 384, 1,
      /* dtype_a, dtype_b, dtype_c, dtype_d, dtype_acc */
      "fp16", "fp16", "fp16", "fp16", "float",

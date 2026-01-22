@@ -2,6 +2,17 @@
 
 This directory contains a performance testing framework based on Google Test (gtest) for CUTLASS XE4 examples.
 
+Use the run_perf_tests.py file to generate the CSV sample usage looks like
+```bash
+cd /path/to/repo/
+cd build
+python ../examples/xe4/perf/run_perf_tests.py \
+  --perf_binary ./examples/xe4/perf/gemm_perf \
+  --simulator_dir /path/to/dir/aubload/started \
+  --output_dir ./results \
+  --test_all
+```
+
 ## Directory Structure
 
 ```
@@ -29,7 +40,7 @@ The `TestParamInfo` class is used to hold parameters for gtest parametric `TEST_
 - `ArithmeticTestFixture`: Specialized fixture for arithmetic operation tests
 
 ### Test Parameters
-- `MultiplyTestParams`: Structure for multiplication test parameters
+- `GemmOpPerfTestParams`: Structure for multiplication test parameters
 - `GemmPerfParams`: Structure for GEMM performance test parameters (for future extension)
 - `TestParametersManager`: Manages and provides test parameter collections
 
@@ -58,7 +69,7 @@ make run_perf_tests_verbose
 
 ### Run specific test pattern:
 ```bash
-./examples/sycl/xe4/perf_test/gemm_perf --gtest_filter="*MultiplyTest*"
+./examples/sycl/xe4/perf_test/gemm_perf --gtest_filter="*GemmOpPerfTest*"
 ```
 
 ## Current Test Cases

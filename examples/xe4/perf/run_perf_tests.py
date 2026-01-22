@@ -194,6 +194,7 @@ class PerfTestRunner:
 
             # Run the test
             cmd = [str(self.perf_binary_path), f"--gtest_filter=*{runnable_test_name}", f"--gtest_output=xml:{xml_name}", "--gtest_color=no"]
+            start_time = time.time()
 
             process = subprocess.Popen(
                 cmd,
@@ -204,25 +205,50 @@ class PerfTestRunner:
                 universal_newlines=True
             )
 
-            # Stream output to console with proper timeout handling
+            # Stream output to console in real-time with proper timeout handling
+            success = False
             try:
-                # Use communicate() with timeout - this properly handles hanging processes
-                stdout, _ = process.communicate(timeout=TEST_EXECUTION_TIMEOUT_SECONDS)
-
-                # Print the captured output
-                for line in stdout.splitlines():
-                    print(line)
-
-                success = process.returncode == 0
-            except subprocess.TimeoutExpired:
-                print(f"⚠️ Test {test_name} timed out after {TEST_EXECUTION_TIMEOUT_SECONDS} seconds")
-                process.kill()
-                # Get any partial output before killing
+                # Read and print output in real-time
+                while True:
+                    # Check if timeout exceeded
+                    if time.time() - start_time > TEST_EXECUTION_TIMEOUT_SECONDS:
+                        print(f"⚠️ Test {test_name} timed out after {TEST_EXECUTION_TIMEOUT_SECONDS} seconds")
+                        process.kill()
+                        # Get any remaining output
+                        try:
+                            remaining_output = process.stdout.read()
+                            if remaining_output:
+                                for line in remaining_output.splitlines():
+                                    print(line)
+                        except:
+                            pass
+                        success = False
+                        break
+                    
+                    # Check if process has finished
+                    if process.poll() is not None:
+                        # Process finished, read any remaining output
+                        remaining_output = process.stdout.read()
+                        if remaining_output:
+                            for line in remaining_output.splitlines():
+                                print(line)
+                        process.wait()
+                        success = process.returncode == 0
+                        break
+                    
+                    # Try to read a line
+                    line = process.stdout.readline()
+                    if line:
+                        print(line.rstrip())
+                    else:
+                        # Avoid busy waiting if no output available
+                        time.sleep(0.1)
+                    
+            except Exception as e:
+                print(f"❌ Error during test execution: {e}")
                 try:
-                    stdout, _ = process.communicate(timeout=1)
-                    for line in stdout.splitlines():
-                        print(line)
-                except subprocess.TimeoutExpired:
+                    process.kill()
+                except:
                     pass
                 success = False
 
@@ -550,10 +576,10 @@ Basic Usage:
   python run_perf_tests.py --perf_binary ./build/gemm_perf --simulator_dir ~/xe4_simulator --output_dir ./results --test_all
 
   # Run only L2 cache tests
-  python run_perf_tests.py --perf_binary ./build/gemm_perf --simulator_dir ~/xe4_simulator --output_dir ./results --test_all --test_type l2
+  python run_perf_tests.py --perf_binary ./build/gemm_perf --simulator_dir ~/xe4_simulator --output_dir ./results --test_all --test_type L2
 
   # Run only L3 cache tests
-  python run_perf_tests.py --perf_binary ./build/gemm_perf --simulator_dir ~/xe4_simulator --output_dir ./results --test_all --test_type l3
+  python run_perf_tests.py --perf_binary ./build/gemm_perf --simulator_dir ~/xe4_simulator --output_dir ./results --test_all --test_type L3
 
 Development & Debugging:
   # Keep JSON files for manual analysis
@@ -638,11 +664,11 @@ Prerequisites:
 
     parser.add_argument(
         '--test_type',
-        choices=['l2', 'l3'],
+        choices=['L2', 'L3'],
         metavar='TYPE',
         help="""Filter tests by type. Only run tests containing the specified
-                type string in their test name. Valid values: 'l2' or 'l3'.
-                Example: --test_type l2 will only run tests with 'l2' in their names."""
+                type string in their test name. Valid values: 'L2' or 'L3'.
+                Example: --test_type L2 will only run tests with 'L2' in their names."""
     )
 
     parser.add_argument(

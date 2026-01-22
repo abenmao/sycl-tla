@@ -165,6 +165,23 @@ public:
                     FAIL()
                     << "This combination is not supported";
                 }
+            } else if(params->dtype_a == "bf16" && params->dtype_b == "bf16" && params->dtype_c == "bf16" && params->dtype_d == "bf16" && params->dtype_acc == "float"){
+                if (params->activation == "SiLu" && params->operation_c == "Mul") {
+                    executeGemm<bf16, bf16, bf16, bf16, float,
+                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
+                                ActivationType::SiLu, OperationCType::Mul>(
+                        params->cta_num_m, params->cta_num_n,
+                        params->cluster_m, params->cluster_n, params->cluster_k);
+                } else if (params->activation == "None" && params->operation_c == "Mul") {
+                    executeGemm<bf16, bf16, bf16, bf16, float,
+                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
+                                ActivationType::None, OperationCType::Mul>(
+                        params->cta_num_m, params->cta_num_n,
+                        params->cluster_m, params->cluster_n, params->cluster_k);
+                } else {
+                    printUnsupportedCombination(params, "RowMajor-RowMajor-RowMajor");
+                    FAIL() << "This combination is not supported";
+                }
             } else {
                 printUnsupportedCombination(params, "RowMajor-RowMajor-RowMajor");
                 FAIL() << "This combination is not supported";
@@ -173,13 +190,13 @@ public:
             if (params->dtype_a == "fp16" && params->dtype_b == "fp16" && params->dtype_c == "fp16" && params->dtype_d == "fp16" && params->dtype_acc == "float") {
                 if (params->activation == "SiLu" && params->operation_c == "Mul") {
                     executeGemm<fp16, fp16, fp16, fp16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
+                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
                                 ActivationType::SiLu, OperationCType::Mul>(
                         params->cta_num_m, params->cta_num_n,
                         params->cluster_m, params->cluster_n, params->cluster_k);
                 } else if (params->activation == "None" && params->operation_c == "Add") {
                     executeGemm<fp16, fp16, fp16, fp16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
+                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
                                 ActivationType::None, OperationCType::Add>(
                         params->cta_num_m, params->cta_num_n,
                         params->cluster_m, params->cluster_n, params->cluster_k);
@@ -190,17 +207,35 @@ public:
             } else if (params->dtype_a == "fp16" && params->dtype_b == "fp16" && params->dtype_c == "void" && params->dtype_d == "fp16" && params->dtype_acc == "float") {
                 if (params->activation == "None" && params->operation_c == "BiasAdd") {
                     executeGemm<fp16, fp16, void, fp16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
+                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
                                 ActivationType::None, OperationCType::BiasAdd>(
                         params->cta_num_m, params->cta_num_n,
                         params->cluster_m, params->cluster_n, params->cluster_k);
                 } else {
-                    printUnsupportedCombination(params, "RowMajor-RowMajor-RowMajor");
+                    printUnsupportedCombination(params, "RowMajor-ColumnMajor-RowMajor");
                     FAIL()
                         << "This combination is not supported";
                 }
-            } else {
-                printUnsupportedCombination(params, "RowMajor-RowMajor-RowMajor");
+            } else if(params->dtype_a == "bf16" && params->dtype_b == "bf16" && params->dtype_c == "bf16" && params->dtype_d == "bf16" && params->dtype_acc == "float"){
+                if (params->activation == "SiLu" && params->operation_c == "Mul") {
+                    executeGemm<bf16, bf16, bf16, bf16, float,
+                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
+                                ActivationType::SiLu, OperationCType::Mul>(
+                        params->cta_num_m, params->cta_num_n,
+                        params->cluster_m, params->cluster_n, params->cluster_k);
+                } else if (params->activation == "None" && params->operation_c == "Mul") {
+                    executeGemm<bf16, bf16, bf16, bf16, float,
+                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
+                                ActivationType::None, OperationCType::Mul>(
+                        params->cta_num_m, params->cta_num_n,
+                        params->cluster_m, params->cluster_n, params->cluster_k);
+                } else {
+                    printUnsupportedCombination(params, "RowMajor-ColumnMajor-RowMajor");
+                    FAIL() << "This combination is not supported";
+                }
+            }
+            else {
+                printUnsupportedCombination(params, "RowMajor-ColumnMajor-RowMajor");
                 FAIL() << "This combination is not supported";
             }
         } else if (params->layout_a == "ColumnMajor" && params->layout_b == "RowMajor" && params->layout_c == "RowMajor") {
