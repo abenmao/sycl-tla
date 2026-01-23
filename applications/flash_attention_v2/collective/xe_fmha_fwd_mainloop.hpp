@@ -356,16 +356,16 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
     /* Create TiledCopy objects for prefetches */
     auto prefetch_q = make_block_2d_prefetch(copy_q);
     auto prefetch_k = make_block_2d_prefetch(copy_k);
-    auto prefetch_v = make_block_2d_prefetch<SGPerWG::value>(tile_shape_v, V_2D);
+    auto prefetch_v = make_block_2d_prefetch(copy_v);
     auto prefetch_k_cache = make_block_2d_prefetch(copy_k_cache);
-    auto prefetch_v_cache = make_block_2d_prefetch<SGPerWG::value>(tile_shape_v, V_cache_2D);
+    auto prefetch_v_cache = make_block_2d_prefetch(copy_v_cache);
 
     /* Partition global tensors for prefetch */
     auto pQgQ = prefetch_q.get_slice(thr_id).partition_S(gQ);
     auto pKgK = prefetch_k.get_slice(thr_id).partition_S(gK);
-    auto pVgV = prefetch_v.get_slice(thr_id).partition_S(gV);
+    auto pVgV = prefetch_v.get_slice(thr_id).partition_S(gV_split);
     auto pKgK_cache = prefetch_k_cache.get_slice(thr_id).partition_S(gK_cache);
-    auto pVgV_cache = prefetch_v_cache.get_slice(thr_id).partition_S(gV_cache);
+    auto pVgV_cache = prefetch_v_cache.get_slice(thr_id).partition_S(gV_cache_split);
     const auto subgroup_id = thr_id / intel::sg_size;
 
     using ScaleCopyQK = void;
@@ -420,45 +420,44 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
     /* Initialization steps for first block: Q/K prefetch, O init */
     /* TODO: limit D prefetch for large head size, and reorder K prefetches */
     int kblocks_cache = ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{}));
-    if (blk_k0 == 0) {
-      for (int D = 0; D < size<3>(pQgQ); D++) {
-        prefetch(prefetch_q, pQgQ(_,_,_,D));
-      }
-
-      for (int D = 0; D < size<4>(pKgK); D++) {
-        CUTLASS_PRAGMA_UNROLL
-        for (int K = 0; K < Stages; K++) {
-          if (K < kblocks_cache) {
-            if constexpr (PagedKV) {
-              int physical_K_tile = get_physical_k_tile(K, l_coord, seq_len_kv_cache);
-              prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_tile,D));
-            } else {
-              prefetch(prefetch_k_cache, pKgK_cache(_,_,_,K,D));
-            }
+    for (int D = 0; D < size<3>(pQgQ); D++) {
+      prefetch(prefetch_q, pQgQ(_,_,_,D));
+    }
+    for (int D = 0; D < size<4>(pKgK); D++) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int K = 0; K < Stages; K++) {
+        if (K < kblocks_cache) {
+          if constexpr (PagedKV) {
+            int physical_K_tile = get_physical_k_tile(K, l_coord, seq_len_kv_cache);
+            prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_tile,D));
           } else {
-            prefetch(prefetch_k, pKgK(_,_,_,K - kblocks_cache,D));
+            prefetch(prefetch_k_cache, pKgK_cache(_,_,_,K,D));
           }
+        } else {
+          prefetch(prefetch_k, pKgK(_,_,_,K - kblocks_cache,D));
         }
       }
-      if constexpr (UseScale) {
-        const int q_coord = get<0>(blk_qv) * BLK_Q + (subgroup_id / ATOM_K)  * SG_Q;
-        auto& tiled_prefetch_scaleQ = get<0>(get<2>(scale_context_qk));
-        auto  prefetch_iter_scaleQ = get<1>(get<2>(scale_context_qk));
-        auto& tiled_prefetch_scaleK = get<0>(get<3>(scale_context_qk));
-        auto  prefetch_iter_scaleK = get<1>(get<3>(scale_context_qk));
-        prefetch_iter_scaleQ.data().coord_ = {q_coord, 0, l_coord};
-        for (int D = 0; D < size<3>(pQgQ); D++) {
-          prefetch(tiled_prefetch_scaleQ, prefetch_iter_scaleQ(_, _, _, D));
-        }
+    }
+    if constexpr (UseScale) {
+      const int q_coord = get<0>(blk_qv) * BLK_Q + (subgroup_id / ATOM_K)  * SG_Q;
+      auto& tiled_prefetch_scaleQ = get<0>(get<2>(scale_context_qk));
+      auto  prefetch_iter_scaleQ = get<1>(get<2>(scale_context_qk));
+      auto& tiled_prefetch_scaleK = get<0>(get<3>(scale_context_qk));
+      auto  prefetch_iter_scaleK = get<1>(get<3>(scale_context_qk));
+      prefetch_iter_scaleQ.data().coord_ = {q_coord, 0, l_coord};
+      for (int D = 0; D < size<3>(pQgQ); D++) {
+        prefetch(tiled_prefetch_scaleQ, prefetch_iter_scaleQ(_, _, _, D));
+      }
 
-        for (int K = 0; K < Stages; K++) {
-          const int k_coord = K * BLK_K + (subgroup_id % ATOM_K)  * SG_K;
-          prefetch_iter_scaleK.data().coord_ = {k_coord, 0, l_coord};
-          for (int D = 0; D < size<4>(pKgK); D++) {
-            prefetch(tiled_prefetch_scaleK, prefetch_iter_scaleK(_, _, _, D));
-          }
+      for (int K = 0; K < Stages; K++) {
+        const int k_coord = K * BLK_K + (subgroup_id % ATOM_K)  * SG_K;
+        prefetch_iter_scaleK.data().coord_ = {k_coord, 0, l_coord};
+        for (int D = 0; D < size<4>(pKgK); D++) {
+          prefetch(tiled_prefetch_scaleK, prefetch_iter_scaleK(_, _, _, D));
         }
       }
+    }
+    if (blk_k0 == 0) {
       clear(tArA);
       fill(tA_max, cutlass::platform::numeric_limits<ElementA>::lowest());
       clear(tA_sum);
@@ -544,7 +543,10 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       }
 
       /* V prefetch for GEMM 2 */
-      prefetch(prefetch_v_cur, pVgV_cur(_,_,_,k_idx));
+      CUTLASS_PRAGMA_UNROLL
+      for (int VV = 0; VV < VTiles; VV++) {
+        prefetch(prefetch_v_cur, pVgV_cur(_,_,_,VV,k_idx));
+      }
       // Prefetch V scale
       if constexpr (UseScale) {
         auto& tiled_prefetch_scaleV = get<0>(get<2>(scale_context_pv));
@@ -699,11 +701,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
     /* Compute row-wise maxima for this block */
     auto tS_bmax = reduce<1>(tS, sycl::maximum{});
 
-    /* Update (scaled) maxima */
-    auto tS_prev_max = tS_max;
+    FragSRow rescale;
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < tS_max.size(); i++) {
-      tS_max(i) = sycl::max(tS_max(i), params.scale * tS_bmax(i));
+      ElementS new_max = sycl::max(tS_max(i), params.scale * tS_bmax(i));
+      rescale(i) = sycl::native::exp2(tS_max(i) - new_max);
+      tS_max(i) = new_max;
     }
 
     /* Scale S and subtract maxima, then exponentiate */
@@ -713,11 +716,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
 
     /* Rescale existing S sums and O accumulator */
     if (!first_block) {
-      FragSRow rescale;
-
       CUTLASS_PRAGMA_UNROLL
-      for (int i = 0; i < tS_max.size(); i++) {
-        rescale(i) = sycl::native::exp2(tS_prev_max(i) - tS_max(i));
+      for (int i = 0; i < tS_sum.size(); i++) {
         tS_sum(i) *= rescale(i);
       }
 
@@ -728,6 +728,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
 
     /* Update sums */
     auto tS_bsum = reduce<1>(tS, sycl::plus<void>{});
+    CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < tS_sum.size(); i++)
       tS_sum(i) += tS_bsum(i);
   }
