@@ -362,17 +362,37 @@ class testFixture : public ::testing::TestWithParam<TestParamInfo> {
             group_range[2] = min(group_range[2], cta_num_x * cluster_size_x);
         }
 
-        std::cout << "IsPersistentMode: " << is_persistent << std::endl;
-        print("ProblemShape_MNKL: ");
-        print(problem_shape_mnkl);
+        print("\n=========== GEMM Configuration ===========\n");
+        print("Problem Shape (M,N,K,L): "); print(problem_shape_mnkl); print("\n");
+        print("CTA Tile (M,N,K): "); print(TileShape{}); print("\n");
+        print("Cluster Shape (M,N,K): "); print(ClusterShape{}); print("\n");
+        if constexpr (is_persistent) {
+            auto [cta_num_y, cta_num_x] = typename Config::CtaNum_MN{};
+            print("CTA Numbers (M,N): ("); print(cta_num_y); print(","); print(cta_num_x); print(")\n");
+        }
+        print("Pipeline Stages: "); print(Config::StagesA); print("\n");
+        print("Persistent Mode: "); print(is_persistent ? "true" : "false"); print("\n");
+        print("Activation: ");
+        if constexpr (activation_type == ActivationType::SiLu) {
+            print("SiLu");
+        } else {
+            print("None");
+        }
         print("\n");
-        print("TileShape_MNK: ");
-        print(TileShape{});
+        print("OperationC: ");
+        if constexpr (operationC_type == OperationCType::Mul) {
+            print("Mul");
+        } else if constexpr (operationC_type == OperationCType::Add) {
+            print("Add");
+        } else if constexpr (operationC_type == OperationCType::BiasAdd) {
+            print("BiasAdd");
+        } else {
+            print("None");
+        }
         print("\n");
-        print("ceil_div(ProblemShape,TileShape): ");
-        print(num_groups);
-        print("\n");
-        std::cout << "Group range: {" << group_range[0] << ", " << group_range[1] << ", " << group_range[2] << "} \n";
+        print("ceil_div(ProblemShape,TileShape): "); print(num_groups); print("\n");
+        print("Group range: {"); print(group_range[0]); print(", "); print(group_range[1]); print(", "); print(group_range[2]); print("}\n");
+        print("=================================\n\n");
 
         auto stride_A = cutlass::make_cute_packed_stride(StrideA{}, select<0, 2, 3>(problem_shape_mnkl));
         auto stride_B = cutlass::make_cute_packed_stride(StrideB{}, select<1, 2, 3>(problem_shape_mnkl));

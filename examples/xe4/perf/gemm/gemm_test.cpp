@@ -40,8 +40,10 @@ template <typename ElementA_T = half_t, typename ElementB_T = half_t, typename E
           typename ElementAccumulator_T = float,
           typename LayoutA_T = cutlass::layout::RowMajor, typename LayoutB_T = cutlass::layout::RowMajor, typename LayoutC_T = cutlass::layout::RowMajor,
           ActivationType activation_T = ActivationType::SiLu, OperationCType operationC_T = OperationCType::Mul,
+          int CtaTileM = 256, int CtaTileN = 256, int CtaTileK = 128,
           int CtaNumM = 2, int CtaNumN = 1,
-          int ClusterM = 1, int ClusterN = 1, int ClusterK = 1>
+          int ClusterM = 1, int ClusterN = 1, int ClusterK = 1,
+          bool IsPersistent = false>
 struct GEMM_RUNTIME_CONFIG {
     using ElementA = ElementA_T;
     using ElementB = ElementB_T;
@@ -51,23 +53,28 @@ struct GEMM_RUNTIME_CONFIG {
     using LayoutA = LayoutA_T;
     using LayoutB = LayoutB_T;
     using LayoutC = LayoutC_T;
-    using CtaTileShape_MNK = Shape<_256, _256, _128>;
+    using CtaTileShape_MNK = Shape<Int<CtaTileM>, Int<CtaTileN>, Int<CtaTileK>>;
     using CtaNum_MN = Shape<Int<CtaNumM>, Int<CtaNumN>>;
     using ClusterShape_MNK = Shape<Int<ClusterM>, Int<ClusterN>, Int<ClusterK>>;
 
     static constexpr int StagesA = 2;
-    static constexpr bool is_persistent = false;
+    static constexpr bool is_persistent = IsPersistent;
     static constexpr auto activation_type = activation_T;
     static constexpr auto operationC_type = operationC_T;
     static constexpr cute::array<int, 4> ProblemShape_MNKL = {1, 1, 1, 1};
 };
 
-#define DISPATCH_GEMM_CONFIG(cta_m_val, cta_n_val, cluster_m_val, cluster_n_val, cluster_k_val)                                       \
-    if (cta_m == cta_m_val && cta_n == cta_n_val &&                                                                                   \
-        cluster_m == cluster_m_val && cluster_n == cluster_n_val && cluster_k == cluster_k_val) {                                     \
+#define DISPATCH_GEMM_CONFIG(tile_m_val, tile_n_val, tile_k_val, cta_m_val, cta_n_val, cluster_m_val, cluster_n_val, cluster_k_val, persistent_val) \
+    if (cta_tile_m == tile_m_val && cta_tile_n == tile_n_val && cta_tile_k == tile_k_val &&                                          \
+        cta_m == cta_m_val && cta_n == cta_n_val &&                                                                                   \
+        cluster_m == cluster_m_val && cluster_n == cluster_n_val && cluster_k == cluster_k_val &&                                     \
+        is_persistent == persistent_val) {                                                                                             \
         using Config = GEMM_RUNTIME_CONFIG<ElementA, ElementB, ElementC, ElementD, ElementAccumulator,                                \
                                            LayoutA, LayoutB, LayoutC,                                                                 \
-                                           activation, operation, cta_m_val, cta_n_val, cluster_m_val, cluster_n_val, cluster_k_val>; \
+                                           activation, operation,                                                                     \
+                                           tile_m_val, tile_n_val, tile_k_val,                                                        \
+                                           cta_m_val, cta_n_val, cluster_m_val,                                                       \
+                                         cluster_n_val, cluster_k_val, persistent_val>;                                               \
         default_run_gemm<Config>();                                                                                                   \
         return;                                                                                                                       \
     }
@@ -84,28 +91,40 @@ class GemmOperator : public testFixture {
     template <typename ElementA, typename ElementB, typename ElementC, typename ElementD, typename ElementAccumulator,
               typename LayoutA, typename LayoutB, typename LayoutC,
               ActivationType activation, OperationCType operation>
-    void executeGemm(int cta_m, int cta_n, int cluster_m, int cluster_n, int cluster_k) {
-        // Dispatch all supported configurations
-        DISPATCH_GEMM_CONFIG(1, 1, 1, 1, 1)
-        DISPATCH_GEMM_CONFIG(1, 1, 2, 2, 2)
-        DISPATCH_GEMM_CONFIG(1, 2, 1, 1, 1)
-        DISPATCH_GEMM_CONFIG(1, 2, 2, 2, 2)
-        DISPATCH_GEMM_CONFIG(2, 1, 1, 1, 1)
-        DISPATCH_GEMM_CONFIG(2, 1, 2, 2, 2)
-        DISPATCH_GEMM_CONFIG(2, 2, 1, 1, 1)
-        DISPATCH_GEMM_CONFIG(2, 2, 2, 1, 1)
-        DISPATCH_GEMM_CONFIG(2, 2, 2, 2, 2)
-        DISPATCH_GEMM_CONFIG(4, 4, 1, 1, 1)
-        DISPATCH_GEMM_CONFIG(4, 4, 2, 2, 2)
-        DISPATCH_GEMM_CONFIG(2, 4, 1, 1, 1)
-        DISPATCH_GEMM_CONFIG(2, 4, 2, 2, 2)
-        DISPATCH_GEMM_CONFIG(4, 2, 1, 1, 1)
-        DISPATCH_GEMM_CONFIG(4, 2, 2, 2, 2)
+    void executeGemm(int cta_tile_m, int cta_tile_n, int cta_tile_k, int cta_m, int cta_n, int cluster_m, int cluster_n, int cluster_k, bool is_persistent) {
+        // Define macros for automatic dispatch generation
+        #define DISPATCH_BOTH_PERSISTENT(tm, tn, tk, cm, cn, clm, cln, clk) \
+            DISPATCH_GEMM_CONFIG(tm, tn, tk, cm, cn, clm, cln, clk, true) \
+            DISPATCH_GEMM_CONFIG(tm, tn, tk, cm, cn, clm, cln, clk, false)
+
+        #define CTA_TILE_CONFIG(tm, tn, tk) \
+            DISPATCH_BOTH_PERSISTENT(tm, tn, tk, 1, 1, 1, 1, 1) \
+            DISPATCH_BOTH_PERSISTENT(tm, tn, tk, 1, 1, 2, 2, 2) \
+            DISPATCH_BOTH_PERSISTENT(tm, tn, tk, 1, 2, 1, 1, 1) \
+            DISPATCH_BOTH_PERSISTENT(tm, tn, tk, 1, 2, 2, 2, 2) \
+            DISPATCH_BOTH_PERSISTENT(tm, tn, tk, 2, 1, 1, 1, 1) \
+            DISPATCH_BOTH_PERSISTENT(tm, tn, tk, 2, 1, 2, 2, 2) \
+            DISPATCH_BOTH_PERSISTENT(tm, tn, tk, 2, 2, 1, 1, 1) \
+            DISPATCH_BOTH_PERSISTENT(tm, tn, tk, 2, 2, 2, 1, 1) \
+            DISPATCH_BOTH_PERSISTENT(tm, tn, tk, 2, 2, 2, 2, 2) \
+            DISPATCH_BOTH_PERSISTENT(tm, tn, tk, 4, 4, 1, 1, 1) \
+            DISPATCH_BOTH_PERSISTENT(tm, tn, tk, 4, 4, 2, 2, 2) \
+            DISPATCH_BOTH_PERSISTENT(tm, tn, tk, 2, 4, 1, 1, 1) \
+            DISPATCH_BOTH_PERSISTENT(tm, tn, tk, 2, 4, 2, 2, 2) \
+            DISPATCH_BOTH_PERSISTENT(tm, tn, tk, 4, 2, 1, 1, 1) \
+            DISPATCH_BOTH_PERSISTENT(tm, tn, tk, 4, 2, 2, 2, 2)
+
+        // All supported CTA tile sizes
+        CTA_TILE_CONFIG(256, 256, 128)
+        CTA_TILE_CONFIG(256, 512, 128)
 
         // If no configuration matched
-        std::cout << "Unsupported CTA/Cluster configuration: CTA(" << cta_m << "," << cta_n
-                  << ") Cluster(" << cluster_m << "," << cluster_n << "," << cluster_k << ")" << std::endl;
+        std::cout << "Unsupported CTA/Cluster configuration: CTA Tile(" << cta_tile_m << "," << cta_tile_n << "," << cta_tile_k
+                  << ") CTA(" << cta_m << "," << cta_n << ") Cluster(" << cluster_m << "," << cluster_n << "," << cluster_k 
+                  << ") Persistent=" << (is_persistent ? "true" : "false") << std::endl;
         FAIL() << "Configuration not supported";
+        #undef CTA_TILE_CONFIG
+        #undef DISPATCH_BOTH_PERSISTENT
         #undef DISPATCH_GEMM_CONFIG
     }
 
@@ -141,14 +160,16 @@ public:
                     executeGemm<fp16, fp16, fp16, fp16, float,
                                 cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
                                 ActivationType::SiLu, OperationCType::Mul>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k);
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
                 } else if (params->activation == "None" && params->operation_c == "Add") {
                     executeGemm<fp16, fp16, fp16, fp16, float,
                                 cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
                                 ActivationType::None, OperationCType::Add>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k);
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
                 } else {
                     printUnsupportedCombination(params, "RowMajor-RowMajor-RowMajor");
                     FAIL() << "This combination is not supported";
@@ -158,8 +179,9 @@ public:
                     executeGemm<fp16, fp16, void, fp16, float,
                                 cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
                                 ActivationType::None, OperationCType::BiasAdd>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k);
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
                 } else {
                     printUnsupportedCombination(params, "RowMajor-RowMajor-RowMajor");
                     FAIL()
@@ -170,14 +192,16 @@ public:
                     executeGemm<bf16, bf16, bf16, bf16, float,
                                 cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
                                 ActivationType::SiLu, OperationCType::Mul>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k);
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
                 } else if (params->activation == "None" && params->operation_c == "Mul") {
                     executeGemm<bf16, bf16, bf16, bf16, float,
                                 cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
                                 ActivationType::None, OperationCType::Mul>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k);
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
                 } else {
                     printUnsupportedCombination(params, "RowMajor-RowMajor-RowMajor");
                     FAIL() << "This combination is not supported";
@@ -192,14 +216,16 @@ public:
                     executeGemm<fp16, fp16, fp16, fp16, float,
                                 cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
                                 ActivationType::SiLu, OperationCType::Mul>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k);
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
                 } else if (params->activation == "None" && params->operation_c == "Add") {
                     executeGemm<fp16, fp16, fp16, fp16, float,
                                 cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
                                 ActivationType::None, OperationCType::Add>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k);
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
                 } else {
                     printUnsupportedCombination(params, "RowMajor-ColumnMajor-RowMajor");
                     FAIL() << "This combination is not supported";
@@ -209,8 +235,9 @@ public:
                     executeGemm<fp16, fp16, void, fp16, float,
                                 cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
                                 ActivationType::None, OperationCType::BiasAdd>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k);
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
                 } else {
                     printUnsupportedCombination(params, "RowMajor-ColumnMajor-RowMajor");
                     FAIL()
@@ -221,14 +248,16 @@ public:
                     executeGemm<bf16, bf16, bf16, bf16, float,
                                 cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
                                 ActivationType::SiLu, OperationCType::Mul>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k);
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
                 } else if (params->activation == "None" && params->operation_c == "Mul") {
                     executeGemm<bf16, bf16, bf16, bf16, float,
                                 cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
                                 ActivationType::None, OperationCType::Mul>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k);
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
                 } else {
                     printUnsupportedCombination(params, "RowMajor-ColumnMajor-RowMajor");
                     FAIL() << "This combination is not supported";
