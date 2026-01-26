@@ -628,8 +628,14 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     compat::wait();
 
     // Check if output from CUTLASS kernel and reference kernel are equal or not
+    // Tolerance selection based on input data type precision:
+    // - FP4 (E2M1): 1 mantissa bit gives ~50% worst-case relative precision (2^-1).
+    //   Flash attention compounds errors through QK GEMM -> softmax -> PV GEMM.
+    //   Empirically observed errors are ~10-12%, so 0.15 provides reasonable margin.
+    // - FP8/FP16/BF16: Higher precision formats use tighter 0.05 tolerance.
+    ElementO tolerance = FP4Input ? ElementO{0.15} : ElementO{0.05};
     bool passed = cutlass::reference::device::BlockCompareRelativelyEqual(block_ref_O.get(), block_O.get(),
-                                                                          block_O.size(), ElementO{0.05}, ElementO{0.05});
+                                                                          block_O.size(), tolerance, tolerance);
 
     return passed;
   }

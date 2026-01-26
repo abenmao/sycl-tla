@@ -79,6 +79,10 @@ int main(int argc, const char **argv) {
   using ElementQ = cutlass::float_e4m3_t;
   using ElementK = cutlass::float_e4m3_t;
   using ElementV = cutlass::float_e4m3_t;
+#elif defined(IS_FLOAT_E2M1)
+  using ElementQ = cutlass::float_e2m1_t;
+  using ElementK = cutlass::float_e2m1_t;
+  using ElementV = cutlass::bfloat16_t;
 #else
   using ElementQ = bfloat16_t;
   using ElementK = bfloat16_t;
@@ -177,6 +181,10 @@ int main(int argc, const char **argv) {
   using ElementQ = cutlass::float_e4m3_t;
   using ElementK = cutlass::float_e4m3_t;
   using ElementV = cutlass::float_e4m3_t;
+#elif defined(IS_FLOAT_E2M1)
+  using ElementQ = cutlass::float_e2m1_t;
+  using ElementK = cutlass::float_e2m1_t;
+  using ElementV = cutlass::bfloat16_t;
 #else
   using ElementQ = bfloat16_t;
   using ElementK = bfloat16_t;

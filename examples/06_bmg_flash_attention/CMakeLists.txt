@@ -30,7 +30,7 @@
 set(CUTLASS_APPLICATIONS_DIR ${CMAKE_SOURCE_DIR}/applications)
 
 if(SYCL_INTEL_TARGET EQUAL 35)
-  set(INPUT_TYPES bfloat16_t float_e5m2_t float_e4m3_t mx_float_e5m2_t mx_float_e4m3_t mx_float_e2m1_t)
+  set(INPUT_TYPES bfloat16_t float_e5m2_t float_e4m3_t float_e2m1_t mx_float_e5m2_t mx_float_e4m3_t mx_float_e2m1_t)
 else()
   set(INPUT_TYPES bfloat16_t float_e5m2_t float_e4m3_t)
 endif()
@@ -63,6 +63,8 @@ foreach(HEAD_DIM 64 96 128 192)
       set(INPUT_MACRO "IS_MX_FLOAT_E4M3")
     elseif(INPUT_TYPE STREQUAL "mx_float_e2m1_t")
       set(INPUT_MACRO "IS_MX_FLOAT_E2M1")
+    elseif(INPUT_TYPE STREQUAL "float_e2m1_t")
+      set(INPUT_MACRO "IS_FLOAT_E2M1")
     endif()
 
    if (INPUT_TYPE STREQUAL "mx_float_e5m2_t" OR  INPUT_TYPE STREQUAL "mx_float_e4m3_t" OR INPUT_TYPE STREQUAL "mx_float_e2m1_t")
