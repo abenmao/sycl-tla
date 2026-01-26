@@ -718,6 +718,9 @@ struct CollectiveMmaAttention {
         tOsP
       );
 
+      pipeline_s.consumer_release(pipeline_s_consumer_state);
+      ++pipeline_s_consumer_state;
+
       pipeline_o.consumer_wait(pipeline_o_consumer_state);
 
       collective_softmax.rescale_O(
@@ -726,9 +729,6 @@ struct CollectiveMmaAttention {
         tOsOacc,
         exp_reg
       );
-
-      pipeline_s.consumer_release(pipeline_s_consumer_state);
-      ++pipeline_s_consumer_state;
 
       pipeline_o.consumer_release(pipeline_o_consumer_state);
       ++pipeline_o_consumer_state;
@@ -745,6 +745,9 @@ struct CollectiveMmaAttention {
         tOsP + slm_bytes_per_p_stage
       );
 
+      pipeline_s.consumer_release(pipeline_s_consumer_state);
+      ++pipeline_s_consumer_state;
+
       pipeline_o.consumer_wait(pipeline_o_consumer_state);
 
       collective_softmax.rescale_O(
@@ -753,9 +756,6 @@ struct CollectiveMmaAttention {
         tOsOacc + slm_bytes_per_oacc_stage,
         exp_reg
       );
-
-      pipeline_s.consumer_release(pipeline_s_consumer_state);
-      ++pipeline_s_consumer_state;
 
       pipeline_o.consumer_release(pipeline_o_consumer_state);
       ++pipeline_o_consumer_state;
