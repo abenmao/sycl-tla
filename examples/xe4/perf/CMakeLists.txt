@@ -6,32 +6,41 @@ if(NOT TARGET gtest)
     message(FATAL_ERROR "GoogleTest targets not found after including googletest.cmake")
 endif()
 
-# Define the target name for the performance test executable
-set(PERF_TARGET_NAME gemm_perf)
+add_xe4_test(gemm_perf gemm/gemm_test.cpp)
+add_xe4_test(xe4_gemm_cluster_perf gemm_cluster/gemm_cluster_test.cpp)
 
-# Collect all source files
-set(PERF_SOURCES
-    gemm/gemm_test.cpp
-)
-
-# Create the executable using the existing xe4 test infrastructure
-add_xe4_test(${PERF_TARGET_NAME} ${PERF_SOURCES})
 
 # Include directories for headers
-target_include_directories(${PERF_TARGET_NAME} PRIVATE
+target_include_directories(gemm_perf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/gemm
     ${CMAKE_CURRENT_SOURCE_DIR}/testFixture
 )
 
+target_include_directories(xe4_gemm_cluster_perf PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/gemm_cluster
+    ${CMAKE_CURRENT_SOURCE_DIR}/testFixture
+)
+
 # Link Google Test libraries
-target_link_libraries(${PERF_TARGET_NAME} PRIVATE
+target_link_libraries(gemm_perf PRIVATE
+    gtest
+    gtest_main
+)
+
+target_link_libraries(xe4_gemm_cluster_perf PRIVATE
     gtest
     gtest_main
 )
 
 # Set target link options for XE4 architecture
-target_link_options(${PERF_TARGET_NAME} PUBLIC
+target_link_options(gemm_perf PUBLIC
+    -Xsycl-target-backend=spir64_gen
+    -device\ jgs-a0
+)
+
+target_link_options(xe4_gemm_cluster_perf PUBLIC
     -Xsycl-target-backend=spir64_gen
     -device\ jgs-a0
 )
