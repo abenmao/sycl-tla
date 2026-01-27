@@ -27,7 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-set(CUTLASS_APPLICATIONS_DIR ${CMAKE_SOURCE_DIR}/applications)
+set(CUTLASS_APPLICATIONS_DIR ${CUTLASS_DIR}/applications)
 
 if(SYCL_INTEL_TARGET EQUAL 35)
   set(INPUT_TYPES bfloat16_t float_e5m2_t float_e4m3_t float_e2m1_t mx_float_e5m2_t mx_float_e4m3_t mx_float_e2m1_t)
