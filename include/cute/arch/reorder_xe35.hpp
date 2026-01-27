@@ -167,30 +167,30 @@ struct Xe_Reorder<ReorderKind::VV, half_t, float_e4m3_t>
 #define CUTE_XE_REORDER_DNSCL_SEQ_VNNI(CVT_TYPE) \
     ".decl IN_UD v_type=G type=UD num_elts=64 alias=<%1,0>\n"   \
     ".decl OUT_UD v_type=G type=UD num_elts=16 alias=<%0,0>\n"  \
-    ".decl TMP0 v_type=G type=UD num_elts=16\n"                 \
-    ".decl TMP1 v_type=G type=UD num_elts=16\n"                 \
+    ".decl TMP0 v_type=G type=UD num_elts=16 align=wordx32\n"   \
+    ".decl TMP1 v_type=G type=UD num_elts=16 align=wordx32\n"   \
     /* mode0: src0=GRF0(K0,K1), src1=GRF2(K4,K5) */             \
     /* [23:20]=K5, [19:16]=K4, [7:4]=K1, [3:0]=K0 */            \
-    "DNSCL." CVT_TYPE ".mode0.rne (M1, 16) TMP0(0,0)<1> IN_UD(0,0)<1;1,0> IN_UD(0,32)<1;1,0> %null.0\n" \
+    "dnscl." CVT_TYPE ".mode0.rne (M1, 16) TMP0.0 IN_UD.0 IN_UD.128 %%null.0\n" \
     /* mode2: src0=GRF1(K2,K3), src1=GRF3(K6,K7) */             \
     /* [31:28]=K7, [27:24]=K6, [15:12]=K3, [11:8]=K2 */         \
-    "DNSCL." CVT_TYPE ".mode2.rne (M1, 16) TMP1(0,0)<1> IN_UD(0,16)<1;1,0> IN_UD(0,48)<1;1,0> %null.0\n"\
+    "dnscl." CVT_TYPE ".mode2.rne (M1, 16) TMP1.0 IN_UD.64 IN_UD.192 %%null.0\n"\
     "or (M1, 16) OUT_UD(0,0)<1> TMP0(0,0)<1;1,0> TMP1(0,0)<1;1,0>\n"
 
 #define CUTE_XE_REORDER_DNSCL_SEQ(CVT_TYPE) \
     ".decl IN_UD v_type=G type=UD num_elts=64 alias=<%1,0>\n"   \
     ".decl OUT_UW v_type=G type=UW num_elts=32 alias=<%0,0>\n"  \
-    ".decl TMP_UD0 v_type=G type=UD num_elts=16\n"              \
-    ".decl TMP_UD1 v_type=G type=UD num_elts=16\n"              \
+    ".decl TMP_UD0 v_type=G type=UD num_elts=16 align=wordx32\n"              \
+    ".decl TMP_UD1 v_type=G type=UD num_elts=16 align=wordx32\n"              \
     ".decl TMP_HI v_type=G type=UD num_elts=16\n"               \
     ".decl TMP_LO v_type=G type=UD num_elts=16\n"               \
     /* First 64 BF16 elements (GRF0-1, UD 0-31) */              \
-    "DNSCL." CVT_TYPE ".mode0.rne (M1, 16) TMP_UD0(0,0)<1> IN_UD(0,0)<1;1,0> IN_UD(0,16)<1;1,0>\n" \
+    "dnscl." CVT_TYPE ".mode0.rne (M1, 16) TMP_UD0.0 IN_UD.0 IN_UD.64 %%null.0\n" \
     "shr (M1, 16) TMP_HI(0,0)<1> TMP_UD0(0,0)<1;1,0> 0x8:ud\n"  \
     "and (M1, 16) TMP_LO(0,0)<1> TMP_UD0(0,0)<1;1,0> 0xFF:ud\n" \
     "or (M1, 16) OUT_UW(0,0)<1> TMP_HI(0,0)<1;1,0> TMP_LO(0,0)<1;1,0>\n" \
     /* Second 64 BF16 elements (GRF2-3, UD 32-63) */            \
-    "DNSCL." CVT_TYPE ".mode0.rne (M1, 16) TMP_UD1(0,0)<1> IN_UD(0,32)<1;1,0> IN_UD(0,48)<1;1,0>\n" \
+    "dnscl." CVT_TYPE ".mode0.rne (M1, 16) TMP_UD1.0 IN_UD.128 IN_UD.192 %%null.0\n" \
     "shr (M1, 16) TMP_HI(0,0)<1> TMP_UD1(0,0)<1;1,0> 0x8:ud\n"  \
     "and (M1, 16) TMP_LO(0,0)<1> TMP_UD1(0,0)<1;1,0> 0xFF:ud\n" \
     "or (M1, 16) OUT_UW(0,16)<1> TMP_HI(0,0)<1;1,0> TMP_LO(0,0)<1;1,0>\n"
@@ -254,6 +254,42 @@ struct Xe_Reorder<ReorderKind::UU, half_t, float_e2m1_t>
     asm (
       "{\n"
       CUTE_XE_REORDER_DNSCL_SEQ("hftoe2m1")
+      "}\n"
+      : "=rw"(dst0)
+      : "rw"(src0)
+    );
+#else
+  CUTE_INVALID_CONTROL_PATH("Not Xe");
+#endif
+  }
+};
+
+template <>
+struct Xe_Reorder<ReorderKind::UU_Universal, float, float_e2m1_t>
+{
+  using SRegisters = intel::float2[1];
+  using DRegisters = intel::vector_t<uint8_t, 1>[1];
+
+  CUTE_HOST_DEVICE static void
+  reorder(intel::float2 const& src0, intel::vector_t<uint8_t, 1>& dst0)
+  {
+#if defined(CUTE_ARCH_REORDER_XE_ENABLED)
+    // Convert 32 float -> 32 half -> 32 e2m1 (16 bytes output)
+    asm (
+      "{\n"
+      ".decl IN_F v_type=G type=F num_elts=32 alias=<%1,0>\n"
+      ".decl TMP_HF v_type=G type=HF num_elts=16 align=wordx32\n"
+      ".decl TMP_HF_1 v_type=G type=HF num_elts=16 align=wordx32\n"
+      ".decl TMP_UD v_type=G type=UD num_elts=8 alias=<TMP_HF,0>\n"
+      ".decl TMP_UD_1 v_type=G type=UD num_elts=8 alias=<TMP_HF_1,0>\n"
+      ".decl OUT_UD v_type=G type=UD num_elts=8 align=wordx32\n"
+      ".decl OUT_UD_UB v_type=G type=UB num_elts=32 alias=<OUT_UD,0>\n"
+      ".decl OUT_UB v_type=G type=UB num_elts=16 alias=<%0,0>\n"
+      "mov (M1, 16) TMP_HF(0,0)<1> IN_F(0,0)<1;1,0>\n"
+      "mov (M1, 16) TMP_HF_1(0,0)<1> IN_F(0,16)<1;1,0>\n"
+      "dnscl.hftoe2m1.mode0.rne (M1, 8) OUT_UD.0 TMP_UD.0 TMP_UD_1.0 %%null.0\n"
+      "mov (M1, 8) OUT_UB(0,0)<1> OUT_UD_UB(0,0)<4;1,0>\n"
+      "mov (M1, 8) OUT_UB(0,8)<1> OUT_UD_UB(0,2)<4;1,0>\n"
       "}\n"
       : "=rw"(dst0)
       : "rw"(src0)
