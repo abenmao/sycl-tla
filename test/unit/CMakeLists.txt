@@ -195,7 +195,9 @@ if (CUTLASS_ENABLE_SYCL)
     gemm
   )
   # Enable Intel hardware specific tests
-  if(SYCL_INTEL_TARGET)
+  if(SYCL_INTEL_TARGET EQUAL 40)
+    add_subdirectory(flash_attention_v3)
+  else()
     list(APPEND SUBDIRS flash_attention)
   endif()
 endif()
