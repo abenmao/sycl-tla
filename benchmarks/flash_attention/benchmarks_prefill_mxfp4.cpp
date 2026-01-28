@@ -29,31 +29,24 @@
  *
  **************************************************************************************************/
 
-#pragma once
+#include "benchmark_runner.hpp"
+#include "fmha_configuration.hpp"
 
-#include <benchmarks_decode_bf16.cpp>
-#include <benchmarks_decode_fp8.cpp>
-#include <benchmarks_decode_fp8kv_fp16mma.cpp>
-#include <benchmarks_prefill_bf16.cpp>
-#include <benchmarks_prefill_fp8.cpp>
-#include <benchmarks_prefill_fp8kv_fp16mma.cpp>
-#if defined(SYCL_INTEL_TARGET) && SYCL_INTEL_TARGET == 35
-#include <benchmarks_prefill_mxfp8.cpp>
-#include <benchmarks_prefill_mxfp4.cpp>
-#endif
+using namespace cutlass::flash_attention;
 
-static void register_flash_attention_decode_benchmarks() {
-  register_flash_attention_decode_benchmarks_bf16();
-  register_flash_attention_decode_benchmarks_fp8();
-  register_flash_attention_decode_benchmarks_fp8kv_fp16mma();
-}
+using mxfp4 = cutlass::mx_float4_t<float_e2m1_t>;
 
-static void register_flash_attention_prefill_benchmarks() {
-  register_flash_attention_prefill_benchmarks_bf16();
-  register_flash_attention_prefill_benchmarks_fp8();
-  register_flash_attention_prefill_benchmarks_fp8kv_fp16mma();
-#if defined(SYCL_INTEL_TARGET) && SYCL_INTEL_TARGET == 35
-  register_flash_attention_prefill_benchmarks_mxfp8();
-  register_flash_attention_prefill_benchmarks_mxfp4();
-#endif
+/* ---------------------------------------- HeadDim = 64 ------------------------------------------ */
+
+using CriFMHAPrefill_MXFP4_MXFP4_BF16_FP32_RCR_h64_Causal_VarLen = FMHAConfigGen</*Mode*/FMHAMode::Prefill,
+  /*ElementQ*/ mxfp4::DataType, /*ElementK*/ mxfp4::DataType, /*ElementV*/ cutlass::bfloat16_t, /*ElementO*/ float,
+  /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
+  /*ElementScale*/ mxfp4::ScaleFactorType, /*Causal*/ true, /*VarLen*/ true, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ true, /*HeadDim*/ 64
+>::type;
+
+CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_MXFP4_MXFP4_BF16_FP32_RCR_h64_Causal_VarLen);
+/* ---------------------------------------- HeadDim = 64 ------------------------------------------ */
+
+static void register_flash_attention_prefill_benchmarks_mxfp4() {
+  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_MXFP4_MXFP4_BF16_FP32_RCR_h64_Causal_VarLen);
 }

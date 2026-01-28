@@ -29,31 +29,22 @@
  *
  **************************************************************************************************/
 
-#pragma once
+#include "benchmark_runner.hpp"
+#include "fmha_configuration.hpp"
 
-#include <benchmarks_decode_bf16.cpp>
-#include <benchmarks_decode_fp8.cpp>
-#include <benchmarks_decode_fp8kv_fp16mma.cpp>
-#include <benchmarks_prefill_bf16.cpp>
-#include <benchmarks_prefill_fp8.cpp>
-#include <benchmarks_prefill_fp8kv_fp16mma.cpp>
-#if defined(SYCL_INTEL_TARGET) && SYCL_INTEL_TARGET == 35
-#include <benchmarks_prefill_mxfp8.cpp>
-#include <benchmarks_prefill_mxfp4.cpp>
-#endif
+using namespace cutlass::flash_attention;
 
-static void register_flash_attention_decode_benchmarks() {
-  register_flash_attention_decode_benchmarks_bf16();
-  register_flash_attention_decode_benchmarks_fp8();
-  register_flash_attention_decode_benchmarks_fp8kv_fp16mma();
-}
+/* ---------------------------------------- HeadDim = 64 ------------------------------------------ */
+using CriFMHADecode_FP16_E4M3_E4M3_FP32_RCR_h64_NonCausal_FixedLen = FMHAConfigGen</*Mode*/FMHAMode::Decode,
+  /*ElementQ*/ cutlass::half_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ float,
+  /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
+  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*HeadDim*/ 64
+>::type;
 
-static void register_flash_attention_prefill_benchmarks() {
-  register_flash_attention_prefill_benchmarks_bf16();
-  register_flash_attention_prefill_benchmarks_fp8();
-  register_flash_attention_prefill_benchmarks_fp8kv_fp16mma();
-#if defined(SYCL_INTEL_TARGET) && SYCL_INTEL_TARGET == 35
-  register_flash_attention_prefill_benchmarks_mxfp8();
-  register_flash_attention_prefill_benchmarks_mxfp4();
-#endif
+CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHADecode_FP16_E4M3_E4M3_FP32_RCR_h64_NonCausal_FixedLen);
+
+/* ---------------------------------------- HeadDim = 64 ------------------------------------------ */
+
+static void register_flash_attention_decode_benchmarks_fp8kv_fp16mma() {
+  CUTLASS_FMHA_BENCHMARK(CriFMHADecode_FP16_E4M3_E4M3_FP32_RCR_h64_NonCausal_FixedLen);
 }
