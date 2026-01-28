@@ -173,23 +173,6 @@ int main(int argc, const char **argv) {
 #else
   constexpr int PipelineStages = 2;
 #endif
-#ifdef IS_FLOAT_E5M2
-  using ElementQ = cutlass::float_e5m2_t;
-  using ElementK = cutlass::float_e5m2_t;
-  using ElementV = cutlass::float_e5m2_t;
-#elif defined(IS_FLOAT_E4M3)
-  using ElementQ = cutlass::float_e4m3_t;
-  using ElementK = cutlass::float_e4m3_t;
-  using ElementV = cutlass::float_e4m3_t;
-#elif defined(IS_FLOAT_E2M1)
-  using ElementQ = cutlass::float_e2m1_t;
-  using ElementK = cutlass::float_e2m1_t;
-  using ElementV = cutlass::bfloat16_t;
-#else
-  using ElementQ = bfloat16_t;
-  using ElementK = bfloat16_t;
-  using ElementV = bfloat16_t;
-#endif
 
 #if PERSISTENT
   return FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, /*persistent=*/true, ElementQ, ElementK, ElementV>::run(options);
