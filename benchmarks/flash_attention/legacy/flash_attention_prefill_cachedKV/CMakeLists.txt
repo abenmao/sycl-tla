@@ -26,19 +26,18 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-
 set(CUTLASS_APPLICATIONS_DIR ${CUTLASS_DIR}/applications)
 
-if (CUTLASS_TEST_FOR_CRI)
-  set(TEST_ARGS "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
-else()
-  set(TEST_ARGS "")
-endif()
+# Pass these configuration files for the CI
+set(CONFIG_FILE_BMG --config_file=${CUTLASS_DIR}/benchmarks/device/bmg/input_files/input_sglang_flash_attention_prefill_extend_kvcache.in)
 
-cutlass_example_add_executable(
-    07_bmg_dual_gemm
-    07_bmg_dual_gemm.cpp
+cutlass_benchmark_add_suite(cutlass_benchmarks_flash_attention_prefill_cachedkv_legacy
+                            SUPERSUITE cutlass_benchmarks_flash_attention_legacy)
+
+cutlass_benchmark_add_executable(
+    cutlass_benchmarks_flash_attention_prefill_cachedkv_legacy_xe
+    main.cpp
     TEST_COMMAND_OPTIONS
-    TEST_ARGS
-  )
-
+    CONFIG_FILE_BMG
+    SUITE cutlass_benchmarks_flash_attention_prefill_cachedkv_legacy
+)

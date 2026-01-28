@@ -41,7 +41,7 @@
 
 int main(int argc, const char** argv) {
 
-  BenckmarkOptions options;
+  BenchmarkOptions options;
 
   options.parse(argc, argv);
 

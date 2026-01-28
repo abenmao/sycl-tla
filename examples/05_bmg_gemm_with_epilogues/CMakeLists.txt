@@ -101,3 +101,17 @@ cutlass_example_add_executable(
   TEST_COMMAND_OPTIONS
   TEST_SPLITK
 )
+
+cutlass_example_add_executable(
+  05_bmg_gemm_with_epilogue_lincombperrowbiaseltactaux
+  05_bmg_gemm_with_epilogue_lincombperrowbiaseltactaux.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_MULTIPLE_BATCHES
+)
+
+cutlass_example_add_executable(
+  05_bmg_gemm_with_epilogue_lincombauxstore
+  05_bmg_gemm_with_epilogue_lincombauxstore.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_MULTIPLE_BATCHES
+)
