@@ -83,6 +83,8 @@ if (SYCL_INTEL_TARGET)
     elseif(TGT STREQUAL "intel_gpu_cri" OR TGT STREQUAL "cri")
       # TODO: cri don't have devide target name, AOT not support now, please use spir64 now
       list(APPEND DPCPP_FLAGS "-fsycl-targets=spir64;")
+    elseif(TGT STREQUAL "intel_gpu_jgs" OR TGT STREQUAL "jgs")
+      list(APPEND DPCPP_FLAGS "-fsycl-targets=intel_gpu_jgs;")
     endif()
   endforeach()
 
@@ -90,8 +92,10 @@ if (SYCL_INTEL_TARGET)
 
   string(JOIN "," SYCL_DEVICES_STR ${SYCL_DEVICES})
 
-  list(APPEND DPCPP_LINK_ONLY_FLAGS "-fsycl-targets=spir64")
-  list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xs;-device ${SYCL_DEVICES_STR}")
+  if (NOT SYCL_INTEL_TARGET EQUAL 40)
+    list(APPEND DPCPP_LINK_ONLY_FLAGS "-fsycl-targets=spir64")
+    list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xs;-device ${SYCL_DEVICES_STR}")
+  endif()
 
   list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xspirv-translator")
 

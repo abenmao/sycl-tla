@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Intel Corporation, All rights reserved.
+# Copyright (c) 2024 - 2024 Codeplay Software Ltd. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,6 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-<<<<<<<< HEAD:examples/xe4/gemm/CMakeLists.txt
 
 add_xe4_test(xe4_gemm gemm.cpp)
 target_include_directories(xe4_gemm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -39,10 +38,3 @@ target_include_directories(xe4_gemm_cluster PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_options(xe4_gemm_cluster PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)
-========
-# Create a legacy flash_attention suite
-cutlass_benchmark_add_suite(cutlass_benchmarks_flash_attention_legacy)
-add_subdirectory(flash_attention_prefill)
-add_subdirectory(flash_attention_prefill_cachedKV)
-add_subdirectory(flash_attention_decode)
->>>>>>>> origin/v0.1.0_next:benchmarks/flash_attention/legacy/CMakeLists.txt
