@@ -92,6 +92,7 @@ if (SYCL_INTEL_TARGET)
 
   string(JOIN "," SYCL_DEVICES_STR ${SYCL_DEVICES})
 
+  # With XE4 only working with internal compiler, below additional flags are not needed
   if (NOT SYCL_INTEL_TARGET EQUAL 40)
     list(APPEND DPCPP_LINK_ONLY_FLAGS "-fsycl-targets=spir64")
     list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xs;-device ${SYCL_DEVICES_STR}")
