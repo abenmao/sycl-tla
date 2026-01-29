@@ -43,15 +43,16 @@ from cutlass_cppgen.utils.lazy_import import lazy_import
 cuda = lazy_import("cuda.cuda")
 cudart = lazy_import("cuda.cudart")
 nvrtc = lazy_import("cuda.nvrtc")
+dpctl = lazy_import("dpctl")
 from cutlass_library import SubstituteTemplate
 
-import dpctl
 
 import cutlass_cppgen
 from cutlass_cppgen import CACHE_FILE, CUTLASS_PATH, cuda_install_path, logger
 from cutlass_cppgen.backend.gemm_operation import GemmOperationUniversal
 from cutlass_cppgen.backend.library import ApiVersion
 from cutlass_cppgen.backend.utils.device import device_cc
+from cutlass_library.arch_constants import ( INTEL_XE12, INTEL_XE20)
 
 IncludeTemplate = r"""#include "${include}"
 """
@@ -174,7 +175,17 @@ class ArtifactManager:
                                        "-Xspirv-translator -spirv-ext=+SPV_INTEL_split_barrier",
                                        "-fno-sycl-instrument-device-code",
                                        "-fsycl-range-rounding=disable"]
-        self.nvcc()
+        try:
+            cc = device_cc()
+            if cc in [INTEL_XE12, INTEL_XE20]:  
+                self.dpcpp()
+            else:
+                self.nvcc()
+        except (ImportError, AttributeError, RuntimeError):
+            if os.environ.get('CUTLASS_USE_SYCL', '0') == '1':
+                self.dpcpp()
+            else:
+                self.nvcc()  
         self.compiled_cache_device = {}
         self.compiled_cache_host = {}
 
@@ -221,7 +232,7 @@ class ArtifactManager:
                 q = dpctl.SyclQueue(cutlass_cppgen.sycl_device())
                 module = dpctl.program.create_program_from_spirv(
                     q, cubin_image)
-                kernel = module.get_sycl_kernel(operation_name)
+                kernel = module.get_sycl_kernel(f"__sycl_kernel_{operation_name}")
             else:
                 err, module = cuda.cuModuleLoadData(cubin_image)
                 if err != cuda.CUresult.CUDA_SUCCESS:
@@ -473,7 +484,13 @@ class ArtifactManager:
                 self._nvcc_compile_options, arch, include_paths, False)
         else:
             cutlass_cppgen.initialize_sycl_context()
-            arch = "intel_gpu_pvc"
+            cc = device_cc()
+            if cc == 12:
+                arch = "intel_gpu_pvc"
+            elif cc == 20:
+                arch = "intel_gpu_bmg_g21"
+            else:
+                arch = "intel_gpu_bmg_g21"  
             host_compile_options = CompilationOptions(
                 ["-std=c++17", "-DCUTLASS_ENABLE_SYCL", "-DSYCL_INTEL_TARGET"],
                 arch, include_paths, True)
@@ -490,9 +507,7 @@ class ArtifactManager:
             # step 1: check if the operation is in cache
             compiled_kernel = self.compiled_cache_device.get(key)
 
-            # TODO(Lukas): Caching is currently deactivated for SYCL and needs
-            #              to be enabled.
-            if compiled_kernel is None and not bypass_cache and not self._is_sycl():
+            if compiled_kernel is None and not bypass_cache:
                 hit = self.load_operation(key, getattr( operation.rt_module, "extra_funcs", {}))
                 if hit:
                     compiled_kernel = self.compiled_cache_device.get(key)

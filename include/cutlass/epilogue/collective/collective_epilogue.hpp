@@ -80,6 +80,7 @@ class CollectiveEpilogue {
 #include "xe_epilogue.hpp"
 #include "xe_epilogue_legacy.hpp"
 #include "xe_array_epilogue.hpp"
+#include "xe_array_epilogue_legacy.hpp"
 #endif
 //
 // Conv

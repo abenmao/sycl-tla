@@ -71,14 +71,31 @@ int main(int argc, const char **argv) {
     return -1;
   }
 
-  // Define the work-group tile shape depending on the head-size of the second matmul
+#ifdef IS_FLOAT_E5M2
+  using ElementQ = cutlass::float_e5m2_t;
+  using ElementK = cutlass::float_e5m2_t;
+  using ElementV = cutlass::float_e5m2_t;
+#elif defined(IS_FLOAT_E4M3)
+  using ElementQ = cutlass::float_e4m3_t;
+  using ElementK = cutlass::float_e4m3_t;
+  using ElementV = cutlass::float_e4m3_t;
+#elif defined(IS_FLOAT_E2M1)
+  using ElementQ = cutlass::float_e2m1_t;
+  using ElementK = cutlass::float_e2m1_t;
+  using ElementV = cutlass::bfloat16_t;
+#else
+  using ElementQ = bfloat16_t;
+  using ElementK = bfloat16_t;
+  using ElementV = bfloat16_t;
+#endif
 
+ // Define the work-group tile shape depending on the head-size of the second matmul
 #ifdef PREFILL
 #if HEAD_DIM == 16
   /* Tiny config for testing */
-  using ShapeQK = Shape<_8, _16, _16>;       // (q,k,d)
-  using ShapePV = Shape<_8, _16, _16>;       // (q,v,k)
-  using ShapeOut = Shape<_8, _16>;           // (q,v)
+  using ShapeQK = Shape<_16, _16, _32>;       // (q,k,d)
+  using ShapePV = Shape<_16, _32, _16>;       // (q,v,k)
+  using ShapeOut = Shape<_16, _16>;           // (q,v)
   using SubgroupLayoutQK = Layout<Shape<_1, _1, _1>>;
 
 #elif HEAD_DIM == 64
@@ -103,40 +120,49 @@ int main(int argc, const char **argv) {
   using ShapeQK = Shape<_256, _64, _32>;
   using ShapePV = Shape<_256, _32, _64>;
   using ShapeOut = Shape<_256, _192>;
-  using SubgroupLayoutQK = Layout<Shape<_32, _1, _1>>;
+  using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 
 #endif
 #elif defined(DECODE)
+
+#if PERSISTENT
+#define NUM_SG _16
+#define KV_TILE_SIZE _256
+#else
+#define NUM_SG _8
+#define KV_TILE_SIZE _512
+#endif
+
 #if HEAD_DIM == 16
   /* Tiny config for testing */
   using ShapeQK = Shape<_1, _16, _16>;       // (q,k,d)
   using ShapePV = Shape<_1, _16, _16>;       // (q,v,k)
   using ShapeOut = Shape<_1, _16>;           // (q,v)
-  using SubgroupLayoutQK = Layout<Shape<_1, _2, _1>>;
+  using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 64
-    using ShapeQK = Shape<_1, _512, _64>;
-    using ShapePV = Shape<_1, _32, _512>;
+    using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
+    using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
     using ShapeOut = Shape<_1, _64>;
-    using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
+    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 96
-    using ShapeQK = Shape<_1, _512, _64>;
-    using ShapePV = Shape<_1, _32, _512>;
+    using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
+    using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
     using ShapeOut = Shape<_1, _96>;
-    using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
+    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 128
-    using ShapeQK = Shape<_1, _512, _64>;
-    using ShapePV = Shape<_1, _32, _512>;
+    using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
+    using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
     using ShapeOut = Shape<_1, _128>;
-    using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
+    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 192
-    using ShapeQK = Shape<_1, _512, _64>;
-    using ShapePV = Shape<_1, _32, _512>;
+    using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
+    using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
     using ShapeOut = Shape<_1, _192>;
-    using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
+    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 #endif
 #else
 #error Either DECODE or PREFILL should be defined.
@@ -144,48 +170,14 @@ int main(int argc, const char **argv) {
 
 #ifdef DECODE
   constexpr int PipelineStages = 1;
-  constexpr bool UseScale = false;
 #else
   constexpr int PipelineStages = 2;
-  constexpr bool UseScale = true;
-#endif
-#ifdef IS_FLOAT_E5M2
-  using ElementQ = cutlass::float_e5m2_t;
-  using ElementK = cutlass::float_e5m2_t;
-  using ElementV = cutlass::float_e5m2_t;
-#elif defined(IS_FLOAT_E4M3)
-  using ElementQ = cutlass::float_e4m3_t;
-  using ElementK = cutlass::float_e4m3_t;
-  using ElementV = cutlass::float_e4m3_t;
-#elif defined(IS_MX_FLOAT_E5M2)
-  using ElementType = cutlass::mx_float8_t<float_e5m2_t>;
-  using ElementQ = typename ElementType::DataType;
-  using ElementK = typename ElementType::DataType;
-  using ElementV = bfloat16_t;
-  using ElementScale = typename ElementType::ScaleFactorType;
-#elif defined(IS_MX_FLOAT_E4M3)
-  using ElementType = cutlass::mx_float8_t<float_e4m3_t>;
-  using ElementQ = typename ElementType::DataType;
-  using ElementK = typename ElementType::DataType;
-  using ElementV = bfloat16_t;
-  using ElementScale = typename ElementType::ScaleFactorType;
-#elif defined(IS_MX_FLOAT_E2M1)
-  using ElementType = cutlass::mx_float4_t<float_e2m1_t>;
-  using ElementQ = typename ElementType::DataType;
-  using ElementK = typename ElementType::DataType;
-  using ElementV = bfloat16_t;
-  using ElementScale = typename ElementType::ScaleFactorType;
-#else
-  using ElementQ = bfloat16_t;
-  using ElementK = bfloat16_t;
-  using ElementV = bfloat16_t;
 #endif
 
-#if defined(IS_MX_FLOAT_E5M2) || defined(IS_MX_FLOAT_E4M3) || defined(IS_MX_FLOAT_E2M1)
-  return options.is_causal ? FMHAConfig<true, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV, ElementScale>::run(options)
-  : FMHAConfig<false, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV, ElementScale>::run(options);
+#if PERSISTENT
+  return FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, /*persistent=*/true, ElementQ, ElementK, ElementV>::run(options);
 #else
-  return options.is_causal ? FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV>::run(options)
-  : FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  ElementQ, ElementK, ElementV>::run(options);
+  return options.is_causal ? FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  /*persistent=*/false, ElementQ, ElementK, ElementV>::run(options)
+  : FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  /*persistent=*/false, ElementQ, ElementK, ElementV>::run(options);
 #endif
 }

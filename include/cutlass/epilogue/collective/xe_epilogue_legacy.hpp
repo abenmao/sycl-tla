@@ -124,7 +124,7 @@ public:
   using val_layout_store_D = decltype(make_layout(shape_div(typename Trait_D::BlockShape{}, CopyThreadShape{})));
   using XE_Copy_D = decltype(make_tiled_copy(Copy_Atom<Trait_D, ElementD>{}, Layout<CopyThreadShape>{}, val_layout_store_D{}));
 
-private:
+protected:
   constexpr static bool is_source_supported = not cute::is_void_v<ElementC> && not cute::is_void_v<CopyOpG2R>;
   constexpr static bool is_destination_supported = not cute::is_void_v<ElementD> && not cute::is_void_v<CopyOpR2G>;
 
@@ -410,7 +410,7 @@ public:
       CUTLASS_PRAGMA_UNROLL
       for (int epi_m = 0; epi_m < FragsM; epi_m++) {
         cst_callbacks.begin_loop(epi_m, epi_n);
-        
+
         //Instead of calling is_C_load_needed. We do heirachical check 
         //so that runtime check not there when ElementC is void
         if constexpr (is_source_supported) {

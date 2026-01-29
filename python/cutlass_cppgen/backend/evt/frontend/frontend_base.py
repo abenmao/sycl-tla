@@ -110,7 +110,7 @@ class EVTFrontendBase:
         self.parse(*args, **kwargs)
 
         # Verify the DAG IR to ensure that "D" is the output node with out_degree = 0
-        if (self.cc >= 90):
+        if cc_map[self.cc] in [12, 20, 90, 100]:
             if (self.dag_ir.out_degree("D") != 0):
                 raise RuntimeError(
                     f"On SM90 or higher, D is expected to be a output node with 0 users to "
@@ -120,7 +120,7 @@ class EVTFrontendBase:
         self.pass_manager()
         # Set the epilogue type
         self.epilogue_thread_type = self.dag_ir.epilogue_thread_type
-        if cc_map[self.cc] in [90, 100]:
+        if cc_map[self.cc] in [12, 20, 90, 100]:
             self.arg_c_type = self.dag_ir.arg_c_type
             self.arg_d_type = self.dag_ir.arg_d_type
         self.reduction_names = self.dag_ir.reduction_names

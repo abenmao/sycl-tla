@@ -33,9 +33,9 @@ from __future__ import annotations
 
 from cutlass_cppgen.utils.lazy_import import lazy_import
 cuda = lazy_import("cuda.cuda")
+dpctl = lazy_import("dpctl")
 import numpy as np
 
-import dpctl
 
 from cutlass_cppgen.backend.memory_manager import device_mem_alloc, todevice
 from cutlass_cppgen.utils.datatypes import (
@@ -83,7 +83,7 @@ class TorchFrontend:
         :return: Device pointer
         """
 
-        if isinstance(stream, dpctl.SyclQueue):
+        if isinstance(stream, dpctl.SyclQueue) or (hasattr(torch_tensor, 'is_xpu') and torch_tensor.is_xpu):
             if not is_xpu_available():
                 raise Exception("No XPU support in Torch available")
             if not is_xpu_tensor(torch_tensor):
@@ -94,7 +94,7 @@ class TorchFrontend:
         # check the device of torch_tensor
         if not torch_tensor.is_cuda:
             torch_tensor = torch_tensor.to("cuda")
-
+            
         return cuda.CUdeviceptr(torch_tensor.data_ptr())
 
 
