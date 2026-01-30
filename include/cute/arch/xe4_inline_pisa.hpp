@@ -3425,6 +3425,127 @@ inline void cm_vcol_load(dtype *data_ptr, const mat_desc_t &mat_desc, const sycl
     data_ptr[i] = dst[i];
   }
 }
+template <typename dtype, uint32_t vs, typename mat_desc_t = uint32_t,
+	  uint32_t xoff=0, uint32_t yoff=0, cute::Vecdir vdir=cute::Vecdir::none,
+	  uint32_t alen=0, uint32_t astride=0, cute::arrdir adir=cute::arrdir::none,
+          cute::morder mo =cute::morder::ordered>
+inline void load_matrix(dtype *data_ptr, const mat_desc_t &mat_desc, const sycl::marray<uint16_t, 2> &pos) {
+  //"ld_matrix.unordered.arrlen.arrstride.arrdir.veclen.vecdir<.xoff><.yoff>.bitwidth dst, desc, coords);
+  //static_assert(cmp_values<arlen,0,1,2,4,8>());
+  //static_assert(cmp_values<astride,0,1,2,4,8>());
+  //static_assert(cmp_values<bwidth,4,6,8,16,32,64>());
+  
+  constexpr uint32_t vlen = vs;
+  constexpr uint32_t dbits = sizeof_bits<dtype>();
+  static_assert(((alen == 0 && astride == 0) || 
+		 (alen == 1 || alen == 2 || alen == 4 || alen == 8)));
+  static_assert((astride == 0 || astride == 1 || astride == 2 || astride == 4 || astride == 8));
+  static_assert(vlen == 0 || (vlen <= 32 && (vlen & vlen-1) == 0));
+  static_assert(xoff <= 1024 && yoff <= 1024);
+  static_assert(dbits == 4 || dbits == 6 || dbits == 8 || dbits == 16 || dbits == 32 || dbits == 64);
+
+  constexpr uint32_t dbits_u32 = sizeof(uint32_t) * BITS_PER_BYTE;
+  constexpr uint32_t vs_u32 = ((dbits * vs + dbits_u32 - 1) / dbits_u32);
+  if constexpr (dbits < 8) {
+    static_assert(vlen <= 32, "for sub-byte type, the maximum vlen is 32");
+  } else {
+    static_assert(vlen * dbits <= 256, "the maximum bits per load is 256");
+  }
+
+  using vtype = vector_t<uint32_t, vs_u32>;
+  vtype temp;
+  using cute::_morder;
+  using cute::_alen;
+  using cute::_astride;
+  using cute::_adir;
+  using cute::_vlen;
+  using cute::_vdir;
+  using cute::_bwidth;
+  vector_t<uint16_t, 2> posv{pos[0], pos[1]};
+  INLINE_PISA(("ld_matrix"+_morder<mo> + _alen<alen> + _astride<astride> + _adir<adir> 
+		         + _vlen<vlen> + _vdir<vdir> + _bwidth<dbits> + " %0, %1, %2;")
+	      : "=r"(temp)
+              : "r"(mat_desc), "r"(posv));
+
+
+  if constexpr (adir==cute::arrdir::arow) {
+     constexpr uint32_t vs_u8 = (dbits * vs + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
+    // for sub-byte type, will cvt to uint8_t first.
+    using dtype_reg = std::conditional_t<(dbits < 8), uint8_t, dtype>;
+    // to make it u8/element aligned
+    constexpr uint32_t vs_dst = (dbits < 8) ? vs_u8 : vs;
+    // to make it u32 aligned
+    constexpr uint32_t vs_reg = vs_u32 * dbits_u32 / sizeof_bits<dtype_reg>();
+    sycl::marray<dtype_reg, vs_reg> dst = sycl::bit_cast<sycl::marray<dtype_reg, vs_reg>>(temp);
+    dtype_reg *data_reg_ptr = reinterpret_cast<dtype_reg *>(data_ptr);
+#pragma unroll
+    for (uint32_t i = 0; i < vs_dst; i++) {
+      data_reg_ptr[i] = dst[i];
+    }
+  } else {
+    constexpr uint32_t vs_dst = vs_u32 * dbits_u32 / dbits;
+    sycl::marray<dtype, vs_dst> dst = sycl::bit_cast<sycl::marray<dtype, vs_dst>>(temp);
+#pragma unroll
+    for (uint32_t i = 0; i < vs; i++) {
+      data_ptr[i] = dst[i];
+    }
+  }
+}
+
+template <typename dtype, uint32_t vs, typename mat_desc_t = uint32_t,
+	  uint32_t xoff=0, uint32_t yoff=0, cute::Vecdir vdir=cute::Vecdir::none,
+	  uint32_t alen=0, uint32_t astride=0, cute::arrdir adir=cute::arrdir::none,
+          cute::morder mo =cute::morder::ordered>
+inline void store_matrix(const mat_desc_t &mat_desc, const dtype *data_ptr, const sycl::marray<uint16_t, 2> &pos) {
+  //"st_matrix.unordered.arrlen.arrstride.arrdir.veclen.vecdir<.xoff><.yoff>.bitwidth dst, desc, coords);
+  //static_assert(cmp_values<arlen,0,1,2,4,8>());
+  //static_assert(cmp_values<astride,0,1,2,4,8>());
+  //static_assert(cmp_values<bwidth,4,6,8,16,32,64>());
+  //static_value_assert(arlen == 0 || arlen == 1 || arlen == 2 || arlen == 4 || arlen == 8);
+  constexpr uint32_t vlen = vs;
+  constexpr uint32_t dbits = sizeof_bits<dtype>();
+  static_assert(((alen == 0 && astride == 0) || 
+		 (alen == 1 || alen == 2 || alen == 4 || alen == 8)));
+  static_assert((astride == 0 || astride == 1 || astride == 2 || astride == 4 || astride == 8));
+  static_assert(vlen == 0 || (vlen <= 32 && (vlen & vlen-1) == 0));
+  static_assert(xoff <= 1024 && yoff <= 1024);
+  static_assert(dbits == 4 || dbits == 6 || dbits == 8 || dbits == 16 || dbits == 32 || dbits == 64);
+
+  if constexpr (dbits < 8) {
+    static_assert(vlen <= 32, "for sub-byte type, the maximum vs is 32");
+  } else {
+    static_assert(vlen * dbits <= 256, "the maximum bits per load is 256");
+  }
+  using cute::_morder;
+  using cute::_alen;
+  using cute::_astride;
+  using cute::_adir;
+  using cute::_vlen;
+  using cute::_vdir;
+  using cute::_bwidth;
+  constexpr uint32_t dbits_u32 = sizeof(uint32_t) * BITS_PER_BYTE;
+  constexpr uint32_t vs_u32 = (dbits * vs + dbits_u32 - 1) / dbits_u32;
+  //constexpr uint32_t vs_src = vs_u32 * dbits_u32 / dbits;
+  constexpr uint32_t vs_u8 = (dbits * vs + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
+  using dtype_reg = std::conditional_t<(dbits < 8), uint8_t, dtype>;
+  constexpr uint32_t vs_src = (dbits < 8) ? vs_u8 : vs;
+  constexpr uint32_t vs_reg = vs_u32 * dbits_u32 / sizeof_bits<dtype_reg>();
+  const dtype_reg *data_reg_ptr = reinterpret_cast<const dtype_reg *>(data_ptr);
+  sycl::marray<dtype_reg, vs_reg> src;
+
+  using vtype = vector_t<uint32_t, vs_u32>;
+  vtype temp;
+  //sycl::marray<dtype, vs_src> src;
+#pragma unroll
+  for (uint32_t i = 0; i < vs; i++) {
+    src[i] = data_reg_ptr[i];
+  }
+  INLINE_PISA(("st_matrix"+_morder<mo> + _alen<alen> + _astride<astride> + _adir<adir> 
+		         + _vlen<vlen> + _vdir<vdir> + _bwidth<dbits> + " %0, %1, %2;") 
+	       ::"r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)),
+                "r"(sycl::bit_cast<vtype>(src)));
+
+}
 
 template <typename dtype, uint32_t vs, typename mat_desc_t = uint32_t>
 inline void cm_vcol_store(const mat_desc_t &mat_desc, dtype *data_ptr, const sycl::marray<uint16_t, 2> &pos) {

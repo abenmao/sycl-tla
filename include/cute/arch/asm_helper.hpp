@@ -11,6 +11,7 @@ template <> struct fixed_s<2>   { static constexpr fixstr::fixed_string value {"
 template <> struct fixed_s<3>   { static constexpr fixstr::fixed_string value {"3"};  };
 template <> struct fixed_s<4>   { static constexpr fixstr::fixed_string value {"4"};  };
 template <> struct fixed_s<5>   { static constexpr fixstr::fixed_string value {"5"};  };
+template <> struct fixed_s<6>   { static constexpr fixstr::fixed_string value {"6"};  };
 template <> struct fixed_s<8>   { static constexpr fixstr::fixed_string value {"8"};  };
 template <> struct fixed_s<16>  { static constexpr fixstr::fixed_string value {"16"}; };
 template <> struct fixed_s<32>  { static constexpr fixstr::fixed_string value {"32"}; };
@@ -70,6 +71,67 @@ enum class tred_round_mode {
   mode_rna
 };
 
+enum class morder {
+  ordered,
+  unordered
+};
+
+template <morder> struct m_order;
+template <> struct m_order<morder::ordered> { static constexpr fixstr::fixed_string value {""}; };
+template <> struct m_order<morder::unordered> { static constexpr fixstr::fixed_string value {".unordered"}; };
+template <morder ord> constexpr auto _morder = m_order<ord>::value;
+
+template <int N> struct alen_prefix { static constexpr fixstr::fixed_string value {".al"}; };
+template <> struct alen_prefix<0> { static constexpr fixstr::fixed_string value {""}; };
+
+template <int N> struct alen { static constexpr fixstr::fixed_string value { fixed_s<N>::value}; };
+template <> struct alen<0> { static constexpr fixstr::fixed_string value {""}; };
+template <int N> constexpr auto _alen = alen_prefix<N>::value + alen<N>::value ;
+
+template <int N> struct as_prefix { static constexpr fixstr::fixed_string value {".as"}; };
+template <> struct as_prefix<0> { static constexpr fixstr::fixed_string value {""}; };
+
+template <int N> struct astride { static constexpr fixstr::fixed_string value { fixed_s<N>::value}; };
+template <> struct astride<0> { static constexpr fixstr::fixed_string value {""}; };
+template <int N > constexpr auto _astride = as_prefix<N>::value + astride<N>::value;
+
+enum class arrdir {
+  none,
+  arow,
+  acol 
+};
+template <arrdir> struct adir;
+template <> struct adir<arrdir::none> { static constexpr fixstr::fixed_string value {""}; };
+template <> struct adir<arrdir::arow> { static constexpr fixstr::fixed_string value {".arow"}; };
+template <> struct adir<arrdir::acol> { static constexpr fixstr::fixed_string value {".acol"}; };
+template <arrdir dir> constexpr auto _adir= adir<dir>::value;
+
+template <int N> struct vl_prefix { static constexpr fixstr::fixed_string value {".vl"}; };
+template <> struct vl_prefix<0> { static constexpr fixstr::fixed_string value {""}; };
+
+template <int N> struct vlen { static constexpr fixstr::fixed_string value {fixed_s<N>::value}; };
+template <> struct vlen<0> { static constexpr fixstr::fixed_string value {""}; };
+template <int N> constexpr auto _vlen = vl_prefix<N>::value + vlen<N>::value;
+
+enum class Vecdir {
+  none,
+  Vrow,
+  Vcol,
+  Cooprow,
+  Coopcol
+};
+template <Vecdir> struct vdir;
+template <> struct vdir<Vecdir::none> { static constexpr fixstr::fixed_string value {""}; };
+template <> struct vdir<Vecdir::Vrow> { static constexpr fixstr::fixed_string value {".vrow"}; };
+template <> struct vdir<Vecdir::Vcol> { static constexpr fixstr::fixed_string value {".vcol"}; };
+template <> struct vdir<Vecdir::Cooprow> { static constexpr fixstr::fixed_string value {".cooprow"}; };
+template <> struct vdir<Vecdir::Coopcol> { static constexpr fixstr::fixed_string value {".coopcol"}; };
+template <Vecdir dir> constexpr auto _vdir= vdir<dir>::value;
+
+template <int N> struct bwidth { static constexpr fixstr::fixed_string value { fixed_s<N>::value }; }; 
+template <int N> constexpr auto _bwidth = "." + bwidth<N>::value +"b";
+
+
 template <tred_round_mode> struct tensor_red_round_type;
 template <> struct tensor_red_round_type<tred_round_mode::none> { static constexpr fixstr::fixed_string value {""};};
 template <> struct tensor_red_round_type<tred_round_mode::mode_re> { static constexpr fixstr::fixed_string value {".re"};};
@@ -100,6 +162,7 @@ template <> struct rd_type<cutlass::tfloat32_t> {static constexpr fixstr::fixed_
 template <> struct rd_type<float> {static constexpr fixstr::fixed_string value {".32b.fp"};};
 template <> struct rd_type<sycl::half> {static constexpr fixstr::fixed_string value {".16b.fp"};};
 template <> struct rd_type<cutlass::half_t> {static constexpr fixstr::fixed_string value {".16b.fp"};};
+template <> struct rd_type<unsigned short> {static constexpr fixstr::fixed_string value {".16b.uint"};};
 template <> struct rd_type<sycl::ext::oneapi::bfloat16> {
   static constexpr fixstr::fixed_string value {".16b.fp"};
 };

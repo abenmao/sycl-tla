@@ -50,3 +50,16 @@ cutlass_test_unit_add_executable(
   cutlass_test_unit_cute_xe4_adma_load_store
   adma_load_store.cpp
 )
+
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_ldsm_load
+  ldsm_load.cpp
+)
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_ldsm_adma
+  ldsm_adma.cpp
+)
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_ldsm_store
+  ldsm_store.cpp
+)
