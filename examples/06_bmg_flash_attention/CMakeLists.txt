@@ -27,10 +27,10 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-set(CUTLASS_APPLICATIONS_DIR ${CMAKE_SOURCE_DIR}/applications)
+set(CUTLASS_APPLICATIONS_DIR ${CUTLASS_DIR}/applications)
 
 if(SYCL_INTEL_TARGET EQUAL 35)
-  set(INPUT_TYPES bfloat16_t float_e5m2_t float_e4m3_t mx_float_e5m2_t mx_float_e4m3_t mx_float_e2m1_t)
+  set(INPUT_TYPES bfloat16_t float_e5m2_t float_e4m3_t float_e2m1_t mx_float_e5m2_t mx_float_e4m3_t mx_float_e2m1_t)
 else()
   set(INPUT_TYPES bfloat16_t float_e5m2_t float_e4m3_t)
 endif()
@@ -38,7 +38,7 @@ endif()
 foreach(HEAD_DIM 64 96 128 192)
   foreach(INPUT_TYPE ${INPUT_TYPES})
     if (CUTLASS_TEST_FOR_CRI)
-      set(TEST_BASE "--batch=1 --num_heads_q=4 --num_heads_kv=4 --seq_len_kv=256 --iterations=0 --verify=0")
+      set(TEST_BASE "--batch=1 --num_heads_q=4 --num_heads_kv=4 --seq_len_kv=256 --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
       set(PAGED_ARGS "--seq_len_kv_cache=64 --page_size=64 --use_paged_kv")
       set(TEST_PAGED_PREFILL ${TEST_BASE} ${PAGED_ARGS} "--seq_len_qo=256")
       set(TEST_PAGED_DECODE ${TEST_BASE} ${PAGED_ARGS} "--seq_len_qo=1")
@@ -63,21 +63,50 @@ foreach(HEAD_DIM 64 96 128 192)
       set(INPUT_MACRO "IS_MX_FLOAT_E4M3")
     elseif(INPUT_TYPE STREQUAL "mx_float_e2m1_t")
       set(INPUT_MACRO "IS_MX_FLOAT_E2M1")
+    elseif(INPUT_TYPE STREQUAL "float_e2m1_t")
+      set(INPUT_MACRO "IS_FLOAT_E2M1")
     endif()
 
-    cutlass_example_add_executable(
-      06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM}
-      06_xe_fmha_fwd.cpp
-      TEST_COMMAND_OPTIONS
-      TEST_NO_PAGED_PREFILL
-    )
+   if (INPUT_TYPE STREQUAL "mx_float_e5m2_t" OR  INPUT_TYPE STREQUAL "mx_float_e4m3_t" OR INPUT_TYPE STREQUAL "mx_float_e2m1_t")
+      cutlass_example_add_executable(
+        06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM}
+        06_xe_fmha_fwd_mxfp.cpp
+        TEST_COMMAND_OPTIONS
+        TEST_NO_PAGED_PREFILL
+      )
 
-    cutlass_example_add_executable(
-      06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM}
-      06_xe_fmha_fwd.cpp
-      TEST_COMMAND_OPTIONS
-      TEST_NO_PAGED_DECODE
-    )
+      cutlass_example_add_executable(
+        06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM}
+        06_xe_fmha_fwd_mxfp.cpp
+        TEST_COMMAND_OPTIONS
+        TEST_NO_PAGED_DECODE
+      )
+    else()
+      cutlass_example_add_executable(
+        06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM}
+        06_xe_fmha_fwd.cpp
+        TEST_COMMAND_OPTIONS
+        TEST_NO_PAGED_PREFILL
+      )
+
+      cutlass_example_add_executable(
+        06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM}
+        06_xe_fmha_fwd.cpp
+        TEST_COMMAND_OPTIONS
+        TEST_NO_PAGED_DECODE
+      )
+
+      if (NOT HEAD_DIM STREQUAL 192)
+        # specific test for persistent kernel
+        cutlass_example_add_executable(
+          06_xe_fmha_fwd_decode_persistent_${INPUT_TYPE}_hdim${HEAD_DIM}
+          06_xe_fmha_fwd.cpp
+          TEST_COMMAND_OPTIONS
+          TEST_NO_PAGED_DECODE
+        )
+        target_compile_definitions(06_xe_fmha_fwd_decode_persistent_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE PERSISTENT SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
+      endif()
+    endif()
 
     target_compile_definitions(06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
     target_compile_definitions(06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
@@ -122,6 +151,14 @@ foreach(HEAD_DIM 64 96 128 192)
     TEST_PAGED_DECODE
   )
 
+  cutlass_example_add_executable(
+    06_xe_fmha_fwd_prefill_fp8kvfp16mma_hdim${HEAD_DIM}
+    06_xe_fmha_fwd_fp8kvfp16mma.cpp
+    TEST_COMMAND_OPTIONS
+    TEST_NO_PAGED_PREFILL
+  )
+
+  target_compile_definitions(06_xe_fmha_fwd_prefill_fp8kvfp16mma_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1)
   target_compile_definitions(06_bmg_prefill_attention_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM})
   target_compile_definitions(06_bmg_prefill_attention_cachedKV_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM})
   target_compile_definitions(06_bmg_decode_attention_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM})

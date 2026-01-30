@@ -104,7 +104,7 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
             class TA1, class ALayout,
             class TB1, class BLayout,
             class TC1, class CLayout>
-  CUTE_HOST_DEVICE constexpr friend void
+  CUTE_DEVICE friend void
   mma_unpack(MMA_Traits<MMAOp>    const& traits,
             Tensor<TD1, DLayout>      & D,
             Tensor<TA1, ALayout> const& A_zipped,
@@ -127,8 +127,8 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
     constexpr int   RegNumB = extent<typename MMAOp::BRegisters>::value;
     constexpr int   RegNumC = extent<typename MMAOp::CRegisters>::value;
 
-    auto  [A, SFA, SFA_OFFSET] = unzip_tensor(A_zipped);
-    auto  [B, SFB, SFB_OFFSET] = unzip_tensor(B_zipped);
+    auto  [A, SFA, SFA_M_OFFSET, SFA_K_OFFSET] = unzip_tensor(A_zipped);
+    auto  [B, SFB, SFB_N_OFFSET, SFB_K_OFFSET] = unzip_tensor(B_zipped);
 
     Tensor rA = recast<RegTypeA>(A);
     Tensor rB = recast<RegTypeB>(B);
@@ -140,6 +140,9 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
     CUTE_STATIC_ASSERT_V(size(rD) == Int<RegNumD>{});
     CUTE_STATIC_ASSERT_V(size(rC) == Int<RegNumC>{});
 
+    auto sfa_offset = SFA_M_OFFSET[0] + SFA_K_OFFSET[0];
+    auto sfb_offset = SFB_N_OFFSET[0] + SFB_K_OFFSET[0];
+
     cute::detail::explode_mma<MMAOp>(
             rD,   make_int_sequence<RegNumD>{},
             rA,   make_int_sequence<RegNumA>{},
@@ -147,7 +150,8 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
             rC,   make_int_sequence<RegNumC>{},
             SFA, make_int_sequence<1>{},
             SFB, make_int_sequence<1>{},
-            SFA_OFFSET[0], SFB_OFFSET[0]);
+            sfa_offset,
+            sfb_offset);
   }
 
 };

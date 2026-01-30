@@ -47,8 +47,12 @@
 
 #include "../../common/sycl_cute_common.hpp"
 
-#pragma clang diagnostic ignored "-Wpass-failed"
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#if defined(__clang__)
+  #pragma clang diagnostic ignored "-Wpass-failed"
+  #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+  #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 
 using namespace cute;
 
@@ -170,18 +174,6 @@ gemm_device(ATensor   const& A,         // (M,K)
   copy(copy_c, tCrC, tCgC);
 }
 
-
-
-template <typename T, size_t = 0>
-struct is_complete : std::false_type {};
-
-template <typename T>
-struct is_complete<T, 0 * sizeof(T)> : std::true_type {};
-
-template <typename T>
-static constexpr bool is_complete_v = is_complete<T>::value;
-
-
 template <typename TA, typename TB, typename TC>
 auto
 choose_mma_op()
@@ -246,7 +238,11 @@ gemm_cute(sycl::queue &Q,
 
   syclex::properties kernel_props {
     syclex::sub_group_size<16>,
+#if (SYCL_INTEL_TARGET == 35)
+    intelex::grf_size<512>
+#else
     intelex::grf_size<256>
+#endif
   };
 
   auto event = Q.parallel_for<GemmCuteName<TA, TB, TC, layoutA, layoutB>>(sycl::nd_range<2>(global, local), kernel_props,

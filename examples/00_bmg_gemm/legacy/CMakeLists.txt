@@ -27,9 +27,11 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 if (CUTLASS_TEST_FOR_CRI)
-  set(TEST_CRI_ARGS "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=0 --verify=0")
+  set(TEST_CRI_ARGS "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
 
   set(GEMM_ARGS TEST_CRI_ARGS)
+  set(GEMM_PADDED_ARGS TEST_CRI_ARGS)
+  set(GEMM_QUEUE_ARGS TEST_CRI_ARGS)
 else()
   set(TEST_BATCHES --l=2)
   set(TEST_LARGE "--l=513 --m=8 --n=16384 --k=512") # B matrix capacity > uint32_max
@@ -37,6 +39,8 @@ else()
   set(TEST_SMALL_SHAPE_PADDABLE --m=1 --n=1 --k=2 --l=2)
 
   set(GEMM_ARGS TEST_BATCHES TEST_LARGE TEST_SMALL_SHAPE)
+  set(GEMM_PADDED_ARGS TEST_BATCHES TEST_SMALL_SHAPE_PADDABLE)
+  set(GEMM_QUEUE_ARGS TEST_BATCHES)
 endif()
 
 cutlass_example_add_executable(
@@ -44,4 +48,18 @@ cutlass_example_add_executable(
   00_bmg_gemm.cpp
   TEST_COMMAND_OPTIONS
   ${GEMM_ARGS}
+)
+
+cutlass_example_add_executable(
+  00_bmg_gemm_padded_legacy
+  00_bmg_gemm_padded.cpp
+  TEST_COMMAND_OPTIONS
+  ${GEMM_PADDED_ARGS}
+)
+
+cutlass_example_add_executable(
+  00_bmg_gemm_with_sycl_queue_legacy
+  00_bmg_gemm_with_sycl_queue.cpp
+  TEST_COMMAND_OPTIONS
+  ${GEMM_QUEUE_ARGS}
 )

@@ -180,7 +180,7 @@ template <class FMHAPrefillKernel, bool isVarLen> struct ExampleRunner {
     using outType = cute::conditional_t<is_fp8_v<Tin>, half_t, Tin>;
     if constexpr(is_fp8_v<Tin>) {
       cutlass::DeviceAllocation<outType> out(in.size());
-      convert_dtype<Tin, outType, ExampleRunner>(in.get(), out.get(), in.size());
+      convert_dtype<Tin, outType, ExampleRunner>(in, out);
       return out;
     } else { 
       return in;

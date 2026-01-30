@@ -96,7 +96,9 @@ endfunction()
 # This CMakeLists.txt builds SYCL-based examples for CUTLASS.
 
 if (CUTLASS_TEST_FOR_CRI)
-  set(CRI_GEMM_DEFAULT_SIZE 256 CACHE INTERNAL "Default GEMM MNK size")
+  set(CRI_GEMM_DEFAULT_SIZE 256 CACHE INTERNAL "Default GEMM matrix dimensions (256, 256, 256) for CRI tests")
+  set(CRI_DEFAULT_ITERATIONS 0 CACHE INTERNAL "Number of iterations for CRI tests (0=single run)")
+  set(CRI_DEFAULT_VERIFY 0 CACHE STRING "Enable verification in CRI tests (0=skip, 1=verify)")
 endif()
 
 if (CUTLASS_ENABLE_SYCL)
@@ -111,10 +113,13 @@ if (CUTLASS_ENABLE_SYCL)
       00_bmg_gemm/legacy
       01_bmg_gemm_with_collective_builder
       02_bmg_gemm_mixed_dtype
+      02_bmg_gemm_mixed_dtype/legacy
       03_bmg_gemm_streamk
+      03_bmg_gemm_streamk/legacy
       04_bmg_grouped_gemm
       04_bmg_grouped_gemm/legacy
       05_bmg_gemm_with_epilogues
+      05_bmg_gemm_with_epilogues/legacy
       06_bmg_flash_attention
       07_bmg_dual_gemm
       08_bmg_gemm_f8
@@ -122,8 +127,10 @@ if (CUTLASS_ENABLE_SYCL)
       09_bmg_grouped_gemm_f8/legacy
       10_bmg_grouped_gemm_mixed_dtype
       11_xe20_cutlass_library
-      12_xe35_block_scaled_gemm
-      13_xe35_block_scaled_grouped_gemm
+      12_xe20_moe_gemm_cute_interface
+      13_bmg_gemm_bias
+      50_xe35_block_scaled_gemm
+      51_xe35_block_scaled_grouped_gemm
       )
       add_subdirectory(${EXAMPLE})
     endforeach()

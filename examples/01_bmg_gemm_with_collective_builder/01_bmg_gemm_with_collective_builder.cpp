@@ -153,7 +153,6 @@ struct ExampleRunner {
   using ElementC = typename Gemm::ElementC;
   using ElementOutput = typename CollectiveEpilogue::ElementOutput;
   using ElementCompute = typename CollectiveEpilogue::ElementCompute;
-  using ElementAccumulator = typename CollectiveEpilogue::ElementAccumulator;
 
   using ProblemShapeType = typename Gemm::GemmKernel::ProblemShape;
 
@@ -196,7 +195,7 @@ struct ExampleRunner {
           beta,
           ref_C,
           ref_D,
-          ElementAccumulator(0),
+          ElementAcc(0),
           L,     // batch_count
           M * K, // batch_stride_A
           K * N, // batch_stride_B
@@ -344,7 +343,7 @@ int main(int argc, const char** argv)
   constexpr int AlignmentB = sizeof(ElementInputB);
   constexpr int AlignmentC = sizeof(ElementAccumulator);
   constexpr int AlignmentD = sizeof(ElementOutput);
-  
+
   using LayoutA = cutlass::layout::RowMajor;
   using LayoutB = cutlass::layout::RowMajor;
   using LayoutC = cutlass::layout::RowMajor;
@@ -352,7 +351,7 @@ int main(int argc, const char** argv)
 
   // Workgroup-level tile
   using TileShape = Shape<_256, _256, _32>;
-  
+
   using CollectiveMainloop = cutlass::gemm::collective::CollectiveBuilder<
     cutlass::arch::IntelXe, cutlass::arch::OpClassTensorOp,
     ElementInputA, LayoutA, AlignmentA,
@@ -364,21 +363,21 @@ int main(int argc, const char** argv)
   >::CollectiveOp;
 
   // Define a Linear Combination, Elementwise Activation (LinCombEltAct) epilogue with ReLU activation
-  using EpilogueOp = cutlass::epilogue::fusion::LinCombEltAct<cutlass::epilogue::thread::ReLu, 
-          ElementOutput, ElementComputeEpilogue, ElementAccumulator, 
+  using EpilogueOp = cutlass::epilogue::fusion::LinCombEltAct<cutlass::epilogue::thread::ReLu,
+          ElementOutput, ElementComputeEpilogue, ElementAccumulator,
           ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
 
   using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveBuilder<
     cutlass::arch::IntelXe, cutlass::arch::OpClassTensorOp,
     TileShape, Shape<_1, _1, _1>,
     cutlass::epilogue::collective::EpilogueTileAuto, ElementComputeEpilogue,
-    ElementAccumulator, 
+    ElementAccumulator,
     ElementAccumulator, LayoutC, AlignmentC,
     ElementOutput,      LayoutD, AlignmentD,
     cutlass::epilogue::collective::EpilogueScheduleAuto,
     EpilogueOp
   >::CollectiveOp;
-  
+
   using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
   Shape<int, int, int, int>,
   CollectiveMainloop,

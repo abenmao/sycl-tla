@@ -370,7 +370,7 @@ struct ExampleRunner {
       std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
       if (!passed) return cutlass::Status::kErrorInternal;
     } else {
-      std::cout << "Verification is skipped.\n";
+      std::cout << "Disposition is skipped.\n";
     }
 
     if (options.iterations > 0) {
@@ -412,6 +412,11 @@ int main(int argc, const char** argv)
 
   if (options.error) {
     std::cerr << "Aborting execution." << std::endl;
+    return -1;
+  }
+
+  if (options.n < options.num_head * (options.nope_dim + options.rope_dim)) {
+    std::cerr << "n should be greater than num_head * (nope_dim + rope_dim)" << std::endl;
     return -1;
   }
 

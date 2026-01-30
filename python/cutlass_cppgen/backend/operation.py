@@ -33,8 +33,8 @@
 import ctypes
 from cutlass_cppgen.utils.lazy_import import lazy_import
 cuda = lazy_import("cuda.cuda")
+dpctl = lazy_import("dpctl")
 
-import dpctl
 
 from cutlass_cppgen.backend.utils.device import device_cc
 
@@ -146,7 +146,7 @@ class ExecutableOperation:
         packed[0] = ctypes.addressof(cArg)
         if isinstance(stream, dpctl.SyclQueue):
            self.run_with_sycl(launch_config, packed[0], len(host_workspace), stream)
-           return cuda.CUresult.CUDA_SUCCESS
+           return 0
 
         if supports_cluster_launch():
             return self.run_with_clusters(launch_config, packed, stream)

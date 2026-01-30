@@ -271,14 +271,12 @@ struct ExampleRunner {
 
       // fp8 -> fp16
       convert_dtype<ElementType, half_t, ExampleRunner>(
-          block_A.get(),
-          block_A_fp16.get(),
-          block_A.size()
+          block_A,
+          block_A_fp16
       );
       convert_dtype<ElementType, half_t, ExampleRunner>(
-          block_B.get(),
-          block_B_fp16.get(),
-          block_B.size()
+          block_B,
+          block_B_fp16
       );
 
       cutlass::TensorRef ref_A(block_A_fp16.get() + offset_A.at(i), LayoutA::packed({M, K}));

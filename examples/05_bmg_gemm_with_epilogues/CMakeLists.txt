@@ -27,9 +27,11 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 if (CUTLASS_TEST_FOR_CRI)
-  set(TEST_BASE "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=0 --verify=0")
+  set(TEST_BASE "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
+  set(TEST_SPLITK ${TEST_BASE} --num-head=2 --nope-dim=64 --rope-dim=64) # Splitk specific parameters
 else()
   set(TEST_BASE "")
+  set(TEST_SPLITK ${TEST_BASE}) # No extra parameters when not in CRI mode
 endif()
 
 set(TEST_MULTIPLE_BATCHES ${TEST_BASE} --l=2)
@@ -97,5 +99,19 @@ cutlass_example_add_executable(
   05_bmg_gemm_with_epilogue_splitk
   05_bmg_gemm_with_epilogue_splitk.cpp
   TEST_COMMAND_OPTIONS
-  TEST_SINGLE_BATCH
+  TEST_SPLITK
+)
+
+cutlass_example_add_executable(
+  05_bmg_gemm_with_epilogue_lincombperrowbiaseltactaux
+  05_bmg_gemm_with_epilogue_lincombperrowbiaseltactaux.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_MULTIPLE_BATCHES
+)
+
+cutlass_example_add_executable(
+  05_bmg_gemm_with_epilogue_lincombauxstore
+  05_bmg_gemm_with_epilogue_lincombauxstore.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_MULTIPLE_BATCHES
 )

@@ -364,14 +364,12 @@ struct ExampleRunner {
     initialize_block(block_C, seed + 2021);
 
     convert_dtype<ElementA, half_t, ExampleRunner>(
-        block_A.get(),
-        block_A_dq.get(),
-        block_A.size()
+        block_A,
+        block_A_dq
     );
     convert_dtype<ElementB, half_t, ExampleRunner>(
-        block_B.get(),
-        block_B_dq.get(),
-        block_B.size()
+        block_B,
+        block_B_dq
     );
 
     initialize_scale(block_scaleA, options);
