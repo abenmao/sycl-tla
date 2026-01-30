@@ -38,8 +38,7 @@ if (CUTLASS_ENABLE_SYCL)
     set(SGEMM_ARGS "")
     set(BMG_ARGS "")
   endif()
-endif()
-if(NOT SYCL_INTEL_TARGET EQUAL 40)
+
   cutlass_example_add_executable(
     cute_tutorial_sgemm_1
     sgemm_1_sycl.cpp
@@ -87,7 +86,6 @@ if(NOT SYCL_INTEL_TARGET EQUAL 40)
       BMG_ARGS
     )
   endif()
-
   if (SYCL_NVIDIA_TARGET)
     message(STATUS "Building CuTE examples for NVIDIA GPU targets with SYCL")
 
@@ -101,7 +99,6 @@ if(NOT SYCL_INTEL_TARGET EQUAL 40)
       sgemm_sm80_sycl.cpp
     )
   endif()
-
 else()
   message(STATUS "CUTLASS_ENABLE_SYCL is OFF - CuTE tutorial examples will not be built")
   message(STATUS "Enable SYCL support to build CuTE tutorial examples")

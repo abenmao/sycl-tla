@@ -28,8 +28,11 @@
 
 
 set(CUTLASS_APPLICATIONS_DIR ${CUTLASS_DIR}/applications)
+# TODO For Multitarget, these input types may be wrong for non-cri hardware.
+# Skip non-supported tests at runtime, keep this flag as well to not increase compile
+# time for single target build.
 
-if(SYCL_INTEL_TARGET EQUAL 35)
+if(DEFINED SYCL_INTEL_TARGET AND SYCL_TARGET_INTEL_GPU_CRI)
   set(INPUT_TYPES bfloat16_t float_e5m2_t float_e4m3_t float_e2m1_t mx_float_e5m2_t mx_float_e4m3_t mx_float_e2m1_t)
 else()
   set(INPUT_TYPES bfloat16_t float_e5m2_t float_e4m3_t)
