@@ -46,30 +46,42 @@ Base NVIDIA CUTLASS Versions for SYCL*TLA releases:
 |0.5-cri | 4.2.0 |
 |0.6 | 4.2.0 |
 |0.6-cri | 4.2.0 |
+|0.7 | 4.2.1 |
+|0.7-cri | 4.2.1 |
 
-# What's New in SYCL*TLA [0.6-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.6-cri)
+# What's New in SYCL*TLA [0.7-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.7-cri)
 ### New Features (Notes: all the tests based on CRI simulator)
- - Support MMA backend for FP8/MXFP8(e5m2, e4m3), FP4/MXFP4(e2m1) (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/106)
- - Support Block Scaled Collective MMA API for MXFP8/MXFP4 (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/119)
- - Support Block Scaled Grouped Collective MMA API for MXFP8/MXFP4  (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/125)
- - Support Flash Attention v2 kernels for FP8/FP4/MXFP8/MXFP4 (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/139, https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/141)
- - Support Flash Attention v2 kernels with Causal Mask ([#fb8c97c](https://github.com/intel-innersource/libraries.ai.cutlass.internal/commit/fb8c97cd))
- - Support Flash Attention v2 kernels with Varable Length inputs ([#5ac9700](https://github.com/intel-innersource/libraries.ai.cutlass.internal/commit/5ac97000))
-
-### Examples Enabling
- - General GEMM for FP8/FP4, example [00_bmg_gemm.cpp](examples/00_bmg_gemm/00_bmg_gemm.cpp) with replacing data type of InputA, InputB, and MMA
- - General Grouped GEMM for FP8/FP4, example [09_bmg_grouped_gemm_f8.cpp](examples/09_bmg_grouped_gemm_f8/09_bmg_grouped_gemm_f8.cpp) with replacing data type of InputA, InputB, and MMA
- - Block Scaled GEMM for MXFP8/MXFP4, example [50_xe35_block_scaled_gemm](examples/50_xe35_block_scaled_gemm/)
- - Block Scaled Grouped GEMM for MXFP8/MXFP4, example [51_xe35_block_scaled_grouped_gemm](examples/51_xe35_block_scaled_grouped_gemm/)
- - Flash Attention v2 kernels, example [06_xe_fmha_fwd.cpp](examples/06_bmg_flash_attention/06_xe_fmha_fwd.cpp)
+  - Support different tile configurations in Block Scaled GEMM (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/174)
+  - Support extended reorder APIs type conversions (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/230)
+  - Support benchmark for GEMM and Flash Attention with new CUTE APIs (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/177 , https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/241)
+  - Support scaled for V matrix in Flash Attention (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/161)
+  - Support scale data preloading and prefetching algorithm for Block Scaled GEMM (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/189 , https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/216)
+  - Refine Grouped GEMM implementation (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/149)
+  - Optimize extra move instructions, improve scale copy efficiency for Block Scaled GEMM (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/184 , https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/195 , https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/204)
+  - Optimize prefetch algorithm for Flash Attention (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/246)
 
 ### Performance (Internal Only)
- - BF16/FP16 GEMM example kernel performance at **73%** of peak (goal: 60% of peak)
- - BF16/FP16 Flash Attention v2 kernel performance at **55%** of BMG efficiency (goal: 60% of BMG efficiency)
+  - Systolic data is relative accurate(CRI simulator can correctly simulate systolic behaviors), E2E data for reference only(CRI simulator cannot correctly simulate memory behaviors).
+  - GEMM Performance
+      | **Data Type**    | **% of Peak (E2E)** | **% of Peak (Systolic)** |
+      |:-----------------|:--------|:---------|
+      |MXFP4 (E2M1)      |  42% |  88%  |
+      |MXFP8 (E4M3, E5M2)|  61% |  92%  |
+      |BF16              |  73% |  96%  |
 
-### Known Issues
-- Focused on functionality enabling in this release
-- More performance tuning is working in progress
+  - MOE Performance
+      | **Data Type**    | **% of Peak (E2E)** |
+      |:-----------------|:--------|
+      |MXFP4 (E2M1)      |  38% |
+      |MXFP8 (E4M3, E5M2)|  54% |
+      |BF16              |  72% |
+
+  - Flash Attention Performance
+      | **Data Type** | **Prefill/Decode** | **% of Peak (E2E)** |
+      |:--------------|:-------------------|:---------|
+      |BF16           |     Prefill        |  18%  |
+      |BF16           |     Decode         |  22%  |
+
 
 **See the [CHANGELOG](CHANGELOG-SYCL.md) for details of all past releases and updates.**
 
@@ -120,10 +132,9 @@ We are regularly testing following setup in CI.
 
 |**Platform**|**Operating System** | **DPC++ Compiler** | **G++** | **Intel Compute Runtime** |**Intel Graphics Compiler** |
 |-----------------|----------|-----------------|--------|---------------------|-----------------------|
-|Xe-HPC| Ubuntu 22.04 |2025.2+ |G++13  | 25.18 | 2.11 |
-|Xe2| Ubuntu 25.04 |2025.2+  |G++13  | 25.35 | 2.18 |
-|Xe3p| Ubuntu 25.04 |2025.2+  |G++13  | 25.35 | 2.18 |
-
+|Xe-HPC| Ubuntu 24.04 |2025.3+ |G++13  | 25.48 | 2.24 |
+|Xe2| Ubuntu 25.04 |2025.3+  |G++13  | 26.01 | 2.27 |
+|Xe3p| Ubuntu 25.04 |2025.3+  |G++13  | 26.01 | 2.27 |
 
 
 ## Target Architecture
