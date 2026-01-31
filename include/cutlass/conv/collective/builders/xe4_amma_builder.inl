@@ -36,6 +36,17 @@
 namespace cutlass::conv::collective {
 using namespace cute;
 
+template<
+  class GmemTiledCopy_,
+  class SmemLayout_,
+  class SmemCopyAtom_ = void
+>
+struct Xe4ImplicitGemmTileTraits {
+  using GmemTiledCopy = GmemTiledCopy_;
+  using SmemLayout = SmemLayout_;
+  using SmemCopyAtom = SmemCopyAtom_;
+};
+
 // Intel_DMA_WS_SS_FPROP
 template <
   conv::Operator ConvOp,
@@ -76,17 +87,17 @@ struct CollectiveBuilder<
   // For wgrad, majorA = MN, major B = MN;
   // For dgrad, majorA = K,  major B = MN;
   static constexpr auto GmmaMajorA =
-    (ConvOp == conv::Operator::kWgrad) ? cute::SM90::GMMA::Major::MN : cute::SM90::GMMA::Major::K;
+    (ConvOp == conv::Operator::kWgrad) ? cute::AMMA::Major::MN : cute::AMMA::Major::K;
   static constexpr auto GmmaMajorB =
-    (ConvOp == conv::Operator::kFprop) ? cute::SM90::GMMA::Major::K : cute::SM90::GMMA::Major::MN;
+    (ConvOp == conv::Operator::kFprop) ? cute::AMMA::Major::K : cute::AMMA::Major::MN;
 
   using TiledMma = decltype(cute::make_tiled_mma(AMMA::ss_op_selector<
       ElementAMma, ElementBMma, ElementAccumulator, decltype(cute::product_each(TileShape_MNK{})), ClusterShape_MNK, GmmaMajorA, GmmaMajorB>()));
 
   // For wgrad kernel, tensor A uses tma tiled mode and tensor B uses tma im2col mode.
-  static constexpr slm_matrix_type cmTypeA = GmmaMajorA == cute::SM90::GMMA::Major::K ? slm_matrix_type::type1 : slm_matrix_type::type2;
-  static constexpr uint32_t cmStrideA = GmmaMajorA == cute::SM90::GMMA::Major::MN ? size<0>(TileShape_MNK{}) : size<2>(TileShape_MNK{});
-  static constexpr uint32_t cmStrideB = GmmaMajorB == cute::SM90::GMMA::Major::MN ? size<1>(TileShape_MNK{}) : size<2>(TileShape_MNK{});
+  static constexpr slm_matrix_type cmTypeA = GmmaMajorA == cute::AMMA::Major::K ? slm_matrix_type::type1 : slm_matrix_type::type2;
+  static constexpr uint32_t cmStrideA = GmmaMajorA == cute::AMMA::Major::MN ? size<0>(TileShape_MNK{}) : size<2>(TileShape_MNK{});
+  static constexpr uint32_t cmStrideB = GmmaMajorB == cute::AMMA::Major::MN ? size<1>(TileShape_MNK{}) : size<2>(TileShape_MNK{});
 
   using GmemTiledCopyA = cute::conditional_t<
     ConvOp == conv::Operator::kWgrad,
@@ -109,13 +120,13 @@ struct CollectiveBuilder<
   >;
 
   using SmemLayoutAtomA = cute::conditional_t<
-    GmmaMajorA == cute::SM90::GMMA::Major::K,
+    GmmaMajorA == cute::AMMA::Major::K,
     decltype(make_layout(cute::select<0, 2>(TileShape_MNK{}), GenRowMajor{})),
     decltype(make_layout(cute::select<0, 2>(TileShape_MNK{}), GenColMajor{}))
   >;
 
   using SmemLayoutAtomB = cute::conditional_t<
-    GmmaMajorB == cute::SM90::GMMA::Major::K,
+    GmmaMajorB == cute::AMMA::Major::K,
     decltype(make_layout(cute::select<1, 2>(TileShape_MNK{}), GenRowMajor{})),
     decltype(make_layout(cute::select<1, 2>(TileShape_MNK{}), GenColMajor{}))
   >;
@@ -125,11 +136,11 @@ struct CollectiveBuilder<
   using SmemLayoutA = decltype(tile_to_shape(
     SmemLayoutAtomA{},
     make_shape(shape<0>(TileShape_MNK{}), shape<2>(TileShape_MNK{}), Int<PipelineStages>{}),
-    cute::conditional_t<GmmaMajorA == cute::SM90::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
+    cute::conditional_t<GmmaMajorA == cute::AMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
   using SmemLayoutB = decltype(tile_to_shape(
     SmemLayoutAtomB{},
     make_shape(shape<1>(TileShape_MNK{}), shape<2>(TileShape_MNK{}), Int<PipelineStages>{}),
-    cute::conditional_t<GmmaMajorB == cute::SM90::GMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
+    cute::conditional_t<GmmaMajorB == cute::AMMA::Major::K, Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
 
   constexpr static int NumSpatialDimensions = cutlass::conv::collective::detail::gmem_layout_tags_to_spatial_dims<GmemLayoutA, GmemLayoutB>();
 
@@ -142,8 +153,8 @@ struct CollectiveBuilder<
     ElementA,
     ElementB,
     TiledMma,
-    detail::Sm90ImplicitGemmTileTraits<GmemTiledCopyA, SmemLayoutA>,
-    detail::Sm90ImplicitGemmTileTraits<GmemTiledCopyB, SmemLayoutB>
+    detail::Xe4ImplicitGemmTileTraits<GmemTiledCopyA, SmemLayoutA>,
+    detail::Xe4ImplicitGemmTileTraits<GmemTiledCopyB, SmemLayoutB>
   >;
 };
 

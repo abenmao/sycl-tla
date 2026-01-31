@@ -729,8 +729,11 @@ print(ThrCopy<TiledCopy, ThrIdx> const& thr_copy)
 #include <cute/atom/copy_traits_sm80.hpp>
 #include <cute/atom/copy_traits_sm90.hpp>
 #include <cute/atom/copy_traits_sm100.hpp>
+
+#if defined(CUTE_COPY_ATOM_TMA_SM90_ENABLED)
 #include <cute/atom/copy_traits_sm90_tma.hpp>
 #include <cute/atom/copy_traits_sm100_tma.hpp>
+#endif
 
 #if defined(SYCL_INTEL_TARGET)
 #include <cute/atom/copy_traits_xe.hpp>
@@ -738,6 +741,7 @@ print(ThrCopy<TiledCopy, ThrIdx> const& thr_copy)
 #include <cute/atom/copy_traits_xe_legacy.hpp>
 #endif
 #if defined(SYCL_INTEL_XE4_TARGET)
+#include <cute/atom/copy_traits_xe4_tma.hpp>
 #include <cute/atom/copy_traits_xe4_adma.hpp>
 #endif
 

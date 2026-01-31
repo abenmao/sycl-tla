@@ -41,6 +41,29 @@
 #include "cute/tensor.hpp"
 #include "cute/arch/copy_xe_2d.hpp"
 
+template <
+  bool ReferenceSrc, // do register tensors reference the src or dst layout of the tiled copy
+  class CtaTileMN,
+  class EpilogueTile,
+  class TiledCopy
+>
+CUTLASS_HOST_DEVICE
+constexpr auto
+xe_partition_for_epilogue(
+    CtaTileMN cT,          // (CTA_M,CTA_N,...)
+    EpilogueTile epi_tile, // (EPI_TILE_M,EPI_TILE_N)
+    TiledCopy tiled_copy,
+    int thread_idx) {
+  cute::ThrCopy thread_copy = tiled_copy.get_thread_slice(thread_idx);
+  cute::Tensor cT_epi = flat_divide(cT, epi_tile);                                 // (EPI_TILE_M,EPI_TILE_N,EPI_M,EPI_N,...)
+  if constexpr (ReferenceSrc) {
+    return thread_copy.partition_S(cT_epi);                                        // (CPY,CPY_M,CPY_N,EPI_M,EPI_N,...)
+  }
+  else {
+    return thread_copy.partition_D(cT_epi);                                        // (CPY,CPY_M,CPY_N,EPI_M,EPI_N,...)
+  }
+}
+
 
 namespace cutlass::epilogue::fusion {
 

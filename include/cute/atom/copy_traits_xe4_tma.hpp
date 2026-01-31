@@ -37,6 +37,8 @@
 #include <cute/atom/copy_atom.hpp>
 #include <cute/algorithm/prefetch.hpp>
 #include <cute/numeric/integral_ratio.hpp>
+#include <cute/arch/copy_xe4_desc.hpp>
+#include <cute/atom/copy_traits_xe4_dma_legacy.hpp>
 
 namespace cute
 {

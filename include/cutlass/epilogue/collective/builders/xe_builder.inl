@@ -35,6 +35,7 @@
 #include <cutlass/arch/arch.h>
 #include "cutlass/epilogue/collective/default_epilogue.hpp"
 #include "cutlass/epilogue/collective/xe_epilogue.hpp"
+#include "cutlass/epilogue/collective/xe_epilogue_legacy.hpp"
 #include "cutlass/epilogue/fusion/xe_callbacks.hpp"
 
 

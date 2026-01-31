@@ -31,7 +31,8 @@
 
 #pragma once
 
-#include "cute/numeric/int.hpp"
+#include <cute/numeric/int.hpp>
+#include <cute/util/sycl_vec.hpp>
 
 #if defined(__SYCL_DEVICE_ONLY__) && defined(SYCL_INTEL_TARGET)
 #define CUTE_ARCH_COPY_XE_ENABLED

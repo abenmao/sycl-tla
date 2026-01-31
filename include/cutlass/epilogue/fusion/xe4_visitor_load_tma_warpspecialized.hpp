@@ -41,7 +41,6 @@
 #include "cutlass/detail/helper_macros.hpp"
 
 #include "cute/tensor.hpp"
-#include "sm90_visitor_tma_warpspecialized.hpp"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -291,7 +290,7 @@ struct Xe4RowBroadcast {
     );
 
     //// S2R: Smem to Reg
-    Tensor tSR_sRow = sm90_partition_for_epilogue<ReferenceSrc>(sRow, args.epi_tile, tiled_s2r, args.thread_idx);
+    Tensor tSR_sRow = xe_partition_for_epilogue<ReferenceSrc>(sRow, args.epi_tile, tiled_s2r, args.thread_idx);
     Tensor tSR_rRow = make_tensor_like<ElementCompute>(take<0,3>(tSR_sRow));  // (CPY,CPY_M,CPY_N)
 
     auto sg = sycl::ext::oneapi::this_work_item::get_nd_item<3>().get_sub_group();

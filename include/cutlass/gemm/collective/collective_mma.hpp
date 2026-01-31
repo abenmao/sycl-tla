@@ -40,6 +40,7 @@
 #include "cutlass/gemm/collective/sm80_mma_array_multistage.hpp"
 #include "cutlass/gemm/collective/sm90_mma_multistage_gmma_ss_warpspecialized.hpp"
 #include "cutlass/gemm/collective/sm90_mma_multistage_gmma_rs_warpspecialized.hpp"
+#if !defined(SYCL_INTEL_XE4_TARGET)
 #include "cutlass/gemm/collective/sm90_mma_tma_gmma_ss.hpp"
 #include "cutlass/gemm/collective/sm90_mma_tma_gmma_rs_warpspecialized.hpp"
 #include "cutlass/gemm/collective/sm90_mma_tma_gmma_rs_warpspecialized_mixed_input.hpp" 
@@ -52,7 +53,8 @@
 #include "cutlass/gemm/collective/sm90_mma_array_tma_gmma_ss_warpspecialized_fp8.hpp"
 #include "cutlass/gemm/collective/sm90_mma_tma_gmma_ss_warpspecialized_fp8_blockwise_scaling.hpp"
 #include "cutlass/gemm/collective/sm90_mma_array_tma_gmma_ss_warpspecialized_fp8_blockwise_scaling.hpp"
-#if !defined(__CUDACC_RTC__) && !defined(SYCL_INTEL_XE4_TARGET)
+#endif
+#if !defined(__CUDACC_RTC__) && !defined(SYCL_INTEL_XE4_TARGET) && !defined(SYCL_INTEL_TARGET)
 #include "cutlass/gemm/collective/sm100_mma_warpspecialized.hpp"
 #include "cutlass/gemm/collective/sm100_mma_array_warpspecialized.hpp"
 #include "cutlass/gemm/collective/sm100_mma_warpspecialized_emulated.hpp"

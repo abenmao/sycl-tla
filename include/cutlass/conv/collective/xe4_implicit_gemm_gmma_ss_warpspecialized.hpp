@@ -2,7 +2,7 @@
 
 #include "cutlass/pipeline/pipeline.hpp"
 #include "cutlass/util/packed_stride.hpp"
-#include "cute/atom/copy_traits_sm90_im2col.hpp"
+#include "cute/atom/copy_traits_xe4_im2col.hpp"
 #include "cute/arch/mma_xe4_amma.hpp"
 #include "cutlass/gemm/dispatch_policy.hpp"
 #include "cutlass/conv/detail.hpp"
@@ -61,8 +61,8 @@ struct CollectiveConv<
   static constexpr int NumSpatialDimensions = DispatchPolicy::NumSpatialDimensions;
   static constexpr int NumTensorDimensions = NumSpatialDimensions + 2;
 
-  using StrideA = decltype(detail::sm90_dispatch_policy_to_stride_A<DispatchPolicy>());
-  using StrideB = decltype(detail::sm90_dispatch_policy_to_stride_B<DispatchPolicy>());
+  using StrideA = decltype(detail::xe4_dispatch_policy_to_stride_A<DispatchPolicy>());
+  using StrideB = decltype(detail::xe4_dispatch_policy_to_stride_B<DispatchPolicy>());
 
   using MainloopPipeline = cutlass::PipelineTmaAsync<DispatchPolicy::Stages>;
   using PipelineState  = typename MainloopPipeline::PipelineState;

@@ -180,6 +180,19 @@ sm100_dispatch_policy_to_stride_B() {
   return sm90_dispatch_policy_to_stride_B<DispatchPolicy>();
 }
 
+#if defined(SYCL_INTEL_XE4_TARGET)
+template <class DispatchPolicy>
+constexpr auto
+xe4_dispatch_policy_to_stride_A() {
+  return sm90_dispatch_policy_to_stride_A<DispatchPolicy>();
+}
+
+template <class DispatchPolicy>
+constexpr auto
+xe4_dispatch_policy_to_stride_B() {
+  return sm90_dispatch_policy_to_stride_B<DispatchPolicy>();
+}
+#endif
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 

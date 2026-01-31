@@ -45,9 +45,7 @@
 #include "cutlass/arch/barrier.h"
 
 #include "cutlass/util/packed_stride.hpp"
-#include "cute/atom/copy_traits_sm90_tma.hpp"
 #include "cutlass/arch/barrier.h"
-#include "cutlass/pipeline/sm90_pipeline.hpp"
 #include "cutlass/pipeline/pipeline.hpp"
 
 #include "../../../common/sycl_cute_common.hpp"

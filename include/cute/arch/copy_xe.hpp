@@ -32,6 +32,8 @@
 #pragma once
 
 
+#include <cute/util/sycl_vec.hpp>
+
 namespace cute
 {
 

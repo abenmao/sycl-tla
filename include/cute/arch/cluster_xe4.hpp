@@ -39,17 +39,17 @@ namespace cute {
 
 CUTE_DEVICE void cluster_arrive_relaxed()
 {
-  CUTE_INVALID_CONTROL_PATH("CUTE_ARCH_CLUSTER_SM90_ENABLED is not defined");
+  CUTE_INVALID_CONTROL_PATH("CUTE_ARCH_CLUSTER_XE4_ENABLED is not defined");
 }
 
 CUTE_DEVICE void cluster_arrive()
 {
-  CUTE_INVALID_CONTROL_PATH("CUTE_ARCH_CLUSTER_SM90_ENABLED is not defined");
+  CUTE_INVALID_CONTROL_PATH("CUTE_ARCH_CLUSTER_XE4_ENABLED is not defined");
 }
 
 CUTE_DEVICE void cluster_wait()
 {
-  CUTE_INVALID_CONTROL_PATH("CUTE_ARCH_CLUSTER_SM90_ENABLED is not defined");
+  CUTE_INVALID_CONTROL_PATH("CUTE_ARCH_CLUSTER_XE4_ENABLED is not defined");
 }
 // Returns the relative dim3 block rank local to the cluster.
 CUTE_DEVICE dim3 block_id_in_cluster()

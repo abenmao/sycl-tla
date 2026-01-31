@@ -2,6 +2,7 @@
 
 #include "xe4_inline_pisa.hpp"
 #include "util.hpp"
+#include <cute/arch/copy_xe4_desc.hpp>
 
 namespace cute {
 

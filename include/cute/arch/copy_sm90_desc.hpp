@@ -30,6 +30,8 @@
  **************************************************************************************************/
 #pragma once
 
+
+#if !defined(SYCL_INTEL_XE4_TARGET)
 #include "cutlass/numeric_types.h"
 
 #if !defined(__CUDACC_RTC__) && !defined(CUTLASS_ENABLE_SYCL)
@@ -479,3 +481,4 @@ tma_descriptor_fence_acquire(TmaDescriptor const* desc_ptr)
 ///////////////////////////////////////////////////////////////////////////////
 
 } // end namespace cute
+#endif

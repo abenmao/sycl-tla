@@ -36,6 +36,7 @@
 
 #include <cute/algorithm/prefetch.hpp>
 #include <cute/arch/copy_xe_2d.hpp>
+#include <cute/tensor_sg.hpp>
 
 // 2D block payload intrinsics
 SYCL_EXTERNAL extern "C" int* __builtin_IB_subgroup_createBlock2DAddressPayload(long base, int width_minus_one, int height_minus_one, int pitch_minus_one,

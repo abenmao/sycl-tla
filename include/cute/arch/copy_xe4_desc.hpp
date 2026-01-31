@@ -30,56 +30,31 @@
  **************************************************************************************************/
 #pragma once
 
-#include <cutlass/detail/dependent_false.hpp>
+#if defined(SYCL_INTEL_XE4_TARGET)
+#include "cutlass/numeric_types.h"
 
-/////////////////////////////////////////////////////////////////////////////////////////////////
-
-namespace cutlass::epilogue::collective {
-
-/////////////////////////////////////////////////////////////////////////////////////////////////
-
-template <
-  class DispatchPolicy,
-  class... Args
->
-class CollectiveEpilogue {
-  static_assert(cutlass::detail::dependent_false<DispatchPolicy>, "Could not find an epilogue specialization.");
-};
-
-/////////////////////////////////////////////////////////////////////////////////////////////////
-
-} // namespace cutlass::epilogue::collective
-
-/////////////////////////////////////////////////////////////////////////////////////////////////
-
-#include "detail.hpp"
-
-//
-// Gemm
-//
-#include "default_epilogue.hpp"
-#include "default_epilogue_array.hpp"
-#include "epilogue_tensor_broadcast.hpp"
-#include "sm70_epilogue_vectorized.hpp"
-#include "sm70_epilogue_vectorized_array.hpp"
-#if !defined (SYCL_INTEL_XE4_TARGET)
-#include "sm90_epilogue_tma_warpspecialized.hpp"
-#include "sm90_epilogue_tma_warpspecialized_bias_elementwise.hpp"
-#include "sm90_epilogue_array_tma_warpspecialized.hpp"
-#include "sm100_epilogue_nosmem.hpp"
-#include "sm100_epilogue_array_nosmem.hpp"
-#include "sm100_epilogue_tma_warpspecialized.hpp"
-#include "sm100_epilogue_array_tma_warpspecialized.hpp"
+#if !defined(__CUDACC_RTC__) && !defined(CUTLASS_ENABLE_SYCL)
+#include <cuda.h>
+#include <cinttypes>
 #endif
-#if defined (SYCL_INTEL_XE4_TARGET)
-#include "xe4_epilogue_adma_warpspecialized.hpp"
-#elif defined (SYCL_INTEL_TARGET)
-#include "xe_epilogue.hpp"
-#include "xe_epilogue_legacy.hpp"
-#include "xe_array_epilogue.hpp"
-#include "xe_array_epilogue_legacy.hpp"
+
+#include <cute/config.hpp>
+
+#include <cute/arch/util.hpp>   // cute::cast_smem_ptr_to_uint
+#include <cute/arch/config.hpp> // CUTE_ARCH_TMA_SMxx_ENABLED
+#include <cute/arch/copy.hpp>
+
+#include <cute/container/alignment.hpp>
+#include <cute/container/bit_field.hpp>
+#include <cute/container/array.hpp>
+#include <cute/numeric/numeric_types.hpp>
+
+namespace cute
+{
+  using TmaDescriptor = uint64_t*;
+  template<typename T, int NumBytesPerCopy>
+  struct alignas(64) Im2ColTmaDescriptor {
+    uint64_t bytes[10];   // support from 3D tensor to 5D tensor
+  };
+} // end namespace cute
 #endif
-//
-// Conv
-//
-/////////////////////////////////////////////////////////////////////////////////////////////////

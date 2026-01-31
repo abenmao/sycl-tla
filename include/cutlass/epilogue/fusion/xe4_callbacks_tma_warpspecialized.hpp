@@ -43,6 +43,20 @@
 
 namespace cutlass::epilogue::fusion {
 
+template <class NodeOp, class... ChildOps>
+using Xe4EVT = Sm90TreeVisitor<NodeOp, ChildOps...>;
+
+template<
+  template <class> class ActivationFn,
+  class ElementOutput,
+  class ElementCompute,
+  FloatRoundStyle RoundStyle
+>
+using Xe4Compute = Sm90Compute<ActivationFn, ElementOutput, ElementCompute, RoundStyle>;
+using Xe4AccFetch = Sm90AccFetch;
+template <class Element>
+using Xe4SrcFetch = Sm90SrcFetch<Element>;
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 // D = activation(acc)
@@ -53,9 +67,9 @@ template<
   FloatRoundStyle RoundStyle = FloatRoundStyle::round_to_nearest
 >
 using Xe4EltAct =
-  Sm90EVT<
-    Sm90Compute<ActivationFn, ElementOutput, ElementCompute, RoundStyle>, // activation(acc)
-    Sm90AccFetch // acc
+  Xe4EVT<
+    Xe4Compute<ActivationFn, ElementOutput, ElementCompute, RoundStyle>, // activation(acc)
+    Xe4AccFetch // acc
   >;
 
 template <
@@ -72,7 +86,7 @@ template <
   class EpilogueTile
 >
 struct FusionCallbacks<
-    epilogue::Sm90TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
+    epilogue::Xe4TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
     fusion::EltAct<ActivationFn, ElementOutput, ElementCompute, RoundStyle>,
     CtaTileShapeMNK,
     EpilogueTile
@@ -82,7 +96,7 @@ struct FusionCallbacks<
   using Operation = fusion::EltAct<ActivationFn, ElementOutput, ElementCompute, RoundStyle>;
 
   struct Arguments {
-    using ActivationArguments = typename Sm90Compute<ActivationFn, ElementOutput, ElementCompute, RoundStyle>::Arguments;
+    using ActivationArguments = typename Xe4Compute<ActivationFn, ElementOutput, ElementCompute, RoundStyle>::Arguments;
     ActivationArguments activation = ActivationArguments();
 
     operator typename Impl::Arguments() const {
@@ -106,13 +120,13 @@ template<
   FloatRoundStyle RoundStyle = FloatRoundStyle::round_to_nearest
 >
 using Xe4EltActMul =
-  Sm90EVT<
-    Sm90Compute<multiplies, ElementOutput, ElementCompute, RoundStyle>, // activation(acc) * C
-      Sm90EVT<
-        Sm90Compute<ActivationFn, ElementCompute, ElementCompute, RoundStyle>, // activation(acc)
-        Sm90AccFetch // acc
+  Xe4EVT<
+    Xe4Compute<multiplies, ElementOutput, ElementCompute, RoundStyle>, // activation(acc) * C
+      Xe4EVT<
+        Xe4Compute<ActivationFn, ElementCompute, ElementCompute, RoundStyle>, // activation(acc)
+        Xe4AccFetch // acc
       >,
-      Sm90SrcFetch<ElementSource> // C
+      Xe4SrcFetch<ElementSource> // C
   >;
 
 template <
@@ -130,7 +144,7 @@ template <
   class EpilogueTile
 >
 struct FusionCallbacks<
-    epilogue::Sm90TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
+    epilogue::Xe4TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
     fusion::EltActMul<ActivationFn, ElementOutput, ElementCompute, ElementSource, RoundStyle>,
     CtaTileShapeMNK,
     EpilogueTile
@@ -140,7 +154,7 @@ struct FusionCallbacks<
   using Operation = fusion::EltActMul<ActivationFn, ElementOutput, ElementCompute, ElementSource, RoundStyle>;
 
   struct Arguments {
-    using ActivationArguments = typename Sm90Compute<ActivationFn, ElementOutput, ElementCompute, RoundStyle>::Arguments;
+    using ActivationArguments = typename Xe4Compute<ActivationFn, ElementOutput, ElementCompute, RoundStyle>::Arguments;
     ActivationArguments activation = ActivationArguments();
 
     operator typename Impl::Arguments() const {
@@ -168,13 +182,13 @@ template<
   FloatRoundStyle RoundStyle = FloatRoundStyle::round_to_nearest
 >
 using Xe4EltActAdd =
-  Sm90EVT<
-    Sm90Compute<plus, ElementOutput, ElementCompute, RoundStyle>, // activation(acc) + C
-      Sm90EVT<
-        Sm90Compute<ActivationFn, ElementCompute, ElementCompute, RoundStyle>, // activation(acc)
-        Sm90AccFetch // acc
+  Xe4EVT<
+    Xe4Compute<plus, ElementOutput, ElementCompute, RoundStyle>, // activation(acc) + C
+      Xe4EVT<
+        Xe4Compute<ActivationFn, ElementCompute, ElementCompute, RoundStyle>, // activation(acc)
+        Xe4AccFetch // acc
       >,
-      Sm90SrcFetch<ElementSource> // C
+      Xe4SrcFetch<ElementSource> // C
   >;
 
 template <
@@ -192,7 +206,7 @@ template <
   class EpilogueTile
 >
 struct FusionCallbacks<
-    epilogue::Sm90TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
+    epilogue::Xe4TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
     fusion::EltActAdd<ActivationFn, ElementOutput, ElementCompute, ElementSource, RoundStyle>,
     CtaTileShapeMNK,
     EpilogueTile
@@ -202,7 +216,7 @@ struct FusionCallbacks<
   using Operation = fusion::EltActAdd<ActivationFn, ElementOutput, ElementCompute, ElementSource, RoundStyle>;
 
   struct Arguments {
-    using ActivationArguments = typename Sm90Compute<ActivationFn, ElementOutput, ElementCompute, RoundStyle>::Arguments;
+    using ActivationArguments = typename Xe4Compute<ActivationFn, ElementOutput, ElementCompute, RoundStyle>::Arguments;
     ActivationArguments activation = ActivationArguments();
 
     operator typename Impl::Arguments() const {
@@ -234,8 +248,8 @@ template<
   FloatRoundStyle RoundStyle = FloatRoundStyle::round_to_nearest
 >
 using Xe4PerColBias =
-  Sm90EVT<Sm90Compute<plus, ElementOutput, ElementCompute, RoundStyle>, // acc + bias
-    Sm90AccFetch, // acc
+  Xe4EVT<Xe4Compute<plus, ElementOutput, ElementCompute, RoundStyle>, // acc + bias
+    Xe4AccFetch, // acc
     Xe4RowBroadcast<0, CtaTileShapeMNK, ElementBias, ElementCompute, Stride<_0,_1,int64_t>, AlignmentBias> // bias
   >;
 
@@ -254,7 +268,7 @@ template <
   class EpilogueTile
 >
 struct FusionCallbacks<
-    epilogue::Sm90TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
+    epilogue::Xe4TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
     fusion::PerColBias<ElementOutput, ElementCompute, ElementBias, AlignmentBias, RoundStyle>,
     CtaTileShapeMNK,
     EpilogueTile

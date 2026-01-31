@@ -40,6 +40,10 @@
 #include "cutlass/detail/layout.hpp"
 #include "cutlass/numeric_size.h" // cutlass::bytes_to_bits
 #include "cutlass/gemm/gemm.h"
+#include "cutlass/epilogue/collective/detail.hpp"
+#include "cutlass/epilogue/thread/linear_combination.h"
+#include "cutlass/epilogue/collective/collective_epilogue.hpp"
+#include "cutlass/epilogue/collective/xe4_epilogue_adma_warpspecialized.hpp"
 
 #include "cute/arch/copy_xe4_dma_legacy.hpp"
 #include "cute/arch/copy_xe4_adma.hpp"
@@ -141,7 +145,7 @@ private:
   using EpilogueTile = decltype(epilogue_tile());
 
   using FusionCallbacks = fusion::FusionCallbacks<
-    Sm90TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
+    Xe4TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
     FusionOpOrCallbacks, CtaTileShape_MNK, EpilogueTile
   >;
 
@@ -249,7 +253,7 @@ private:
   using EpilogueTile = decltype(epilogue_tile());
 
   using FusionCallbacks = fusion::FusionCallbacks<
-    Sm90TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
+    Xe4TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
     FusionOpOrCallbacks, CtaTileShape_MNK, EpilogueTile
   >;
 
