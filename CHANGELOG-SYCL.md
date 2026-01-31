@@ -1,4 +1,12 @@
 # SYCL*TLA (previously referred to as cutlass-sycl) Changelog
+
+# [SYCL*TLA 0.7-jgs](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.7-jgs) (2026-01-30)
+### New Features
+- Load / store matrix atom (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/196) 
+### Examples
+- Xe4 CuTe tutorial (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/181)
+- FlashAttention 3 & 4 (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/150, https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/236)
+
 ## [SYCL*TLA 0.7-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.7-cri) (2026-01-30)
 ### New Features (Notes: all the tests based on CRI simulator)
   - Support different tile configurations in Block Scaled GEMM (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/174)

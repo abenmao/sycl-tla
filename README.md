@@ -49,6 +49,14 @@ Base NVIDIA CUTLASS Versions for SYCL*TLA releases:
 |0.6-jgs | 4.2.1 |
 |0.7 | 4.2.1 |
 |0.7-cri | 4.2.1 |
+|0.7-jgs | 4.2.1 |
+
+# What's New in SYCL*TLA [0.7-jgs](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.7-jgs)
+### New Features
+- Load / store matrix atom (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/196) 
+### Examples
+- Xe4 CuTe tutorial (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/181)
+- FlashAttention 3 & 4 (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/150, https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/236)
 
 # What's New in SYCL*TLA [0.7-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.7-cri)
 ### New Features (Notes: all the tests based on CRI simulator)
