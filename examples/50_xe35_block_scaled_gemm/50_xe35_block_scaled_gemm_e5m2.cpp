@@ -1,6 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2025 - 2025 Codeplay Software Ltd. All rights reserved.
- * Copyright (c) 2025 Intel Corporation, All rights reserved.
+ * Copyright (c) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -46,26 +46,14 @@
 
 #include "50_xe35_block_scaled_gemm_runner.hpp"
 
-int main(int argc, const char** argv) {
-  //
-  // Parse options
-  //
-
-  Options options;
-
-  options.parse(argc, argv);
-
-  if (options.help) {
-    options.print_usage(std::cout) << std::endl;
-    return 0;
-  }
-
-  if (options.error) {
-    std::cerr << "Aborting execution." << std::endl;
-    return -1;
-  }
-
-  using ElementType = cutlass::mx_float8_t<float_e5m2_t>;
+template <typename ElementType,
+          typename TileShape,
+          int GroupSize = 32,
+          typename ThreadLayout = Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>,
+          typename LayoutA = cutlass::layout::RowMajor,
+          typename LayoutB = cutlass::layout::RowMajor>
+cutlass::Status run_mx_case(Options & options){
+  
   using MmaType = typename ElementType::DataType;
 
   using ElementAccumulator = float;
@@ -74,26 +62,21 @@ int main(int argc, const char** argv) {
   using ElementInputB = typename ElementType::DataType;
   using ElementOutput = float;
 
-  using LayoutA = cutlass::layout::RowMajor;
-  using LayoutB = cutlass::layout::RowMajor;
   using LayoutC = cutlass::layout::RowMajor;
   using LayoutD = cutlass::layout::RowMajor;
 
   using ElementScale = typename ElementType::ScaleFactorType;
-
   using StrideScale = cute::Stride<_1, int64_t, int64_t>;
 
   using GmemTiledCopyA = void;
   using GmemTiledCopyB = void;
   using GmemTiledCopyScaleA = void;
   using GmemTiledCopyScaleB = void;
-  
-  using TileShape = Shape<_512, _256, _64>;
 
-  using TiledMma = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, ElementInputA>>, Layout<TileShape>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+  using TiledMma = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, ElementInputA>>, Layout<TileShape>, ThreadLayout>::TiledMMA;
 
   constexpr int PipelineStages = 2;
-  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages>;
+  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages, GroupSize>;
   using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
 
   using EpilogueOp = cutlass::epilogue::fusion::LinearCombination<ElementOutput, ElementComputeEpilogue,
@@ -136,6 +119,33 @@ int main(int argc, const char** argv) {
   hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
 
   CUTLASS_CHECK(ExampleRunner<Gemm>{}.run(options, hw_info));
+
+  return cutlass::Status::kSuccess;
+}
+
+int main(int argc, const char** argv) {
+  //
+  // Parse options
+  //
+
+  Options options;
+
+  options.parse(argc, argv);
+
+  if (options.help) {
+    options.print_usage(std::cout) << std::endl;
+    return 0;
+  }
+
+  if (options.error) {
+    std::cerr << "Aborting execution." << std::endl;
+    return -1;
+  }
+
+  CUTLASS_CHECK((run_mx_case
+    <cutlass::mx_float8_t<float_e5m2_t>, Shape<_512, _256, _64>, 32>(options)));
+  CUTLASS_CHECK((run_mx_case
+    <cutlass::mx_float8_t<float_e5m2_t>, Shape<_512, _256, _64>, 128>(options)));
 
   return 0;
 }

@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2025 Intel Corporation, All rights reserved.
+ * Copyright (c) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -68,7 +68,6 @@ struct Options {
   bool help;
   bool error;
 
-  int mode;
   int m, n, k, l, iterations, groups, verify;
   float alpha, beta;
   std::vector<typename ProblemShape::UnderlyingProblemShape> problem_sizes_host;
@@ -78,7 +77,6 @@ struct Options {
     error(false),
     m(5120), n(4096), k(4096), l(1), iterations(20),
     groups(2),
-    mode(0),
     alpha(1.f), beta(0.f)
   {
     problem_sizes_host.reserve(groups);
@@ -100,7 +98,6 @@ struct Options {
     cmd.get_cmd_line_argument("n", n, 4096);
     cmd.get_cmd_line_argument("k", k, 4096);
     cmd.get_cmd_line_argument("l", l, 1);
-    cmd.get_cmd_line_argument("mode", mode, 1);
     cmd.get_cmd_line_argument("groups", groups, 2);
     cmd.get_cmd_line_argument("alpha", alpha, 1.f);
     cmd.get_cmd_line_argument("beta", beta, 0.f);
@@ -126,7 +123,6 @@ struct Options {
       << "  --k=<int>                   Sets the K extent of the GEMM\n"
       << "  --l=<int>                   Sets the L extent (batch count) of the GEMM\n"
       << "  --groups=<int>              Sets the number of individual GEMM problems for Grouped GEMM\n"
-      << "  --mode=<int>                The mode to run the gemm. 0 is Convert Only, 1 is Convert and Scale\n"
       << "  --alpha=<s32>               Epilogue scalar alpha\n"
       << "  --beta=<s32>                Epilogue scalar beta\n\n"
       << "  --iterations=<int>          Iterations\n\n"
@@ -190,7 +186,8 @@ struct ExampleRunner {
   using ElementCompute = typename CollectiveEpilogue::ElementCompute;
 
   using ProblemShapeType = typename Gemm::GemmKernel::ProblemShape;
-  static constexpr int GROUP_SIZE = CollectiveMainloop::GROUP_K;
+  static constexpr int scaleGroupSize = CollectiveMainloop::GroupK;
+
   //
   // Data members
   //
@@ -425,7 +422,7 @@ struct ExampleRunner {
       int64_t elements_C = M * N;
       int64_t elements_D = M * N;
       
-      const int scale_k = cute::ceil_div(K, GROUP_SIZE);
+      const int scale_k = cute::ceil_div(K, scaleGroupSize);
       int64_t elements_SFA = scale_k * M;
       int64_t elements_SFB = scale_k * N;
       cutlass::DeviceAllocation<ElementA> a;
@@ -484,7 +481,7 @@ struct ExampleRunner {
       auto shape_A = cute::make_shape(M, K, L);
       auto shape_B = cute::make_shape(N, K, L);
       auto shape_CD = cute::make_shape(M, N, L);
-      const int scale_k = cute::ceil_div(K, GROUP_SIZE);
+      const int scale_k = cute::ceil_div(K, scaleGroupSize);
       auto shape_scale_A = cute::make_shape(M, scale_k, L);
       auto shape_scale_B = cute::make_shape(N, scale_k, L);
 
@@ -592,7 +589,7 @@ struct ExampleRunner {
     typename Gemm::GemmKernel::Arguments arguments {
       get<0>(args_tuple), get<1>(args_tuple),
       typename Gemm::GemmKernel::MainloopArguments{ptr_A.get(), stride_A.get(), ptr_B.get(), stride_B.get(), ptr_SFA.get(),
-      stride_SFA.get(), ptr_SFB.get(), stride_SFB.get(), GROUP_SIZE},
+      stride_SFA.get(), ptr_SFB.get(), stride_SFB.get()},
       typename Gemm::GemmKernel::EpilogueArguments{get<2>(args_tuple), ptr_C.get(), stride_C.get(), ptr_D.get(), stride_D.get()},
       get<3>(args_tuple), get<4>(args_tuple)
     };

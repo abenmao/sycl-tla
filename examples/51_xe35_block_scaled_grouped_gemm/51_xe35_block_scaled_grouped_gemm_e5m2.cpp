@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2025 Intel Corporation, All rights reserved.
+ * Copyright (c) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -87,7 +87,7 @@ int main(int argc, const char** argv) {
   using GmemTiledCopyScaleA = void;
   using GmemTiledCopyScaleB = void;
   
-  using TileShape = Shape<_256, _256, _32>;
+  using TileShape = Shape<_512, _256, _64>;
 
   using TiledMma = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, ElementInputA>>, Layout<TileShape>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
 

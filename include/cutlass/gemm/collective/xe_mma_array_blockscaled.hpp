@@ -1,6 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2025 - 2025 Codeplay Software Ltd. All rights reserved.
- * Copyright (C) 2025 Intel Corporation, All rights reserved.
+ * Copyright (C) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -44,6 +44,7 @@ namespace cutlass::gemm::collective {
 
 template <
   int Stages,
+  int GroupSize,
   class Schedule,
   class TileShape_,
   class ElementPairA_,
@@ -60,7 +61,7 @@ template <
   class SmemCopyAtomB_,
   class TransformB_>
 struct CollectiveMma<
-    MainloopIntelXeXMX16BlockScaledGroup<Stages, Schedule>,
+    MainloopIntelXeXMX16BlockScaledGroup<Stages, GroupSize, Schedule>,
     TileShape_,
     ElementPairA_,
     StridePairA_,
@@ -74,7 +75,8 @@ struct CollectiveMma<
     GmemTiledCopyPairB_,
     SmemLayoutAtomB_,
     SmemCopyAtomB_,
-    TransformB_> : public CollectiveMma<MainloopIntelXeXMX16BlockScaled<Stages>,
+    TransformB_> : 
+    public CollectiveMma<MainloopIntelXeXMX16BlockScaled<Stages, GroupSize>,
                               TileShape_,
                               ElementPairA_,
                               StridePairA_,
@@ -94,8 +96,8 @@ public:
   //
   // Type Aliases
   //
-  using DispatchPolicy = MainloopIntelXeXMX16BlockScaledGroup<Stages, Schedule>;
-  using Base = CollectiveMma<MainloopIntelXeXMX16BlockScaled<Stages>,
+  using DispatchPolicy = MainloopIntelXeXMX16BlockScaledGroup<Stages, GroupSize, Schedule>;
+  using Base = CollectiveMma<MainloopIntelXeXMX16BlockScaled<Stages, GroupSize>,
                     TileShape_,
                     ElementPairA_,
                     StridePairA_,
@@ -137,8 +139,6 @@ public:
 
     using MainloopTensors = cute::tuple<TensorMKL, TensorNKL, TensorScaleA, TensorScaleB>;
   
-    static constexpr auto GROUP_K = Base::GROUP_K;
-
   // Host side kernel arguments
   struct Arguments {
     ElementA const** ptr_A;
@@ -149,8 +149,6 @@ public:
     StrideScaleA dSA{};
     ElementScaleB const** ptr_SB = nullptr;
     StrideScaleB dSB{};
-    // TODO: Current implementation only support group size = 32 ans Set as GROUP_K = 32
-    int group_size = GROUP_K;
   };
 
   using Params = Arguments;
@@ -182,8 +180,7 @@ public:
     return BaseArguments{ args.ptr_A[idx], args.dA[idx],
                           args.ptr_B[idx], args.dB[idx],
                           args.ptr_SA[idx], args.dSA[idx],
-                          args.ptr_SB[idx], args.dSB[idx],
-                          GROUP_K};
+                          args.ptr_SB[idx], args.dSB[idx]};
   }
 
   template<class ProblemShape>
@@ -197,6 +194,14 @@ public:
     auto [M,N,K,L] = problem_shape_MNKL;
 
     bool implementable = true;
+
+    if constexpr (cute::is_same_v<ElementA, cutlass::float_e2m1_t> ||
+                  cute::is_same_v<ElementB, cutlass::float_e2m1_t>) {
+      if (GroupSize != 32) {
+        CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Intel Xe blockscaled MMA only supports GroupSize=32 for e2m1 inputs.\n");
+        implementable = false;
+      }
+    }
 
     constexpr int min_aligned_elements_A = copy_alignment_bits / sizeof_bits<ElementA>::value;
     constexpr int min_aligned_elements_B = copy_alignment_bits / sizeof_bits<ElementB>::value;

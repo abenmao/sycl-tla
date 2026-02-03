@@ -1,6 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2025 - 2025 Codeplay Software Ltd. All rights reserved.
- * Copyright (C) 2025 Intel Corporation, All rights reserved.
+ * Copyright (C) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -48,6 +48,7 @@ using namespace cute;
 
 template <
   int Stages,
+  int GroupSize,
   class TileShape_,
   class ElementPairA_,
   class StridePairA_,
@@ -63,7 +64,7 @@ template <
   class SmemCopyAtomB_,
   class TransformB_>
 struct CollectiveMma<
-    MainloopIntelXeXMX16BlockScaled<Stages>,
+    MainloopIntelXeXMX16BlockScaled<Stages, GroupSize>,
     TileShape_,
     ElementPairA_,
     StridePairA_,
@@ -83,7 +84,7 @@ public:
   //
   // Type Aliases
   //
-  using DispatchPolicy = MainloopIntelXeXMX16BlockScaled<Stages>;
+  using DispatchPolicy = MainloopIntelXeXMX16BlockScaled<Stages, GroupSize>;
   using WorkgroupTileShape = TileShape_;
 
   using GmemTiledCopyPairA = GmemTiledCopyPairA_;
@@ -163,6 +164,10 @@ public:
     }
   }();
   
+  static_assert(!(cute::is_same_v<ElementA, cutlass::float_e2m1_t> || 
+                  cute::is_same_v<ElementB, cutlass::float_e2m1_t>) || (GroupSize == 32), 
+                "Intel Xe blockscaled MMA only supports GroupSize=32 for e2m1 inputs.");
+
   static_assert(std::is_same_v<TransformA, cute::identity>, "Transformation for A is not currently supported on Intel PVC");
   static_assert(std::is_same_v<TransformB, cute::identity>, "Transformation for B is not currently supported on Intel PVC");
   static_assert(kSupportedElementA && kSupportedElementB,
@@ -194,7 +199,7 @@ public:
   static constexpr int SG_K = ceil_div(BLK_K, SG_NUMS_K);
   using SubgroupTileShape = Shape<C<SG_M>, C<SG_N>, C<SG_K>>;
 
-  static constexpr auto GROUP_K = 32;
+  static constexpr auto GroupK = GroupSize;
 
   static_assert(SG_K >= 32, "Intel Xe blockscaled MMA requires SG_K to be at least 32.");
 
@@ -225,7 +230,6 @@ public:
     StrideScaleA dSA{};
     ElementScaleB const* ptr_SB = nullptr;
     StrideScaleB dSB{};
-    int group_size = 32;
   };
 
   struct Params {
@@ -233,7 +237,6 @@ public:
     TensorType<ElementB, StrideB> mB_nkl;
     TensorType<ElementScaleA, StrideScaleA> mAscale;
     TensorType<ElementScaleB, StrideScaleB> mBscale;
-    int group_size;
   };
 
   //
@@ -255,13 +258,13 @@ public:
     auto mB_nkl =
         make_tensor(make_gmem_ptr(static_cast<ElementB const *>(args.ptr_B)), make_layout(make_shape(N, K, L), args.dB));
 
-    auto scale_k = cute::ceil_div(K, GROUP_K);
+    auto scale_k = cute::ceil_div(K, GroupK);
     auto mScaleA = make_tensor(make_gmem_ptr(static_cast<ElementScaleA const *>(args.ptr_SA)),
                                make_layout(make_shape(M, scale_k, L), args.dSA));
     auto mScaleB = make_tensor(make_gmem_ptr(static_cast<ElementScaleB const *>(args.ptr_SB)),
                                make_layout(make_shape(N, scale_k, L), args.dSB));
 
-    return Params{mA_mkl, mB_nkl, mScaleA, mScaleB, GROUP_K};
+    return Params{mA_mkl, mB_nkl, mScaleA, mScaleB};
   }
 
   template<class ProblemShape>
@@ -275,6 +278,14 @@ public:
     auto [M,N,K,L] = problem_shape_MNKL;
 
     bool implementable = true;
+
+    if constexpr (cute::is_same_v<ElementA, cutlass::float_e2m1_t> ||
+                  cute::is_same_v<ElementB, cutlass::float_e2m1_t>) {
+      if (GroupSize != 32) {
+        CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Intel Xe blockscaled MMA only supports GroupSize=32 for e2m1 inputs.\n");
+        implementable = false;
+      }
+    }
 
     constexpr int min_aligned_elements_A = copy_alignment_bits / sizeof_bits<ElementA>::value;
     implementable &= cutlass::detail::check_alignment<min_aligned_elements_A>(cute::make_shape(M,K,L), args.dA);
@@ -364,17 +375,17 @@ public:
     const int l_coord = l_idx;
 
     auto [tiled_copy_scaleA, copy_iter_scaleA, fragment_scaleA] = make_scaled_copy<GmemTiledCopyScaleA, NonVoidElementScaleA,
-                                              SG_M, SG_K, GROUP_K>(mainloop.mAscale, m_coord, l_coord, k_tile_count);
+                                              SG_M, SG_K, GroupK>(mainloop.mAscale, m_coord, l_coord, k_tile_count);
     auto [tiled_copy_scaleB, copy_iter_scaleB, fragment_scaleB] = make_scaled_copy<GmemTiledCopyScaleB, NonVoidElementScaleB,
-                                              SG_N, SG_K, GROUP_K>(mainloop.mBscale, n_coord, l_coord, k_tile_count);
+                                              SG_N, SG_K, GroupK>(mainloop.mBscale, n_coord, l_coord, k_tile_count);
     auto [scale_m_offsets, scale_n_offsets, scale_ak_offsets, scale_bk_offsets] = make_scaled_offsets<
-                                                  GemmIterM::value, GemmIterN::value, GemmIterK::value, MMA_K, GROUP_K,
+                                                  GemmIterM::value, GemmIterN::value, GemmIterK::value, MMA_K, GroupK,
                                                   typename decltype(tiled_copy_scaleA)::BlockShape,
                                                   typename decltype(tiled_copy_scaleB)::BlockShape>();
     auto [tiled_prefetch_scaleA, prefetch_iter_scaleA] = make_scaled_prefetch<decltype(tiled_copy_scaleA),
-                                                           SG_M, SG_K, GROUP_K>(tiled_copy_scaleA, m_coord, l_coord, k_tile_count);
+                                                           SG_M, SG_K, GroupK>(tiled_copy_scaleA, m_coord, l_coord, k_tile_count);
     auto [tiled_prefetch_scaleB, prefetch_iter_scaleB] = make_scaled_prefetch<decltype(tiled_copy_scaleB),
-                                                           SG_N, SG_K, GROUP_K>(tiled_copy_scaleB, n_coord, l_coord, k_tile_count);
+                                                           SG_N, SG_K, GroupK>(tiled_copy_scaleB, n_coord, l_coord, k_tile_count);
 
 #define PRINT(x) print(#x ": "); print(x); print("\n");
 
@@ -406,7 +417,7 @@ public:
     const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K_start));
 
 
-    constexpr int k_reload_factor = cute::max(GROUP_K / BLK_K, 1);
+    constexpr int k_reload_factor = cute::max(GroupK / BLK_K, 1);
 
     // pre-prefetch
     int prefetch_k = k_start_idx;

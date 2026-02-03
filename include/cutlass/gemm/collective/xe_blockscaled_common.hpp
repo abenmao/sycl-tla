@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (C) 2025 Intel Corporation, All rights reserved.
+ * Copyright (C) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -87,7 +87,8 @@ namespace cutlass::gemm::collective
     return make_tensor(make_inttuple_iter(make_coord(mn_coord, 0, l_coord)),
                        make_layout(make_shape(Int<TraitsSize>{}, Int<TraitsNum>{}, _1{}, k_count),
                                    make_stride(E<0>{} * _16{}, E<0>{} * size<1>(BlockShape{}),
-                                               E<1>{} * size<0>(BlockShape{}), E<1>{} * (SgK / GroupK))));
+                                               E<1>{} * size<0>(BlockShape{}), E<1>{} * cute::ceil_div(
+                                                SgK, GroupK))));
   }
 
   // Helper to generate index data for GEMM offsets (M/N/Q dimension)
@@ -140,7 +141,8 @@ namespace cutlass::gemm::collective
   make_scaled_copy(Tensor const &tensor, int mn_coord = 0, int l_coord = 0, int k_count = 0)
   {
     using Stride = cute::remove_cvref_t<decltype(tensor.stride())>;
-    using NonVoidScaleTraits = ScaleCopyTraits<Element, SgK / GroupK, SgMN>;
+    using NonVoidScaleTraits = 
+        ScaleCopyTraits<Element, cute::ceil_div(SgK, GroupK), SgMN>;
     using NonVoidScaleCopy = typename NonVoidScaleTraits::Type;
     using SelectedCopy = cute::conditional_t<cute::is_void_v<ScaleCopy>, NonVoidScaleCopy, ScaleCopy>;
 
