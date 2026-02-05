@@ -74,41 +74,43 @@ print(DescriptorIterator const&) {
 template <AMMA::Major, bool = false>
 struct smem_desc : DescriptorIterator {};
 
-}
+} // namespace AMMA
 
 // Customization point for creating a AMMA::smem_desc Tensor
 template <AMMA::Major major, bool is_A>
-struct MakeTensor<AMMA::smem_desc<major, is_A>>
-{
+struct MakeTensor<AMMA::smem_desc<major, is_A>> {
+  template <int Dim0, int Stride> constexpr auto coreMatrixStride() {
+    constexpr int Cols = 32;
+    constexpr int TotalBytes = 1024;
+    constexpr int RowBytes = TotalBytes / Cols;
+    constexpr int Ret = (Stride >= Dim0) ? Stride : RowBytes * Stride;
+    return C<Ret>{};
+  }
+
   template <class TEngine, class TLayout>
   CUTE_HOST_DEVICE constexpr auto
-  operator()(Tensor<TEngine,TLayout> const& smem_tensor)
-  {
-    constexpr auto layout = decltype(recast<uint8_t const>(smem_tensor).layout()) {};
-    constexpr auto coreMatrixStride = [Dim0 = size<0>(layout)](auto stride) {
-      constexpr int Cols = 32;
-      constexpr int TotalBytes = 1024;
-      constexpr int RowBytes = TotalBytes / Cols;
-      constexpr int Ret = (stride >= Dim0) ? stride : RowBytes * stride;
-      return C<Ret>{};
-    };
+  operator()(Tensor<TEngine, TLayout> const &smem_tensor) {
+    constexpr auto layout =
+        decltype(recast<uint8_t const>(smem_tensor).layout()){};
 
     constexpr auto stride = layout.stride();
-    constexpr auto stride1 = coreMatrixStride(get<1>(stride));
-    constexpr auto stride2 = coreMatrixStride(get<2>(stride));
+    constexpr int S1 = get<1>(layout.stride());
+    constexpr int S2 = get<2>(layout.stride());
+    using Stride1 = decltype(coreMatrixStride<size<0>(layout), S1>());
+    using Stride2 = decltype(coreMatrixStride<size<0>(layout), S2>());
 
     // TODO: Enable this test and use 'make_smem_ptr'
     // static_assert(is_smem<TEngine>::value, "Expected SMEM Tensor to construct a AMMA Desc Tensor");
     return make_tensor(
         AMMA::DescriptorIterator{
           AMMA::make_matrix_desc<major, is_A>(tensor<0>(smem_tensor))
-        }, 
+        },
         make_layout(
           tuple_cat(make_tuple(_1{}), take<1, -1>(shape(layout))),
-          tuple_cat(make_tuple(_0{}, stride1, stride2), take<3, -1>(stride))
+          tuple_cat(make_tuple(_0{}, Stride1{}, Stride2{}), take<3, -1>(stride))
         )
     );
   }
 };
 
-}
+} // namespace cute

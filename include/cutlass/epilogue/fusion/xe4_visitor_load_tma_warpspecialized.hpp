@@ -40,6 +40,8 @@
 #include "cutlass/epilogue/collective/detail.hpp"
 #include "cutlass/detail/helper_macros.hpp"
 
+#include "xe_visitor.hpp"
+
 #include "cute/tensor.hpp"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
