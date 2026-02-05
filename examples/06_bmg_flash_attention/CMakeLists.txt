@@ -1,4 +1,5 @@
 # Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
+# Copyright (C) 2025 - 2026 Intel Corporation, All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -113,58 +114,5 @@ foreach(HEAD_DIM 64 96 128 192)
 
     target_compile_definitions(06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
     target_compile_definitions(06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
-
   endforeach()
-  
-  cutlass_example_add_executable(
-    06_bmg_prefill_attention_hdim${HEAD_DIM}
-    06_bmg_prefill_attention.cpp
-    TEST_COMMAND_OPTIONS
-    TEST_NO_PAGED_PREFILL
-  )
-
-  cutlass_example_add_executable(
-    06_bmg_prefill_attention_cachedKV_hdim${HEAD_DIM}
-    06_bmg_prefill_attention_prefill_cachedKV.cpp
-    TEST_COMMAND_OPTIONS
-    TEST_NO_PAGED_PREFILL
-    TEST_PAGED_PREFILL
-  )
-
-  cutlass_example_add_executable(
-    06_bmg_decode_attention_hdim${HEAD_DIM}
-    06_bmg_decode_attention.cpp
-    TEST_COMMAND_OPTIONS
-    TEST_NO_PAGED_DECODE
-    TEST_PAGED_DECODE
-  )
-
-  cutlass_example_add_executable(
-    06_bmg_prefill_attention_fp8_hdim${HEAD_DIM}
-    06_bmg_prefill_attention_fp8.cpp
-    TEST_COMMAND_OPTIONS
-    TEST_NO_PAGED_PREFILL
-  )
-
-  cutlass_example_add_executable(
-    06_bmg_decode_attention_fp8_hdim${HEAD_DIM}
-    06_bmg_decode_attention_fp8.cpp
-    TEST_COMMAND_OPTIONS
-    TEST_NO_PAGED_DECODE
-    TEST_PAGED_DECODE
-  )
-
-  cutlass_example_add_executable(
-    06_xe_fmha_fwd_prefill_fp8kvfp16mma_hdim${HEAD_DIM}
-    06_xe_fmha_fwd_fp8kvfp16mma.cpp
-    TEST_COMMAND_OPTIONS
-    TEST_NO_PAGED_PREFILL
-  )
-
-  target_compile_definitions(06_xe_fmha_fwd_prefill_fp8kvfp16mma_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1)
-  target_compile_definitions(06_bmg_prefill_attention_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM})
-  target_compile_definitions(06_bmg_prefill_attention_cachedKV_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM})
-  target_compile_definitions(06_bmg_decode_attention_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM})
-  target_compile_definitions(06_bmg_prefill_attention_fp8_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM})
-  target_compile_definitions(06_bmg_decode_attention_fp8_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM})
 endforeach()
