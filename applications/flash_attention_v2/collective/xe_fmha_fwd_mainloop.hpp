@@ -560,7 +560,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       }
       /* Causal masking - only in non-cache mode */
       if constexpr (!is_cache && CausalMask) {
-        if (K == blk_k1 - 1) {
+        if (K == total_blk - 1) {
+          // Need to get global col and row indices to mask the elements
           Tensor cPgP = make_identity_tensor(make_shape(seq_len, seq_len));
           Tensor gP = local_tile(cPgP, take<0,2>(TileShapeQK{}), make_coord(get<0>(blk_qv), K));
           auto cS_thread = thr_mma_qk.partition_C(gP);
