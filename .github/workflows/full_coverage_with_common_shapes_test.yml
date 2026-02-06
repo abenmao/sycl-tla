@@ -37,7 +37,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
-      - name: Setup virtual environment
+      - name: Setup Virtual Environment
         shell: bash
         run: |
           source /opt/intel/oneapi/setvars.sh --force
@@ -54,7 +54,7 @@ jobs:
           which $CXX
           $CXX --version
           sycl-ls
-      - name: Build
+      - name: Configure Cmake Options
         shell: bash
         run: |
           # Temporarily disable 06_bmg_flash_attention for BMG target:
@@ -70,19 +70,30 @@ jobs:
             -DCUTLASS_ENABLE_BENCHMARKS=ON \
             -DCUTLASS_SYCL_PROFILING_ENABLED=ON \
             -DCUTLASS_SYCL_RUNNING_CI=ON
-          cmake --build .
-      - name: Unit test
+      - name: Build Unit Tests
         working-directory: build
         shell: bash
         run: |
-          cmake --build . --target test_unit
-      - name: Examples
+          ninja test/all
+      - name: Run Unit Tests
         working-directory: build
         shell: bash
         run: |
-          cmake --build . --target test_examples -j 1
+          ctest -R test_unit
+      - name: Build Examples
+        working-directory: build
+        shell: bash
+        run: |
+          ninja examples/all
+      - name: Run Examples
+        working-directory: build
+        shell: bash
+        run: |
+          ctest -R test_example
       - name: Build Benchmarks
         working-directory: build
         shell: bash
         run: |
-          cmake --build . --target cutlass_benchmarks
+          ninja benchmarks/all
+          
+
