@@ -115,4 +115,12 @@ foreach(HEAD_DIM 64 96 128 192)
     target_compile_definitions(06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
     target_compile_definitions(06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
   endforeach()
+
+  cutlass_example_add_executable(
+    06_xe_fmha_fwd_prefill_fp8kvfp16mma_hdim${HEAD_DIM}
+    06_xe_fmha_fwd_fp8kvfp16mma.cpp
+    TEST_COMMAND_OPTIONS
+    TEST_NO_PAGED_PREFILL
+  )
+  target_compile_definitions(06_xe_fmha_fwd_prefill_fp8kvfp16mma_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1)
 endforeach()
