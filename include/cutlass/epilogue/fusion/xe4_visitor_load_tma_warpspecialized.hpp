@@ -39,6 +39,7 @@
 #include "cutlass/arch/barrier.h"
 #include "cutlass/epilogue/collective/detail.hpp"
 #include "cutlass/detail/helper_macros.hpp"
+#include "cutlass/epilogue/fusion/xe_visitor.hpp"
 
 #include "xe_visitor.hpp"
 
