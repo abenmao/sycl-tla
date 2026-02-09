@@ -49,27 +49,27 @@ CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_MXFP8E4M3_MXFP8E4M3_MXFP8E4M3_FP32_
 
 /* ---------------------------------------- Custom Tiles ------------------------------------------ */
 
-using CriFMHAPrefill_MXFP8E5M2_MXFP8E5M2_MXFP8E5M2_FP32_RCR_h64_WgQ128K64V32_SgQ8K64P8V32_NonCausal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
+using CriFMHAPrefill_MXFP8E5M2_MXFP8E5M2_MXFP8E5M2_FP32_RCR_WgQ128K64V32_SgQ8K64_HDimQK32V64_NonCausal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
   /*ElementQ*/ mxfp8_e5m2::DataType, /*ElementK*/ mxfp8_e5m2::DataType, /*ElementV*/ mxfp8_e5m2::DataType, /*ElementO*/ float,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
   /*ElementScale*/ mxfp8_e5m2::ScaleFactorType, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ true, /*WgTileQ*/ 128, /*WgTileK*/ 64, /*WgTileV*/ 32,
   /*SgTileQ*/ 8, /*SgTileK*/ 64, /*HeadDimQK*/ 32, /*HeadDimV*/ 64
 >::type;
 
-using CriFMHAPrefill_MXFP8E4M3_MXFP8E4M3_MXFP8E4M3_FP32_RCR_h64_WgQ128K64V32_SgQ8K64P8V32_NonCausal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
+using CriFMHAPrefill_MXFP8E4M3_MXFP8E4M3_MXFP8E4M3_FP32_RCR_WgQ128K64V32_SgQ8K64_HDimQK32V64_NonCausal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
   /*ElementQ*/ mxfp8_e4m3::DataType, /*ElementK*/ mxfp8_e4m3::DataType, /*ElementV*/ mxfp8_e4m3::DataType, /*ElementO*/ float,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
   /*ElementScale*/ mxfp8_e4m3::ScaleFactorType, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ true, /*WgTileQ*/ 128, /*WgTileK*/ 64, /*WgTileV*/ 32,
   /*SgTileQ*/ 8, /*SgTileK*/ 64, /*HeadDimQK*/ 32, /*HeadDimV*/ 64
 >::type;
 
-CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_MXFP8E5M2_MXFP8E5M2_MXFP8E5M2_FP32_RCR_h64_WgQ128K64V32_SgQ8K64P8V32_NonCausal_FixedLen);
-CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_MXFP8E4M3_MXFP8E4M3_MXFP8E4M3_FP32_RCR_h64_WgQ128K64V32_SgQ8K64P8V32_NonCausal_FixedLen);
+CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_MXFP8E5M2_MXFP8E5M2_MXFP8E5M2_FP32_RCR_WgQ128K64V32_SgQ8K64_HDimQK32V64_NonCausal_FixedLen);
+CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_MXFP8E4M3_MXFP8E4M3_MXFP8E4M3_FP32_RCR_WgQ128K64V32_SgQ8K64_HDimQK32V64_NonCausal_FixedLen);
 
 
 static void register_flash_attention_prefill_benchmarks_mxfp8() {
   CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_MXFP8E4M3_MXFP8E4M3_MXFP8E4M3_FP32_RCR_h64_NonCausal_FixedLen_Persistent);
 
-  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_MXFP8E5M2_MXFP8E5M2_MXFP8E5M2_FP32_RCR_h64_WgQ128K64V32_SgQ8K64P8V32_NonCausal_FixedLen);
-  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_MXFP8E4M3_MXFP8E4M3_MXFP8E4M3_FP32_RCR_h64_WgQ128K64V32_SgQ8K64P8V32_NonCausal_FixedLen);
+  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_MXFP8E5M2_MXFP8E5M2_MXFP8E5M2_FP32_RCR_WgQ128K64V32_SgQ8K64_HDimQK32V64_NonCausal_FixedLen);
+  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_MXFP8E4M3_MXFP8E4M3_MXFP8E4M3_FP32_RCR_WgQ128K64V32_SgQ8K64_HDimQK32V64_NonCausal_FixedLen);
 }
