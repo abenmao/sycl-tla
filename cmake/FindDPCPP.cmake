@@ -74,25 +74,25 @@ if (SYCL_INTEL_TARGET)
 
   # For 2026 compiler onwards, sycl-target is filled with proper device.
   # Idea of multitargets support is supposing we get DPCPP_SYCL_TARGET as bmg,pvc
-  # In that case, we will pass -fsycl-targets=spir64 to compiler as well as linker.
+  # In that case, we will pass -fsycl-targets=spir64_gen to compiler as well as linker.
   # But in linker, we will specify -device as bmg_g21,pvc
   # If we want DPCPP_SYCL_TARGET as bmg,pvc,cri in that case for compiler
-  # we will pass -fsycl-targets=spir64,intel_gpu_cri since code to be compiled is different for these
+  # we will pass -fsycl-targets=spir64_gen,intel_gpu_cri since code to be compiled is different for these
   # cases. For Linking we need to pass different value of spirv-translator and device option only for
   # spirv compile target.
 
   foreach(TGT IN LISTS DPCPP_SYCL_TARGET_LIST)
     if(TGT STREQUAL "intel_gpu_bmg_g21" OR TGT STREQUAL "bmg")
-      list(APPEND SYCL_TARGETS "spir64")
+      list(APPEND SYCL_TARGETS "spir64_gen")
       list(APPEND SYCL_DEVICES "bmg_g21")
     elseif(TGT STREQUAL "intel_gpu_pvc" OR TGT STREQUAL "pvc")
-      list(APPEND SYCL_TARGETS "spir64")
+      list(APPEND SYCL_TARGETS "spir64_gen")
       list(APPEND SYCL_DEVICES "pvc")
     elseif(TGT STREQUAL "intel_gpu_cri" OR TGT STREQUAL "cri")
       if(COMPILER_VERSION_2026_ONWARDS)
         list(APPEND SYCL_TARGETS "intel_gpu_cri")
       else()
-        list(APPEND SYCL_TARGETS "spir64")
+        list(APPEND SYCL_TARGETS "spir64_gen")
       endif()
     endif()
   endforeach()
@@ -121,7 +121,7 @@ if (SYCL_INTEL_TARGET)
       list(APPEND SPIRV_EXT "+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate")
     endif()
 
-    if(${TARGET} STREQUAL "spir64")
+    if(${TARGET} STREQUAL "spir64_gen")
       list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xsycl-target-backend=${TARGET};-device ${SYCL_DEVICES_STR}")
     endif()
     list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xspirv-translator=${TARGET}")
