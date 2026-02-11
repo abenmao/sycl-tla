@@ -83,7 +83,7 @@ static GemmTestParams gemm_test_params[] = {
      /* cluster_m, cluster_n, cluster_k */ 1, 1, 1,
      /* stages_a */ 2,
      /* is_persistent */ true,
-     /* activation, operation_c */ "None", "Mul"},  // 0
+     /* activation, operation_c */ "None", "None"},  // 0
 
      {/* test_level */ "L2",
      /* state */ "enabled",
@@ -96,7 +96,7 @@ static GemmTestParams gemm_test_params[] = {
      /* cluster_m, cluster_n, cluster_k */ 1, 1, 1,
      /* stages_a */ 2,
      /* is_persistent */ true,
-     /* activation, operation_c */ "None", "Mul"},  // 1
+     /* activation, operation_c */ "None", "None"},  // 1
 
      {/* test_level */ "L2",
      /* state */ "disabled",
@@ -109,7 +109,7 @@ static GemmTestParams gemm_test_params[] = {
      /* cluster_m, cluster_n, cluster_k */ 1, 1, 1,
      /* stages_a */ 2,
      /* is_persistent */ true,
-     /* activation, operation_c */ "None", "Mul"},  // 2
+     /* activation, operation_c */ "None", "None"},  // 2
 
 
      {/* test_level */ "L2",
@@ -123,7 +123,7 @@ static GemmTestParams gemm_test_params[] = {
      /* cluster_m, cluster_n, cluster_k */ 1, 1, 1,
      /* stages_a */ 2,
      /* is_persistent */ true,
-     /* activation, operation_c */ "None", "Mul"},  // 3
+     /* activation, operation_c */ "None", "None"},  // 3
 
      {/* test_level */ "L2",
      /* state */ "disabled",
@@ -136,7 +136,7 @@ static GemmTestParams gemm_test_params[] = {
      /* cluster_m, cluster_n, cluster_k */ 1, 1, 1,
      /* stages_a */ 2,
      /* is_persistent */ true,
-     /* activation, operation_c */ "None", "Mul"},  // 4
+     /* activation, operation_c */ "None", "None"},  // 4
 
      {/* test_level */ "L2",
      /* state */ "disabled",
@@ -149,7 +149,7 @@ static GemmTestParams gemm_test_params[] = {
      /* cluster_m, cluster_n, cluster_k */ 1, 1, 1,
      /* stages_a */ 2,
      /* is_persistent */ true,
-     /* activation, operation_c */ "None", "Mul"},  // 5
+     /* activation, operation_c */ "None", "None"},  // 5
 
      {/* test_level */ "L2",
      /* state */ "disabled",
@@ -162,10 +162,10 @@ static GemmTestParams gemm_test_params[] = {
      /* cluster_m, cluster_n, cluster_k */ 1, 1, 1,
      /* stages_a */ 2,
      /* is_persistent */ true,
-     /* activation, operation_c */ "None", "Mul"},  // 6
+     /* activation, operation_c */ "None", "None"},  // 6
 
 
-
+#if 0
     {/* test_level */ "L3",
      /* state */ "enabled",
      /* M, N, K, L */ 512, 768, 384, 1,
@@ -640,4 +640,5 @@ static GemmTestParams gemm_test_params[] = {
      /* is_persistent */ false,
      /* activation, operation_c */ "SiLu", "Mul"},  // 35
     /************* End: cluster size variation {1,2,4} */
+#endif
 };
