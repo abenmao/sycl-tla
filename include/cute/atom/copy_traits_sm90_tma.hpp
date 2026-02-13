@@ -30,6 +30,7 @@
  **************************************************************************************************/
 #pragma once
 
+#if !defined(SYCL_INTEL_XE4_TARGET)
 #if !defined(__CUDACC_RTC__) && !defined(CUTLASS_ENABLE_SYCL)
 #include <cuda.h>
 #endif
@@ -44,11 +45,6 @@
 
 #include <cutlass/cuda_host_adapter.hpp>
 
-#if defined(SYCL_INTEL_XE4_TARGET)
-#include <cute/atom/copy_traits_xe4_dma_legacy.hpp>
-#endif
-
-#if !defined(SYCL_INTEL_XE4_TARGET) 
 namespace cute
 {
 
@@ -990,13 +986,8 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
   // TMA smem desc info
   //
 
-#if defined(SYCL_INTEL_XE4_TARGET)
-  sycl::marray<uint32_t, tma_dim> smem_box_shape(uint32_t(1));
-  sycl::marray<uint32_t, tma_dim> smem_box_stride(uint32_t(1));
-#else
   cute::array<uint32_t, 5> smem_box_shape  = {1,1,1,1,1};
   cute::array<uint32_t, 5> smem_box_stride = {1,1,1,1,1};
-#endif
 
   // The smem box is simply given by the sizes of the modes in tma_gbasis
   for_each(make_seq<tma_dim>{}, [&](auto i) {
@@ -1130,16 +1121,7 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
                                  decltype(tma_gbasis),
                                  decltype(swizzle)>;
 
-#if defined(SYCL_INTEL_XE4_TARGET)
-  sycl::marray<uint32_t, tma_dim> gmem_shape;
-  for_each(make_seq<tma_dim>{}, [&](auto i) {gmem_shape[i] = gmem_prob_shape[i];});
-  sycl::marray<uint64_t, tma_dim-1> gmem_stride;
-  for_each(make_seq<tma_dim-1>{}, [&](auto i) {gmem_stride[i] = gmem_prob_stride[i+1];});
-  auto tma_desc_details = make_tuple(gmem_shape, gmem_stride, smem_box_shape, smem_box_stride);
-  return cute::make_tuple(tma_desc_details, AuxParams{gmem_tma_basis_stride});
-#else
   return cute::make_tuple(tma_desc, AuxParams{gmem_tma_basis_stride});
-#endif
 }
 
 template <class TmaInternalType,
@@ -1177,23 +1159,11 @@ make_tma_copy_atom(CopyOp,
   // Construct the Copy_Traits
   //
 
-#if defined(SYCL_INTEL_XE4_TARGET)
-  auto gmem_ptr = cute::raw_pointer_cast(recast<TmaInternalType>(gtensor).data());
-  constexpr int num_bits_per_tma = size(tma_gbasis) * sizeof_bits_v<TmaInternalType>;
-  using DmaCache = Xe4DmaCache<decltype(tma_desc), decltype(aux_params), decltype(gmem_ptr)>;
-  using Traits = Copy_Traits<Xe4CopyOp<CopyOp>, cute::C<num_bits_per_tma>, DmaCache>;
-  using Atom   = Copy_Atom<Traits, typename GEngine::value_type>;
-
-  Traits tma_traits{{tma_desc, aux_params, gmem_ptr}};
-
-#else
   constexpr int num_bits_per_tma = size(tma_gbasis) * sizeof_bits_v<TmaInternalType>;
   using Traits = Copy_Traits<CopyOp, cute::C<num_bits_per_tma>, decltype(aux_params)>;
   using Atom   = Copy_Atom<Traits, typename GEngine::value_type>;
 
   Traits tma_traits{tma_desc, aux_params};
-
-#endif
 
 #if 0
   print("num_bits_per_tma :  "); print(num_bits_per_tma); print("\n");
@@ -1346,12 +1316,8 @@ make_tma_copy(CopyOp                  const& copy_op,
               CTA_Tiler               const& cta_tiler,
               Cluster_Size            const& cluster_size)
 {
-#if defined(SYCL_INTEL_XE4_TARGET)
-  if constexpr (is_base_of_v<xe4::ASYNC_ROW_IM2COL, CopyOp>) {
-#else
   if constexpr (cute::is_same_v<CopyOp, SM90_TMA_LOAD_IM2COL> ||
                 cute::is_same_v<CopyOp, SM90_TMA_STORE_IM2COL>) {
-#endif
     return make_im2col_tma_copy(copy_op,
                                 gtensor,
                                 slayout,

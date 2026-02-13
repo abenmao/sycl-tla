@@ -30,6 +30,7 @@
  **************************************************************************************************/
 #pragma once
 
+#if defined(SYCL_INTEL_XE4_TARGET)
 #include "cute/layout.hpp"
 #include "cute/layout_composed.hpp"  // cute::composition
 #include "cute/swizzle.hpp"             // cute::Swizzle
@@ -275,11 +276,7 @@ template <int Stages_>
 class PipelineTmaAsync {
 public:
   using FullBarrier = cutlass::arch::ClusterTransactionBarrier;
-#if defined(SYCL_INTEL_XE4_TARGET)
   using EmptyBarrier = cutlass::arch::ClusterTransactionBarrier;
-#else
-  using EmptyBarrier = cutlass::arch::ClusterBarrier;
-#endif
   using ProducerBarrierType = FullBarrier::ValueType;
   using ConsumerBarrierType = EmptyBarrier::ValueType;
   static constexpr uint32_t Stages = Stages_;
@@ -319,12 +316,6 @@ public:
       uint32_t const producer_arv_cnt = params.num_producers;
       uint32_t const num_consumer_warpgroups_per_cluster = params.num_consumers / NumThreadsPerWarpGroup;
       uint32_t multicast_consumer_arrival_count = params.num_consumers; // If cluster_size is 1
-#if !defined(SYCL_INTEL_XE4_TARGET)
-      if (cute::size(cluster_shape) > 1) {
-        multicast_consumer_arrival_count = (cute::size<0>(cluster_shape) + cute::size<1>(cluster_shape) - 1) *
-              num_consumer_warpgroups_per_cluster;
-      }
-#endif
       cutlass::arch::detail::initialize_barrier_array_pair_aligned<decltype(storage.full_barrier_), decltype(storage.empty_barrier_), Stages>(
           storage.full_barrier_, storage.empty_barrier_, producer_arv_cnt, multicast_consumer_arrival_count);
     }
@@ -446,14 +437,6 @@ public:
     producer_commit(state.index(), bytes);
   }
 
-#if !defined(SYCL_INTEL_XE4_TARGET)
-  template<class UserDefinedArriveOp>
-  CUTLASS_DEVICE
-  void producer_commit(PipelineState state, UserDefinedArriveOp&& user_defined_arrive_op) {
-    cute::forward<UserDefinedArriveOp>(user_defined_arrive_op)(producer_get_barrier(state.index()));;
-  }
-#endif
-
   // Prevents early exit of producer blocks in Cluster.
   // This should be called once before kernel exits.
   CUTLASS_DEVICE
@@ -503,7 +486,6 @@ public:
     consumer_release(state.index());
   }
 
-#if defined(SYCL_INTEL_XE4_TARGET)
   CUTLASS_DEVICE
   void consumer_commit(PipelineState state, uint32_t bytes) {
     consumer_commit(state.index(), bytes);
@@ -513,7 +495,6 @@ public:
   ConsumerBarrierType* consumer_get_barrier(PipelineState state) {
     return consumer_get_barrier(state.index());
   }
-#endif
 
 private:
   uint32_t dst_blockid_ = 0;
@@ -588,11 +569,9 @@ private:
   // NOP for TMA based mainloop
   CUTLASS_DEVICE
   void producer_commit(uint32_t stage, uint32_t bytes) {
-    #if defined(SYCL_INTEL_XE4_TARGET)
       if (!params_.is_leader) {
         return full_barrier_ptr_[stage].arrive(bytes);
       }
-    #endif
 
     // Below code is used only for unit-testing (in the absence of TMA commit)
     #if CUTLASS_UNIT_TEST_PIPELINE
@@ -662,26 +641,13 @@ private:
   void consumer_release(uint32_t stage, uint32_t skip = false) {
     detail::pipeline_check_is_consumer(params_.role);
 
-#if defined(SYCL_INTEL_XE4_TARGET)
     return empty_barrier_ptr_[stage].arrive();
-#endif
-
-    empty_barrier_ptr_[stage].arrive(dst_blockid_, is_signaling_thread_ & (!skip));
-    #ifndef NDEBUG
-    if (params_.role == ThreadCategory::Producer || params_.role == ThreadCategory::NonParticipant) {
-      #if defined(__CUDA_ARCH__)
-      asm volatile ("brkpt;\n" ::);
-      #endif
-    }
-    #endif
   }
 
-#if defined(SYCL_INTEL_XE4_TARGET)
   CUTLASS_DEVICE
   void consumer_commit(uint32_t stage, uint32_t bytes) {
     empty_barrier_ptr_[stage].arrive_and_expect_tx(bytes);
   }
-#endif
 
   CUTLASS_DEVICE
   ProducerBarrierType* producer_get_barrier(uint32_t stage) {
@@ -1433,3 +1399,4 @@ pipeline_init_arrive_relaxed(int cluster_size) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 } // namespace cutlass
+#endif
