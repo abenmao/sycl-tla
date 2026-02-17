@@ -96,7 +96,6 @@ struct XE4_LDSTMatrixBase {
                     (BitWidth == 8 && cmp_values<vlen, 1,2,4,8>()));
     } else if constexpr (Type == MatrixType::Type3) {
       static_assert(dependent_false<T>, "Matrix type supported now for row access");
-      //static_assert(BitWidth == 8 && cmp_values(vlen, 1,2,4,8));
     } else {
       static_assert(dependent_false<T>, "Matrix type supported");
     }

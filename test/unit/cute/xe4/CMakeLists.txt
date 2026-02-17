@@ -32,6 +32,9 @@ add_custom_target(
   DEPENDS
   cutlass_test_unit_cute_xe4_reduce_exp
   cutlass_test_unit_cute_xe4_adma_load_store
+  cutlass_test_unit_cute_xe4_ldsm_load
+  cutlass_test_unit_cute_xe4_ldsm_adma
+  cutlass_test_unit_cute_xe4_ldsm_store
 )
 
 add_custom_target(

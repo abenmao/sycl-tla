@@ -112,7 +112,7 @@ ldsm_test_device_cute(T* g_in, T* g_out,
 		 
     // Copy SMEM -> RMEM via tiled_copy (LDSM, LDS)
     copy(tiled_load, tXsX, tXrX);
-    sycl::group_barrier(sycl::ext::oneapi::this_work_item::get_nd_item<1>().get_group());
+    sycl::group_barrier(sycl::ext::oneapi::this_work_item::get_nd_item<3>().get_group());
     //syncthreads();
 
     // Store OP from RMEM to SMEM
@@ -124,19 +124,19 @@ ldsm_test_device_cute(T* g_in, T* g_out,
     auto thr_src_frag = thr_store.partition_fragment_S(coord_tile);
     // Default Copy register to register
     copy(tXrX, thr_src_frag);
-    sycl::group_barrier(sycl::ext::oneapi::this_work_item::get_nd_item<1>().get_group());
+    sycl::group_barrier(sycl::ext::oneapi::this_work_item::get_nd_item<3>().get_group());
     // Copy (Store) from  RMEM src to SMEM
     copy(tiled_store, thr_src_frag, thr_dst_coord);
-    sycl::group_barrier(sycl::ext::oneapi::this_work_item::get_nd_item<1>().get_group());
+    sycl::group_barrier(sycl::ext::oneapi::this_work_item::get_nd_item<3>().get_group());
 
     for (int i = tid; i < size(t_smem); i += 32) {
       t_g_out(i) = ts_smem(i);
     }
-    sycl::group_barrier(sycl::ext::oneapi::this_work_item::get_nd_item<1>().get_group());
+    sycl::group_barrier(sycl::ext::oneapi::this_work_item::get_nd_item<3>().get_group());
     //copy(tXrX, tXgX);
   }
 }
-template<typename T, typename LoadOp, typename StoreOp,
+template<typename T, typename LoadOp, typename StoreOp, int GroupSize,
          typename TLayout, typename VLayout, typename SLayout,
 	 typename Hin>
 void launch_tiled_kernel(TLayout t_layout, VLayout v_layout,
@@ -148,7 +148,7 @@ void launch_tiled_kernel(TLayout t_layout, VLayout v_layout,
 
   sc_exp::launch<ldsm_test_device_cute<T, LoadOp, StoreOp, decltype(smem_layout), TLayout, VLayout>>
     //( sc_exp::launch_policy{sc::dim3(1), sc::dim3(int(size(tiled_copy))),
-    ( sc_exp::launch_policy{sc::dim3(1), sc::dim3(32)},
+    ( sc_exp::launch_policy{sc::dim3(1), sc::dim3(32 * GroupSize)},
       //sc_exp::local_mem_size{sizeof(T) * size(smem_layout)}},
       d_in.data(), d_out.data(), t_layout, v_layout, smem_layout);
   sc::wait_and_throw();
@@ -160,8 +160,25 @@ void launch_tiled_kernel(TLayout t_layout, VLayout v_layout,
   }
 }
 
+template<int GroupSize, LDSMMode Mode> struct ThrLayout {
+   static constexpr int ThrM=32/GroupSize;
+    // Since ThrM is div by GroupSize, ThrN is GroupSize^2
+    // as there will be 32 * GroupSize threads
+   static constexpr int ThrN=GroupSize*GroupSize;
+   static constexpr Layout t_layout = make_layout(make_shape(Int<ThrM>{}, Int<ThrN>{}), LayoutLeft{});
+};
+
+// Unordered Vetor needs seperate layout due to h/w constraints on bank acces
+// first 8 threads in group 0 access 8 rows in bank 1,
+// then first 8 threads in group 1 access 8 threads in back 2
+// upto 4 banks. This make the stride 32
+template<int GroupSize> struct ThrLayout<GroupSize, LDSMMode::UnorderedVector> {
+   static constexpr Layout t_layout = make_layout(make_shape(make_shape(Int<8>{}, Int<4>{}), Int<GroupSize>{}),
+                                                  make_stride(make_stride(Int<1>{}, Int<32>{}), Int<8>{}));
+};
+
 template<typename T, int M, int N, LDSMMode Mode, int Vlen,
-         cute::Vecdir Vdir>
+         cute::Vecdir Vdir, int GroupSize=1>
 void run_ldsm_test()
 {
   constexpr int elem_alignment = 16 / sizeof(T);
@@ -184,14 +201,15 @@ void run_ldsm_test()
     using StoreOp = XE4_STORE_MATRIX<T, SLayout, Mode,
                                    Vlen, Vdir>;
     constexpr int THRS = 32;
-    Layout t_layout = make_layout(make_shape(Int<32>{}, Int<1>{}));
+    //Layout t_layout = make_layout(make_shape(Int<32>{}, Int<1>{}));
+    Layout t_layout = ThrLayout<GroupSize, Mode>::t_layout;
     Layout v_layout_row = make_layout(make_shape(Int<1>{}, Int<Vlen>{}));
     Layout v_layout_col = make_layout(make_shape(Int<Vlen>{}, Int<1>{}));
    
     if (Vdir == cute::Vecdir::Vrow) {
-      launch_tiled_kernel<T, LoadOp, StoreOp>(t_layout, v_layout_row, SLayout{}, h_in, count, zeros);
+      launch_tiled_kernel<T, LoadOp, StoreOp, GroupSize>(t_layout, v_layout_row, SLayout{}, h_in, count, zeros);
     } else {
-      launch_tiled_kernel<T, LoadOp, StoreOp>(t_layout, v_layout_col, SLayout{}, h_in, count, zeros);
+      launch_tiled_kernel<T, LoadOp, StoreOp, GroupSize>(t_layout, v_layout_col, SLayout{}, h_in, count, zeros);
     }
     CUTLASS_TRACE_HOST("CuTe LDSM SUCCESS\n");
   }
@@ -214,7 +232,8 @@ TEST(XE4_CuTe_JGS, LDSM_Row_CoopVector)
 TEST(XE4_CuTe_JGS, LDSM_Row_UnorderedVector)
 {
   using T = uint16_t;
-  run_ldsm_test<T, 32, 16, LDSMMode::UnorderedVector,16, cute::Vecdir::Vrow>();
+  run_ldsm_test<T, 32, 16, LDSMMode::UnorderedVector,16, cute::Vecdir::Vrow, 4>();
+  run_ldsm_test<T, 32, 16*4, LDSMMode::UnorderedVector,16, cute::Vecdir::Vrow, 4>();
 }
 TEST(XE4_CuTe_JGS, LDSM_Col_Vector)
 {

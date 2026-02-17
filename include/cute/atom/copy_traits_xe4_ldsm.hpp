@@ -72,8 +72,6 @@ struct Xe4LDSMTraitsBase {
                       >;
     using DstLayout = SrcLayout; 
     using RefLayout = DstLayout;  
-    // using ThrID = Layout<intel::_SGSize>;
-    // using ThrID = Layout<_1>;
     using ThrID = Layout<Int<Group_Size>>;
 
     static constexpr int ValBits = Op::BitWidth;
@@ -84,6 +82,8 @@ struct Xe4LDSMTraitsBase {
 
 };
 
+// This is called swap since on JGS y is passed as the second dim
+// to the primitive while y is the first value in the tuple
 sycl::marray<uint16_t, 2>
 swap_coord_for_ldsm(cute::ArithmeticTuple<int, int> const& t) {
   // Element access via get<>() 
@@ -95,11 +95,11 @@ swap_coord_for_ldsm(cute::ArithmeticTuple<int, int> const& t) {
 }
 sycl::marray<uint16_t, 2>
 swap_coord_for_ldsm(cute::ArithmeticTuple<int, cute::C<0>> const& t) {
-  // Element access via get<>() just like std::tuple. [web:17][web:42]
+  // Element access via get<>() just like std::tuple.
   uint16_t x = 0;
   uint16_t y = static_cast<uint16_t>(cute::get<0>(t));
 
-  // marray can be list-initialized from scalars. [web:74]
+  // marray can be list-initialized from scalars.
   return sycl::marray<uint16_t, 2>{x, y};
 }
 
@@ -146,10 +146,8 @@ struct Copy_Traits<XE4_LOAD_MATRIX<T, SrLayout, Mode, Vlen, Vdir>, MatInfo>
                   "Destination tensor size does not match copy atom size.");
 
     auto as_xe4_coord = [](auto const& t) {
-      auto asd = flatten_to_tuple(t);
       return swap_coord_for_ldsm(flatten_to_tuple(t));
     };
-    //auto src_coord = as_xe4_coord(take<0,1>(dst(Int<0>{}))); //src(Int<0>{}));
     auto coord = as_xe4_coord(src.data().coord_);
     Op::copy(dst.data(), traits.cache_.matrix_desc_, coord);
   }
@@ -198,14 +196,10 @@ struct Copy_Traits<XE4_STORE_MATRIX<T, SrLayout, Mode, Vlen, Vdir>, MatInfo>
     static_assert(size(DLayout{}) * SBits == size<1>(DstLayout{}),
                   "Destination tensor size does not match copy atom size.");
 
-    // NEED To call righ Copy here
-    //Op::copy(traits.payload, recast_ptr<int_byte_t<bits_to_bytes(Super::ValBits)>>(&*dst.data()));
     auto as_xe4_coord = [](auto const& t) {
       return swap_coord_for_ldsm(flatten_to_tuple(t));
     };
-    //auto src_coord = as_xe4_coord(take<0,1>(dst(Int<0>{}))); //src(Int<0>{}));
     auto coord = as_xe4_coord(dst.data().coord_);
-    //Op::copy(traits.cache_.matrix_desc_, src.data(), coord);
     Op::copy(src.data(), traits.cache_.matrix_desc_, coord);
   }
 };
@@ -225,24 +219,33 @@ make_ldsm_matrix_descriptor(
   else
     matrix_desc = make_matrix_descriptor(slayout, !is_B_matrix);
 
-  //auto src_ptr = recast_ptr<ValType>(&stensor.data());
+  // Start Address of SLM the first 23 bits of the tensor address
   matrix_desc.StartAddress = static_cast<uint32_t>(
       reinterpret_cast<uint64_t>(slm_space_cast(&*stensor.data()))) >> 9;
 
   return matrix_desc;
 }
 
-template<int Vlen, cute::Vecdir Vdir> struct LdsmLayout { 
+template<int Vlen, cute::Vecdir Vdir> struct LdsmValLayout { 
    static constexpr Layout v_layout = make_layout(Shape(Int<1>{}, Int<Vlen>{}));
 };
-template<int Vlen> struct LdsmLayout<Vlen, cute::Vecdir::Vrow> {
-   static constexpr Layout v_layout = make_layout(Shape(Int<1>{}, Int<Vlen>{}));
-};
-template<int Vlen> struct LdsmLayout<Vlen, cute::Vecdir::Vcol> {
+template<int Vlen> struct LdsmValLayout<Vlen, cute::Vecdir::Vcol> {
    static constexpr Layout v_layout = make_layout(Shape(Int<Vlen>{}, Int<1>{}));
 };
 
-template <class CopyOp, 
+template<uint32_t ThCount, uint32_t GroupSize, LDSMMode Mode> struct LdsmThrLayout {
+   static constexpr Layout t_layout = make_layout(Shape(Int<ThCount>{}, Int<1>{}));
+};
+template<uint32_t ThCount, uint32_t GroupSize> struct LdsmThrLayout<ThCount,
+                                	GroupSize, LDSMMode::UnorderedVector> {
+  static_assert((GroupSize > 0) && (GroupSize % 4 == 0));
+  static constexpr Layout t_layout = make_layout(
+		   make_shape(make_shape(Int<8>{}, Int<ThCount/8>{}), Int<GroupSize>{}),
+                   make_stride(make_stride(Int<1>{}, Int<32>{}), Int<8>{}));
+};
+
+template <int ThrGroupSize=1,
+	  class CopyOp, 
           class GEngine,
           class SLayout>
 CUTE_HOST_DEVICE
@@ -254,11 +257,10 @@ make_ldsm_tiled_copy(const CopyOp& Op,
   using Traits = Copy_Traits<CopyOp, MInfo>;
   using ThrLayout = typename Traits::ThrLayout;
   using RefLayout = typename Traits::RefLayout;
-  constexpr auto ThCount = get<0>(ThrLayout{}.shape());
-  auto t_layout = make_layout(Shape(Int<ThCount>{}, Int<1>{}));
-  auto v_layout = LdsmLayout<CopyOp::Vlen, CopyOp::Vdir>::v_layout;
+  constexpr auto ThrCount = get<0>(ThrLayout{}.shape());
+  auto t_layout = LdsmThrLayout<ThrCount, ThrGroupSize, CopyOp::CopyMode>::t_layout;
+  auto v_layout = LdsmValLayout<CopyOp::Vlen, CopyOp::Vdir>::v_layout;
 
-  //static_assert(CopyOp::Vdir == cute::Vecdir::Vrow || CopyOp::Vdir == cute::Vecdir::Vcol);
   return make_ldsm_tiled_copy(Op, stensor, t_layout, v_layout, is_B_matrix);
 }
 
@@ -277,6 +279,8 @@ auto make_ldsm_tiled_copy(const CopyOp& Op,
     MatrixDescriptor matrix_desc = make_ldsm_matrix_descriptor(stensor, is_B_matrix);
     //constexpr auto Vdir = get_vector_dir(SLayout{});
     //using CopyOp = XE4_LOAD_MATRIX<ValType, SLayout, Mode, Vlen, Vdir>;
+    if constexpr (CopyOp::CopyMode == LDSMMode::UnorderedVector)
+      static_assert(size(t_layout) % 128 ==0);
     using  Traits = Copy_Traits<CopyOp, MInfo>;
     using  Atom = Copy_Atom<Traits, ValType>;
     Traits traits{matrix_desc};
