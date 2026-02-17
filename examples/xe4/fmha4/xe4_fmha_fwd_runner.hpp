@@ -349,6 +349,15 @@ struct ExampleRunner {
 
     const auto sycl_block = compat::dim3(block.x, block.y, block.z);
     const auto sycl_grid = compat::dim3(grid.x, grid.y, grid.z);
+    sycl::nd_range<3> Range(sycl_grid * sycl_block, sycl_block);
+
+    namespace syclexp = sycl::ext::oneapi::experimental;
+    using ClusterShape = typename GemmKernel::ClusterShape;
+    constexpr uint32_t cluster_size_y = size<0>(ClusterShape{});
+    constexpr uint32_t cluster_size_x = size<1>(ClusterShape{});
+    constexpr uint32_t cluster_size_z = size<2>(ClusterShape{});
+    sycl::range<3> clusterSize(cluster_size_z, cluster_size_y, cluster_size_x);
+    syclexp::properties Props {syclexp::work_groups_per_cluster<3>(clusterSize)};
 
     GemmKernel kernel;
 
@@ -357,9 +366,8 @@ struct ExampleRunner {
     auto* v_ptr = block_V.get();
     auto* o_ptr = block_O.get();
 
-    q.parallel_for<FlashAttentionKernel>(sycl::nd_range<3>{sycl_grid * sycl_block, sycl_block},
+    q.parallel_for<FlashAttentionKernel>(Range, Props,
       [=](sycl::nd_item<3> item) {
-
         auto params_workaround = params;
         params_workaround.mainloop.tma_load_Q.cache_.set_gmem_ptr(q_ptr);
         params_workaround.mainloop.tma_load_K.cache_.set_gmem_ptr(k_ptr);
@@ -432,13 +440,13 @@ struct ExampleRunner {
 
 template <typename TileShape, 
           int NumSoftmaxWarps = 16, int NumThreadPerRow = 16, 
-          int SoftmaxUnroll = 2, int SoftmaxNumStage = 2> 
+          int SoftmaxUnroll = 2, int SoftmaxNumStage = 2,
+          typename ClusterShape = Shape<_1, _1, _1>>
 struct FMHAConfig {
 
   template <typename ProblemConfig>
   static int run(const Options &options) {
     using ProblemShape = cute::tuple<int, int, int, int, int, int>;
-    using ClusterShape = Shape<_1, _1, _1>;
 
     using TileShapeQK_MNK = decltype(select<0, 2, 3>(TileShape{}));
     using TileShapePV_MNK = decltype(select<0, 1, 2>(TileShape{}));
@@ -500,8 +508,17 @@ struct FMHAConfig {
                  Int<NumStageQO>{})));
 
     using TMACopyAtomQ = cute::xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1, size<2>(TileShapeQK_MNK{})>;
-    using TMACopyAtomK = cute::xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1, size<2>(TileShapeQK_MNK{})>;
-    using TMACopyAtomV = cute::xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1, size<1>(TileShapePV_MNK{})>;
+
+    using TMACopyAtomK = cute::conditional_t<
+      size(ClusterShape{}) == 1,
+      cute::xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1, size<2>(TileShapeQK_MNK{})>,
+      cute::xe4::ASYNC_TENSOR_LOAD_MULTICAST<slm_matrix_type::type1, size<2>(TileShapeQK_MNK{})>>;
+
+    using TMACopyAtomV = cute::conditional_t<
+      size(ClusterShape{}) == 1,
+      cute::xe4::ASYNC_TENSOR_LOAD<slm_matrix_type::type1, size<1>(TileShapePV_MNK{})>,
+      cute::xe4::ASYNC_TENSOR_LOAD_MULTICAST<slm_matrix_type::type1, size<1>(TileShapePV_MNK{})>>;
+
     using TMACopyAtomO = cute::xe4::ASYNC_TENSOR_STORE<slm_matrix_type::type1, size<1>(TileShapePV_MNK{})>;
 
     using TiledMmaQK = decltype(cute::make_tiled_mma(
@@ -529,7 +546,7 @@ struct FMHAConfig {
       majorV>()));
 
     using CollectiveMainloop = cutlass::flash_attention::collective::CollectiveMmaAttention<
-      ProblemShape, TileShape,
+      ProblemShape, ClusterShape, TileShape,
       ElementInputQ, ElementInputKV, ElementInputKV,
       ElementS, ElementP,
       ElementAccumulator, ElementOutput,
