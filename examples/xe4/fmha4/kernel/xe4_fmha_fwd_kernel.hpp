@@ -275,6 +275,7 @@ public:
     pipeline_epi_params.num_consumers = 1;
     typename CollectiveMainloop::PipelineEpi pipeline_epi(shared_pipelines.epi, pipeline_epi_params, ClusterShape{});
 
+
     typename CollectiveMainloop::PipelineQ::PipelineState pipeline_load_q_consumer_state;
     typename CollectiveMainloop::PipelineQ::PipelineState pipeline_load_q_producer_state =
       cutlass::make_producer_start_state<typename CollectiveMainloop::PipelineQ>();
@@ -307,14 +308,7 @@ public:
       // TODO: add AMMA atom with different combinations of .dtm, .atm, and .btm
       shared_pipelines.mainloop.barrier_dummy.init(1);
     }
-
-    if constexpr (size(ClusterShape{}) > 1) {
-      cute::cluster_arrive_relaxed();
-      cute::cluster_wait_relaxed();
-    }
-    else {
-      item.barrier(sycl::access::fence_space::local_space);
-    }
+    item.barrier(sycl::access::fence_space::local_space);
 
     if (role == SgRole::Load && lane_predicate) {
       for (; tile_scheduler.is_valid(); ++tile_scheduler) {
@@ -348,7 +342,7 @@ public:
           pipeline_mma_corr, pipeline_mma_corr_producer_state
         );
       }
-    }
+    } 
     else if (role == SgRole::Epilogue && lane_predicate) {
       for (; tile_scheduler.is_valid(); ++tile_scheduler) {
         auto block_coord = tile_scheduler.get_block_coord();

@@ -94,24 +94,18 @@ int main(int argc, const char **argv) {
     return -1;
   }
 
-  FMHAConfig<
-    Shape<_128 /*Q blk*/, _128 /*v head dim*/, _512 /*KV blk*/, _128 /*qk head dim*/>,
-    16 /*NumSoftmaxWarps*/,
-    16 /*NumThreadPerRow*/,
-    1 /*SoftmaxUnroll*/,
-    1 /*SoftmaxNumStage*/,
-    Shape<_1 /*ClusterM*/, _1 /*ClusterN*/, _1 /*ClusterK*/>
-  >::run<ProblemConfig_FP16FP16FP16FP16>(options);
+  // FMHAConfig<Shape<_64 /*Q blk*/, _128 /*v head dim*/, _128 /*KV blk*/, _128 /*qk head dim*/>>::run<ProblemConfig_FP16FP16FP32FP32>(options);
 
-  // with cluster multicast
-  // FMHAConfig<
-  //   Shape<_128 /*Q blk*/, _128 /*v head dim*/, _512 /*KV blk*/, _128 /*qk head dim*/>,
-  //   16 /*NumSoftmaxWarps*/,
-  //   16 /*NumThreadPerRow*/,
-  //   1 /*SoftmaxUnroll*/,
-  //   1 /*SoftmaxNumStage*/,
-  //   Shape<_2 /*ClusterM*/, _1 /*ClusterN*/, _1 /*ClusterK*/>
-  // >::run<ProblemConfig_FP16FP16FP16FP16>(options);
+  // FMHAConfig<Shape<_64, _128, _128, _128>>::run<ProblemConfig_FP16FP16FP32FP16>(options);
+  // FMHAConfig<Shape<_128, _128, _128, _128>>::run<ProblemConfig_FP16FP16FP32FP16>(options);
+  // FMHAConfig<Shape<_128, _128, _256, _128>>::run<ProblemConfig_FP16FP16FP32FP16>(options);
+
+  // FMHAConfig<Shape<_64, _128, _128, _128>>::run<ProblemConfig_FP16FP16FP16FP16>(options);
+  // FMHAConfig<Shape<_64, _128, _256, _128>>::run<ProblemConfig_FP16FP16FP16FP16>(options);
+  // FMHAConfig<Shape<_128, _128, _256, _128>>::run<ProblemConfig_FP16FP16FP16FP16>(options);
+  //FMHAConfig<Shape<_128, _128, _256, _128>>::run<ProblemConfig_FP16FP16FP16FP16>(options);
+  //FMHAConfig<Shape<_256, _128, _256, _128>>::run<ProblemConfig_FP16FP16FP16FP16>(options);
+  FMHAConfig<Shape<_128, _128, _512, _128>, 16, 16, 1, 1>::run<ProblemConfig_FP16FP16FP16FP16>(options);
 
   return 0;
 }

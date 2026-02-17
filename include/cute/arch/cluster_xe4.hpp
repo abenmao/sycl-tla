@@ -39,22 +39,17 @@ namespace cute {
 
 CUTE_DEVICE void cluster_arrive_relaxed()
 {
-  INLINE_PISA("cbarrier.arrive.relaxed;" ::);
+  CUTE_INVALID_CONTROL_PATH("CUTE_ARCH_CLUSTER_XE4_ENABLED is not defined");
 }
 
 CUTE_DEVICE void cluster_arrive()
 {
-  INLINE_PISA("cbarrier.arrive;" ::); // default value is `release`
-}
-
-CUTE_DEVICE void cluster_wait_relaxed()
-{
-  INLINE_PISA("cbarrier.wait.relaxed;" ::);
+  CUTE_INVALID_CONTROL_PATH("CUTE_ARCH_CLUSTER_XE4_ENABLED is not defined");
 }
 
 CUTE_DEVICE void cluster_wait()
 {
-  INLINE_PISA("cbarrier.wait;" ::); // default value is `acquire`
+  CUTE_INVALID_CONTROL_PATH("CUTE_ARCH_CLUSTER_XE4_ENABLED is not defined");
 }
 // Returns the relative dim3 block rank local to the cluster.
 CUTE_DEVICE dim3 block_id_in_cluster()

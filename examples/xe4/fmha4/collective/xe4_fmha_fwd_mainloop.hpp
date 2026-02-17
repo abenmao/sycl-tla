@@ -41,7 +41,6 @@ using namespace cute;
 
 template <
   class ProblemShape_,
-  class ClusterShape_,
   class TileShape_,
   class ElementQ_,
   class ElementK_,
@@ -66,7 +65,7 @@ template <
 struct CollectiveMmaAttention {
 
   using ProblemShape = ProblemShape_;
-  using ClusterShape = ClusterShape_;
+
   using TileShape = TileShape_;                                   // <BLK_M_Q, BLK_N_V, BLK_N_QK, BLK_K_QK>
   using TileShapeQK_MNK = decltype(select<0, 2, 3>(TileShape{})); // <BLK_M_Q, BLK_N_QK, BLK_K_QK>
   using TileShapePV_MNK = decltype(select<0, 1, 2>(TileShape{})); // <BLK_M_PV, BLK_N_V, BLK_N_QK>
@@ -102,6 +101,8 @@ struct CollectiveMmaAttention {
   static constexpr int NumStageQO = 2;
   static constexpr int NumStageKV = 2;
 
+  using ClusterShape = Shape<_1, _1, _1>;
+
   // from load q to mma
   using PipelineQ = cutlass::PipelineTmaAsync<NumStageQO>;
 
@@ -127,7 +128,7 @@ struct CollectiveMmaAttention {
                 StrideQ{}),
     SmemLayoutQ{}(_, _, cute::Int<0>{}),
     select<0, 2>(TileShapeQK_MNK{}),
-    _1{} // no mcast
+    _1{}
   ));
 
   using TMA_K = decltype(make_tma_copy(
@@ -137,7 +138,7 @@ struct CollectiveMmaAttention {
                 StrideK{}),
     SmemLayoutK{}(_, _, cute::Int<0>{}),
     select<1, 2>(TileShapeQK_MNK{}),
-    size<0>(ClusterShape{}) // mcast along M mode, if any
+    _1{}
   ));
 
   using TMA_V = decltype(make_tma_copy(
@@ -147,7 +148,7 @@ struct CollectiveMmaAttention {
                 StrideV{}),
     SmemLayoutV{}(_, _, cute::Int<0>{}),
     select<1, 2>(TileShapePV_MNK{}),
-    size<0>(ClusterShape{}) // mcast along M mode, if any
+    _1{}
   ));
 
   using SmemLayoutStageS = decltype(make_layout(
@@ -227,7 +228,7 @@ struct CollectiveMmaAttention {
       mQ, 
       SmemLayoutQ{}(_, _, _0{}),
       select<0, 2>(TileShapeQK_MNK{}), 
-      _1{} // no mcast
+      _1{}
     );
 
     Tensor mK = make_tensor(
@@ -240,7 +241,7 @@ struct CollectiveMmaAttention {
       mK, 
       SmemLayoutK{}(_, _, _0{}),
       select<1, 2>(TileShapeQK_MNK{}), 
-      size<0>(ClusterShape{}) // mcast along M mode, if any
+      _1{}
     );
 
     Tensor mV = make_tensor(
@@ -253,7 +254,7 @@ struct CollectiveMmaAttention {
       mV, 
       SmemLayoutV{}(_, _, _0{}),
       select<1, 2>(TileShapePV_MNK{}), 
-      size<0>(ClusterShape{}) // mcast along M mode, if any
+      _1{}
     );
 
     return {problem_shape, tma_load_Q, tma_load_K, tma_load_V};
@@ -326,65 +327,42 @@ struct CollectiveMmaAttention {
     Tensor sK = make_tensor(make_smem_ptr(shared_tensors.smem_K.data()), SmemLayoutK{}); // (BLK_N,BLK_K,PIPE)
     Tensor sV = make_tensor(make_smem_ptr(shared_tensors.smem_V.data()), SmemLayoutV{}); // (BLK_N,BLK_K,PIPE)
 
-    constexpr uint32_t cluster_size_x = size<1>(ClusterShape{});
-    constexpr uint32_t cluster_size_y = size<0>(ClusterShape{});
-    uint32_t cluster_wgid_x = get_cluster_wgid<0>();
-    uint32_t cluster_wgid_y = get_cluster_wgid<1>();
-    uint32_t cluster_wgid = cluster_wgid_y * cluster_size_x + cluster_wgid_x;
-
-    uint32_t mcast_mask_a = 0;
-    uint32_t mcast_mask_b = 0;
-    if constexpr (size(ClusterShape{}) > 1) {
-      cluster_wgid_y = cluster_wgid / cluster_size_y;
-      mcast_mask_b = ((1u << cluster_size_y) - 1) << (cluster_wgid_y * cluster_size_y); // 0011
-    }
-
-    auto cta_layout_QK_vmnk = tiled_divide(make_layout(ClusterShape{}), make_tile(typename TiledMmaQK::AtomThrID{}));
-    auto cta_coord_QK_vmnk = cta_layout_QK_vmnk.get_flat_coord(cluster_wgid);
-
-    auto cta_layout_PV_vmnk = tiled_divide(make_layout(ClusterShape{}), make_tile(typename TiledMmaPV::AtomThrID{}));
-    auto cta_coord_PV_vmnk = cta_layout_PV_vmnk.get_flat_coord(cluster_wgid);
-
-    auto [tQgQ, tQsQ] = tma_partition(params.tma_load_Q,
-                                      _0{},
-                                      Layout<_1>{},
+    auto [tQgQ, tQsQ] = tma_partition(params.tma_load_Q, _0{}, Layout<_1>{},
                                       group_modes<0, 2>(sQ), group_modes<0, 2>(gQ)); // (TMA,q), (TMA,PIPE)
-    auto [tKgK, tKsK] = tma_partition(params.tma_load_K,
-                                      get<1>(cta_coord_QK_vmnk),
-                                      make_layout(size<1>(cta_layout_QK_vmnk)),
+    auto [tKgK, tKsK] = tma_partition(params.tma_load_K, _0{}, Layout<_1>{},
                                       group_modes<0, 2>(sK), group_modes<0, 2>(gK)); // (TMA,k), (TMA,PIPE)
-    auto [tVgV, tVsV] = tma_partition(params.tma_load_V,
-                                      get<1>(cta_coord_PV_vmnk),
-                                      make_layout(size<1>(cta_layout_PV_vmnk)),
+    auto [tVgV, tVsV] = tma_partition(params.tma_load_V, _0{}, Layout<_1>{},
                                       group_modes<0, 2>(sV), group_modes<0, 2>(gV)); // (TMA,k), (TMA,PIPE)
+
+    constexpr uint32_t mcast_mask = 0;
 
     int q0_index = NumStageQO * blk_m_coord;
     int q1_index = NumStageQO * blk_m_coord + 1;
 
     pipeline_q.producer_acquire(pipeline_q_producer_state);
     copy(params.tma_load_Q.with(
-         pipeline_q.producer_get_barrier(pipeline_q_producer_state), mcast_mask_a),
+         pipeline_q.producer_get_barrier(pipeline_q_producer_state), mcast_mask),
          tQgQ(_, q0_index), tQsQ(_, pipeline_q_producer_state.index())
     );
     ++pipeline_q_producer_state;
     
     pipeline_k.producer_acquire(pipeline_k_producer_state);
     copy(params.tma_load_K.with(
-         pipeline_k.producer_get_barrier(pipeline_k_producer_state), mcast_mask_b),
+         pipeline_k.producer_get_barrier(pipeline_k_producer_state), mcast_mask),
          tKgK(_, _0{}), tKsK(_, pipeline_k_producer_state.index())
     );
     ++pipeline_k_producer_state;
-
+    
     pipeline_q.producer_acquire(pipeline_q_producer_state);
     copy(params.tma_load_Q.with(
-         pipeline_q.producer_get_barrier(pipeline_q_producer_state), mcast_mask_a),
+         pipeline_q.producer_get_barrier(pipeline_q_producer_state), mcast_mask),
          tQgQ(_, q1_index), tQsQ(_, pipeline_q_producer_state.index())
     );
     ++pipeline_q_producer_state;
 
     pipeline_v.producer_acquire(pipeline_v_producer_state);
     copy(params.tma_load_V.with(
-         pipeline_v.producer_get_barrier(pipeline_v_producer_state), mcast_mask_b),
+         pipeline_v.producer_get_barrier(pipeline_v_producer_state), mcast_mask),
          tVgV(_, _0{}), tVsV(_, pipeline_v_producer_state.index())
     );
     ++pipeline_v_producer_state;
@@ -392,14 +370,14 @@ struct CollectiveMmaAttention {
     for (int i = 1; i < num_kv_tiles; ++i) {
       pipeline_k.producer_acquire(pipeline_k_producer_state);
       copy(params.tma_load_K.with(
-           pipeline_k.producer_get_barrier(pipeline_k_producer_state), mcast_mask_b),
+           pipeline_k.producer_get_barrier(pipeline_k_producer_state), mcast_mask),
            tKgK(_, i), tKsK(_, pipeline_k_producer_state.index())
       );
       ++pipeline_k_producer_state;
 
       pipeline_v.producer_acquire(pipeline_v_producer_state);
       copy(params.tma_load_V.with(
-           pipeline_v.producer_get_barrier(pipeline_v_producer_state), mcast_mask_b),
+           pipeline_v.producer_get_barrier(pipeline_v_producer_state), mcast_mask),
            tVgV(_, i), tVsV(_, pipeline_v_producer_state.index())
       );
       ++pipeline_v_producer_state;
@@ -443,24 +421,10 @@ struct CollectiveMmaAttention {
     uint64_t pv_mma_ctrl_0 = 0x100;
     uint64_t pv_mma_ctrl_1 = 0x100;
     
-    constexpr uint32_t cluster_size_x = size<1>(ClusterShape{});
-    constexpr uint32_t cluster_size_y = size<0>(ClusterShape{});
-    uint32_t cluster_wgid_x = get_cluster_wgid<0>();
-    uint32_t cluster_wgid_y = get_cluster_wgid<1>();
-    uint32_t cluster_wgid = cluster_wgid_y * cluster_size_x + cluster_wgid_x;
-
-    uint32_t mcast_mask_a = 0;
-    uint32_t mcast_mask_b = 0;
-    if constexpr (size(ClusterShape{}) > 1) {
-      cluster_wgid_y = cluster_wgid / cluster_size_y;
-      mcast_mask_b = ((1u << cluster_size_y) - 1) << (cluster_wgid_y * cluster_size_y); // 0011
-    }
+    constexpr uint32_t mcast_mask = 0;
 
     constexpr int qk_mma_k_itr = size<2>(tSsQ);
     constexpr int pv_mma_k_itr = size<2>(tOsP);
-
-    constexpr int qk_expect_tx = NumStageQO * qk_mma_k_itr * cluster_size_y;
-    constexpr int pv_expect_tx = NumStageQO * pv_mma_k_itr * cluster_size_y;
 
     pipeline_q.consumer_wait(pipeline_q_consumer_state);
     ++pipeline_q_consumer_state;
@@ -478,7 +442,7 @@ struct CollectiveMmaAttention {
         pipeline_s.producer_get_barrier(pipeline_s_producer_state),
         reinterpret_cast<uint64_t*>(&shared_pipelines.barrier_dummy),
         pipeline_k.consumer_get_barrier(pipeline_k_consumer_state),
-        mcast_mask_a, mcast_mask_b
+        mcast_mask, mcast_mask
       ), tSsQ(_, _, k, _0{}), tSsK(_, _, k, pipeline_k_consumer_state.index()), tSsS(_, _, _, _0{}));
     }
 
@@ -497,13 +461,13 @@ struct CollectiveMmaAttention {
         pipeline_s.producer_get_barrier(pipeline_s_producer_state),
         reinterpret_cast<uint64_t*>(&shared_pipelines.barrier_dummy),
         pipeline_k.consumer_get_barrier(pipeline_k_consumer_state),
-        mcast_mask_a, mcast_mask_b
+        mcast_mask, mcast_mask
       ), tSsQ(_, _, k, _1{}), tSsK(_, _, k, pipeline_k_consumer_state.index()), tSsS(_, _, _, _1{}));
     }
 
     ++pipeline_s_producer_state;
 
-    pipeline_k.consumer_commit(pipeline_k_consumer_state, qk_expect_tx);
+    pipeline_k.consumer_commit(pipeline_k_consumer_state, 2 * qk_mma_k_itr);
     ++pipeline_k_consumer_state;
 
     pipeline_v.consumer_wait(pipeline_v_consumer_state);
@@ -521,18 +485,14 @@ struct CollectiveMmaAttention {
         pipeline_corr.producer_get_barrier(pipeline_corr_producer_state),
         reinterpret_cast<uint64_t*>(&shared_pipelines.barrier_dummy),
         pipeline_v.consumer_get_barrier(pipeline_v_consumer_state),
-        mcast_mask_a, mcast_mask_b
+        mcast_mask, mcast_mask
       ), tOsP(_, _, k, _0{}), tOsV(_, _, k, pipeline_v_consumer_state.index()), tOsOacc(_, _, _, _0{}));
 
       pv_mma_ctrl_0 = 0x0;
     }
 
     ++pipeline_corr_producer_state;
-
-    if (num_kv_tiles == 1) {
-      ++pipeline_s_producer_state;
-    }
-
+    
     for (int i = 1; i < num_kv_tiles; ++i) {
       pipeline_k.consumer_wait(pipeline_k_consumer_state);
 
@@ -545,7 +505,7 @@ struct CollectiveMmaAttention {
           pipeline_s.producer_get_barrier(pipeline_s_producer_state),
           reinterpret_cast<uint64_t*>(&shared_pipelines.barrier_dummy),
           pipeline_k.consumer_get_barrier(pipeline_k_consumer_state),
-          mcast_mask_a, mcast_mask_b
+          mcast_mask, mcast_mask
         ), tSsQ(_, _, k, _0{}), tSsK(_, _, k, pipeline_k_consumer_state.index()), tSsS(_, _, _, _0{}));
       }
 
@@ -564,7 +524,7 @@ struct CollectiveMmaAttention {
           pipeline_corr.producer_get_barrier(pipeline_corr_producer_state),
           reinterpret_cast<uint64_t*>(&shared_pipelines.barrier_dummy),
           pipeline_v.consumer_get_barrier(pipeline_v_consumer_state),
-          mcast_mask_a, mcast_mask_b
+          mcast_mask, mcast_mask
         ), tOsP(_, _, k, _1{}), tOsV(_, _, k, pipeline_v_consumer_state.index()), tOsOacc(_, _, _, _1{}));
 
         pv_mma_ctrl_1 = 0x0;
@@ -572,7 +532,7 @@ struct CollectiveMmaAttention {
 
       ++pipeline_corr_producer_state;
 
-      pipeline_v.consumer_commit(pipeline_v_consumer_state, pv_expect_tx);
+      pipeline_v.consumer_commit(pipeline_v_consumer_state, 2 * pv_mma_k_itr);
       ++pipeline_v_consumer_state;
 
       // gemm Q2 * Ki -> S2
@@ -584,13 +544,13 @@ struct CollectiveMmaAttention {
           pipeline_s.producer_get_barrier(pipeline_s_producer_state),
           reinterpret_cast<uint64_t*>(&shared_pipelines.barrier_dummy),
           pipeline_k.consumer_get_barrier(pipeline_k_consumer_state),
-          mcast_mask_a, mcast_mask_b
+          mcast_mask, mcast_mask
         ), tSsQ(_, _, k, _1{}), tSsK(_, _, k, pipeline_k_consumer_state.index()), tSsS(_, _, _, _1{}));
       }
 
       ++pipeline_s_producer_state;
 
-      pipeline_k.consumer_commit(pipeline_k_consumer_state, qk_expect_tx);
+      pipeline_k.consumer_commit(pipeline_k_consumer_state, 2 * qk_mma_k_itr);
       ++pipeline_k_consumer_state;
 
       pipeline_v.consumer_wait(pipeline_v_consumer_state);
@@ -608,20 +568,14 @@ struct CollectiveMmaAttention {
           pipeline_corr.producer_get_barrier(pipeline_corr_producer_state),
           reinterpret_cast<uint64_t*>(&shared_pipelines.barrier_dummy),
           pipeline_v.consumer_get_barrier(pipeline_v_consumer_state),
-          mcast_mask_a, mcast_mask_b
+          mcast_mask, mcast_mask
         ), tOsP(_, _, k, _0{}), tOsV(_, _, k, pipeline_v_consumer_state.index()), tOsOacc(_, _, _, _0{}));
       }
 
       ++pipeline_corr_producer_state;
-
-      if (i == num_kv_tiles - 1) {
-        ++pipeline_s_producer_state;
-      }
     }
 
     pipeline_corr.producer_acquire(pipeline_corr_producer_state);
-
-    pipeline_s.producer_acquire(pipeline_s_producer_state);
 
     // gemm P2 * Vn -> O2
     CUTE_UNROLL
@@ -632,7 +586,7 @@ struct CollectiveMmaAttention {
         pipeline_corr.producer_get_barrier(pipeline_corr_producer_state),
         reinterpret_cast<uint64_t*>(&shared_pipelines.barrier_dummy),
         pipeline_v.consumer_get_barrier(pipeline_v_consumer_state),
-        mcast_mask_a, mcast_mask_b
+        mcast_mask, mcast_mask
       ), tOsP(_, _, k, _1{}), tOsV(_, _, k, pipeline_v_consumer_state.index()), tOsOacc(_, _, _, _1{}));
 
       pv_mma_ctrl_1 = 0x0;
@@ -640,7 +594,7 @@ struct CollectiveMmaAttention {
 
     ++pipeline_corr_producer_state;
 
-    pipeline_v.consumer_commit(pipeline_v_consumer_state, pv_expect_tx);
+    pipeline_v.consumer_commit(pipeline_v_consumer_state, 2 * pv_mma_k_itr);
     ++pipeline_v_consumer_state;
   }
 
