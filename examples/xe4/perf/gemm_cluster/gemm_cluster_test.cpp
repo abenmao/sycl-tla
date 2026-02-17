@@ -168,6 +168,13 @@ public:
                         params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
                         params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
+                } else if (params->activation == "None" && params->operation_c == "None") {
+                    executeGemm<fp16, fp16, fp16, fp16, float,
+                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
+                                ActivationType::None, OperationCType::None>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
+                        params->cta_num_m, params->cta_num_n,
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
                 } else {
                     printUnsupportedCombination(params, "RowMajor-RowMajor-RowMajor");
                     FAIL() << "This combination is not supported";
@@ -177,6 +184,13 @@ public:
                     executeGemm<fp16, fp16, void, fp16, float,
                                 cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
                                 ActivationType::None, OperationCType::BiasAdd>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
+                        params->cta_num_m, params->cta_num_n,
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
+                } else if (params->activation == "None" && params->operation_c == "None") {
+                    executeGemm<fp16, fp16, void, fp16, float,
+                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
+                                ActivationType::None, OperationCType::None>(
                         params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
                         params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
@@ -198,6 +212,13 @@ public:
                     executeGemm<bf16, bf16, bf16, bf16, float,
                                 cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
                                 ActivationType::None, OperationCType::Mul>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
+                        params->cta_num_m, params->cta_num_n,
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
+                } else if (params->activation == "None" && params->operation_c == "None") {
+                    executeGemm<bf16, bf16, bf16, bf16, float,
+                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
+                                ActivationType::None, OperationCType::None>(
                         params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
                         params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
@@ -227,6 +248,13 @@ public:
                         params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
                         params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
+                } else if (params->activation == "None" && params->operation_c == "None") {
+                    executeGemm<fp16, fp16, fp16, fp16, float,
+                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
+                                ActivationType::None, OperationCType::None>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
+                        params->cta_num_m, params->cta_num_n,
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
                 } else {
                     printUnsupportedCombination(params, "RowMajor-ColumnMajor-RowMajor");
                     FAIL() << "This combination is not supported";
@@ -236,6 +264,13 @@ public:
                     executeGemm<fp16, fp16, void, fp16, float,
                                 cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
                                 ActivationType::None, OperationCType::BiasAdd>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
+                        params->cta_num_m, params->cta_num_n,
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
+                } else if (params->activation == "None" && params->operation_c == "None") {
+                    executeGemm<fp16, fp16, void, fp16, float,
+                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
+                                ActivationType::None, OperationCType::None>(
                         params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
                         params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
@@ -257,6 +292,13 @@ public:
                     executeGemm<bf16, bf16, bf16, bf16, float,
                                 cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
                                 ActivationType::None, OperationCType::Mul>(
+                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
+                        params->cta_num_m, params->cta_num_n,
+                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
+                } else if (params->activation == "None" && params->operation_c == "None") {
+                    executeGemm<bf16, bf16, bf16, bf16, float,
+                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
+                                ActivationType::None, OperationCType::None>(
                         params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
                         params->cta_num_m, params->cta_num_n,
                         params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
