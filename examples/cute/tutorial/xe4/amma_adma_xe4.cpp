@@ -324,8 +324,8 @@ gemm_tn(int m, int n, int k,
   static constexpr auto majorA = cute::AMMA::Major::K;
   static constexpr auto majorB = cute::AMMA::Major::K;
 
-  using ElementA = fp16;
-  using ElementB = fp16;
+  using ElementA = TA;
+  using ElementB = TB;
   using ElementAccumulator = float;
   using ElementC = float;
 
@@ -518,14 +518,14 @@ int main(int argc, char** argv)
   auto B = make_shared_usm_tensor<TB, 'R'>(queue, n, k);
   auto C = make_shared_usm_tensor<TC, 'R'>(queue, m, n);
 
-  one_fill(A);
-  one_fill(B);
+  random_fill(A);
+  random_fill(B);
   zero_fill(C);
 
   bool ok = false;
   
-  auto A_ref = make_shared_usm_tensor<float, 'R'>(queue, m, k);
-  auto B_ref = make_shared_usm_tensor<float, 'R'>(queue, n, k);
+  auto A_ref = make_shared_usm_tensor<TA, 'R'>(queue, m, k);
+  auto B_ref = make_shared_usm_tensor<TB, 'R'>(queue, n, k);
 
   copy(A, A_ref);
   copy(B, B_ref);
@@ -561,12 +561,13 @@ int main(int argc, char** argv)
   
   // Determine layout based on transpose flags
   mem_layout layout_a = mem_layout::row_major;
-  mem_layout layout_b = mem_layout::row_major;
+  // validate_gemm_result expects B as KxN row_major, for NxK row_major we need to send col_major
+  mem_layout layout_b = mem_layout::col_major;
   
   // Extract raw pointers from tensor iterators
-  float* A_ref_ptr = &*A_ref.data();
-  float* B_ref_ptr = &*B_ref.data();
-  float* C_ptr = &*C.data();
+  TA* A_ref_ptr = &*A_ref.data();
+  TB* B_ref_ptr = &*B_ref.data();
+  TC* C_ptr = &*C.data();
   
   int err_cnt = validate_gemm_result(A_ref_ptr, B_ref_ptr, C_ptr, m, n, k, layout_a, layout_b);
   printf("Verification: %s\n", (err_cnt == 0) ? "PASSED" : "FAILED");

@@ -129,6 +129,7 @@
 
 #if defined(CUTLASS_ENABLE_SYCL)
 #include <cutlass/sycl_vector_types.h>
+#include <sycl/sycl.hpp>
 #else
 #include <vector_types.h>
 #endif
@@ -926,6 +927,21 @@ struct numeric_limits<float> {
   static constexpr bool has_infinity = true;
   static constexpr bool is_signed = true;
 };
+
+#if defined(CUTLASS_ENABLE_SYCL)
+template <>
+struct numeric_limits<sycl::half> {
+  CUTLASS_HOST_DEVICE
+  static sycl::half lowest() noexcept { return sycl::half(-65504.0f); }
+  CUTLASS_HOST_DEVICE
+  static sycl::half max() noexcept { return sycl::half(65504.0f); }
+  CUTLASS_HOST_DEVICE
+  static sycl::half infinity() noexcept { return sycl::half(CUTLASS_STL_NAMESPACE::numeric_limits<float>::infinity()); }
+  static constexpr bool is_integer = false;
+  static constexpr bool has_infinity = true;
+  static constexpr bool is_signed = true;
+};
+#endif
 
 /// Returns a value that curries the `std::maximum()` function into the identity
 /// function. No value will compare < than this value.
