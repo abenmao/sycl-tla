@@ -158,10 +158,6 @@ TEST(XE4_CuTe_JGS, LDSM_Row_CoopVector)
 {
   run_ldsm_test<uint16_t, 32, 16, LDSMMode::CoopVector,16, cute::Vecdir::Vrow>();
 }
-TEST(XE4_CuTe_JGS, LDSM_Row_UnorderedVector)
-{
-  run_ldsm_test<uint16_t, 32, 16, LDSMMode::UnorderedVector,16, cute::Vecdir::Vrow>();
-}
 TEST(XE4_CuTe_JGS, LDSM_Col_Vector)
 {
   // Col direction

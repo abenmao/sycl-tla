@@ -45,8 +45,8 @@ using namespace cute::detail;
 template <class SLayout>
 constexpr auto get_vector_dir(SLayout Layout)
 {
-  static constexpr auto strides = Layout.stride();
-  static constexpr auto vdir =  get<1>(strides) == 1
+  constexpr auto strides = Layout.stride();
+  constexpr auto vdir =  get<1>(strides) == 1
 	                             ? cute::Vecdir::Vrow 
 				     : cute::Vecdir::Vcol;
   return vdir;

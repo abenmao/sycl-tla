@@ -227,14 +227,14 @@ make_ldsm_matrix_descriptor(
 }
 
 template<int Vlen, cute::Vecdir Vdir> struct LdsmValLayout { 
-   static constexpr Layout v_layout = make_layout(Shape(Int<1>{}, Int<Vlen>{}));
+   static constexpr Layout v_layout = make_layout(make_shape(Int<1>{}, Int<Vlen>{}));
 };
 template<int Vlen> struct LdsmValLayout<Vlen, cute::Vecdir::Vcol> {
-   static constexpr Layout v_layout = make_layout(Shape(Int<Vlen>{}, Int<1>{}));
+   static constexpr Layout v_layout = make_layout(make_shape(Int<Vlen>{}, Int<1>{}));
 };
 
 template<uint32_t ThCount, uint32_t GroupSize, LDSMMode Mode> struct LdsmThrLayout {
-   static constexpr Layout t_layout = make_layout(Shape(Int<ThCount>{}, Int<1>{}));
+   static constexpr Layout t_layout = make_layout(make_shape(Int<ThCount>{}, Int<1>{}));
 };
 template<uint32_t ThCount, uint32_t GroupSize> struct LdsmThrLayout<ThCount,
                                 	GroupSize, LDSMMode::UnorderedVector> {
