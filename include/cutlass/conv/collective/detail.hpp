@@ -180,7 +180,7 @@ sm100_dispatch_policy_to_stride_B() {
   return sm90_dispatch_policy_to_stride_B<DispatchPolicy>();
 }
 
-#if defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET == 40)
 template <class DispatchPolicy>
 constexpr auto
 xe4_dispatch_policy_to_stride_A() {
@@ -278,7 +278,7 @@ template <> struct is_im2col_load<cute::SM90_TMA_LOAD_IM2COL          > { static
 template <> struct is_im2col_load<cute::SM90_TMA_LOAD_IM2COL_MULTICAST> { static constexpr bool value = true; };
 template <> struct is_im2col_load<cute::SM100_TMA_2SM_LOAD_IM2COL          > { static constexpr bool value = true; }; 
 template <> struct is_im2col_load<cute::SM100_TMA_2SM_LOAD_IM2COL_MULTICAST> { static constexpr bool value = true; }; 
-#if defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET == 40)
 template <auto cm_type, uint32_t stride> struct is_im2col_load<cute::xe4::ASYNC_ROW_LOAD_IM2COL<cm_type, stride>> { static constexpr bool value = true; };
 #endif
 /////////////////////////////////////////////////////////////////////////////////////////////////

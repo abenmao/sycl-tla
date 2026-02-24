@@ -62,7 +62,7 @@ class CollectiveEpilogue {
 #include "epilogue_tensor_broadcast.hpp"
 #include "sm70_epilogue_vectorized.hpp"
 #include "sm70_epilogue_vectorized_array.hpp"
-#if !defined (SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET != 40)
 #include "sm90_epilogue_tma_warpspecialized.hpp"
 #include "sm90_epilogue_tma_warpspecialized_bias_elementwise.hpp"
 #include "sm90_epilogue_array_tma_warpspecialized.hpp"
@@ -71,7 +71,7 @@ class CollectiveEpilogue {
 #include "sm100_epilogue_tma_warpspecialized.hpp"
 #include "sm100_epilogue_array_tma_warpspecialized.hpp"
 #endif
-#if defined (SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET == 40)
 #include "xe4_epilogue_adma_warpspecialized.hpp"
 #elif defined (SYCL_INTEL_TARGET)
 #include "xe_epilogue.hpp"

@@ -31,7 +31,7 @@
  **************************************************************************************************/
 #pragma once
 
-#if defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET == 40)
 
 #include <cute/atom/copy_traits.hpp>
 #include <cute/atom/copy_atom.hpp>

@@ -37,11 +37,11 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "cutlass/gemm/collective/collective_builder_decl.hpp"
-#if !defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET != 40)
 #include "cutlass/gemm/collective/builders/sm90_gmma_builder.inl"
 #include "cutlass/gemm/collective/builders/sm90_sparse_gmma_builder.inl"
 #endif
-#if !defined(__CUDACC_RTC__) && !defined(SYCL_INTEL_XE4_TARGET) && !defined(SYCL_INTEL_TARGET)
+#if !defined(__CUDACC_RTC__) && (SYCL_INTEL_TARGET != 40) && !defined(SYCL_INTEL_TARGET)
 #include "cutlass/gemm/collective/builders/sm100_umma_builder.inl"              
 #include "cutlass/gemm/collective/builders/sm100_9xBF16_umma_builder.inl"       
 #include "cutlass/gemm/collective/builders/sm100_sparse_umma_builder.inl"
@@ -61,7 +61,7 @@
 #include "cutlass/gemm/collective/builders/sm120_blockwise_mma_builder.inl"
 #endif
 
-#if defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET == 40)
 #include "cutlass/gemm/collective/builders/xe4_amma_builder.inl"
 #elif defined(SYCL_INTEL_TARGET)
 #include "cutlass/gemm/collective/builders/xe_mma_builder.inl"

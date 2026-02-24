@@ -1003,7 +1003,7 @@ struct fast_exp_op<Array<T, N>> {
 
   Array<T, N> y;
 
-#if defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET == 40)
   multiplies<Array<T, N>> mul;
   auto mul_res = mul(rhs, kLog2e);
 

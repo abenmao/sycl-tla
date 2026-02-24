@@ -34,7 +34,7 @@
 #include <cute/numeric/numeric_types.hpp>
 #include "xe4_util.hpp"
 
-#if defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET == 40)
 // Config
 namespace cute {
 

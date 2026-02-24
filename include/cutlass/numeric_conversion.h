@@ -1034,7 +1034,7 @@ struct NumericArrayConverter<cutlass::half_t, float, N, Round> {
   }
 };
 
-#if defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET == 40)
 template <
   int N,
   FloatRoundStyle Round
@@ -4191,7 +4191,7 @@ struct NumericArrayConverter<int8_t, float, N, Round> {
 
   CUTLASS_HOST_DEVICE
   static result_type convert(source_type const & source) {
-#if defined(SYCL_INTEL_XE4_TARGET) && defined(__SYCL_DEVICE_ONLY__)
+#if (SYCL_INTEL_TARGET == 40) && defined(__SYCL_DEVICE_ONLY__)
     result_type result;
 
     CUTLASS_PRAGMA_UNROLL
@@ -7123,7 +7123,7 @@ public:
 
 #endif // defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
 
-#if defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET == 40)
 
 template <typename ResultType, typename SourceType, int N>
 inline void xe4_convert_with_gtp_optimized(Array<SourceType, N> const& source, Array<ResultType, N>& result) {
@@ -7166,7 +7166,7 @@ XE4_DEFINE_NUMERIC_ARRAY_CONVERTER(bf8, fp16)
 XE4_DEFINE_NUMERIC_ARRAY_CONVERTER(hf8, fp16)
 // XE4_DEFINE_NUMERIC_ARRAY_CONVERTER(fp4_e3m0, fp16)
 
-#endif // defined(SYCL_INTEL_XE4_TARGET)
+#endif // (SYCL_INTEL_TARGET == 40)
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 

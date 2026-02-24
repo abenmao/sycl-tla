@@ -471,7 +471,7 @@ make_adma_copy_atom(
   //
 
   constexpr int num_bits_per_tma = size(adma_gbasis) * sizeof_bits_v<InternalType>;
-#if defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET == 40)
   using DmaCache = Obsolete_Xe4DmaCache<InternalType, decltype(aux_params)>;
   using Traits = Copy_Traits<Obsolete_Xe4CopyOp<CopyOp>, cute::C<num_bits_per_tma>, DmaCache>;
   using Atom   = Copy_Atom<Traits, typename GEngine::value_type>;

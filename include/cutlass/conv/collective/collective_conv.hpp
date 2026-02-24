@@ -58,7 +58,7 @@ struct CollectiveConv {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-#if defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET == 40)
 #include "cutlass/conv/collective/xe4_implicit_gemm_gmma_ss_warpspecialized.hpp"
 #else
 #include "sm90_implicit_gemm_gmma_ss_warpspecialized.hpp"

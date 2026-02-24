@@ -33,7 +33,7 @@
 /*! \file
   \brief im2col make_tma_copy
 */
-#if !defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET != 40)
 
 #include "cute/arch/copy_sm90.hpp"
 #include "cute/arch/copy_sm90_desc.hpp"

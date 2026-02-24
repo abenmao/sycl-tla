@@ -297,7 +297,7 @@ struct Sm120PtrArrayTmaWarpSpecialized {
   constexpr static int NumEpilogueWarpGroups = NumEpilogueWarpGroups_;
 };
 
-#if defined (SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET == 40)
 template<
   int StagesC_,
   int StagesD_,

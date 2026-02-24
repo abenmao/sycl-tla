@@ -30,7 +30,7 @@
  **************************************************************************************************/
 #pragma once
 
-#if defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET == 40)
 #include "cute/layout.hpp"
 #include "cute/layout_composed.hpp"  // cute::composition
 #include "cute/swizzle.hpp"             // cute::Swizzle

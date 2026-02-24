@@ -32,7 +32,7 @@
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#if defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET == 40)
 #include "cutlass/pipeline/xe4_pipeline.hpp"
 #else
 #include "cutlass/pipeline/sm90_pipeline.hpp"

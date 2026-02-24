@@ -859,7 +859,7 @@ print(ThrMMA<TiledMMA, ThrVMNK> const& thr_mma)
 #include <cute/atom/mma_traits_xe.hpp>
 #include <cute/atom/mma_traits_xe_legacy.hpp>
 #endif
-#if defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET == 40)
 #include <cute/atom/mma_traits_xe4.hpp>
 #endif
 ////////////////////////////////////////////////////////////////////////////////////////////////////

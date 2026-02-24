@@ -33,7 +33,7 @@
 #include <cute/config.hpp>
 #include <cute/numeric/numeric_types.hpp>
 
-#if !defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET != 40)
 
 // Config
 #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900) && \

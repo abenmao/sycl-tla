@@ -33,7 +33,7 @@
 
 #pragma once
 
-#if !defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET != 40)
 #if !defined(__CUDACC_RTC__) && !defined(CUTLASS_ENABLE_SYCL)
 #include <cuda.h>
 #endif

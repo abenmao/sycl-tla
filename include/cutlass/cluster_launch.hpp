@@ -41,7 +41,7 @@
 #include "cutlass/cutlass.h"
 #include "cutlass/trace.h"
 
-#if defined(SYCL_INTEL_XE4_TARGET) && (CUTLASS_ENABLE_SYCL)
+#if (SYCL_INTEL_TARGET == 40) && (CUTLASS_ENABLE_SYCL)
 #include <cute/arch/cluster_xe4.hpp> 
 #else
 #include <cute/arch/cluster_sm100.hpp> 

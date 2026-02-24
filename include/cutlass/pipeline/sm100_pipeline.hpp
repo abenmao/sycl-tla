@@ -30,7 +30,7 @@
  **************************************************************************************************/
 #pragma once
 //
-#if !defined(SYCL_INTEL_XE4_TARGET)
+#if (SYCL_INTEL_TARGET != 40)
 //
 
 #include "cute/numeric/integral_constant.hpp"
