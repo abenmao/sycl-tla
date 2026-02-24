@@ -4,6 +4,7 @@
 #include <cute/tensor.hpp>
 
 #include "cute/arch/copy_xe4_adma.hpp"
+#include "cute/arch/cluster_xe4.hpp"
 #include "cutlass/gemm/collective/collective_mma.hpp"
 #include "cutlass/epilogue/collective/collective_epilogue.hpp"
 
@@ -315,8 +316,8 @@ public:
       // We need this to guarantee that the Pipeline init is visible
       // To all producers and consumer thread blocks in the Cluster
       if constexpr (size(ClusterShape{}) > 1) {
-        cbar_arrive();
-        return [] () { cbar_wait(); };
+        cluster_arrive();
+        return [] () { cluster_wait(); };
       }
       else {
         item.barrier(sycl::access::fence_space::local_space);
