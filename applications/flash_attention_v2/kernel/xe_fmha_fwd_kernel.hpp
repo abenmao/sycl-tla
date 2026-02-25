@@ -657,6 +657,11 @@ public:
       int block_budget_remained = num_blocks_per_wg;
       int batch_head_id = start_batch_head_id;
       bool is_update_batch_head_id = false;
+      // Skip excess WGs whose start_batch_head_id is already out of range.
+      // This happens when total_k_blocks < GridDimZ (more WGs than work).
+      if (batch_head_id >= num_batch_heads) {
+        block_budget_remained = 0;
+      }
       while (block_budget_remained > 0) {
         int num_new_blocks = local_k_blocks - num_computed_blocks;
         if (num_new_blocks <= block_budget_remained) {
