@@ -429,8 +429,12 @@ struct Fmha3KernelFactory {
     constexpr static auto majorV = cute::AMMA::Major::MN;
 
     constexpr static int PipelineStages = 2;
+    constexpr static int PipelineStagesQ = 2;
 
-    using SmemLayoutQ = decltype(make_layout(select<0, 2>(TileShapeQK_MNK{}), GenRowMajor{}));
+    using SmemLayoutAtomQ = decltype(make_layout(select<0, 2>(TileShapeQK_MNK{}), GenRowMajor{}));
+    using SmemLayoutQ = decltype(tile_to_shape(
+      SmemLayoutAtomQ{},
+      make_shape(shape<0>(TileShapeQK_MNK{}), shape<2>(TileShapeQK_MNK{}), Int<PipelineStagesQ>{})));
 
     using SmemLayoutAtomK = decltype(make_layout(select<1, 2>(TileShapeQK_MNK{}), GenRowMajor{}));
     using SmemLayoutK = decltype(tile_to_shape(
@@ -494,7 +498,9 @@ struct Fmha3KernelFactory {
       SmemLayoutOutput,
       TMACopyAtomQ,
       TMACopyAtomK,
-      TMACopyAtomV>;
+      TMACopyAtomV,
+      PipelineStages,
+      PipelineStagesQ>;
 
     using CollectiveSoftmaxEpilogue = cutlass::flash_attention::collective::CollectiveSoftmaxEpilogue<
       TileShape,
