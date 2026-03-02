@@ -49,6 +49,7 @@
 #include "cutlass/util/device_memory.h"
 #include "cutlass/util/reference/device/gemm_complex.h"
 #include "cutlass/util/reference/device/tensor_fill.h"
+#include "cutlass/util/reference/host/gemm_complex.h"
 #include "cutlass/util/reference/host/tensor_fill.h"
 #include "cutlass/util/packed_stride.hpp"
 
@@ -129,8 +130,7 @@ class TestbedImpl {
 #if (CUTLASS_DEBUG_TRACE_LEVEL > 1)
     CUTLASS_TRACE_HOST("TestbedImpl::run: Calling verify");
 #endif
-    // TODO Need to enable to after mismatch issue fix
-    bool passed = true;//verify(problem_shape, softmax_scale);
+    bool passed = verify(problem_shape, softmax_scale);
     if (!passed) {
       CUTLASS_TRACE_HOST("TestbedImpl::run: this->verify FAILED");
       std::cout << "Error : Failed \n";
@@ -217,27 +217,41 @@ class TestbedImpl {
     int seq_len_qo = get<2>(problem_shape);
     int seq_len_kv = get<3>(problem_shape);
 
+    // Copy device tensors to host
+    std::vector<ElementQ> host_Q_all(block_Q_.size());
+    std::vector<ElementK> host_K_all(block_K_.size());
+    std::vector<ElementV> host_V_all(block_V_.size());
+    std::vector<ElementOutput> host_O_device(block_O_.size());
+
+    compat::memcpy(host_Q_all.data(), block_Q_.get(), block_Q_.size() * sizeof(ElementQ));
+    compat::memcpy(host_K_all.data(), block_K_.get(), block_K_.size() * sizeof(ElementK));
+    compat::memcpy(host_V_all.data(), block_V_.get(), block_V_.size() * sizeof(ElementV));
+    compat::memcpy(host_O_device.data(), block_O_.get(), block_O_.size() * sizeof(ElementOutput));
+    compat::wait();
+
+    // Store all reference outputs
+    std::vector<ElementOutput> host_ref_all(batch * num_heads * seq_len_qo * head_size_vo);
+
     int offset_q = 0;
     int offset_k = 0;
     int offset_v = 0;
-    int offset_o = 0;
+    int ref_offset = 0;
 
     for (int b = 0; b < batch; b++) {
       for (int h = 0; h < num_heads; h++) {
-        cutlass::DeviceAllocation<ElementAccum> block_S;
-        cutlass::DeviceAllocation<ElementV> block_P;
+        std::vector<ElementAccum> host_S(seq_len_qo * seq_len_kv);
+        std::vector<ElementV> host_P(seq_len_qo * seq_len_kv);
+        std::vector<ElementOutput> host_O_ref(seq_len_qo * head_size_vo);
 
-        block_S.reset(seq_len_qo * seq_len_kv);
-        block_P.reset(seq_len_qo * seq_len_kv);
+        cutlass::TensorRef ref_Q(host_Q_all.data() + offset_q, LayoutQ::packed({seq_len_qo, head_size_qk}));
+        cutlass::TensorRef ref_K(host_K_all.data() + offset_k, LayoutK::packed({head_size_qk, seq_len_kv}));
+        cutlass::TensorRef ref_V(host_V_all.data() + offset_v, LayoutV::packed({seq_len_kv, head_size_vo}));
+        cutlass::TensorRef ref_S(host_S.data(), LayoutQ::packed({seq_len_qo, seq_len_kv}));
+        cutlass::TensorRef ref_P(host_P.data(), LayoutQ::packed({seq_len_qo, seq_len_kv}));
+        cutlass::TensorRef ref_O(host_O_ref.data(), LayoutO::packed({seq_len_qo, head_size_vo}));
 
-        cutlass::TensorRef ref_Q(block_Q_.get() + offset_q, LayoutQ::packed({seq_len_qo, head_size_qk}));
-        cutlass::TensorRef ref_K(block_K_.get() + offset_k, LayoutK::packed({head_size_qk, seq_len_kv}));
-        cutlass::TensorRef ref_V(block_V_.get() + offset_v, LayoutV::packed({seq_len_kv, head_size_vo}));
-        cutlass::TensorRef ref_S(block_S.get(), LayoutQ::packed({seq_len_qo, seq_len_kv}));
-        cutlass::TensorRef ref_P(block_P.get(), LayoutQ::packed({seq_len_qo, seq_len_kv}));
-        cutlass::TensorRef ref_O(block_ref_O_.get() + offset_o, LayoutO::packed({seq_len_qo, head_size_vo}));
-
-        cutlass::reference::device::GemmComplex(
+        // Compute S = Q * K^T using host reference
+        cutlass::reference::host::GemmComplex(
           {seq_len_qo, seq_len_kv, head_size_qk},
           1.f,
           ref_Q,
@@ -254,14 +268,7 @@ class TestbedImpl {
           seq_len_qo * seq_len_kv,
           seq_len_qo * seq_len_kv);
 
-        compat::wait();
-
-        std::vector<ElementAccum> host_S(block_S.size());
-        compat::memcpy<ElementAccum>(host_S.data(), block_S.get(), host_S.size());
-        compat::wait();
-
-        block_S.reset();
-
+        // Compute max element per row of S
         std::vector<ElementAccum> max_vec(seq_len_qo, -INFINITY);
         for (int row = 0; row < seq_len_qo; row++) {
           int idx = row * seq_len_kv;
@@ -274,14 +281,16 @@ class TestbedImpl {
           }
         }
 
+        // Compute exp of S - use division by sqrt(head_size_qk) to match example
         for (int row = 0; row < seq_len_qo; row++) {
           int idx = row * seq_len_kv;
           int max_idx = row;
           for (int col = 0; col < seq_len_kv; col++, idx++) {
-            host_S[idx] = expf((host_S[idx] - max_vec[max_idx]) * softmax_scale);
+            host_S[idx] = expf((host_S[idx] - max_vec[max_idx]) / std::sqrt(static_cast<ElementAccum>(head_size_qk)));
           }
         }
 
+        // Compute sum per row and normalize
         std::vector<ElementAccum> sum_vec(seq_len_qo, ElementAccum{0});
         for (int row = 0; row < seq_len_qo; row++) {
           int idx = row * seq_len_kv;
@@ -297,15 +306,13 @@ class TestbedImpl {
           }
         }
 
-        std::vector<ElementV> host_P(host_S.size());
+        // Convert S to P
         for (size_t p = 0; p < host_P.size(); p++) {
           host_P[p] = static_cast<ElementV>(host_S[p]);
         }
 
-        compat::memcpy<ElementV>(block_P.get(), host_P.data(), host_P.size());
-        compat::wait();
-
-        cutlass::reference::device::GemmComplex(
+        // Compute O = P * V using host reference
+        cutlass::reference::host::GemmComplex(
           {seq_len_qo, head_size_vo, seq_len_kv},
           1.f,
           ref_P,
@@ -322,23 +329,20 @@ class TestbedImpl {
           seq_len_qo * head_size_vo,
           seq_len_qo * head_size_vo);
 
-        compat::wait();
+        // Copy reference output to accumulated array
+        std::copy(host_O_ref.begin(), host_O_ref.end(), host_ref_all.begin() + ref_offset);
+        ref_offset += seq_len_qo * head_size_vo;
 
         offset_q += seq_len_qo * head_size_qk;
         offset_k += seq_len_kv * head_size_qk;
         offset_v += seq_len_kv * head_size_vo;
-        offset_o += seq_len_qo * head_size_vo;
       }
     }
 
-    compat::wait();
-
+    // Compare host reference with device output
     return TensorCompareRelativelyEqual<ElementOutput>(
-      block_ref_O_.get(),
-      block_O_.get(),
-      block_O_.size(),
-      ElementOutput(0.05f),
-      ElementOutput(0.05f));
+        host_ref_all.data(), host_O_device.data(), host_O_device.size(),
+        ElementOutput(0.05f), ElementOutput(0.05f));
   }
 
   bool sufficient() {
@@ -353,16 +357,32 @@ class TestbedImpl {
     stride_V_ = cutlass::make_cute_packed_stride(StrideV{}, cute::make_shape(head_size_vo, seq_len_kv, batch * num_heads));
     stride_O_ = cutlass::make_cute_packed_stride(StrideO{}, cute::make_shape(seq_len_qo, head_size_vo, batch * num_heads));
 
-    block_Q_.reset(static_cast<std::size_t>(batch) * num_heads * seq_len_qo * head_size_qk);
-    block_K_.reset(static_cast<std::size_t>(batch) * num_heads * seq_len_kv * head_size_qk);
-    block_V_.reset(static_cast<std::size_t>(batch) * num_heads * seq_len_kv * head_size_vo);
-    block_O_.reset(static_cast<std::size_t>(batch) * num_heads * seq_len_qo * head_size_vo);
-    block_ref_O_.reset(static_cast<std::size_t>(batch) * num_heads * seq_len_qo * head_size_vo);
+    size_t size_Q = static_cast<std::size_t>(batch) * num_heads * seq_len_qo * head_size_qk;
+    size_t size_K = static_cast<std::size_t>(batch) * num_heads * seq_len_kv * head_size_qk;
+    size_t size_V = static_cast<std::size_t>(batch) * num_heads * seq_len_kv * head_size_vo;
+    size_t size_O = static_cast<std::size_t>(batch) * num_heads * seq_len_qo * head_size_vo;
+
+    block_Q_.reset(size_Q);
+    block_K_.reset(size_K);
+    block_V_.reset(size_V);
+    block_O_.reset(size_O);
+    block_ref_O_.reset(size_O);
+
+    // Create host buffers and fill with random data (matching example approach)
+    std::vector<ElementQ> host_Q(size_Q);
+    std::vector<ElementK> host_K(size_K);
+    std::vector<ElementV> host_V(size_V);
 
     uint64_t seed = 2025;
-    cutlass::reference::device::BlockFillRandomUniform(block_Q_.get(), block_Q_.size(), seed, ElementQ(1), ElementQ(-1), 0);
-    cutlass::reference::device::BlockFillRandomUniform(block_K_.get(), block_K_.size(), seed + 1, ElementK(1), ElementK(-1), 0);
-    cutlass::reference::device::BlockFillRandomUniform(block_V_.get(), block_V_.size(), seed + 2, ElementV(1), ElementV(-1), 0);
+    cutlass::reference::host::BlockFillRandomUniform(host_Q.data(), host_Q.size(), seed, ElementQ(1), ElementQ(-1), 0);
+    cutlass::reference::host::BlockFillRandomUniform(host_K.data(), host_K.size(), seed + 1, ElementK(1), ElementK(-1), 0);
+    cutlass::reference::host::BlockFillRandomUniform(host_V.data(), host_V.size(), seed + 2, ElementV(1), ElementV(-1), 0);
+
+    // Copy host data to device
+    compat::memcpy(block_Q_.get(), host_Q.data(), size_Q * sizeof(ElementQ));
+    compat::memcpy(block_K_.get(), host_K.data(), size_K * sizeof(ElementK));
+    compat::memcpy(block_V_.get(), host_V.data(), size_V * sizeof(ElementV));
+    compat::wait();
   }
 
   void launch(typename GemmKernel::Params params) {
