@@ -126,7 +126,7 @@ int main(int argc, const char **argv) {
 #elif defined(DECODE)
 
 #if PERSISTENT
-#define NUM_SG _16
+#define NUM_SG _8
 #define KV_TILE_SIZE _256
 #else
 #define NUM_SG _8
