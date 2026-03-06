@@ -39,6 +39,7 @@
 #include <cute/numeric/integral_ratio.hpp>
 #include <cute/arch/copy_xe4_desc.hpp>
 #include <cute/atom/copy_traits_xe4_dma_legacy.hpp>
+#include <cute/arch/copy_xe4_adma.hpp>
 
 namespace cute
 {
@@ -573,13 +574,13 @@ make_tma_copy_tiled(CopyOp                  const& copy_op,
 
 /** Make a CuTe CTA-collective TiledCopy for a TMA operation.
  *
- * @param CopyOp The target copy operation: SM90_TMA_LOAD, SM90_TMA_LOAD_MULTICAST, SM90_TMA_STORE
+ * @param CopyOp The target copy operation: XE4_ADMA_LOAD, XE4_ADMA_LOAD_MULTICAST, XE4_ADMA_STORE
  * @param gtensor The GMEM Tensor to be involved in the TMA.
  * @param slayout The SMEM Layout to be involved in the TMA.
  * @param cta_tile The CTA-local tile that each CTA will be tiling GMEM with.
  *                 This is often the blk_shape that is used to tile the GMEM for CTAs:
  *                   local_tile(gtensor, blk_shape, blk_coord) -> CTA-local tile of gtensor
- * @param cluster_size When using SM90_TMA_LOAD_MULTICAST, this can be a (static) power-of-2 <= 16
+ * @param cluster_size When using XE4_ADMA_LOAD_MULTICAST, this can be a (static) power-of-2 <= 16
  *                   defining the multicast size (used to further partition the SMEM)
  *                 Else, static-1
  *
@@ -600,21 +601,21 @@ make_tma_copy_tiled(CopyOp                  const& copy_op,
     // Simple 2D
     Tensor gtensor = make_tensor(gptr, make_shape(1024, 256), GenRowMajor{}); // K-Major GMEM
     auto slayout   = make_layout(make_shape(_64{}, _32{}), GenRowMajor{});    // K-Major SMEM
-    auto tma = make_tma_copy(SM90_TMA_LOAD{}, gtensor, slayout);
+    auto tma = make_tma_copy(XE4_ADMA_LOAD{}, gtensor, slayout);
     }
 
     {
     // GMMA 2D
     Tensor gtensor = make_tensor(gptr, make_shape(1024, 256));                                 // MN-Major GMEM
     auto slayout   = tile_to_shape(GMMA::Layout_MN_SW128_Atom<T>{}, make_shape(_128{},_64{})); // MN-Major Swizzled+Tiled 128x64 SMEM
-    auto tma = make_tma_copy(SM90_TMA_LOAD{}, gtensor, slayout);
+    auto tma = make_tma_copy(XE4_ADMA_LOAD{}, gtensor, slayout);
     }
 
     {
     // 3D
     Tensor gtensor = make_tensor(gptr, make_shape(1024, 32, 512), make_stride(64, Int<1>{}, 65536)); // GMEM
     auto slayout   = make_layout(make_shape(_16{}, _8{}, _2{}), make_stride(_16{}, _1{}, _8{}));     // SMEM w/ same major-mode
-    auto tma = make_tma_copy(SM90_TMA_LOAD{}, gtensor, slayout);
+    auto tma = make_tma_copy(XE4_ADMA_LOAD{}, gtensor, slayout);
     }
 
     {
@@ -625,7 +626,7 @@ make_tma_copy_tiled(CopyOp                  const& copy_op,
                                                                                  //                         m-last may be predicated
                                                                                  //   Take 32-elem from k0, 2-elem from k1
     auto slayout = make_layout(cta_tile);                                        // Col-Major SMEM
-    auto tma = make_tma_copy(SM90_TMA_LOAD{}, gtensor, slayout, cta_tile, Int<1>{});
+    auto tma = make_tma_copy(XE4_ADMA_LOAD{}, gtensor, slayout, cta_tile, Int<1>{});
     }
  *
  * Check the TMA box size and desc:
@@ -856,7 +857,7 @@ make_tma_copy_A(CopyOp                  const& copy_op,
   auto cluster_size_n = size<1>(cluster_size);
 
   // ESYCL JM
-  if constexpr (cute::is_same_v<CopyOp, SM90_TMA_LOAD_IM2COL>) {
+  if constexpr (is_base_of_v<xe4::ASYNC_ROW_IM2COL, CopyOp>) {
 	  //ESYCL JM
     return make_im2col_tma_copy(copy_op,
                                 gtensor,
@@ -895,7 +896,7 @@ make_tma_copy_B(CopyOp                  const& copy_op,
   auto cluster_size_m = size<0>(cluster_size);
 
   // ESYCL JM
-  if constexpr (cute::is_same_v<CopyOp, SM90_TMA_LOAD_IM2COL>) {
+  if constexpr (is_base_of_v<xe4::ASYNC_ROW_IM2COL, CopyOp>) {
 	  // ESYCL JM
     return make_im2col_tma_copy(copy_op,
                                 gtensor,
@@ -929,8 +930,7 @@ make_tma_copy_C(CopyOp                  const& copy_op,
   auto cta_tiler_mn = remove<2>(cta_tiler);
 
   // ESYCL JM
-  if constexpr (cute::is_same_v<CopyOp, SM90_TMA_LOAD_IM2COL> ||
-      cute::is_same_v<CopyOp, SM90_TMA_STORE_IM2COL>) {
+  if constexpr (is_base_of_v<xe4::ASYNC_ROW_IM2COL, CopyOp>) {
 	  // ESYCL JM
     return make_im2col_tma_copy(copy_op,
                                 gtensor,
@@ -1000,12 +1000,12 @@ make_tma_copy_A(CopyOp                  const& copy_op,
 
   // ESYCL JM
   auto cta_t_vmnk_strides = [](){
-    if constexpr (is_same_v<CopyOp, SM90_TMA_LOAD_MULTICAST> ||
+    if constexpr (is_same_v<CopyOp, XE4_ADMA_LOAD_MULTICAST> ||
                   is_same_v<CopyOp, SM100_TMA_2SM_LOAD_MULTICAST>) {
       return Stride<_0,_0,_1,_0>{};                    // VMNK: Use only the N-CTAs in the Multicast
     } else
-    if constexpr (is_same_v<CopyOp, SM90_TMA_LOAD>  ||
-                  is_same_v<CopyOp, SM90_TMA_STORE> ||
+    if constexpr (is_same_v<CopyOp, XE4_ADMA_LOAD>  ||
+                  is_same_v<CopyOp, XE4_ADMA_STORE> ||
                   is_same_v<CopyOp, SM100_TMA_2SM_LOAD>) {
       return Stride<_0,_0,_0,_0>{};                    // VMNK: Use no CTAs in Non-Multicast
     } else {
@@ -1045,12 +1045,12 @@ make_tma_copy_B(CopyOp                  const& copy_op,
 
   // ESYCL JM
   auto cta_t_vmnk_strides = [](){
-    if constexpr (is_same_v<CopyOp, SM90_TMA_LOAD_MULTICAST> ||
+    if constexpr (is_same_v<CopyOp, XE4_ADMA_LOAD_MULTICAST> ||
                   is_same_v<CopyOp, SM100_TMA_2SM_LOAD_MULTICAST>) {
       return Stride<_0,_1,_0,_0>{};                    // VMNK: Use only the M-CTAs in the Multicast
     } else
-    if constexpr (is_same_v<CopyOp, SM90_TMA_LOAD>  ||
-                  is_same_v<CopyOp, SM90_TMA_STORE> ||
+    if constexpr (is_same_v<CopyOp, XE4_ADMA_LOAD>  ||
+                  is_same_v<CopyOp, XE4_ADMA_STORE> ||
                   is_same_v<CopyOp, SM100_TMA_2SM_LOAD>) {
       return Stride<_0,_0,_0,_0>{};                    // VMNK: Use no CTAs in Non-Multicast
     } else {
@@ -1089,8 +1089,8 @@ make_tma_copy_C(CopyOp                  const& copy_op,
   auto cta_v_tile = layout<1>(mma.thrfrg_C(g_tile))(_, repeat<rank(g_tile)>(_));    // (MMA, MMA_M, MMA_N, ...)
 
   // ESYCL JM
-  static_assert(is_same_v<CopyOp, SM90_TMA_LOAD>  ||
-                is_same_v<CopyOp, SM90_TMA_STORE> ||
+  static_assert(is_same_v<CopyOp, XE4_ADMA_LOAD>  ||
+                is_same_v<CopyOp, XE4_ADMA_STORE> ||
                 is_same_v<CopyOp, SM100_TMA_2SM_LOAD>,
                 "Unsupported TMA Op, expected a non-multicast TMA");
 

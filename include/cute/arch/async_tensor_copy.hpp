@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cute/arch/asm_helper.hpp>
+#include <cute/arch/mma_xe4_desc.hpp>
 
 namespace sycl {
 #ifdef __SYCL_DEVICE_ONLY__
