@@ -399,8 +399,7 @@ struct ExampleRunner {
             }
           }();
 
-          auto scale_data = (ret_type)(scale_tensor(mn, k / 32, l));
-
+          auto scale_data = (ret_type)(scale_tensor(mn, k / scaleGroupSize, l));
           dst_tensor(mn, k, l) = (src_data) * scale_data;
         }
       }

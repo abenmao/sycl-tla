@@ -47,7 +47,7 @@
 
 template <typename ElementType,
           typename TileShape,
-          int GroupSize = 32,
+          int GroupSize = 32,//The `can_implement` function only forces a 32-bit version in the `fp4` case.
           typename ThreadLayout = Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>,
           typename LayoutA = cutlass::layout::RowMajor,
           typename LayoutB = cutlass::layout::RowMajor>
@@ -142,9 +142,10 @@ int main(int argc, const char** argv) {
   }
 
   CUTLASS_CHECK((run_mx_case
-    <cutlass::mx_float8_t<float_e4m3_t>, Shape<_512, _256, _64>, 32>(options)));
-  CUTLASS_CHECK((run_mx_case
     <cutlass::mx_float8_t<float_e4m3_t>, Shape<_512, _256, _64>, 64>(options)));
+  CUTLASS_CHECK((run_mx_case
+    <cutlass::mx_float8_t<float_e4m3_t>, Shape<_512, _256, _64>, 32>(options)));
+
 
   return 0;
 }
