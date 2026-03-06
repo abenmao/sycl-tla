@@ -95,16 +95,16 @@ template <int N> struct astride { static constexpr fixstr::fixed_string value { 
 template <> struct astride<0> { static constexpr fixstr::fixed_string value {""}; };
 template <int N > constexpr auto _astride = as_prefix<N>::value + astride<N>::value;
 
-enum class arrdir {
+enum class Arrdir {
   none,
-  arow,
-  acol 
+  Arow,
+  Acol 
 };
-template <arrdir> struct adir;
-template <> struct adir<arrdir::none> { static constexpr fixstr::fixed_string value {""}; };
-template <> struct adir<arrdir::arow> { static constexpr fixstr::fixed_string value {".arow"}; };
-template <> struct adir<arrdir::acol> { static constexpr fixstr::fixed_string value {".acol"}; };
-template <arrdir dir> constexpr auto _adir= adir<dir>::value;
+template <Arrdir> struct adir;
+template <> struct adir<Arrdir::none> { static constexpr fixstr::fixed_string value {""}; };
+template <> struct adir<Arrdir::Arow> { static constexpr fixstr::fixed_string value {".arow"}; };
+template <> struct adir<Arrdir::Acol> { static constexpr fixstr::fixed_string value {".acol"}; };
+template <Arrdir dir> constexpr auto _adir= adir<dir>::value;
 
 template <int N> struct vl_prefix { static constexpr fixstr::fixed_string value {".vl"}; };
 template <> struct vl_prefix<0> { static constexpr fixstr::fixed_string value {""}; };

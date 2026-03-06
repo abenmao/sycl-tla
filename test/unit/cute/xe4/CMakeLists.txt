@@ -35,6 +35,9 @@ add_custom_target(
   cutlass_test_unit_cute_xe4_ldsm_load
   cutlass_test_unit_cute_xe4_ldsm_adma
   cutlass_test_unit_cute_xe4_ldsm_store
+  cutlass_test_unit_cute_xe4_ldsm_uaov
+  cutlass_test_unit_cute_xe4_ldsm_adma_aov
+  cutlass_test_unit_cute_xe4_ldsm_adma_uaov
 )
 
 add_custom_target(
@@ -42,6 +45,12 @@ add_custom_target(
   DEPENDS
   test_unit_cute_xe4_reduce_exp
   test_unit_cute_xe4_adma_load_store
+  test_unit_cute_xe4_ldsm_load
+  test_unit_cute_xe4_ldsm_adma
+  test_unit_cute_xe4_ldsm_store
+  test_unit_cute_xe4_ldsm_uaov
+  test_unit_cute_xe4_ldsm_adma_aov
+  test_unit_cute_xe4_ldsm_adma_uaov
 )
 
 cutlass_test_unit_add_executable(
@@ -65,4 +74,16 @@ cutlass_test_unit_add_executable(
 cutlass_test_unit_add_executable(
   cutlass_test_unit_cute_xe4_ldsm_store
   ldsm_store.cpp
+)
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_ldsm_uaov
+  ldsm_uaov.cpp
+)
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_ldsm_adma_aov
+  ldsm_adma_aov.cpp
+)
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_ldsm_adma_uaov
+  ldsm_adma_uaov.cpp
 )

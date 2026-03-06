@@ -75,7 +75,6 @@ ldsm_test_device_cute(T* g_in, T* g_out,
     // Loop over the TMA stages, using smem as our buffer
     int kPhaseBitLoad = 0;
     bool electedThread = cute::elect_one_sync();
-    //sycl::sub_group sg = sycl::ext::oneapi::experimental::this_sub_group();
     sycl::sub_group sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     if(electedThread && sg.get_group_id() == 0) {
         xe4_initialize_barrier(adma_load_mbar[0], 1 /*numThreads*/);
@@ -118,6 +117,24 @@ ldsm_test_device_cute(T* g_in, T* g_out,
     // Output rmem -> gmem
     item.barrier(sycl::access::fence_space::local_space);
     syncthreads();
+    /*
+    if (thread(0)) {
+      int tid = ThreadIdxX();
+      printf("\n ID : %d\n", tid);
+      for (int i = 0; i < size<0>(tXrX); ++i) {
+        //for (int j = 0; j < size<1>(tXrX); ++j) {
+	  printf("%d:%d, ", tXrX(i), tAsA_x(i));
+	//}
+      }
+      printf("\n");
+      for (int i = 0; i < size<0>(coord_tile); ++i) {
+        for (int j = 0; j < size<1>(coord_tile); ++j) {
+	  printf("%d, ", coord_tile(i, j));
+	}
+        printf("\n");
+      }
+    }
+    */
     copy(tXrX, tXgX);
     syncthreads();
   }
@@ -149,12 +166,18 @@ void launch_tiled_kernel(TLayout t_layout, VLayout v_layout,
   //     for (int i = 0; i < size<1>(ht_in); ++i) 
   for (int i = 0; i < size<0>(ht_in); ++i) {
     for (int j = 0; j < size<1>(ht_in); ++j) {
-      //printf("\tData: %d : %d  %d \n", i, int(h_in[i]), int(h_out[i]));
       int val1 = ht_in(i,j);
       int val2 = ht_out(i,j);
       EXPECT_EQ(val1, val2);
+      //printf("\tData: %d : %d  %d \n", i, val1, val2);
     }
   }
+  /*
+  printf("\n-------------ht_in-------------------\n");
+  print_tensor(ht_in);
+  printf("\n-------------ht_out-------------------\n");
+  print_tensor(ht_out);
+  */
 }
 
 template<int GroupSize, LDSMMode Mode> struct ThrLayout {
@@ -163,6 +186,7 @@ template<int GroupSize, LDSMMode Mode> struct ThrLayout {
     // as there will be 32 * GroupSize threads
    static constexpr int ThrN=GroupSize*GroupSize;
    static constexpr Layout t_layout = make_layout(make_shape(Int<ThrM>{}, Int<ThrN>{}), LayoutLeft{});
+   //static constexpr Layout t_layout = make_layout(make_shape(Int<8>{}, Int<4>{}), make_stride(Int<2>{}, Int<8>{}));
 };
 
 // Unordered Vetor needs seperate layout due to h/w constraints on bank acces
@@ -173,8 +197,12 @@ template<int GroupSize> struct ThrLayout<GroupSize, LDSMMode::UnorderedVector> {
    static constexpr Layout t_layout = make_layout(make_shape(make_shape(Int<8>{}, Int<4>{}), Int<GroupSize>{}),
     		                                  make_stride(make_stride(Int<1>{}, Int<32>{}), Int<8>{}));
 };
+template<int GroupSize> struct ThrLayout<GroupSize, LDSMMode::UnorderedArrOfVectors> {
+   static constexpr Layout t_layout = make_layout(make_shape(make_shape(Int<8>{}, Int<4>{}), Int<GroupSize>{}),
+    		                                  make_stride(make_stride(Int<1>{}, Int<32>{}), Int<8>{}));
+};
 template<typename T, int M, int N, LDSMMode Mode, int Vlen,
-         cute::Vecdir Vdir, uint32_t GroupSize=1>
+         cute::Vecdir Vdir, uint32_t Alen, cute::Arrdir Adir, uint32_t GroupSize=1>
 void run_ldsm_test()
 {
   constexpr int elem_alignment = 16 / sizeof(T);
@@ -193,7 +221,7 @@ void run_ldsm_test()
   }
   {
     // Load Vector
-    using CopyOp = XE4_LOAD_MATRIX<T, SLayout, Mode, Vlen, Vdir>;
+    using CopyOp = XE4_LOAD_MATRIX<T, SLayout, Mode, Vlen, Vdir, Alen, Adir>;
     using ADMA_Load = cute::XE4_ADMA_LOAD;
     auto mem_layout = SLayout{};
 
@@ -202,11 +230,10 @@ void run_ldsm_test()
     auto cta_tiler = product_each(shape(mem_layout));
     auto adma_load = cute::make_adma_copy<T>(ADMA_Load{}, gA, mem_layout, cta_tiler, Int<1>{});
 
-
     Layout t_layout = ThrLayout<GroupSize, Mode>::t_layout;
 
-    Layout v_layout_row = make_layout(make_shape(Int<1>{}, Int<Vlen>{}));
-    Layout v_layout_col = make_layout(make_shape(Int<Vlen>{}, Int<1>{}));
+    Layout v_layout_row = make_layout(make_shape(Int<1>{}, Int<Vlen*Alen>{}));
+    Layout v_layout_col = make_layout(make_shape(Int<Vlen*Alen>{}, Int<1>{}));
    
     static_assert((Vdir == cute::Vecdir::Vrow || Vdir == cute::Vecdir::Vcol));
     int check_count = count;
@@ -223,58 +250,10 @@ void run_ldsm_test()
 
   CUTLASS_TRACE_HOST("PASS");
 }
-TEST(XE4_CuTe_JGS, LDSM_ADMA_Row_UnorderedVector_1)
+TEST(XE4_CuTe_JGS, LDSM_ADMA_Row_UAOfVector_row_2x16)
 {
   using T = uint16_t;
-  run_ldsm_test<T, 32, 16*4, LDSMMode::UnorderedVector,16, cute::Vecdir::Vrow, 4>();
-  run_ldsm_test<T, 32, 16*8, LDSMMode::UnorderedVector,16, cute::Vecdir::Vrow, 4>();
-  run_ldsm_test<T, 32, 16*16, LDSMMode::UnorderedVector,16, cute::Vecdir::Vrow, 4>();
-}
-TEST(XE4_CuTe_JGS, LDSM_ADMA_Row_UnorderedVector_2)
-{
-  using T = uint16_t;
-  run_ldsm_test<T, 32*4, 16*16, LDSMMode::UnorderedVector,16, cute::Vecdir::Vrow, 4>();
-}
-TEST(XE4_CuTe_JGS, LDSM_ADMA_Row_Vector_1)
-{
-  using T = uint16_t;
-  run_ldsm_test<T, 32, 16, LDSMMode::Vector,1, cute::Vecdir::Vrow>();
-  run_ldsm_test<T, 32, 16, LDSMMode::Vector,2, cute::Vecdir::Vrow>();
-  run_ldsm_test<T, 32, 16, LDSMMode::Vector,4, cute::Vecdir::Vrow>();
-  run_ldsm_test<T, 32, 16, LDSMMode::Vector,8, cute::Vecdir::Vrow>();
-  run_ldsm_test<T, 32, 16, LDSMMode::Vector,16, cute::Vecdir::Vrow>();
-}
-TEST(XE4_CuTe_JGS, LDSM_ADMA_Row_Vector_4)
-{
-  using T = uint16_t;
-  constexpr int N = 16*16;
-  run_ldsm_test<T, 32, N, LDSMMode::Vector,1, cute::Vecdir::Vrow, 4>();
-  run_ldsm_test<T, 32, N, LDSMMode::Vector,2, cute::Vecdir::Vrow, 4>();
-  run_ldsm_test<T, 32, N, LDSMMode::Vector,4, cute::Vecdir::Vrow, 4>();
-  run_ldsm_test<T, 32, N, LDSMMode::Vector,8, cute::Vecdir::Vrow, 4>();
-  run_ldsm_test<T, 32, N, LDSMMode::Vector,16, cute::Vecdir::Vrow, 4>();
-}
-TEST(XE4_CuTe_JGS, LDSM_ADMA_Row_CoopVector_1)
-{
-  using T = uint16_t;
-  run_ldsm_test<T, 32, 16, LDSMMode::CoopVector,16, cute::Vecdir::Vrow>();
-}
-TEST(XE4_CuTe_JGS, LDSM_ADMA_Row_CoopVector_4)
-{
-  using T = uint16_t;
-  run_ldsm_test<T, 32, 16*16, LDSMMode::CoopVector,16, cute::Vecdir::Vrow, 4>();
-}
-TEST(XE4_CuTe_JGS, LDSM_ADMA_Col_Vector_1)
-{
-  // Col direction
-  constexpr int N = 16;
-  run_ldsm_test<uint16_t, 64, N, LDSMMode::Vector,2, cute::Vecdir::Vcol>();
-  run_ldsm_test<uint16_t, 128, N, LDSMMode::Vector,4, cute::Vecdir::Vcol>();
-}
-TEST(XE4_CuTe_JGS, LDSM_ADMA_Col_Vector_4)
-{
-  // Col direction
-  constexpr int N = 16*16;
-  run_ldsm_test<uint16_t, 64, N, LDSMMode::Vector,2, cute::Vecdir::Vcol, 4>();
-  run_ldsm_test<uint16_t, 128, N, LDSMMode::Vector,4, cute::Vecdir::Vcol, 4>();
+  static constexpr int ALEN=2;
+  run_ldsm_test<T, 32, 16*4*2, LDSMMode::UnorderedArrOfVectors,16, cute::Vecdir::Vrow,
+	        ALEN, cute::Arrdir::Arow, 4>();
 }

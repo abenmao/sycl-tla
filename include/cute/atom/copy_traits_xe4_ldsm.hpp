@@ -55,24 +55,18 @@ using namespace cute::detail;
 template<class OP> 
 struct Xe4LDSMTraitsBase {
     using Op = OP;
-    static constexpr auto Group_Size = (Op::Super::Coop) ? (Op::BitWidth==4 ? 4 :2): 1;
-
     /*
      /For Matrix Type 1
      BitWidth = 16
-     Vlen =1 (1, 16*1) (16*1, 1)
-     Vlen =2 (1, 16*2) (16*2, 1)
+     Vlen =1  Layout = (1, 16*1)
+     Vlen =2  Layout = (1, 16*2)
     */
-    using SrcLayout = Layout<Shape<Int<Group_Size>, Int<Op::BitWidth * Op::Vlen>>,
-                          typename std::conditional_t<
-		              (Op::Type == MatrixType::Type1), // For Matrix Type1
-		              Stride<Int<Op::BitWidth * Op::Vlen>, _1>,
-		              Stride<_1, Int<Op::BitWidth * Op::Vlen>> 
-			  >
-                      >;
+    static constexpr uint32_t Alen = (Op::Alen == 0) ? 1 : Op::Alen;
+    static constexpr uint32_t DataSize = Op::BitWidth * Op::Vlen * Alen;
+    using SrcLayout = Layout<Shape<Int<1>, Int<DataSize>>>;
     using DstLayout = SrcLayout; 
     using RefLayout = DstLayout;  
-    using ThrID = Layout<Int<Group_Size>>;
+    using ThrID = Layout<Int<1>>;
 
     static constexpr int ValBits = Op::BitWidth;
     static_assert(Op::Super::CopyBitsPerThread % ValBits == 0, "Type is incompatible with this copy atom");
@@ -104,11 +98,12 @@ swap_coord_for_ldsm(cute::ArithmeticTuple<int, cute::C<0>> const& t) {
 }
 
 template<typename T, class SrLayout, LDSMMode Mode, uint32_t Vlen,
-         cute::Vecdir Vdir, class MatInfo>
-struct Copy_Traits<XE4_LOAD_MATRIX<T, SrLayout, Mode, Vlen, Vdir>, MatInfo> 
-       : Xe4LDSMTraitsBase<XE4_LOAD_MATRIX<T, SrLayout, Mode, Vlen, Vdir>> {
+         cute::Vecdir Vdir, class MatInfo,
+	 uint32_t Alen, cute::Arrdir Adir>
+struct Copy_Traits<XE4_LOAD_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>, MatInfo> 
+       : Xe4LDSMTraitsBase<XE4_LOAD_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>> {
 
-    using Op = XE4_LOAD_MATRIX<T, SrLayout, Mode, Vlen, Vdir>;
+    using Op = XE4_LOAD_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>;
     using Super = Xe4LDSMTraitsBase<Op>;
     using ThrID = typename Super::ThrID;
     // Logical thread id to thread idx
@@ -154,11 +149,12 @@ struct Copy_Traits<XE4_LOAD_MATRIX<T, SrLayout, Mode, Vlen, Vdir>, MatInfo>
 };
 
 template<typename T, class SrLayout, LDSMMode Mode, uint32_t Vlen,
-         cute::Vecdir Vdir, class MatInfo>
-struct Copy_Traits<XE4_STORE_MATRIX<T, SrLayout, Mode, Vlen, Vdir>, MatInfo> 
-       : Xe4LDSMTraitsBase<XE4_STORE_MATRIX<T, SrLayout, Mode, Vlen, Vdir>> {
+         cute::Vecdir Vdir, class MatInfo,
+	 uint32_t Alen, cute::Arrdir Adir>
+struct Copy_Traits<XE4_STORE_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>, MatInfo> 
+       : Xe4LDSMTraitsBase<XE4_STORE_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>> {
 
-  using Op= XE4_STORE_MATRIX<T, SrLayout, Mode, Vlen, Vdir>;
+  using Op= XE4_STORE_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>;
   using Super = Xe4LDSMTraitsBase<Op>;
   using ThrID = typename Super::ThrID;
   // Logical thread id to thread idx
@@ -233,11 +229,11 @@ template<int Vlen> struct LdsmValLayout<Vlen, cute::Vecdir::Vcol> {
    static constexpr Layout v_layout = make_layout(make_shape(Int<Vlen>{}, Int<1>{}));
 };
 
-template<uint32_t ThCount, uint32_t GroupSize, LDSMMode Mode> struct LdsmThrLayout {
+template<uint32_t ThCount, uint32_t GroupSize, bool UnorderedType=false> struct LdsmThrLayout {
    static constexpr Layout t_layout = make_layout(make_shape(Int<ThCount>{}, Int<1>{}));
 };
 template<uint32_t ThCount, uint32_t GroupSize> struct LdsmThrLayout<ThCount,
-                                	GroupSize, LDSMMode::UnorderedVector> {
+                                	GroupSize, true> {
   static_assert((GroupSize > 0) && (GroupSize % 4 == 0));
   static constexpr Layout t_layout = make_layout(
 		   make_shape(make_shape(Int<8>{}, Int<ThCount/8>{}), Int<GroupSize>{}),
@@ -258,7 +254,9 @@ make_ldsm_tiled_copy(const CopyOp& Op,
   using ThrLayout = typename Traits::ThrLayout;
   using RefLayout = typename Traits::RefLayout;
   constexpr auto ThrCount = get<0>(ThrLayout{}.shape());
-  auto t_layout = LdsmThrLayout<ThrCount, ThrGroupSize, CopyOp::CopyMode>::t_layout;
+  constexpr bool UnorderedType = ((CopyOp::CopyMode == UnorderedVector) ||
+	                          (CopyOp::CopyMode == UnorderedArrOfVectors));
+  auto t_layout = LdsmThrLayout<ThrCount, ThrGroupSize, UnorderedType>::t_layout;
   auto v_layout = LdsmValLayout<CopyOp::Vlen, CopyOp::Vdir>::v_layout;
 
   return make_ldsm_tiled_copy(Op, stensor, t_layout, v_layout, is_B_matrix);
@@ -279,7 +277,8 @@ auto make_ldsm_tiled_copy(const CopyOp& Op,
     MatrixDescriptor matrix_desc = make_ldsm_matrix_descriptor(stensor, is_B_matrix);
     //constexpr auto Vdir = get_vector_dir(SLayout{});
     //using CopyOp = XE4_LOAD_MATRIX<ValType, SLayout, Mode, Vlen, Vdir>;
-    if constexpr (CopyOp::CopyMode == LDSMMode::UnorderedVector)
+    if constexpr (CopyOp::CopyMode == LDSMMode::UnorderedVector ||
+		  CopyOp::CopyMode == LDSMMode::UnorderedArrOfVectors )
       static_assert(size(t_layout) % 128 ==0);
     using  Traits = Copy_Traits<CopyOp, MInfo>;
     using  Atom = Copy_Atom<Traits, ValType>;

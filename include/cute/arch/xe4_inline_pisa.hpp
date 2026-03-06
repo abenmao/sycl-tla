@@ -3427,10 +3427,10 @@ inline void cm_vcol_load(dtype *data_ptr, const mat_desc_t &mat_desc, const sycl
 }
 template <typename dtype, uint32_t vs, typename mat_desc_t = uint32_t,
 	  uint32_t xoff=0, uint32_t yoff=0, cute::Vecdir vdir=cute::Vecdir::none,
-	  uint32_t alen=0, uint32_t astride=0, cute::arrdir adir=cute::arrdir::none,
+	  uint32_t alen=0, uint32_t astride=0, cute::Arrdir adir=cute::Arrdir::none,
           cute::morder mo =cute::morder::ordered>
 inline void load_matrix(dtype *data_ptr, const mat_desc_t &mat_desc, const sycl::marray<uint16_t, 2> &pos) {
-  //"ld_matrix.unordered.arrlen.arrstride.arrdir.veclen.vecdir<.xoff><.yoff>.bitwidth dst, desc, coords);
+  //"ld_matrix.unordered.arrlen.arrstride.Arrdir.veclen.vecdir<.xoff><.yoff>.bitwidth dst, desc, coords);
   //static_assert(cmp_values<arlen,0,1,2,4,8>());
   //static_assert(cmp_values<astride,0,1,2,4,8>());
   //static_assert(cmp_values<bwidth,4,6,8,16,32,64>());
@@ -3452,7 +3452,8 @@ inline void load_matrix(dtype *data_ptr, const mat_desc_t &mat_desc, const sycl:
     static_assert(vlen * dbits <= 256, "the maximum bits per load is 256");
   }
 
-  using vtype = vector_t<uint32_t, vs_u32>;
+  constexpr uint32_t arrlen = (alen==0) ? 1 : alen;
+  using vtype = vector_t<uint32_t, arrlen*vs_u32>;
   vtype temp;
   using cute::_morder;
   using cute::_alen;
@@ -3466,38 +3467,25 @@ inline void load_matrix(dtype *data_ptr, const mat_desc_t &mat_desc, const sycl:
 		         + _vlen<vlen> + _vdir<vdir> + _bwidth<dbits> + " %0, %1, %2;")
 	      : "=r"(temp)
               : "r"(mat_desc), "r"(posv));
-
-
-  if constexpr (adir==cute::arrdir::arow) {
-     constexpr uint32_t vs_u8 = (dbits * vs + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
-    // for sub-byte type, will cvt to uint8_t first.
+  
+  // Need to be fixed for < 8 bits
+  if constexpr (arrlen==1 && vlen ==1) {
     using dtype_reg = std::conditional_t<(dbits < 8), uint8_t, dtype>;
-    // to make it u8/element aligned
-    constexpr uint32_t vs_dst = (dbits < 8) ? vs_u8 : vs;
-    // to make it u32 aligned
     constexpr uint32_t vs_reg = vs_u32 * dbits_u32 / sizeof_bits<dtype_reg>();
-    sycl::marray<dtype_reg, vs_reg> dst = sycl::bit_cast<sycl::marray<dtype_reg, vs_reg>>(temp);
-    dtype_reg *data_reg_ptr = reinterpret_cast<dtype_reg *>(data_ptr);
-#pragma unroll
-    for (uint32_t i = 0; i < vs_dst; i++) {
-      data_reg_ptr[i] = dst[i];
-    }
+    sycl::marray<dtype_reg, arrlen*vs_reg> dst = 
+	    sycl::bit_cast<sycl::marray<dtype_reg, arrlen*vs_reg>>(temp);
+    *data_ptr=dst[0];
   } else {
-    constexpr uint32_t vs_dst = vs_u32 * dbits_u32 / dbits;
-    sycl::marray<dtype, vs_dst> dst = sycl::bit_cast<sycl::marray<dtype, vs_dst>>(temp);
-#pragma unroll
-    for (uint32_t i = 0; i < vs; i++) {
-      data_ptr[i] = dst[i];
-    }
+    memcpy(data_ptr, &temp, sizeof(vtype));
   }
 }
 
 template <typename dtype, uint32_t vs, typename mat_desc_t = uint32_t,
 	  uint32_t xoff=0, uint32_t yoff=0, cute::Vecdir vdir=cute::Vecdir::none,
-	  uint32_t alen=0, uint32_t astride=0, cute::arrdir adir=cute::arrdir::none,
+	  uint32_t alen=0, uint32_t astride=0, cute::Arrdir adir=cute::Arrdir::none,
           cute::morder mo =cute::morder::ordered>
 inline void store_matrix(const mat_desc_t &mat_desc, const dtype *data_ptr, const sycl::marray<uint16_t, 2> &pos) {
-  //"st_matrix.unordered.arrlen.arrstride.arrdir.veclen.vecdir<.xoff><.yoff>.bitwidth dst, desc, coords);
+  //"st_matrix.unordered.arrlen.arrstride.Arrdir.veclen.vecdir<.xoff><.yoff>.bitwidth dst, desc, coords);
   //static_assert(cmp_values<arlen,0,1,2,4,8>());
   //static_assert(cmp_values<astride,0,1,2,4,8>());
   //static_assert(cmp_values<bwidth,4,6,8,16,32,64>());
@@ -3531,14 +3519,16 @@ inline void store_matrix(const mat_desc_t &mat_desc, const dtype *data_ptr, cons
   constexpr uint32_t vs_src = (dbits < 8) ? vs_u8 : vs;
   constexpr uint32_t vs_reg = vs_u32 * dbits_u32 / sizeof_bits<dtype_reg>();
   const dtype_reg *data_reg_ptr = reinterpret_cast<const dtype_reg *>(data_ptr);
-  sycl::marray<dtype_reg, vs_reg> src;
+  constexpr uint32_t arrlen = (alen==0) ? 1 : alen;
+  sycl::marray<dtype_reg, arrlen*vs_reg> src;
 
-  using vtype = vector_t<uint32_t, vs_u32>;
+  using vtype = vector_t<uint32_t, arrlen*vs_u32>;
   vtype temp;
   //sycl::marray<dtype, vs_src> src;
-#pragma unroll
-  for (uint32_t i = 0; i < vs; i++) {
-    src[i] = data_reg_ptr[i];
+  if constexpr (arrlen==1 && vlen ==1) {
+    src[0] = data_reg_ptr[0];
+  } else {
+    memcpy(&src, data_ptr, sizeof(vtype));
   }
   INLINE_PISA(("st_matrix"+_morder<mo> + _alen<alen> + _astride<astride> + _adir<adir> 
 		         + _vlen<vlen> + _vdir<vdir> + _bwidth<dbits> + " %0, %1, %2;") 

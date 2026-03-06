@@ -22,8 +22,9 @@ enum LDSMMode {
   Scalar,
   Vector,
   CoopVector,
-  ArrayOfVectors,
-  UnorderedVector
+  ArrayOfVectors, // Array Of Vectors
+  UnorderedVector,
+  UnorderedArrOfVectors
 };
 
 // Recursive case: compare against first, then the rest
@@ -54,12 +55,14 @@ constexpr auto get_vector_dir(SLayout Layout)
 
 // LOAD MATRIX Layer
 // Initial verssion with xoff and yoff ==0
-template <typename T, class SLayout, LDSMMode Mode, uint32_t vlen, cute::Vecdir vdir>
+template <typename T, class SLayout, LDSMMode Mode, uint32_t vlen, cute::Vecdir vdir,
+	  uint32_t alen=0, cute::Arrdir adir=cute::Arrdir::none>
 struct XE4_LDSTMatrixBase {
 
   using ValType = T;
   static constexpr cute::Vecdir getVdir() {
-    if constexpr (Mode == CoopVector || Mode == UnorderedVector) {
+    if constexpr (Mode == CoopVector || Mode == UnorderedVector 
+		                     || Mode == UnorderedArrOfVectors) {
       return ((vdir == cute::Vecdir::Vrow) ? cute::Vecdir::Cooprow
 	              : (vdir == cute::Vecdir::Vcol) ? cute::Vecdir::Coopcol
 		      : vdir);
@@ -69,8 +72,10 @@ struct XE4_LDSTMatrixBase {
   }
   static constexpr LDSMMode CopyMode = Mode;
   static constexpr int Vlen = vlen;
+  static constexpr int Alen = alen;
   static constexpr bool Coop = (Mode == CoopVector);
   static constexpr cute::Vecdir Vdir = getVdir();
+  static constexpr cute::Arrdir Adir = adir;
   static constexpr bool Unordered = (Mode == UnorderedVector);
 
   static constexpr int BitWidth =sizeof_bits_v<T>;
@@ -140,13 +145,19 @@ struct XE4_LDSTMatrixBase {
     } else if constexpr(Mode == CoopVector) {
        if constexpr (Vdir == cute::Vecdir::Cooprow) check_coop_row_vector_constraints();
        if constexpr (Vdir == cute::Vecdir::Coopcol) check_coop_col_vector_constraints();
-    } else if constexpr (Mode == UnorderedVector) {
+    } else if constexpr (Mode == UnorderedVector || Mode == UnorderedArrOfVectors) {
        if constexpr (Vdir == cute::Vecdir::Cooprow) check_coop_row_vector_constraints();
        else {
           static_assert(dependent_false<T>, "Cooperative column access not supported for Unordered access");
        }
+       if constexpr(Mode == UnorderedArrOfVectors) {
+         static_assert(cmp_values<alen, 2,4,8>());
+	 static_assert(Adir == cute::Arrdir::Arow);
+       }
     } else if constexpr (Mode == ArrayOfVectors) {
-       static_assert(dependent_false<T>, "Array of Vector access not supported now.");
+       //static_assert(dependent_false<T>, "Array of Vector access not supported now.");
+       static_assert(cmp_values<alen, 1,2,4,8>());
+       // Acol need to be supported.
     }
     return true;
   }
@@ -158,19 +169,24 @@ struct XE4_LDSTMatrixBase {
 /// XE4_MATRIX_LOAD Load initiates a matrix copy from shared memory to registers
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 using namespace cute::detail;
-template<typename T, class SLayout, LDSMMode Mode=UnorderedVector, uint32_t VLEN=8, cute::Vecdir VDIR=cute::Vecdir::Vrow>
-struct XE4_LOAD_MATRIX : XE4_LDSTMatrixBase<T, SLayout, Mode, VLEN, VDIR> 
+template<typename T, class SLayout, LDSMMode Mode=UnorderedVector,
+         uint32_t VLEN=8, cute::Vecdir VDIR=cute::Vecdir::Vrow,
+	 uint32_t ALEN=0, cute::Arrdir ADIR=cute::Arrdir::none>
+struct XE4_LOAD_MATRIX : XE4_LDSTMatrixBase<T, SLayout, Mode, VLEN, VDIR, ALEN, ADIR> 
 {
   //static constexpr BitWidth = sizeof(T) * BITS_PER_BYTE;
 
-  using Super = XE4_LDSTMatrixBase<T, SLayout, Mode, VLEN, VDIR>;
+  static constexpr int AStride = (ALEN==0) ? 0 : 1;
+  using Super = XE4_LDSTMatrixBase<T, SLayout, Mode, VLEN, VDIR, ALEN, ADIR>;
   template <size_t Dim>
   CUTE_HOST_DEVICE static void
   copy(T *reg_ptr, const uint32_t mat_desc_,
        const sycl::marray<uint16_t, Dim>& coord) {
 #if defined (__SYCL_DEVICE_ONLY__)
     static_assert(Dim==2);
-    load_matrix<T, Super::Vlen, uint32_t, 0,0,Super::Vdir,0,0,arrdir::none,Super::Order>(reg_ptr, mat_desc_, coord);
+    load_matrix<T, Super::Vlen, uint32_t, 0,0,Super::Vdir,
+	        ALEN,AStride,ADIR,
+		Super::Order>(reg_ptr, mat_desc_, coord);
 #endif
   }
 };
@@ -180,23 +196,31 @@ struct XE4_LOAD_MATRIX : XE4_LDSTMatrixBase<T, SLayout, Mode, VLEN, VDIR>
 /// XE4_STORE_MTARIX : Initiates a matrix copy from registers to shared memory
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 using namespace cute::detail;
-template<typename T, class SLayout, LDSMMode Mode=UnorderedVector, uint32_t VLEN=8, cute::Vecdir VDIR=cute::Vecdir::Vrow>
-struct XE4_STORE_MATRIX : XE4_LDSTMatrixBase<T, SLayout, Mode, VLEN, VDIR> 
+template<typename T, class SLayout, LDSMMode Mode=UnorderedVector,
+         uint32_t VLEN=8, cute::Vecdir VDIR=cute::Vecdir::Vrow,
+	 uint32_t ALEN=0, cute::Arrdir ADIR=cute::Arrdir::none>
+struct XE4_STORE_MATRIX : XE4_LDSTMatrixBase<T, SLayout, Mode, VLEN, VDIR, ALEN, ADIR> 
 {
   //static constexpr BitWidth = sizeof(T) * BITS_PER_BYTE;
 
-  using Super = XE4_LDSTMatrixBase<T, SLayout, Mode, VLEN, VDIR>;
+  static constexpr int AStride = (ALEN==0) ? 0 : 1;
+  using Super = XE4_LDSTMatrixBase<T, SLayout, Mode, VLEN, VDIR, ALEN, ADIR>;
   template <size_t Dim>
   CUTE_HOST_DEVICE static void
   copy(T const* reg_ptr, const uint32_t mat_desc_,
        const sycl::marray<uint16_t, Dim>& coord) {
 #if defined (__SYCL_DEVICE_ONLY__)
     static_assert(Dim==2);
-    store_matrix<T, Super::Vlen, uint32_t, 0,0,Super::Vdir,0,0,arrdir::none,Super::Order>(mat_desc_, reg_ptr, coord);
+    store_matrix<T, Super::Vlen, uint32_t, 0,0,Super::Vdir,
+	         ALEN,AStride,ADIR,
+		 Super::Order>(mat_desc_, reg_ptr, coord);
 #endif
   }
 };
-//
+
+/////////////////////////////////////////////////////////////////////////
+//    LOAD MATRIX
+/////////////////////////////////////////////////////////////////////////
 // Load Matrix Scalar Load
 template<typename T, class SLayout>
 using XE4_LDSM_Scaler = XE4_LOAD_MATRIX<T, SLayout, LDSMMode::Scalar, 0,cute::Vecdir::none>;
@@ -205,16 +229,31 @@ using XE4_LDSM_Scaler = XE4_LOAD_MATRIX<T, SLayout, LDSMMode::Scalar, 0,cute::Ve
 template <typename T, class SLayout, uint32_t vlen, cute::Vecdir vdir=cute::Vecdir::Vrow>
 using XE4_LDSM_Vector = XE4_LOAD_MATRIX<T, SLayout, LDSMMode::Vector, vlen, vdir>;
 
+// Simple Vector
+template <typename T, class SLayout, uint32_t vlen, cute::Vecdir vdir=cute::Vecdir::Vrow,
+          uint32_t alen=2, cute::Arrdir adir=cute::Arrdir::Arow>
+using XE4_LDSM_AOfVector = XE4_LOAD_MATRIX<T, SLayout, LDSMMode::ArrayOfVectors, vlen, vdir>;
+
 // Load Matrix Cooperative Vector
 template <typename T, class SLayout, uint32_t vlen, cute::Vecdir vdir=cute::Vecdir::Cooprow>
 using XE4_LDSM_CoopVector = XE4_LOAD_MATRIX<T, SLayout, LDSMMode::CoopVector, vlen, vdir>;
 
 // Load Matrix Unordered Vector
-// Only Cooprow supported in unordered
-template <typename T, class SLayout, uint32_t vlen, cute::Vecdir>
+// Cooprow and AofV (row dir) supported in unordered
+template <typename T, class SLayout, uint32_t vlen>
 using XE4_LDSM_UVector = XE4_LOAD_MATRIX<T, SLayout, LDSMMode::UnorderedVector, vlen,
                                          cute::Vecdir::Cooprow>;
-// Store Matrix Scalar Load
+//
+// Load Matrix Unordered Array of Vector
+// Cooprow and AofV (row dir) supported in unordered
+template <typename T, class SLayout, uint32_t vlen, uint32_t alen>
+using XE4_LDSM_UAOfVector = XE4_LOAD_MATRIX<T, SLayout, LDSMMode::UnorderedArrOfVectors, vlen,
+                                            cute::Vecdir::Cooprow, alen, cute::Arrdir::Arow>;
+//
+/////////////////////////////////////////////////////////////////////////
+//    STORE MATRIX
+/////////////////////////////////////////////////////////////////////////
+// Store Matrix Scalar Store
 template<typename T, class SLayout>
 using XE4_STSM_Scaler = XE4_STORE_MATRIX<T, SLayout, LDSMMode::Scalar, 0,cute::Vecdir::none>;
 
@@ -227,10 +266,14 @@ template <typename T, class SLayout, uint32_t vlen, cute::Vecdir vdir=cute::Vecd
 using XE4_STSM_CoopVector = XE4_STORE_MATRIX<T, SLayout, LDSMMode::CoopVector, vlen, vdir>;
 
 // Store Matrix Unordered Vector
-// Only Cooprow supported in unordered
-template <typename T, class SLayout, uint32_t vlen, cute::Vecdir>
+template <typename T, class SLayout, uint32_t vlen>
 using XE4_STSM_UVector = XE4_STORE_MATRIX<T, SLayout, LDSMMode::UnorderedVector, vlen,
                                          cute::Vecdir::Cooprow>;
+
+// Store Matrix Coop Unordered Array of Vector
+template <typename T, class SLayout, uint32_t vlen, uint32_t alen>
+using XE4_STSM_UAOfVector = XE4_STORE_MATRIX<T, SLayout, LDSMMode::UnorderedVector, vlen,
+                                         cute::Vecdir::Cooprow, alen, cute::Arrdir::Arow>;
 
 } // namespace cute
 #endif
