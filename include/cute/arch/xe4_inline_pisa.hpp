@@ -1,5 +1,6 @@
 #pragma once
 
+#include <type_traits>
 #include "xe4_util.hpp"
 #include "asm_helper.hpp"
 
@@ -3425,6 +3426,82 @@ inline void cm_vcol_load(dtype *data_ptr, const mat_desc_t &mat_desc, const sycl
     data_ptr[i] = dst[i];
   }
 }
+template <typename T>
+static constexpr bool valid_matrix_reduction_type() {
+  if constexpr (std::is_same_v<T, int> ||
+		std::is_same_v<T, uint32_t> ||
+		std::is_same_v<T, uint16_t> ||
+		std::is_same_v<T, unsigned short> ||
+		std::is_same_v<T, short> ||
+		std::is_same_v<T, float> ||
+		std::is_same_v<T, cutlass::tfloat32_t> ||
+		std::is_same_v<T, sycl::ext::oneapi::bfloat16> ||
+		std::is_same_v<T, cutlass::half_t> ||
+		std::is_same_v<T, sycl::half>) {
+    return true;
+  }
+  return false;
+}
+template <typename dtype, cute::mred_algo ralgo, uint32_t vs, typename mat_desc_t = uint32_t,
+	  uint32_t xoff=0, uint32_t yoff=0, cute::Vecdir vdir=cute::Vecdir::none,
+	  uint32_t alen=0, uint32_t astride=0, cute::Arrdir adir=cute::Arrdir::none>
+inline void red_matrix(const dtype *data_ptr, const mat_desc_t &mat_desc, const sycl::marray<uint16_t, 2> &pos) {
+  constexpr uint32_t vlen = vs;
+  constexpr uint32_t dbits = sizeof_bits<dtype>();
+
+  static_assert(valid_matrix_reduction_type<dtype>() == true);
+  static_assert(((alen == 0 && astride == 0) ||
+		 (alen == 1 || alen == 2 || alen == 4 || alen == 8)));
+  static_assert((astride == 0 || astride == 1 || astride == 2 || astride == 4 || astride == 8));
+  static_assert(vlen == 0 || (vlen <= 32 && (vlen & vlen-1) == 0));
+  static_assert(xoff <= 1024 && yoff <= 1024);
+  static_assert(dbits == 16 || dbits == 32);
+
+  constexpr uint32_t dbits_u32 = sizeof(uint32_t) * BITS_PER_BYTE;
+  constexpr uint32_t vs_u32 = ((dbits * vs + dbits_u32 - 1) / dbits_u32);
+  if constexpr (dbits < 8) {
+    static_assert(vlen <= 32, "for sub-byte type, the maximum vlen is 32");
+  } else {
+    static_assert(vlen * dbits <= 256, "the maximum bits per load is 256");
+  }
+
+  using dtype_reg = std::conditional_t<(dbits < 8), uint8_t, dtype>;
+  constexpr uint32_t vs_reg = vs_u32 * dbits_u32 / sizeof_bits<dtype_reg>();
+  constexpr uint32_t arrlen = (alen==0) ? 1 : alen;
+  sycl::marray<dtype_reg, arrlen*vs_reg> src;
+  using vtype = vector_t<uint32_t, arrlen*vs_u32>;
+  using cute::_mred_algo;
+  using cute::_alen;
+  using cute::_astride;
+  using cute::_adir;
+  using cute::_vlen;
+  using cute::_vdir;
+  using cute::_bwidth;
+  using cute::_mdtype;
+  vector_t<uint16_t, 2> posv{pos[0], pos[1]};
+
+  const dtype_reg *data_reg_ptr = reinterpret_cast<const dtype_reg *>(data_ptr);
+  if constexpr (arrlen==1 && vlen ==1) {
+    src[0] = data_reg_ptr[0];
+  } else {
+    memcpy(&src, data_ptr, sizeof(vtype));
+  }
+  // xoff yoff is 0 for default as of now
+  if constexpr ((std::is_same_v<dtype, int>) ||
+		(std::is_same_v<dtype, uint32_t>) ||
+	       	(std::is_same_v<dtype, uint16_t>)) {
+    INLINE_PISA(("ired_matrix" + _mred_algo<ralgo> + _alen<alen> + _astride<astride> + _adir<adir>
+		         + _vlen<vlen> + _vdir<vdir> + _bwidth<dbits> + " %0, %1, %2;")
+	       ::"r"(mat_desc), "r"(posv),
+                "r"(sycl::bit_cast<vtype>(src)));
+  } else {
+    INLINE_PISA(("fred_matrix" + _mred_algo<ralgo> + _alen<alen> + _astride<astride> + _adir<adir>
+		         + _vlen<vlen> + _vdir<vdir> + _mdtype<dtype> + " %0, %1, %2;")
+	       ::"r"(mat_desc), "r"(posv),
+                "r"(sycl::bit_cast<vtype>(src)));
+  }
+}
+
 template <typename dtype, uint32_t vs, typename mat_desc_t = uint32_t,
 	  uint32_t xoff=0, uint32_t yoff=0, cute::Vecdir vdir=cute::Vecdir::none,
 	  uint32_t alen=0, uint32_t astride=0, cute::Arrdir adir=cute::Arrdir::none,
@@ -3434,10 +3511,10 @@ inline void load_matrix(dtype *data_ptr, const mat_desc_t &mat_desc, const sycl:
   //static_assert(cmp_values<arlen,0,1,2,4,8>());
   //static_assert(cmp_values<astride,0,1,2,4,8>());
   //static_assert(cmp_values<bwidth,4,6,8,16,32,64>());
-  
+
   constexpr uint32_t vlen = vs;
   constexpr uint32_t dbits = sizeof_bits<dtype>();
-  static_assert(((alen == 0 && astride == 0) || 
+  static_assert(((alen == 0 && astride == 0) ||
 		 (alen == 1 || alen == 2 || alen == 4 || alen == 8)));
   static_assert((astride == 0 || astride == 1 || astride == 2 || astride == 4 || astride == 8));
   static_assert(vlen == 0 || (vlen <= 32 && (vlen & vlen-1) == 0));
@@ -3463,16 +3540,16 @@ inline void load_matrix(dtype *data_ptr, const mat_desc_t &mat_desc, const sycl:
   using cute::_vdir;
   using cute::_bwidth;
   vector_t<uint16_t, 2> posv{pos[0], pos[1]};
-  INLINE_PISA(("ld_matrix"+_morder<mo> + _alen<alen> + _astride<astride> + _adir<adir> 
+  INLINE_PISA(("ld_matrix"+_morder<mo> + _alen<alen> + _astride<astride> + _adir<adir>
 		         + _vlen<vlen> + _vdir<vdir> + _bwidth<dbits> + " %0, %1, %2;")
 	      : "=r"(temp)
               : "r"(mat_desc), "r"(posv));
-  
+
   // Need to be fixed for < 8 bits
   if constexpr (arrlen==1 && vlen ==1) {
     using dtype_reg = std::conditional_t<(dbits < 8), uint8_t, dtype>;
     constexpr uint32_t vs_reg = vs_u32 * dbits_u32 / sizeof_bits<dtype_reg>();
-    sycl::marray<dtype_reg, arrlen*vs_reg> dst = 
+    sycl::marray<dtype_reg, arrlen*vs_reg> dst =
 	    sycl::bit_cast<sycl::marray<dtype_reg, arrlen*vs_reg>>(temp);
     *data_ptr=dst[0];
   } else {
@@ -3492,7 +3569,7 @@ inline void store_matrix(const mat_desc_t &mat_desc, const dtype *data_ptr, cons
   //static_value_assert(arlen == 0 || arlen == 1 || arlen == 2 || arlen == 4 || arlen == 8);
   constexpr uint32_t vlen = vs;
   constexpr uint32_t dbits = sizeof_bits<dtype>();
-  static_assert(((alen == 0 && astride == 0) || 
+  static_assert(((alen == 0 && astride == 0) ||
 		 (alen == 1 || alen == 2 || alen == 4 || alen == 8)));
   static_assert((astride == 0 || astride == 1 || astride == 2 || astride == 4 || astride == 8));
   static_assert(vlen == 0 || (vlen <= 32 && (vlen & vlen-1) == 0));
@@ -3530,8 +3607,8 @@ inline void store_matrix(const mat_desc_t &mat_desc, const dtype *data_ptr, cons
   } else {
     memcpy(&src, data_ptr, sizeof(vtype));
   }
-  INLINE_PISA(("st_matrix"+_morder<mo> + _alen<alen> + _astride<astride> + _adir<adir> 
-		         + _vlen<vlen> + _vdir<vdir> + _bwidth<dbits> + " %0, %1, %2;") 
+  INLINE_PISA(("st_matrix"+_morder<mo> + _alen<alen> + _astride<astride> + _adir<adir>
+		         + _vlen<vlen> + _vdir<vdir> + _bwidth<dbits> + " %0, %1, %2;")
 	       ::"r"(mat_desc), "r"(sycl::bit_cast<vector_t<uint16_t, 2>>(pos)),
                 "r"(sycl::bit_cast<vtype>(src)));
 
@@ -3901,8 +3978,8 @@ inline dst_type tensor_pipe_tred_pisa(const sycl::marray<dtype_reg, round_up<N *
 }
 
 template <typename src_type, typename dst_type, uint32_t N, typename dtype_reg=uint32_t, cute::tred_red_dim red_dim=cute::tred_red_dim::none, bool mxnd=false, cute::tred_round_mode mode=cute::tred_round_mode::none, bool dsat=false, bool xch=false>
-inline float tensor_pipe_exp_red_pisa(const sycl::marray<dtype_reg, round_up<N * sizeof(src_type), sizeof(dtype_reg)>::value>& src0, 
-                                      sycl::marray<dtype_reg, round_up<N * sizeof(dst_type), sizeof(dtype_reg)>::value>& dst, 
+inline float tensor_pipe_exp_red_pisa(const sycl::marray<dtype_reg, round_up<N * sizeof(src_type), sizeof(dtype_reg)>::value>& src0,
+                                      sycl::marray<dtype_reg, round_up<N * sizeof(dst_type), sizeof(dtype_reg)>::value>& dst,
                                       float m = 0.0, float dsrc1 = 0.0) {
   static_assert((N >=1 || N <=4 || N == 8 || N == 16 || N == 32) &&
                 "Invalid N size, valid N is 1, 2, 3, 4, 8, 16, 32");
@@ -3940,8 +4017,8 @@ inline float tensor_pipe_exp_red_pisa(const sycl::marray<dtype_reg, round_up<N *
 }
 
 template <typename src_type, typename dst_type, uint32_t N, typename dtype_reg=uint32_t, cute::tred_red_dim red_dim=cute::tred_red_dim::none, bool mxnd=false, cute::tred_round_mode mode=cute::tred_round_mode::none, bool dsat=false, bool xch=false>
-inline float tensor_pipe_exp2_red_pisa(const sycl::marray<dtype_reg, N * sizeof(src_type) / sizeof(dtype_reg)>& src0, 
-                                     sycl::marray<dtype_reg, N * sizeof(dst_type) / sizeof(dtype_reg)>& dst, 
+inline float tensor_pipe_exp2_red_pisa(const sycl::marray<dtype_reg, N * sizeof(src_type) / sizeof(dtype_reg)>& src0,
+                                     sycl::marray<dtype_reg, N * sizeof(dst_type) / sizeof(dtype_reg)>& dst,
                                      float m = 0.0, float dsrc1 = 0.0) {
   static_assert((N >=1 || N <=4 || N == 8 || N == 16 || N == 32) &&
                 "Invalid N size, valid N is 1, 2, 3, 4, 8, 16, 32");

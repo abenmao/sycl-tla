@@ -38,6 +38,7 @@ add_custom_target(
   cutlass_test_unit_cute_xe4_ldsm_uaov
   cutlass_test_unit_cute_xe4_ldsm_adma_aov
   cutlass_test_unit_cute_xe4_ldsm_adma_uaov
+  cutlass_test_unit_cute_xe4_ldsm_red
 )
 
 add_custom_target(
@@ -51,6 +52,7 @@ add_custom_target(
   test_unit_cute_xe4_ldsm_uaov
   test_unit_cute_xe4_ldsm_adma_aov
   test_unit_cute_xe4_ldsm_adma_uaov
+  test_unit_cute_xe4_ldsm_red
 )
 
 cutlass_test_unit_add_executable(
@@ -86,4 +88,8 @@ cutlass_test_unit_add_executable(
 cutlass_test_unit_add_executable(
   cutlass_test_unit_cute_xe4_ldsm_adma_uaov
   ldsm_adma_uaov.cpp
+)
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_ldsm_red
+  ldsm_red.cpp
 )

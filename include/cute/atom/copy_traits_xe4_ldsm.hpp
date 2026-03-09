@@ -52,7 +52,7 @@ struct MInfo {
 
 
 using namespace cute::detail;
-template<class OP> 
+template<class OP>
 struct Xe4LDSMTraitsBase {
     using Op = OP;
     /*
@@ -64,8 +64,8 @@ struct Xe4LDSMTraitsBase {
     static constexpr uint32_t Alen = (Op::Alen == 0) ? 1 : Op::Alen;
     static constexpr uint32_t DataSize = Op::BitWidth * Op::Vlen * Alen;
     using SrcLayout = Layout<Shape<Int<1>, Int<DataSize>>>;
-    using DstLayout = SrcLayout; 
-    using RefLayout = DstLayout;  
+    using DstLayout = SrcLayout;
+    using RefLayout = DstLayout;
     using ThrID = Layout<Int<1>>;
 
     static constexpr int ValBits = Op::BitWidth;
@@ -80,7 +80,7 @@ struct Xe4LDSMTraitsBase {
 // to the primitive while y is the first value in the tuple
 sycl::marray<uint16_t, 2>
 swap_coord_for_ldsm(cute::ArithmeticTuple<int, int> const& t) {
-  // Element access via get<>() 
+  // Element access via get<>()
   uint16_t x = static_cast<uint16_t>(cute::get<1>(t));
   uint16_t y = static_cast<uint16_t>(cute::get<0>(t));
 
@@ -100,7 +100,7 @@ swap_coord_for_ldsm(cute::ArithmeticTuple<int, cute::C<0>> const& t) {
 template<typename T, class SrLayout, LDSMMode Mode, uint32_t Vlen,
          cute::Vecdir Vdir, class MatInfo,
 	 uint32_t Alen, cute::Arrdir Adir>
-struct Copy_Traits<XE4_LOAD_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>, MatInfo> 
+struct Copy_Traits<XE4_LOAD_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>, MatInfo>
        : Xe4LDSMTraitsBase<XE4_LOAD_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>> {
 
     using Op = XE4_LOAD_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>;
@@ -109,17 +109,17 @@ struct Copy_Traits<XE4_LOAD_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>, M
     // Logical thread id to thread idx
     using ThrLayout = Layout<_32>;
     // Map from (src-thr,src-val) to bit
-    using SrcLayout = typename Super::SrcLayout; 
+    using SrcLayout = typename Super::SrcLayout;
     // Map from (dst-thr,dst-val) to bit
     using DstLayout = SrcLayout;
     // Reference map from (thr,val) to bit
     using RefLayout = typename Super::RefLayout;
     using Traits = Copy_Traits<Op, MInfo>;
     MatInfo cache_;
-    Copy_Traits(MatInfo minfo) 
+    Copy_Traits(MatInfo minfo)
 	: Super(),
        	cache_(minfo) {}
-   
+
   // Execution.
   template <class SEngine, class SLayout,
             class DEngine, class DLayout>
@@ -151,7 +151,7 @@ struct Copy_Traits<XE4_LOAD_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>, M
 template<typename T, class SrLayout, LDSMMode Mode, uint32_t Vlen,
          cute::Vecdir Vdir, class MatInfo,
 	 uint32_t Alen, cute::Arrdir Adir>
-struct Copy_Traits<XE4_STORE_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>, MatInfo> 
+struct Copy_Traits<XE4_STORE_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>, MatInfo>
        : Xe4LDSMTraitsBase<XE4_STORE_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>> {
 
   using Op= XE4_STORE_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>;
@@ -167,10 +167,10 @@ struct Copy_Traits<XE4_STORE_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>, 
   using RefLayout = typename Super::RefLayout;
   using Traits = Copy_Traits<Op, MInfo>;
   MatInfo cache_;
-  Copy_Traits(MatInfo minfo) 
+  Copy_Traits(MatInfo minfo)
         : Super(),
           cache_(minfo) {}
-   
+
   // Execution.
   template <class SEngine, class SLayout,
             class DEngine, class DLayout>
@@ -200,6 +200,57 @@ struct Copy_Traits<XE4_STORE_MATRIX<T, SrLayout, Mode, Vlen, Vdir, Alen, Adir>, 
   }
 };
 
+template<typename T, cute::MredOp Rop, class SrLayout, LDSMMode Mode, uint32_t Vlen,
+         cute::Vecdir Vdir, class MatInfo,
+	 uint32_t Alen, cute::Arrdir Adir>
+struct Copy_Traits<XE4_REDUCE_MATRIX<T, Rop, SrLayout, Mode, Vlen, Vdir, Alen, Adir>, MatInfo>
+       : Xe4LDSMTraitsBase<XE4_REDUCE_MATRIX<T, Rop, SrLayout, Mode, Vlen, Vdir, Alen, Adir>> {
+
+  using Op= XE4_REDUCE_MATRIX<T, Rop, SrLayout, Mode, Vlen, Vdir, Alen, Adir>;
+  using Super = Xe4LDSMTraitsBase<Op>;
+  using ThrID = typename Super::ThrID;
+  // Logical thread id to thread idx
+  using ThrLayout = Layout<_32>;
+  // Map from (src-thr,src-val) to bit
+  using SrcLayout = typename Super::SrcLayout;
+  // Map from (dst-thr,dst-val) to bit
+  using DstLayout = SrcLayout;
+  // Reference map from (thr,val) to bit
+  using RefLayout = typename Super::RefLayout;
+  using Traits = Copy_Traits<Op, MInfo>;
+  MatInfo cache_;
+  Copy_Traits(MatInfo minfo)
+        : Super(),
+          cache_(minfo) {}
+
+  // Execution.
+  template <class SEngine, class SLayout,
+            class DEngine, class DLayout>
+  CUTE_DEVICE friend constexpr void
+  copy_unpack(Traits const&                   traits,
+              Tensor<SEngine, SLayout> const& src,
+              Tensor<DEngine, DLayout> &      dst) {
+
+    using SType = typename SEngine::value_type;
+    using DType = typename DEngine::value_type;
+    using SrcLayout = typename Traits::SrcLayout;
+    using DstLayout = typename Traits::DstLayout;
+    constexpr auto SBits = sizeof_bits_v<SType>;
+
+    static_assert(is_counting_layout_v<DLayout>, "Destination tensor must be a coordinate tensor.");
+    static_assert(is_rmem_v<SEngine>, "Source tensor must be in registers.");
+    static_assert(size(SLayout{}) * SBits == size<1>(SrcLayout{}),
+                  "Source tensor size does not match copy atom size.");
+    static_assert(size(DLayout{}) * SBits == size<1>(DstLayout{}),
+                  "Destination tensor size does not match copy atom size.");
+
+    auto as_xe4_coord = [](auto const& t) {
+      return swap_coord_for_ldsm(flatten_to_tuple(t));
+    };
+    auto coord = as_xe4_coord(dst.data().coord_);
+    Op::copy(src.data(), traits.cache_.matrix_desc_, coord);
+  }
+};
 
 template <class GEngine, class SLayout>
 CUTE_HOST
@@ -222,7 +273,7 @@ make_ldsm_matrix_descriptor(
   return matrix_desc;
 }
 
-template<int Vlen, cute::Vecdir Vdir> struct LdsmValLayout { 
+template<int Vlen, cute::Vecdir Vdir> struct LdsmValLayout {
    static constexpr Layout v_layout = make_layout(make_shape(Int<1>{}, Int<Vlen>{}));
 };
 template<int Vlen> struct LdsmValLayout<Vlen, cute::Vecdir::Vcol> {
@@ -241,7 +292,7 @@ template<uint32_t ThCount, uint32_t GroupSize> struct LdsmThrLayout<ThCount,
 };
 
 template <int ThrGroupSize=1,
-	  class CopyOp, 
+	  class CopyOp,
           class GEngine,
           class SLayout>
 CUTE_HOST_DEVICE
@@ -252,7 +303,6 @@ make_ldsm_tiled_copy(const CopyOp& Op,
 {
   using Traits = Copy_Traits<CopyOp, MInfo>;
   using ThrLayout = typename Traits::ThrLayout;
-  using RefLayout = typename Traits::RefLayout;
   constexpr auto ThrCount = get<0>(ThrLayout{}.shape());
   constexpr bool UnorderedType = ((CopyOp::CopyMode == UnorderedVector) ||
 	                          (CopyOp::CopyMode == UnorderedArrOfVectors));
@@ -267,7 +317,7 @@ template <class CopyOp,
           class SLayout,
           class TLayout,
           class VLayout>
-auto make_ldsm_tiled_copy(const CopyOp& Op, 
+auto make_ldsm_tiled_copy(const CopyOp& Op,
 		          Tensor<GEngine,SLayout> const& stensor,
 			  TLayout t_layout,
 			  VLayout v_layout,
@@ -286,6 +336,18 @@ auto make_ldsm_tiled_copy(const CopyOp& Op,
     Copy_Atom atom = Atom{traits};
     auto tiled_copy = make_tiled_copy(atom, t_layout, v_layout);
     return tiled_copy;
+}
+
+template <class CopyReduceOp,
+          class GEngine,
+          class SLayout>
+CUTE_HOST_DEVICE
+auto
+make_ldsm_tiled_copy_reduce(const CopyReduceOp& Op,
+	             Tensor<GEngine,SLayout> const& stensor,
+		     bool is_B_matrix=true)
+{
+  return make_ldsm_tiled_copy(Op, stensor, is_B_matrix);
 }
 
 }

@@ -71,6 +71,51 @@ enum class tred_round_mode {
   mode_rna
 };
 
+//For Matrix Reduction
+enum class MredOp{
+  None,
+  Add,
+  Min,
+  Max,
+  Smin,
+  Smax,
+  Umin,
+  Umax,
+  And,
+  Or,
+  Xor,
+  Incwrap,
+  Decwrap
+};
+using mred_algo=MredOp;
+
+
+template <mred_algo> struct mat_red_algo;
+template <> struct mat_red_algo<mred_algo::None> { static constexpr fixstr::fixed_string value {""};};
+template <> struct mat_red_algo<mred_algo::Max> { static constexpr fixstr::fixed_string value {".max"};};
+template <> struct mat_red_algo<mred_algo::Min> { static constexpr fixstr::fixed_string value {".min"};};
+template <> struct mat_red_algo<mred_algo::Smax> { static constexpr fixstr::fixed_string value {".smax"};};
+template <> struct mat_red_algo<mred_algo::Smin> { static constexpr fixstr::fixed_string value {".smin"};};
+template <> struct mat_red_algo<mred_algo::Umax> { static constexpr fixstr::fixed_string value {".umax"};};
+template <> struct mat_red_algo<mred_algo::Umin> { static constexpr fixstr::fixed_string value {".umin"};};
+template <> struct mat_red_algo<mred_algo::Add> { static constexpr fixstr::fixed_string value {".add"};};
+template <> struct mat_red_algo<mred_algo::And> { static constexpr fixstr::fixed_string value {".and"};};
+template <> struct mat_red_algo<mred_algo::Or> { static constexpr fixstr::fixed_string value {".or"};};
+template <> struct mat_red_algo<mred_algo::Xor> { static constexpr fixstr::fixed_string value {".xor"};};
+template <> struct mat_red_algo<mred_algo::Incwrap> { static constexpr fixstr::fixed_string value {".incwrap"};};
+template <> struct mat_red_algo<mred_algo::Decwrap> { static constexpr fixstr::fixed_string value {".decwrap"};};
+template <mred_algo ralgo> constexpr auto _mred_algo = mat_red_algo<ralgo>::value;
+
+template <typename> struct md_type;
+template <> struct md_type<cutlass::tfloat32_t> {static constexpr fixstr::fixed_string value {".f"};};
+template <> struct md_type<float> {static constexpr fixstr::fixed_string value {".f"};};
+template <> struct md_type<sycl::half> {static constexpr fixstr::fixed_string value {".hf"};};
+template <> struct md_type<cutlass::half_t> {static constexpr fixstr::fixed_string value {".hf"};};
+template <> struct md_type<sycl::ext::oneapi::bfloat16> {
+  static constexpr fixstr::fixed_string value {".bf"};
+};
+template <typename T> constexpr auto _mdtype = md_type<T>::value;
+
 enum class morder {
   ordered,
   unordered
@@ -98,7 +143,7 @@ template <int N > constexpr auto _astride = as_prefix<N>::value + astride<N>::va
 enum class Arrdir {
   none,
   Arow,
-  Acol 
+  Acol
 };
 template <Arrdir> struct adir;
 template <> struct adir<Arrdir::none> { static constexpr fixstr::fixed_string value {""}; };
@@ -128,7 +173,7 @@ template <> struct vdir<Vecdir::Cooprow> { static constexpr fixstr::fixed_string
 template <> struct vdir<Vecdir::Coopcol> { static constexpr fixstr::fixed_string value {".coopcol"}; };
 template <Vecdir dir> constexpr auto _vdir= vdir<dir>::value;
 
-template <int N> struct bwidth { static constexpr fixstr::fixed_string value { fixed_s<N>::value }; }; 
+template <int N> struct bwidth { static constexpr fixstr::fixed_string value { fixed_s<N>::value }; };
 template <int N> constexpr auto _bwidth = "." + bwidth<N>::value +"b";
 
 

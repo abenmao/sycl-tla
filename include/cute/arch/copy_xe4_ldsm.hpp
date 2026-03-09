@@ -2,6 +2,7 @@
 
 #if (SYCL_INTEL_TARGET == 40)
 
+#include <type_traits>
 #include <cute/numeric/int.hpp>
 #include <cute/arch/asm_helper.hpp>
 #include <cute/arch/mma_xe4_desc.hpp>
@@ -48,7 +49,7 @@ constexpr auto get_vector_dir(SLayout Layout)
 {
   constexpr auto strides = Layout.stride();
   constexpr auto vdir =  get<1>(strides) == 1
-	                             ? cute::Vecdir::Vrow 
+	                             ? cute::Vecdir::Vrow
 				     : cute::Vecdir::Vcol;
   return vdir;
 }
@@ -61,7 +62,7 @@ struct XE4_LDSTMatrixBase {
 
   using ValType = T;
   static constexpr cute::Vecdir getVdir() {
-    if constexpr (Mode == CoopVector || Mode == UnorderedVector 
+    if constexpr (Mode == CoopVector || Mode == UnorderedVector
 		                     || Mode == UnorderedArrOfVectors) {
       return ((vdir == cute::Vecdir::Vrow) ? cute::Vecdir::Cooprow
 	              : (vdir == cute::Vecdir::Vcol) ? cute::Vecdir::Coopcol
@@ -165,6 +166,66 @@ struct XE4_LDSTMatrixBase {
   XE4_LDSTMatrixBase() {}
 };
 
+enum RedType {
+  None,
+  IntType,
+  FloatType
+};
+
+template <typename T, cute::MredOp Rop, class SLayout, LDSMMode Mode, uint32_t Vlen, cute::Vecdir Vdir,
+	  uint32_t Alen=0, cute::Arrdir Adir=cute::Arrdir::none>
+struct XE4_MatrixRedBase : XE4_LDSTMatrixBase<T, SLayout, Mode, Vlen, Vdir, Alen, Adir> {
+
+  static constexpr RedType rtype = (std::is_same_v<T, int> ||
+                                    std::is_same_v<T, uint32_t> ||
+                                    std::is_same_v<T, uint16_t>)
+	                         ? RedType::IntType
+				 : ((std::is_same_v<T, cutlass::tfloat32_t> ||
+                                      std::is_same_v<T, float> ||
+                                      std::is_same_v<T, sycl::ext::oneapi::bfloat16> ||
+                                      std::is_same_v<T, cutlass::half_t> ||
+                                      std::is_same_v<T, sycl::half>)
+				 ? RedType::FloatType
+				 : RedType::None);
+
+  using Super = XE4_LDSTMatrixBase<T, SLayout, Mode, Vlen, Vdir, Alen, Adir>;
+  static constexpr cute::MredOp RedOp = Rop;
+  static constexpr inline void check_red_mode_contraints() {
+    if constexpr (Mode == Scalar) {
+      static_assert(Vlen == 0 && Alen == 0);
+    } else if constexpr(Mode == Vector || Mode == ArrayOfVectors) {
+      static_assert(Vlen >= 1 && Vlen <= 32 && (Vlen & Vlen-1) == 0);
+      static_assert(Vdir == cute::Vecdir::Vrow);
+      Super::check_row_vector_constraints();
+    }
+    if constexpr(Mode == ArrayOfVectors) {
+      static_assert(cmp_values<Alen, 1,2,4,8>());
+      static_assert(Adir == cute::Arrdir::Arow || Adir == cute::Arrdir::Acol);
+    }
+  }
+  static constexpr inline bool check_constraints() {
+    // Only three modes supported for reduction ops
+    static_assert(cmp_values<Mode, Scalar, Vector, ArrayOfVectors>());
+    static_assert(rtype != RedType::None, "DataTypes should be Int or float types of 16 or 32 bits");
+    static_assert(Vlen >= 0 && Vlen <= 32);
+    static_assert(Super::BitWidth == 16 || Super::BitWidth == 32);
+    if constexpr (Rop == MredOp::Incwrap || Rop == MredOp::Decwrap) {
+      static_assert(Super::BitWidth==32 && rtype == RedType::IntType);
+    }
+    if constexpr (rtype == RedType::FloatType) {
+      static_assert((Rop == MredOp::Add || Rop == MredOp::Min || Rop == MredOp::Max));
+    }
+    if constexpr (rtype == RedType::IntType) {
+      static_assert(!(Rop == MredOp::Min || Rop == MredOp::Max));
+    }
+    check_red_mode_contraints();
+    return true;
+    // NEED TO ADD check for aligment
+  }
+  static_assert(check_constraints());
+  XE4_MatrixRedBase() : XE4_LDSTMatrixBase<T, SLayout, Mode, Vlen, Vdir, Alen, Adir>() {}
+};
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 /// XE4_MATRIX_LOAD Load initiates a matrix copy from shared memory to registers
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -172,7 +233,7 @@ using namespace cute::detail;
 template<typename T, class SLayout, LDSMMode Mode=UnorderedVector,
          uint32_t VLEN=8, cute::Vecdir VDIR=cute::Vecdir::Vrow,
 	 uint32_t ALEN=0, cute::Arrdir ADIR=cute::Arrdir::none>
-struct XE4_LOAD_MATRIX : XE4_LDSTMatrixBase<T, SLayout, Mode, VLEN, VDIR, ALEN, ADIR> 
+struct XE4_LOAD_MATRIX : XE4_LDSTMatrixBase<T, SLayout, Mode, VLEN, VDIR, ALEN, ADIR>
 {
   //static constexpr BitWidth = sizeof(T) * BITS_PER_BYTE;
 
@@ -199,7 +260,7 @@ using namespace cute::detail;
 template<typename T, class SLayout, LDSMMode Mode=UnorderedVector,
          uint32_t VLEN=8, cute::Vecdir VDIR=cute::Vecdir::Vrow,
 	 uint32_t ALEN=0, cute::Arrdir ADIR=cute::Arrdir::none>
-struct XE4_STORE_MATRIX : XE4_LDSTMatrixBase<T, SLayout, Mode, VLEN, VDIR, ALEN, ADIR> 
+struct XE4_STORE_MATRIX : XE4_LDSTMatrixBase<T, SLayout, Mode, VLEN, VDIR, ALEN, ADIR>
 {
   //static constexpr BitWidth = sizeof(T) * BITS_PER_BYTE;
 
@@ -274,6 +335,33 @@ using XE4_STSM_UVector = XE4_STORE_MATRIX<T, SLayout, LDSMMode::UnorderedVector,
 template <typename T, class SLayout, uint32_t vlen, uint32_t alen>
 using XE4_STSM_UAOfVector = XE4_STORE_MATRIX<T, SLayout, LDSMMode::UnorderedVector, vlen,
                                          cute::Vecdir::Cooprow, alen, cute::Arrdir::Arow>;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// XE4_REDUCE_MATRIX Initiates a matrix reducetion from shared memory to registers
+////////////////////////////////////////////////////////////////////////////////////////////////////
+using namespace cute::detail;
+template<typename T, cute::MredOp Rop,
+	 class SLayout, LDSMMode Mode=UnorderedVector,
+         uint32_t VLEN=8, cute::Vecdir VDIR=cute::Vecdir::Vrow,
+         uint32_t ALEN=0, cute::Arrdir ADIR=cute::Arrdir::none>
+struct XE4_REDUCE_MATRIX : XE4_MatrixRedBase<T, Rop, SLayout, Mode, VLEN, VDIR, ALEN, ADIR>
+{
+  //static constexpr BitWidth = sizeof(T) * BITS_PER_BYTE;
+
+  static constexpr int AStride = (ALEN==0) ? 0 : 1;
+  using Super = XE4_MatrixRedBase<T, Rop, SLayout, Mode, VLEN, VDIR, ALEN, ADIR>;
+  template <size_t Dim>
+  CUTE_HOST_DEVICE static void
+  copy(T const *reg_ptr, const uint32_t mat_desc_,
+       const sycl::marray<uint16_t, Dim>& coord) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    static_assert(Dim==2);
+    red_matrix<T, Rop, Super::Vlen, uint32_t, 0,0,Super::Vdir,
+               ALEN, AStride, ADIR
+              >(reg_ptr, mat_desc_, coord);
+#endif
+  }
+};
 
 } // namespace cute
 #endif
