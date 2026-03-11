@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2025 Intel Corporation. All rights reserved.
+ * Copyright (C) 2025 - 2026 Intel Corporation. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,6 +32,10 @@
 /*! \file
     \brief CUTLASS Intel BMG MoE API example based on sycl-tla Group GEMM
 
+    Usage:
+      To skip verification, modify the verify parameter in the launcher() calls in main():
+        launcher(total_rows_for_each_expert[i], 5760, 2880, num_experts, 0);  // 0 = skip verify
+        launcher(total_rows_for_each_expert[i], 2880, 2880, num_experts, 1);  // 1 = enable verify (default)
 */
 
 #include "cutlass/util/GPU_Clock.hpp"
@@ -412,7 +416,15 @@ int main(int argc, const char **argv) {
 
   constexpr int num_experts = 32;
   constexpr int max_layers = 24;
-  
+
+  if (options.num_layers > max_layers) {
+    std::cerr << "Error: num_layers (" << options.num_layers 
+              << ") exceeds maximum supported layers (" << max_layers 
+              << ")." << std::endl;
+    std::cerr << "Aborting execution." << std::endl;
+    return -1;
+  }
+
   int total_rows_for_each_expert[max_layers][num_experts] = {
       {148, 231, 404, 180, 127, 244, 224, 244, 110, 617, 289,
        845, 191, 424, 30,  97,  57,  324, 62,  77,  75,  144,
