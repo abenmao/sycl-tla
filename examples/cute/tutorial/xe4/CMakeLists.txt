@@ -39,3 +39,10 @@ target_include_directories(${AMMA_ADMA_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 target_link_options(${AMMA_ADMA_TARGET} PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)
+
+set(AMMA_ADMA_NVFP4_TARGET xe4_amma_adma_nvfp4_gemm)
+add_xe4_test(${AMMA_ADMA_NVFP4_TARGET} amma_adma_xe4_nvfp4_gemm.cpp)
+target_include_directories(${AMMA_ADMA_NVFP4_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(${AMMA_ADMA_NVFP4_TARGET} PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)

@@ -149,7 +149,7 @@ As we can see that for every 4 accumulations it requires loading of two scale fa
 
 ### MMA Operations
 
-- `XE4_AMMA_MXFP4` supports `mxfp4` and `nvfp4+`.
+- `XE4_AMMA_FP4` supports `mxfp4` and `nvfp4+`.
 - `XE4_AMMA_MXFP8` supports `mxfp8`, `mxfp6` and mixed precision euqal to and below 8-bit.
 - `XE4_AMMA_MIX` (optional) supports 16-bit floating-point mix with low precision.
 
@@ -158,7 +158,7 @@ In addition to normal A-MMA Operation, MX variants need more information about s
 ```cpp
 template <class d_type, class a_type, class b_type, class c_type, class sf_type,
          int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
-struct XE4_AMMA_MXFP4 {
+struct XE4_AMMA_FP4 {
 ...
   using DRegisters = void;
   using ARegisters = void;
@@ -213,8 +213,8 @@ Traits of AMMA operation must reflect additional types and constants of underlin
 Define fragment type of scaling factor in Traits
 
 ```
-  using FrgTypeA   = AMMA::smem_sf_frg;
-  using FrgTypeB   = AMMA::smem_sf_frg;
+  using FrgTypeSFA = AMMA::smem_sf_desc;
+  using FrgTypeSFB = AMMA::smem_sf_desc;
 ```
 
 In Cutlass example, `MMA_ScaleFactor` is a redefinition of the Traits it reside in with `N` dimension aligned to 128. Follow the convention we should also provide the redefinition.
@@ -261,7 +261,7 @@ Recommand not to collapse signature with tuples. Plain list of parameters requir
 
 ### SF Fragment Tensor
 
-Like A/B fragment tensor, SF fragment contains ``DescriptorIterator`` instead of raw pointer. Type ``AMMA::smem_sf_frg`` shall inherit from ``DescriptorIterator``, no template parameter needed.
+Like A/B fragment tensor, SF fragment contains ``DescriptorIterator`` instead of raw pointer. Type ``AMMA::smem_sf_desc`` shall inherit from ``DescriptorIterator``, no template parameter needed.
 
 Implementation of `make_fragment_desc` is similar to `make_matrix_desc`. However, it always generate type 3 `Matrix Descriptor` with `Pitch` always use first dimension of input layout. Recommand to put static assert to make sure A/B sf matrics use MN Major.
 

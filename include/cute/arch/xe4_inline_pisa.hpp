@@ -52,8 +52,10 @@ inline uint8_t *allocate_abar_bytes() {
     ALLOCATE_ABAR(abar3, ABAR3, abar_bytes);
   } else if constexpr (IDX == 4) {
     ALLOCATE_ABAR(abar4, ABAR4, abar_bytes);
+  } else if constexpr (IDX == 5) {
+    ALLOCATE_ABAR(abar5, ABAR5, abar_bytes);
   } else {
-    static_assert(IDX >= 0 && IDX <= 4, "Unsupported IDX for allocate_abar");
+    static_assert(IDX >= 0 && IDX <= 5, "Unsupported IDX for allocate_abar");
   }
   return ret;
 }

@@ -605,22 +605,35 @@ make_adma_atom_A_xe4(
   // cta val idx -> gmem mode
   auto cta_v_tile = layout<1>(mma.thrfrg_A(g_tile))(_, repeat<rank(g_tile)>(_));
 
-  // TODO: fix with better implementation to handle all shapes.
-  // Extract 2D layout for matrix descriptor:
-  // - If hierarchical (rank >= 3, from tile_to_mma_shape): use layout<0>
-  // - If flat 2D: use coalesce
-  auto slayout_2d = [&]() {
-    if constexpr (decltype(rank(slayout))::value >= 3) {
-      return layout<0>(slayout);  // Hierarchical: extract first mode
+  // Matrix descriptor derivation:
+  // Detect SF / MX-metadata layouts at compile time: they contain stride-0 broadcast
+  // modes from SfAtom (size(slayout) != size(filter_zeros(slayout))). Data layouts
+  // never have stride-0 modes. This allows make_adma_atom_A_xe4 to be used for both
+  // data A and scale-factor SFA without separate functions.
+  //   SF (broadcast detected)  -> Type3, Pitch = TILE_M >> 2
+  //   Data (no broadcast)      -> Type1/Type2, Pitch derived from SMEM strides
+  constexpr bool is_sf_layout = size(SLayout{}) != size(filter_zeros(SLayout{}));
+  auto matrix_desc = [&]() -> uint32_t {
+    if constexpr (is_sf_layout) {
+      MatrixDescriptor sf_md{};
+      sf_md.Type = MatrixDescriptor::Type3;
+      sf_md.Pitch = get<0>(mma_tiler) >> 2;  // TILE_M >> 2
+      return sf_md.raw_;
     } else {
-      return coalesce(slayout);   // Flat 2D: coalesce to handle any trivial modes
+      // TODO: fix with better implementation to handle all shapes.
+      auto slayout_2d = [&]() {
+        if constexpr (decltype(rank(slayout))::value >= 3) {
+          return layout<0>(slayout);  // Hierarchical: extract first mode
+        } else {
+          return coalesce(slayout);   // Flat 2D: coalesce to handle any trivial modes
+        }
+      }();
+      return detail::make_matrix_descriptor(slayout_2d, true);
     }
   }();
-  auto matrix_desc = detail::make_matrix_descriptor(slayout_2d, true);
 
 #if 0
   print("(tma_a) slayout:      "); print(slayout);      print("\n");
-  print("(tma_a) mma_tiler_nk: "); print(mma_tiler_nk); print("\n");
   print("(tma_a) g_tile:       "); print(g_tile);       print("\n");
   print("(tma_a) mma_tiler:    "); print(mma_tiler);    print("\n");
   print("(tma_a) cta_v_tile:   "); print(cta_v_tile);   print("\n");
@@ -666,22 +679,33 @@ make_adma_atom_B_xe4(
   // cta val idx -> gmem mode
   auto cta_v_tile = layout<1>(mma.thrfrg_B(g_tile))(_, repeat<rank(g_tile)>(_));
 
-  // TODO: fix with better implementation to handle all shapes.
-  // Extract 2D layout for matrix descriptor:
-  // - If hierarchical (rank >= 3, from tile_to_mma_shape): use layout<0>
-  // - If flat 2D (rank == 2, from tile_to_shape): use coalesce
-  auto slayout_2d = [&]() {
-    if constexpr (decltype(rank(slayout))::value >= 3) {
-      return layout<0>(slayout);  // Hierarchical: extract first mode
+  // Matrix descriptor derivation:
+  // Detect SF / MX-metadata layouts at compile time via stride-0 broadcast modes.
+  // See make_adma_atom_A_xe4 for full rationale.
+  //   SF (broadcast detected)  -> Type3, Pitch = TILE_N >> 2
+  //   Data (no broadcast)      -> Type1, Pitch derived from SMEM strides
+  constexpr bool is_sf_layout = size(SLayout{}) != size(filter_zeros(SLayout{}));
+  auto matrix_desc = [&]() -> uint32_t {
+    if constexpr (is_sf_layout) {
+      MatrixDescriptor sf_md{};
+      sf_md.Type = MatrixDescriptor::Type3;
+      sf_md.Pitch = get<1>(mma_tiler) >> 2;  // TILE_N >> 2
+      return sf_md.raw_;
     } else {
-      return coalesce(slayout);   // Flat 2D: coalesce to handle any trivial modes
+      // TODO: fix with better implementation to handle all shapes.
+      auto slayout_2d = [&]() {
+        if constexpr (decltype(rank(slayout))::value >= 3) {
+          return layout<0>(slayout);  // Hierarchical: extract first mode
+        } else {
+          return coalesce(slayout);   // Flat 2D: coalesce to handle any trivial modes
+        }
+      }();
+      return detail::make_matrix_descriptor(slayout_2d, false);
     }
   }();
-  auto matrix_desc = detail::make_matrix_descriptor(slayout_2d, false);
 
 #if 0
   print("(tma_b) slayout:      "); print(slayout);      print("\n");
-  print("(tma_b) mma_tiler_nk: "); print(mma_tiler_nk); print("\n");
   print("(tma_b) g_tile:       "); print(g_tile);       print("\n");
   print("(tma_b) mma_tiler:    "); print(mma_tiler);    print("\n");
   print("(tma_b) cta_v_tile:   "); print(cta_v_tile);   print("\n");

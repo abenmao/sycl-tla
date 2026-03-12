@@ -32,6 +32,32 @@ make_matrix_desc(Tensor<TEngine, TLayout> const& tensor) {
   return desc;
 }
 
+// Create a Type3 (scale factor) MatrixDescriptor from a rank-2 SMEM tensor.
+// SF layout is always MN-major: dim-0 (MN) has unit stride, dim-1 (K/VS) stride
+// gives the pitch.  The hardware uses Type3 to distinguish SF tiles from data tiles.
+template <class TEngine, class TLayout>
+CUTE_HOST_DEVICE constexpr
+MatrixDescriptor
+make_sf_matrix_desc(Tensor<TEngine, TLayout> const& tensor) {
+  static_assert(TLayout::rank == 2, "SF descriptors require rank-2 tensors.");
+
+  // Assert MN-major: first-dimension stride must be 1
+  static_assert(
+    cute::is_constant<1, decltype(front(get<0>(tensor.stride())))>::value,
+    "Scale factor layout must be MN-major (first dimension stride == 1)");
+
+  MatrixDescriptor desc;
+  uint32_t start_address = cast_smem_ptr_to_uint(raw_pointer_cast(tensor.data()));
+  desc.StartAddress = start_address >> 9;
+
+  // Pitch = number of MN elements per column >> 2.
+  // For MN-major unit-stride layouts, the leading dimension equals size<0>.
+  desc.Pitch = size<0>(tensor) >> 2;
+  desc.Type  = MatrixDescriptor::Type3;
+
+  return desc;
+}
+
 struct DescriptorIterator
 {
   using reference    = MatrixDescriptor;
@@ -74,6 +100,9 @@ print(DescriptorIterator const&) {
 template <AMMA::Major, bool = false>
 struct smem_desc : DescriptorIterator {};
 
+// Scale-factor fragment descriptor (type-3 MatrixDescriptor, always MN-major pitch)
+struct smem_sf_desc : DescriptorIterator {};
+
 } // namespace AMMA
 
 // Customization point for creating a AMMA::smem_desc Tensor
@@ -92,6 +121,7 @@ struct MakeTensor<AMMA::smem_desc<major, is_A>> {
   operator()(Tensor<TEngine, TLayout> const &smem_tensor) {
     constexpr auto layout =
         decltype(recast<uint8_t const>(smem_tensor).layout()){};
+    static_assert(decltype(layout)::rank >= 3,"MakeTensor<AMMA::smem_desc> requires a (recasted) layout of rank >= 3.");
 
     constexpr auto stride = layout.stride();
     constexpr int S1 = get<1>(layout.stride());
@@ -108,6 +138,46 @@ struct MakeTensor<AMMA::smem_desc<major, is_A>> {
         make_layout(
           tuple_cat(make_tuple(_1{}), take<1, -1>(shape(layout))),
           tuple_cat(make_tuple(_0{}, Stride1{}, Stride2{}), take<3, -1>(stride))
+        )
+    );
+  }
+};
+
+// Customization point for creating an AMMA::smem_sf_desc Tensor (type-3 descriptor).
+// Scale-factor descriptors are always MN-major; Pitch is derived from the stride of
+// the second dimension (K/VS) of the SF smem tensor.  Unlike data descriptors, no
+// Type1-vs-Type2 branching is needed — Type3 is unconditional.
+//
+// The input smem_tensor is expected to be rank-3+ (partitioned SF tile):
+//   mode-0: the 2D SF tile  (MN, K/VS)
+//   mode-1+: iteration / pipeline dimensions
+// tensor<0>(smem_tensor) is passed to make_sf_matrix_desc to build the first
+// descriptor; higher-mode byte strides drive DescriptorIterator advancement.
+template <>
+struct MakeTensor<AMMA::smem_sf_desc> {
+  template <class TEngine, class TLayout>
+  CUTE_HOST_DEVICE constexpr auto
+  operator()(Tensor<TEngine, TLayout> const &smem_tensor) {
+    static_assert(TLayout::rank >= 3,
+      "smem_sf_desc requires a rank-3+ SF tensor: (SF_tile, iter, pipe, ...)");
+    // Recast to byte layout for stride computation.
+    // SF SMEM layouts may have hierarchical (nested-tuple) strides at
+    // iteration modes (e.g. (blk_MN, blk_K)), so we forward them directly
+    // via take<1,-1> rather than extracting as scalar ints.
+    constexpr auto layout =
+        decltype(recast<uint8_t const>(smem_tensor).layout()){};
+    static_assert(decltype(layout)::rank >= 3,
+      "MakeTensor<AMMA::smem_sf_desc> requires a (recasted) layout of rank >= 3.");
+
+    // SF byte strides are used directly — no core-matrix adjustment is needed
+    // because SF tiles use simple MN-major layout without sub-tile blocking.
+    return make_tensor(
+        AMMA::DescriptorIterator{
+          AMMA::make_sf_matrix_desc(tensor<0>(smem_tensor))
+        },
+        make_layout(
+          tuple_cat(make_tuple(_1{}), take<1, -1>(shape(layout))),
+          tuple_cat(make_tuple(_0{}), take<1, -1>(stride(layout)))
         )
     );
   }

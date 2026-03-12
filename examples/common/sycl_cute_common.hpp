@@ -32,7 +32,7 @@
 #pragma once
 
 #include "cute/tensor.hpp"
-
+#include <random>
 //
 // Common routines for SYCL CuTe examples.
 //
@@ -102,6 +102,29 @@ one_fill(InTensor &X)
 
   for (int i = 0; i < size(X); i++)
     X(i) = T(1);
+}
+
+// Random fill for float_e2m1_t tensors.
+// representable e2m1 value {-6,-4,-3,-2,-1.5,-1,-0.5, 0, 0.5, 1, 1.5, 2, 3, 4, 6}.
+template <typename Tensor>
+void random_fill_fp4(Tensor& X, uint64_t seed) {
+  using T = typename Tensor::element_type;
+  std::mt19937 rng(seed);
+  std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+  for (int i = 0; i < size(X); ++i)
+    X(i) = T(dist(rng));
+}
+
+// Random fill for float_ue4m3_t (8-bit unsigned) scale factor tensors.
+// Follows NVIDIA testbed convention: uniform in [1, 4] — small positive range
+// that avoids overflow when multiplied with FP4 data during golden GEMM.
+template <typename Tensor>
+void random_fill_sf(Tensor& X, uint64_t seed) {
+  using T = typename Tensor::element_type;
+  std::mt19937 rng(seed);
+  std::uniform_real_distribution<float> dist(1.0f, 4.0f);
+  for (int i = 0; i < size(X); ++i)
+    X(i) = T(dist(rng));
 }
 // Pack sub-byte types in a gmem tensor.
 // On input, the backing array holds one sub-byte value per byte.

@@ -192,6 +192,9 @@ struct MMA_Atom<MMA_Traits<MMAOperation, Args...>>
                       || (sizeof_bits_v<typename remove_cvref_t<BTensor>::value_type> == 8 &&
                           (sizeof_bits_v<ValTypeB> == 8 || sizeof_bits_v<ValTypeB> == 6 || sizeof_bits_v<ValTypeB> == 4))
 
+                      || (sizeof_bits_v<typename remove_cvref_t<BTensor>::value_type> == 4 &&
+                          (sizeof_bits_v<ValTypeB> == 4 || sizeof_bits_v<ValTypeB> == 3 || sizeof_bits_v<ValTypeB> == 2))
+
                       , "Expecting ValTypeB type");
       return make_tensor<FrgTypeB>(static_cast<BTensor&&>(btensor));
     } else {

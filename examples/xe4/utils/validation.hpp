@@ -520,7 +520,8 @@ std::vector<dtype_c> calculate_golden_result(dtype_a *A, dtype_b *B, dtype_meta 
                                              uint32_t matrix_m, uint32_t matrix_n, uint32_t matrix_k,
                                              mem_layout layout_a = mem_layout::row_major,
                                              mem_layout layout_b = mem_layout::row_major, bool a_scaling = false,
-                                             bool b_scaling = false, bool negative_axb = false) {
+                                             bool b_scaling = false, bool negative_axb = false,
+                                            uint32_t scale_ele_num = 32) {
   const size_t m = matrix_m;
   const size_t k = matrix_k;
   const size_t n = matrix_n;
@@ -528,7 +529,6 @@ std::vector<dtype_c> calculate_golden_result(dtype_a *A, dtype_b *B, dtype_meta 
   std::vector<dtype_acc> gold_acc(m * n, 0);
   dtype_acc alpha = negative_axb ? -1.0 : 1.0;
 
-  static constexpr uint32_t scale_ele_num = 32;
   std::vector<dtype_acc> upcast_a(m * k);
   std::vector<dtype_acc> upcast_b(n * k);
 
@@ -545,10 +545,12 @@ template <typename dtype_a, typename dtype_b, typename dtype_c, typename dtype_m
 int validate_mxfp_gemm_result(dtype_a *A, dtype_b *B, dtype_c *C, uint32_t matrix_m, uint32_t matrix_n,
                               uint32_t matrix_k, bool a_scaling, bool b_scaling, dtype_meta *a_meta, dtype_meta *b_meta,
                               mem_layout layout_a = mem_layout::row_major, mem_layout layout_b = mem_layout::row_major,
-                              bool negative_axb = false, tolerance<dtype_c> tol = {}) {
+                              bool negative_axb = false, tolerance<dtype_c> tol = {},
+                              uint32_t scale_ele_num = 32) {
 
   std::vector<dtype_c> gold_c = calculate_golden_result<dtype_a, dtype_b, dtype_c, dtype_meta, dtype_acc>(
-      A, B, a_meta, b_meta, matrix_m, matrix_n, matrix_k, layout_a, layout_b, a_scaling, b_scaling, negative_axb);
+      A, B, a_meta, b_meta, matrix_m, matrix_n, matrix_k, layout_a, layout_b, a_scaling, b_scaling, negative_axb,
+      scale_ele_num);
   return check_and_log(C, gold_c.data(), matrix_m, matrix_n, tol);
 }
 

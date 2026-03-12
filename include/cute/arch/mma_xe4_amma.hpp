@@ -248,4 +248,153 @@ struct XE4_AMMA_DAB_CLUSTER {
   }
 };
 
+// ===============================================================================
+// Block-Scaled AMMA Operations for FP4
+//
+// These variants add `.ascale.bscale` to the async_gmma instruction and accept
+// scale factor (SF) MatrixDescriptors as additional operands.
+//
+// MMAControl bits encode the block scale configuration:
+//   A_BlockScaleType bits 22:20
+//   B_BlockScaleType bits 26:24
+// (set by the caller before invoking fma)
+//
+// SF operands are Type-3 MatrixDescriptors pointing to SLM-resident SF data.
+// ===============================================================================
+
+// Block-scaled AMMA, barrier tracking: D only
+template <class d_type, class a_type, class b_type, class c_type, class sf_type,
+         int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
+struct XE4_AMMA_FP4_D {
+  using DRegisters   = void;
+  using ARegisters   = void;
+  using BRegisters   = void;
+  using CRegisters   = void;
+  using SFARegisters = uint32_t[1];
+  using SFBRegisters = uint32_t[1];
+
+  static constexpr int SFVectorSize = VS;
+
+  CUTE_HOST_DEVICE static void fma(
+      MMAControl const& ctrl,
+      uint32_t const& desc_d,   uint32_t const& desc_a,
+      uint32_t const& desc_b,   uint32_t const& desc_c,
+      uint32_t const& desc_sfa, uint32_t const& desc_sfb,
+      uint64_t* abar_d)
+  {
+#if defined(__SYCL_DEVICE_ONLY__)
+    if ( cute::elect_one_sync() ) {
+        asm volatile (
+          ("async_gmma.m"+_s<M>+"n"+_s<N>+"k"+_s<K>+"."+_t<d_type>+"_"+_t<a_type>+"_"+_t<b_type>+"_"+_t<c_type>+".ascale.bscale"+_am<a_major>+_bk<b_major>+".dtm %0, %1, %2, %3, %4, %5, %6, [%7];\n")
+          ::"r"(ctrl), "r"(desc_d), "r"(desc_a), "r"(desc_b), "r"(desc_c),
+          "r"(desc_sfa), "r"(desc_sfb), "r"(abar_d));
+    }
+#else
+    (void)ctrl; (void)desc_d; (void)desc_a; (void)desc_b; (void)desc_c;
+    (void)desc_sfa; (void)desc_sfb; (void)abar_d;
+#endif
+  }
+};
+
+// Block-scaled AMMA, barrier tracking: A and B
+template <class d_type, class a_type, class b_type, class c_type, class sf_type,
+         int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
+struct XE4_AMMA_FP4_AB {
+  using DRegisters   = void;
+  using ARegisters   = void;
+  using BRegisters   = void;
+  using CRegisters   = void;
+  using SFARegisters = uint32_t[1];
+  using SFBRegisters = uint32_t[1];
+
+  static constexpr int SFVectorSize = VS;
+
+  CUTE_HOST_DEVICE static void fma(
+      MMAControl const& ctrl,
+      uint32_t const& desc_d,   uint32_t const& desc_a,
+      uint32_t const& desc_b,   uint32_t const& desc_c,
+      uint32_t const& desc_sfa, uint32_t const& desc_sfb,
+      uint64_t* abar_a, uint64_t* abar_b)
+  {
+#if defined(__SYCL_DEVICE_ONLY__)
+    if ( cute::elect_one_sync() ) {
+        asm volatile (
+          ("async_gmma.m"+_s<M>+"n"+_s<N>+"k"+_s<K>+"."+_t<d_type>+"_"+_t<a_type>+"_"+_t<b_type>+"_"+_t<c_type>+".ascale.bscale"+_am<a_major>+_bk<b_major>+".atm.btm %0, %1, %2, %3, %4, %5, %6, [%7], [%8];\n")
+          ::"r"(ctrl), "r"(desc_d), "r"(desc_a), "r"(desc_b), "r"(desc_c),
+          "r"(desc_sfa), "r"(desc_sfb), "r"(abar_a), "r"(abar_b));
+    }
+#else
+    (void)ctrl; (void)desc_d; (void)desc_a; (void)desc_b; (void)desc_c;
+    (void)desc_sfa; (void)desc_sfb; (void)abar_a; (void)abar_b;
+#endif
+  }
+};
+
+// Block-scaled AMMA, barrier tracking: D, A, and B
+template <class d_type, class a_type, class b_type, class c_type, class sf_type,
+         int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
+struct XE4_AMMA_FP4_DAB {
+  using DRegisters   = void;
+  using ARegisters   = void;
+  using BRegisters   = void;
+  using CRegisters   = void;
+  using SFARegisters = uint32_t[1];
+  using SFBRegisters = uint32_t[1];
+
+  static constexpr int SFVectorSize = VS;
+
+  CUTE_HOST_DEVICE static void fma(
+      MMAControl const& ctrl,
+      uint32_t const& desc_d,   uint32_t const& desc_a,
+      uint32_t const& desc_b,   uint32_t const& desc_c,
+      uint32_t const& desc_sfa, uint32_t const& desc_sfb,
+      uint64_t* abar_d, uint64_t* abar_a, uint64_t* abar_b)
+  {
+#if defined(__SYCL_DEVICE_ONLY__)
+    if ( cute::elect_one_sync() ) {
+        asm volatile (
+          ("async_gmma.m"+_s<M>+"n"+_s<N>+"k"+_s<K>+"."+_t<d_type>+"_"+_t<a_type>+"_"+_t<b_type>+"_"+_t<c_type>+".ascale.bscale"+_am<a_major>+_bk<b_major>+".dtm.atm.btm %0, %1, %2, %3, %4, %5, %6, [%7], [%8], [%9];\n")
+          ::"r"(ctrl), "r"(desc_d), "r"(desc_a), "r"(desc_b), "r"(desc_c),
+          "r"(desc_sfa), "r"(desc_sfb), "r"(abar_d), "r"(abar_a), "r"(abar_b));
+    }
+#else
+    (void)ctrl; (void)desc_d; (void)desc_a; (void)desc_b; (void)desc_c;
+    (void)desc_sfa; (void)desc_sfb; (void)abar_d; (void)abar_a; (void)abar_b;
+#endif
+  }
+};
+
+// Block-scaled AMMA, no barrier tracking
+template <class d_type, class a_type, class b_type, class c_type, class sf_type,
+         int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
+struct XE4_AMMA_FP4 {
+  using DRegisters   = void;
+  using ARegisters   = void;
+  using BRegisters   = void;
+  using CRegisters   = void;
+  using SFARegisters = uint32_t[1];
+  using SFBRegisters = uint32_t[1];
+
+  static constexpr int SFVectorSize = VS;
+
+  CUTE_HOST_DEVICE static void fma(
+      MMAControl const& ctrl,
+      uint32_t const& desc_d,   uint32_t const& desc_a,
+      uint32_t const& desc_b,   uint32_t const& desc_c,
+      uint32_t const& desc_sfa, uint32_t const& desc_sfb)
+  {
+#if defined(__SYCL_DEVICE_ONLY__)
+    if ( cute::elect_one_sync() ) {
+        asm volatile (
+          ("async_gmma.m"+_s<M>+"n"+_s<N>+"k"+_s<K>+"."+_t<d_type>+"_"+_t<a_type>+"_"+_t<b_type>+"_"+_t<c_type>+".ascale.bscale"+_am<a_major>+_bk<b_major>+" %0, %1, %2, %3, %4, %5, %6;\n")
+          ::"r"(ctrl), "r"(desc_d), "r"(desc_a), "r"(desc_b), "r"(desc_c),
+          "r"(desc_sfa), "r"(desc_sfb));
+    }
+#else
+    (void)ctrl; (void)desc_d; (void)desc_a; (void)desc_b; (void)desc_c;
+    (void)desc_sfa; (void)desc_sfb;
+#endif
+  }
+};
+
 } // namespace cute

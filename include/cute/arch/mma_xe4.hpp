@@ -3,6 +3,7 @@
 #include "cute/config.hpp"
 #include "cute/numeric/math.hpp"
 #include "cute/layout.hpp"
+#include "cutlass/float_subbyte.h"
 #include "xe4_inline_pisa.hpp"
 #include "mma_xe4_amma.hpp"
 
@@ -25,6 +26,9 @@ constexpr uint32_t getMinMmaK() {
   if constexpr (std::is_same_v<T, bf8> || std::is_same_v<T, int8_t>) {
     return 32;
   }
+  if constexpr (std::is_same_v<T, cutlass::float_e2m1_t>) {
+    return 64;
+  }
 
   CUTE_GCC_UNREACHABLE;
 }
@@ -39,6 +43,9 @@ constexpr uint32_t getMaxMmaK() {
   }
   if constexpr (std::is_same_v<T, bf8> || std::is_same_v<T, int8_t>) {
     return 256;
+  }
+  if constexpr (std::is_same_v<T, cutlass::float_e2m1_t>) {
+    return 768;
   }
 
   CUTE_GCC_UNREACHABLE;
@@ -88,6 +95,63 @@ ss_op_selector()
     return XE4_AMMA_AB_CLUSTER<
       ElementD, ElementA, ElementB, ElementC, M, N, K, MajorA, MajorB>();
   }
+
+  CUTE_GCC_UNREACHABLE;
+}
+
+// Block-scaled MMA operation selector for XE4
+template <
+  class ElementD,
+  class ElementA,
+  class ElementB,
+  class ElementC,
+  class ElementSF,    // Scale factor type
+  int VS,             // Vector size (16 or 32)
+  class TileShape_MNK,
+  class ClusterShape_MNK,
+  AMMA::Major MajorA,
+  AMMA::Major MajorB
+>
+CUTE_HOST_DEVICE constexpr
+auto
+bs_op_selector()
+{
+  static_assert(is_static<TileShape_MNK>::value, "TileShape_MNK must be static.");
+  static_assert(rank(TileShape_MNK{}) == 3, "TileShape_MNK must be rank 3.");
+  static_assert(VS == 16 || VS == 32, "Vector size must be 16 or 32.");
+
+  constexpr uint32_t M_MIN = 32;
+  constexpr uint32_t M_MAX = 256;
+  constexpr uint32_t N_MIN = 32;
+  constexpr uint32_t N_MAX = 512;
+
+  // K_MIN accounts for both the element-type hardware minimum and the
+  // cm_8x32B SF descriptor constraint: K_sf = K/VS >= 8  →  K >= 8*VS.
+  constexpr uint32_t K_MIN = cute::max(
+      cute::max(getMinMmaK<ElementA>(), getMinMmaK<ElementB>()),
+      static_cast<uint32_t>(8 * VS));
+  constexpr uint32_t K_MAX = cute::min(getMaxMmaK<ElementA>(), getMaxMmaK<ElementB>());
+
+  constexpr uint32_t Tile_M = size<0>(TileShape_MNK{});
+  constexpr uint32_t Tile_N = size<1>(TileShape_MNK{});
+  constexpr uint32_t Tile_K = size<2>(TileShape_MNK{});
+
+  constexpr uint32_t M = cute::gcd(Tile_M, M_MAX);
+  constexpr uint32_t N = cute::gcd(Tile_N, N_MAX);
+  constexpr uint32_t K = cute::gcd(Tile_K, K_MAX);
+
+  static_assert(M >= M_MIN, "MMA_M must be >= 32.");
+  static_assert(N >= N_MIN, "MMA_N must be >= 32.");
+  static_assert(K >= K_MIN, "MMA_K must be >= K_MIN (element type minimum and 8*VS SF descriptor constraint).");
+  static_assert(K % VS == 0, "MMA_K must be a multiple of the scale factor vector size (VS).");
+
+  // Currently only single-CTA variant implemented for block-scaled
+  // TODO: Add cluster support when XE4_AMMA_FP4_CLUSTER is implemented
+  static_assert(size(ClusterShape_MNK{}) == 1, 
+    "Block-scaled cluster operations not yet implemented for XE4.");
+
+  return XE4_AMMA_FP4<
+    ElementD, ElementA, ElementB, ElementC, ElementSF, M, N, K, VS, MajorA, MajorB>();
 
   CUTE_GCC_UNREACHABLE;
 }
