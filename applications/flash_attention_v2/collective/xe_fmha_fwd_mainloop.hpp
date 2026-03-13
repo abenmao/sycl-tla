@@ -535,8 +535,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
           cute::gemm(mma_qk, zipped_q, zipped_k, tSrS);
         } else {
           if constexpr (F8kvF16mma) {
-            for (int i = 0; i < tSrK.size(); i++)
-              tSrK(i) = static_cast<typename TiledMMAQK::ValTypeB>(scale_k * static_cast<float>(tSrK(i)));
+            dequantize(tSrK, scale_k);
           }
           cute::gemm(mma_qk, tSrQ, tSrK, tSrS);
         }
@@ -630,8 +629,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
           cute::gemm(mma_pv, zipped_p, zipped_v, tArA(_,_,_,VV));
         } else {
           if constexpr (F8kvF16mma) {
-            for (int i = 0; i < tArV.size(); i++)
-              tArV(i) = static_cast<typename TiledMMAQK::ValTypeB>(scale_v * static_cast<float>(tArV(i)));
+            dequantize(tArV, scale_v);
           }
           cute::gemm(mma_pv, tArP, tArV, tArA(_,_,_,VV));
         }
