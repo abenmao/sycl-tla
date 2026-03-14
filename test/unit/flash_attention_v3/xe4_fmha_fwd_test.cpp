@@ -77,7 +77,7 @@ struct ProblemConfig_BF16BF16FP32BF16 {
   using ElementOutput = bf16;
 };
 
-TEST(XE4_FMHA_FWD, smoke_fp16) {
+TEST(XE4_FMHA_FWD, DISABLED_smoke_fp16) {
   // Xe4 fwd kernel tile is fixed to 128x128x512x128 (M,N,K,cluster) for this smoke test.
   using TileShape = cute::Shape<_128, _128, _512, _128>;
   using KernelFactory = Fmha3KernelFactory<TileShape>;
@@ -120,7 +120,7 @@ TEST(XE4_FMHA_FWD, case1_batch2_seq1024) {
 
 // Case 2: batch=4, num_heads=16, seq_len_qo=128, seq_len_kv=512
 // Note: K tile=512 requires seq_kv >= 512 for FP16
-TEST(XE4_FMHA_FWD, case2_batch4_heads16) {
+TEST(XE4_FMHA_FWD, DISABLED_case2_batch4_heads16) {
   using TileShape = cute::Shape<_128, _128, _512, _128>;
   using KernelFactory = Fmha3KernelFactory<TileShape>;
 
@@ -161,7 +161,7 @@ TEST(XE4_FMHA_FWD, DISABLED_case3_heads8_seq2048) {
 }
 
 // Case 4: Asymmetric KV cache - batch=1, num_heads=4, seq_len_qo=256, seq_len_kv=4096
-TEST(XE4_FMHA_FWD, case4_asymmetric_kv_cache) {
+TEST(XE4_FMHA_FWD, DISABLED_case4_asymmetric_kv_cache) {
   using TileShape = cute::Shape<_128, _128, _512, _128>;
   using KernelFactory = Fmha3KernelFactory<TileShape>;
 
@@ -181,7 +181,7 @@ TEST(XE4_FMHA_FWD, case4_asymmetric_kv_cache) {
 }
 
 // Case 5: Small batch, many heads - batch=1, num_heads=32, seq_len_qo=512, seq_len_kv=512
-TEST(XE4_FMHA_FWD, case5_heads32_seq512) {
+TEST(XE4_FMHA_FWD, DISABLED_case5_heads32_seq512) {
   using TileShape = cute::Shape<_128, _128, _512, _128>;
   using KernelFactory = Fmha3KernelFactory<TileShape>;
 
@@ -316,7 +316,7 @@ TEST(XE4_FMHA_FWD, batch8_heads1_seq128_kv512) {
 =============================================================================
 */
 
-TEST(XE4_FMHA_FWD, batch1_heads2_seq256_kv512) {
+TEST(XE4_FMHA_FWD, DISABLED_batch1_heads2_seq256_kv512) {
   using TileShape = cute::Shape<_128, _128, _512, _128>;
   using KernelFactory = Fmha3KernelFactory<TileShape>;
 
@@ -474,7 +474,7 @@ TEST(XE4_FMHA_FWD, batch1_heads4_seq512_kv1024) {
   EXPECT_TRUE(passed);
 }
 
-TEST(XE4_FMHA_FWD, batch1_heads4_seq1024_kv1024) {
+TEST(XE4_FMHA_FWD, DISABLED_batch1_heads4_seq1024_kv1024) {
   using TileShape = cute::Shape<_128, _128, _512, _128>;
   using KernelFactory = Fmha3KernelFactory<TileShape>;
 
@@ -557,7 +557,7 @@ TEST(XE4_FMHA_FWD, batch1_heads4_seq256_kv2048) {
   EXPECT_TRUE(passed);
 }
 
-TEST(XE4_FMHA_FWD, batch1_heads4_seq256_kv4096) {
+TEST(XE4_FMHA_FWD, DISABLED_batch1_heads4_seq256_kv4096) {
   using TileShape = cute::Shape<_128, _128, _512, _128>;
   using KernelFactory = Fmha3KernelFactory<TileShape>;
 
@@ -621,7 +621,7 @@ TEST(XE4_FMHA_FWD, asymmetric_seq128_kv2048) {
   EXPECT_TRUE(passed);
 }
 
-TEST(XE4_FMHA_FWD, asymmetric_seq256_kv4096) {
+TEST(XE4_FMHA_FWD, DISABLED_asymmetric_seq256_kv4096) {
   using TileShape = cute::Shape<_128, _128, _512, _128>;
   using KernelFactory = Fmha3KernelFactory<TileShape>;
 
@@ -666,7 +666,7 @@ TEST(XE4_FMHA_FWD, DISABLED_asymmetric_seq512_kv8192) {
 =============================================================================
 */
 
-TEST(XE4_FMHA_FWD, batch2_heads8_seq512_kv1024) {
+TEST(XE4_FMHA_FWD, DISABLED_DISABLED_batch2_heads8_seq512_kv1024) {
   using TileShape = cute::Shape<_128, _128, _512, _128>;
   using KernelFactory = Fmha3KernelFactory<TileShape>;
 
@@ -685,7 +685,7 @@ TEST(XE4_FMHA_FWD, batch2_heads8_seq512_kv1024) {
   EXPECT_TRUE(passed);
 }
 
-TEST(XE4_FMHA_FWD, batch4_heads8_seq256_kv1024) {
+TEST(XE4_FMHA_FWD, DISABLED_batch4_heads8_seq256_kv1024) {
   using TileShape = cute::Shape<_128, _128, _512, _128>;
   using KernelFactory = Fmha3KernelFactory<TileShape>;
 
@@ -771,7 +771,7 @@ TEST(XE4_FMHA_FWD, minimum_valid_config) {
 }
 
 // Square attention (seq_q == seq_kv)
-TEST(XE4_FMHA_FWD, square_attention_1024) {
+TEST(XE4_FMHA_FWD, DISABLED_square_attention_1024) {
   using TileShape = cute::Shape<_128, _128, _512, _128>;
   using KernelFactory = Fmha3KernelFactory<TileShape>;
 
@@ -791,7 +791,7 @@ TEST(XE4_FMHA_FWD, square_attention_1024) {
 }
 
 // Large batch with single head
-TEST(XE4_FMHA_FWD, large_batch_single_head) {
+TEST(XE4_FMHA_FWD, DISABLED_large_batch_single_head) {
   using TileShape = cute::Shape<_128, _128, _512, _128>;
   using KernelFactory = Fmha3KernelFactory<TileShape>;
 

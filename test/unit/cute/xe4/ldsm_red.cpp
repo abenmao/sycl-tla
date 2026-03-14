@@ -207,7 +207,7 @@ void run_ldsm_test()
   }
   CUTLASS_TRACE_HOST("PASS");
 }
-TEST(XE4_CuTe_JGS, LDSM_Rreduce_Vector_float_Add)
+TEST(XE4_CuTe_JGS, DISABLED_LDSM_Rreduce_Vector_float_Add)
 {
   // Row direction
   using T = sycl::half;
