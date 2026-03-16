@@ -45,4 +45,3 @@ function(xe4_add_fmha_example TARGET SOURCE)
 endfunction()
 
 xe4_add_fmha_example(xe4_fmha_fwd xe4_fmha_fwd.cpp)
-xe4_add_fmha_example(test_sdpa_bfloat16 test_sdpa_bfloat16.cpp)

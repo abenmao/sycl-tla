@@ -30,13 +30,14 @@
  **************************************************************************************************/
 #pragma once
 
+#include <algorithm>
 #include <vector>
 #include <cute/arch/mma_xe4.hpp>
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
 #include "cutlass/util/command_line.h"
 #include "cutlass/util/reference/host/gemm_complex.h"
-#include "cutlass/util/reference/device/gemm_complex.h"
 #include "cutlass/util/reference/host/tensor_fill.h"
+#include "cutlass/util/GPU_Clock.hpp"
 #include "sycl_common.hpp"
 #include "cute/util/compat.hpp"
 #include "kernel/xe4_tile_scheduler.hpp"
@@ -55,7 +56,8 @@ struct Options {
   int seq_len_kv = 512;
   int head_size_qk = 128;
   int head_size_vo = 128;
-  int iterations = 100;
+  int iterations = 0;
+  int warmup_iterations = 0;
   float softmax_scale;
 
   void parse(int argc, char const **args) {
@@ -72,7 +74,8 @@ struct Options {
     cmd.get_cmd_line_argument("seq_len_kv", seq_len_kv, 8192);
     cmd.get_cmd_line_argument("head_size_vo", head_size_vo, 128);
     cmd.get_cmd_line_argument("head_size_qk", head_size_qk, head_size_vo);
-    cmd.get_cmd_line_argument("iterations", iterations, 100);
+    cmd.get_cmd_line_argument("iterations", iterations, 0);
+    cmd.get_cmd_line_argument("warmup_iterations", warmup_iterations, 0);
 
     softmax_scale = 1 / sqrt(static_cast<float>(head_size_qk));
   }
@@ -87,7 +90,9 @@ struct Options {
         << "  --seq_len_kv=<int>          Sets the Sequence length of the Key-Value pair in Multi-Head Self Attention module\n"
         << "  --head_size_qk=<int>        Sets the Attention Head dimension of the 1st Matrix Multiplication in Multi-Head Self Attention module\n"
         << "  --head_size_vo=<int>        Sets the Attention Head dimension of the 2nd Matrix Multiplication in Multi-Head Self Attention module\n"
-        << "  --iterations=<int>          Iterations\n\n";
+        << "  --iterations=<int>          Iterations\n\n"
+        << "  --warmup_iterations=<int>   Iterations for warmup\n\n";
+
     return out;
   }
 };
@@ -120,12 +125,6 @@ struct ExampleRunner {
   cutlass::DeviceAllocation<ElementV> block_V;
   cutlass::DeviceAllocation<ElementOutput> block_O;
   cutlass::DeviceAllocation<ElementOutput> block_ref_O;
-
-  std::vector<ElementQ> block_Q_h;
-  std::vector<ElementK> block_K_h;
-  std::vector<ElementV> block_V_h;
-  std::vector<ElementOutput> block_O_h;
-  std::vector<ElementOutput> block_ref_O_h;
 
   StrideQ stride_Q;
   StrideK stride_K;
@@ -315,9 +314,6 @@ struct ExampleRunner {
         offset_o += seq_len_qo * head_size_vo;
       }
     }
-
-    compat::memcpy<ElementOutput>(block_ref_O.get(), block_ref_O_h.data(), block_ref_O_h.size());
-    compat::wait();
     
     // Copy device output to host for comparison
     size_t total_output_size = block_O.size();
@@ -428,6 +424,37 @@ struct ExampleRunner {
     bool passed = verify(problem_shape);
     std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
 
+    if (!passed) {
+      return cutlass::Status::kErrorInternal;
+    }
+
+    if (options.iterations > 0) {
+      GPU_Clock timer;
+
+      if (options.warmup_iterations > 0) {
+        std::cout << "Warm up " << options.warmup_iterations << " iterations..." << std::endl;
+        for (int i = 0; i < options.warmup_iterations; ++i) {
+          run(params);
+        }
+        compat::wait();
+      }
+
+      timer.start();
+      for (int i = 0; i < options.iterations; ++i) {
+        run(params);
+      }
+      compat::wait();
+
+      double avg_time = timer.seconds() / options.iterations;
+      std::cout << "\tBatch: " << options.batch
+                << "\tSeqLenQO: " << options.seq_len_qo
+                << "\tSeqLenKV: " << options.seq_len_kv
+                << "\tHeadSizeQK: " << options.head_size_qk
+                << "\tHeadSizeVO: " << options.head_size_vo
+                << "\tIterations: " << options.iterations;
+
+      printf("\nPerformance:   %6.4f  ms\n\n", avg_time * 1000);
+    }
     return cutlass::Status::kSuccess;
   }
 };

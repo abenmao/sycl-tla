@@ -40,12 +40,20 @@ jobs:
               echo "Starting Xe4 Simulator at $(date)"
               ./AubLoad -device :config/fleur_de_lis/devices/xe4hpc.1tx1x1x4x4.a0.map.xml \
               -socket tcp:4321 -attr EU.XESIM 3 -sim_mode perf_mpu \
+              -cb_cfg multithread_mode affinity max_worker_threads 10 \
               -cb_cfg hang_detect_enable true hang_activation_threshold 1500 \
               hang_threshold 50 hang_analysis_period 1000000 hang_max_hang_cycles 250 \
-              -enableDcGpgpuPrintMessage -disableFeature 14017893554 -enableFeature gpuCapabilityStructure \
-              -disableFeature 14019930466 -enableFeature 14024886170 -enableFeature 14023456409 \
-              -enableFeature 14022148216 -enableFeature 14021142441 -disableFeature 14024592460 \
-              -disableFeature 14023522245
+              -enableDcGpgpuPrintMessage -enableFeature gpuCapabilityStructure \
+              -disableFeature 14019930466 \
+              -enableFeature 14024886170 \
+              -enableFeature 14023456409 \
+              -enableFeature 14022148216 \
+              -enableFeature 14021142441 \
+              -disableFeature 14024592460 \
+              -disableFeature 14023522245 \
+              -disableFeature 14025930643 \
+              -enableFeature 16029053229 \
+              -enableFeature 14024709425
               EXIT_CODE=$?
               echo "Xe4 Simulator exited with code $EXIT_CODE at $(date)"
               if [ $EXIT_CODE -ne 0 ]; then
@@ -82,22 +90,30 @@ jobs:
         run: |
           source ~/xe4_toolkit/source_oneapi_env.sh
           source ~/xe4_toolkit/source_simulator_env.sh
-          echo #--------------------------------------"
+          echo "--------------------------------------"
           echo "Running Xe4 GEMM Workload"
           ninja xe4_gemm
           ./examples/xe4/gemm/xe4_gemm
-          echo #--------------------------------------"
+          echo "--------------------------------------"
           echo "Running Xe4 GEMM Cluster Workload"
           ninja xe4_gemm_cluster
           ./examples/xe4/gemm/xe4_gemm_cluster
-          echo #--------------------------------------"
+          echo "--------------------------------------"
           echo "Running Xe4 CuTe AMMA w/o DMA GEMM Tutorial Workload"
           ninja xe4_amma
           ./examples/cute/tutorial/xe4/xe4_amma
-          echo #--------------------------------------"
+          echo "--------------------------------------"
           echo "Running Xe4 CuTe AMMA+DMA GEMM Tutorial Workload"
           ninja xe4_amma_adma
           ./examples/cute/tutorial/xe4/xe4_amma_adma
+          echo "--------------------------------------"
+          echo "Running Xe4 CuTe FMHA3 Workload"
+          ninja xe4_fmha_fwd
+          ./examples/xe4/fmha3/xe4_fmha_fwd
+          echo "--------------------------------------"
+          echo "Running Xe4 CuTe FMHA4 Workload"
+          ninja xe4_fmha4_fwd
+          ./examples/xe4/fmha4/xe4_fmha4_fwd --batch=2 --num_heads=1 --seq_len_qo=1024 --seq_len_kv=1024 --head_size_vo=128 --head_size_qk=128
       
       - name: Run Xe4 UTs 
         working-directory: build
