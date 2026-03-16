@@ -19,9 +19,9 @@ Block scaled format is numeric representation where a group (block) of values sh
 
 GPU docs refer to the scale factor also as MX metadata; both terms are used interchangeably in the following description.
 
-### Representation in Cutlass
+### Representation in SYCL-TLA
 
-Cutlass has supported block scaled format, which uses wrapper type to augment scale factor type on top of narrow precision type. For example, in addition to fp8, mxfp8 requires extra e8m0 scale for each block of data which can be captured by template (where to put 16/32 block size?):
+Original code base has supported block scaled format, which uses wrapper type to augment scale factor type on top of narrow precision type. For example, in addition to fp8, mxfp8 requires extra e8m0 scale for each block of data which can be captured by template:
 
 ```
 template <class F8Type>
@@ -37,7 +37,7 @@ In order to support nvfp4+, we shall implement `float_ue5m3_t` following the pat
 
 Different floating-point data types can be mixed in Async-MMA to support a wide range of use cases. For example, Async-MMA instruction supports combinations such as MXFP8 with MXFP4 or FP16 with NVFP4. Supported combinations are constrained only by hardware capabilities, not by the software implementation. Exhaustive enumeration is not required in the current implementation but left possibility for adding them in the future.
 
-## Layout
+## Scale Factor Layout
 ### Layout Deduction
 
 Each block scaled matrix has a scale factor (SF) matrix attached to it. Both of their layouts for local and global accesses are correlated. In order to infer SF matrix layout from its master matrix, we need to implement ``Xe4BlockScaledConfig`` type in ``xe4_blockscaled_layout.hpp`` which capture the layout relationship that follows Xe4's hardware specs.
@@ -61,17 +61,17 @@ struct Sm1xxBlockScaledBasicChunk {
 };
 ```
 
-Xe4 exposes normal MN-major matrix layout `(_MN, (_1, SFVecSize)) : (_1, (_MN, 0))`
+For basic scaling factor block, two modes were used to describe it: column block and row block. Xe4 exposes normal MN-major matrix layout hence row block is `_1` and column block is `(SFVecSize, _1)`.
 
 ```
-template<int SFVecSize, int _MN>
+template<int SFVecSize, AMMA::Major major = AMMA::Major::MN>
 struct Xe4BlockScaledBasicChunk {
 
-  using Blk_MN    = _MN;
-  using Blk_SF    =  _1; 
+  using Blk_MN    = _1;
+  using Blk_SF    = _1;
 
-  using SfMNMajorAtom = Layout< Shape< shape <_MN>, shape <SFVecSize, _1>>,
-                                Stride< Stride<_1>, shape <_0, _MN> >;
+  using SfMNMajorAtom = Layout< Shape< _1, Int<SFVecSize>>,
+                                Stride<_1,             _0>>;
   using SfAtom    = SfMNMajorAtom;
 };
 ```
@@ -88,15 +88,15 @@ struct Xe4BlockScaledConfig {
   CUTE_HOST_DEVICE static constexpr auto deduce_layoutSFA();
   CUTE_HOST_DEVICE static constexpr auto deduce_layoutSFB();
   
-  template < class ProblemShape, class LayoutSFA = LayoutSF>
+  template < class ProblemShape>
   CUTE_HOST_DEVICE
   static constexpr auto
-  tile_atom_to_shape_SFA(ProblemShape problem_shape, LayoutSFA layout_sfa = LayoutSFA{});
+  tile_atom_to_shape_SFA(ProblemShape problem_shape);
 
-  template <class ProblemShape, class LayoutSFB = LayoutSF>
+  template <class ProblemShape>
   CUTE_HOST_DEVICE
   static constexpr auto
-  tile_atom_to_shape_SFB(ProblemShape problem_shape, LayoutSFB layout_sfb = LayoutSFB{});
+  tile_atom_to_shape_SFB(ProblemShape problem_shape);
   
   template<class TiledMma, class TileShape_MNK>
   CUTE_HOST_DEVICE
@@ -110,6 +110,22 @@ struct Xe4BlockScaledConfig {
 } 
 ```
 
+`deduce_layoutSFA` and `deduce_layoutSFB` are used to deduce the layout for meta tensors in global address space before concrete tensor information is presented to Atom construction APIs.
+
+They return
+
+- `layout_sfa:	((_1,0),(_16,0),(_1,0)):((_1,_1),(_0,0),(_0,0))`
+- `layout_sfb:	((_1,0),(_16,0),(_1,0)):((_1,_1),(_0,0),(_0,0))`
+
+`deduce_smem_layoutSFA` and `deduce_smem_layoutSFB` are used for deducing Atom shared memory layouts from `TiledMma` and `TileShape_MNK`. But this layout is not final layout for SF in shared memory, usually user has to add repeat count and other information for further functionalities.
+
+A sample return should include shared memory block layout, tiling layout, in accordance to the relationship between `TiledMma` and `TileShape_MNK`:
+
+- `sfA_layout:	(((_1,_128),(_16,_4)),_1,(_1,_4)):(((_1,_1),(_0,_128)),_0,(_0,_512))`
+- `sfB_layout:	(((_1,_256),(_16,_4)),_1,(_1,_4)):(((_1,_1),(_0,_256)),_0,(_0,_1024))`
+
+`tile_atom_to_shape_SFA` and `tile_atom_to_shape_SFB` are used to create global memory layout from concrete scaling factor tensor. The type of return must agree with `deduce_layoutSF*` APIs
+
 ### Layout Instance
 
 In order to facilitate design of aforementioned API, list a specific layout instance for a hypothetical block scaled GEMM.
@@ -117,8 +133,7 @@ In order to facilitate design of aforementioned API, list a specific layout inst
 ####Basic MMA Tile
 - `MmaTileShape`: `(_128, _256, _256)`
 - `TiledShape_MNK`: `MmaTileShape`
-- `ClusterShape`: `(_2, _2, _1)`
-- `ClusterShape_MNK`: `ClusterShape`
+
 
 #### TiledMMA Atom
 TiledMMA contains shapes derived from MMA Tile
@@ -129,17 +144,16 @@ TiledMMA contains shapes derived from MMA Tile
 
 Choose Shared Local Memory layout for A/B as `(_8,_256):(_256,_1)` which holds TiledMMA horizontally.
 
-- `mma_shape_A:`	`((_128,_64),_1,_4)`
-- `mma_shape_B:` `((_256,_64),_1,_4)`
-- `sA_layout:` `smem_ptr[4b](unset) o ((_128,_64),_1,_4):((_256,_1),_0,_64)`
-- `sB_layout:` `smem_ptr[4b](unset) o ((_256,_64),_1,_4):((_256,_1),_0,_64)`
-- `sfA_layout:` `smem_ptr[8b](unset) o (_128, _16):(_1, _128)`
-- `sfB_layout:` `smem_ptr[8b](unset) o (_256, _16):(_1, _256)`
+- `mma_shape_A:	((_128,_64),_1,_4,_4)`
+- `mma_shape_B:	((_256,_64),_1,_4,_4)`
+- `sA_layout:` `((_128,_64),_1,_4,(_1,_4)):((_256,_1),_0,_64,(_0,_32768))`
+- `sB_layout:` `((_256,_64),_1,_4,(_1,_4)):((_256,_1),_0,_64,(_0,_65536))`
+- `sfA_layout:` `(((_1,_128),(_16,_4)),_1,(_1,_4),_4):(((_1,_1),(_0,_128)),_0,(_0,_512),_2048)`
+- `sfB_layout:` `(((_1,_256),(_16,_4)),_1,(_1,_4),_4):(((_1,_1),(_0,_256)),_0,(_0,_1024),_4096)`
 
-Alternatively if we follow sm100 convention, we should have:
+`mma_shape_*` suggests that block of `TiledMMA`, `(_128, _64)` for example, uses `K=64` while outer tiler `(_1, _4, _4)` runs 4 unrolled in K direction and uses quadruple buffers.
 
-- `sfA_layout:` `smem_ptr[16b](unset) o ((_1, 128), _1, (_1, _16)):(_0, _1), _0, (_1, _128)`
-- `sfB_layout:` `smem_ptr[16b](unset) o ((_1, 256), _1, (_1, _16)):(_0, _1), _0, (_1, _256)`
+`s*_Layout` is for shared local memory layouts. Similar to `mma_shape_*`, part of them are block shapes, part of them are for iterations and buffer numbers. Notice that scaling factor layout follows master tensor layout with column major, as well as a `_16` in block size with zero stride.
 
 Depends on which flavours fit the already have APIs. Be minded all shared local memory layout shall be aligned to equal to or larger than **512 bytes**.
 
@@ -289,16 +303,32 @@ Caveat: Also, the data type for invoking APIs for creating SF Copy Atoms tends t
 
 Continue from MMA layout example we follow concrete example. All four layouts will be the input to ``make_adma_atom_*_xe4``
 
+```
+TiledMMA
+  ThrLayoutVMNK:  (_1,_1,_1,_1):(_0,_0,_0,_0)
+  PermutationMNK: (_,_,_)
+MMA_Atom
+  ThrID:      _1:_0
+  Shape_MNK:  (_128,_256,_64)
+  LayoutA_TV: (_1,(_128,_64)):(_0,(_1,_128))
+  LayoutB_TV: (_1,(_256,_64)):(_0,(_1,_256))
+  LayoutC_TV: (_1,(_128,_256)):(_0,(_1,_128))
+```
 - `mma_tiler:` `(_128,_256,_256)`
-- `sA_layout:` `smem_ptr[4b](unset) o ((_128,_64),_1,_4):((_256,_1),_0,_64)`
-- `sB_layout:` `smem_ptr[4b](unset) o ((_256,_64),_1,_4):((_256,_1),_0,_64)`
-- `sfA_layout:` `smem_ptr[8b](unset) o (_128, _16):(_1, _128)`
-- `sfB_layout:` `smem_ptr[8b](unset) o (_256, _16):(_1, _256)`
+- `sA_layout:` `((_128,_64),_1,_4,(_1,_4)):((_256,_1),_0,_64,(_0,_32768))`
+- `sB_layout:` `((_256,_64),_1,_4,(_1,_4)):((_256,_1),_0,_64,(_0,_65536))`
+- `sfA_layout:` `(((_1,_128),(_16,_4)),_1,(_1,_4),_4):(((_1,_1),(_0,_128)),_0,(_0,_512),_2048)`
+- `sfB_layout:` `(((_1,_256),(_16,_4)),_1,(_1,_4),_4):(((_1,_1),(_0,_256)),_0,(_0,_1024),_4096)`
 
-Also, Matrix from global will have simple row major layout
+Also, Matrix from global memory will have simple row major layout with runtime dimension.
 
 - `A:` `(512, 2048) : (2048, 1)`
 - `B:` `(1024, 2048) : (2048, 1)`
+
+Scaling factor layout from API `tile_atom_to_shape_SF*` with global memory tensors should be:
+
+- `layout_SFA:	((_1,512),(_16,128),(_1,1)):((_1,_1),(_0,512),(_0,65536))`
+- `layout_SFB:	((_1,1024),(_16,128),(_1,1)):((_1,_1),(_0,1024),(_0,131072))`
 
 The already have API for sm90/sm100 will generate correct global shape and shared memory box size.
 
