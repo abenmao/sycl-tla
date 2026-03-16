@@ -103,8 +103,12 @@ jobs:
           " || true
 
           # Layer 2: Full remote build (protected by 30-min step timeout)
+          # Clean up any leftover ci-build dir for this BUILD_ID.
+          # Docker may leave root-owned artifacts (e.g. mount stubs)
+          # that rsync (running as gta) cannot overwrite.
           ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} \
-            "mkdir -p /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source"
+            "sudo -n rm -rf /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID} && \\
+             mkdir -p /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source"
           rsync -a --delete --exclude='.git' -e "ssh ${SSH_OPTS}" \
             ${{ github.workspace }}/ \
             ${BUILD_SERVER_USER}@${BUILD_SERVER}:/home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source/
