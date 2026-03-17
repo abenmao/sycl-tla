@@ -87,6 +87,13 @@ if (CUTLASS_ENABLE_SYCL)
     )
 
     cutlass_example_add_executable(
+      cute_tutorial_xe_gemm_quantization
+      xe_gemm_quantization.cpp
+      TEST_COMMAND_OPTIONS
+      BMG_ARGS
+    )
+
+    cutlass_example_add_executable(
       cute_tutorial_xe_gemm_subgroup_specialization_slm
       xe_gemm_subgroup_specialization_slm.cpp
       TEST_COMMAND_OPTIONS
