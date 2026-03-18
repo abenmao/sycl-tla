@@ -21,6 +21,7 @@ CUTLASS defines classes for the following numeric data types.
 * `float_e5m2_t`: 8bits signed float (exponent: 5 bits, mantissa: 2 bits)
 * `float_e4m3_t`: 8bits signed float (exponent: 4 bits, mantissa: 3 bits)
 * `float_ue4m3_t`: 8bits unsigned float (exponent: 4 bits, mantissa: 3 bits)
+* `float_ue5m3_t`: 8bits unsigned float (exponent: 5 bits, mantissa: 3 bits)
 * `float_ue8m0_t`: 8bits unsigned float (exponent: 8 bits, mantissa: 0 bits)
 * `float_e3m2_t`: 6bits signed float (exponent: 3 bits, mantissa: 2 bits)
 * `float_e2m3_t`: 6bits signed float (exponent: 2 bits, mantissa: 3 bits)
@@ -32,6 +33,7 @@ CUTLASS defines classes for the following numeric data types.
 * `mx_float6_t<float_e3m2_t>` or `mx_float6_t<float_e2m3_t>` : Block scaled data type with fp6 element type and float_ue8m0_t scale factor and vector size of 32.
 * `mx_float4_t<float_e2m1_t>` : Block scaled data type with signed e2m1 element type and float_ue8m0_t scale factor and vector size of 32.
 * `nv_float4_t<float_e2m1_t>` : Block scaled data type with signed e2m1 element type and float_ue4m3_t scale factor and vector size of 16.
+* `nv_float4_plus_t<float_e2m1_t>` : Block scaled data type with signed e2m1 element type and float_ue5m3_t scale factor (NVFP4+) and vector size of 16 and 32.
 * `complex<T>`: defines complex-valued data type based on the supplied real-valued numeric type
 
 Numeric types in CUTLASS may be used in both host and device code and are intended to function

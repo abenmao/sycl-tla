@@ -462,7 +462,7 @@ struct MMA_Traits<
 template <class d_type, class a_type, class b_type, class c_type, class sf_type,
          int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
 struct MMA_Traits<
-  XE4_AMMA_FP4<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+  XE4_AMMA_FP4FP8<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
 {
   using ValTypeD = d_type;
   using ValTypeA = a_type;
@@ -506,7 +506,7 @@ struct MMA_Traits<
     auto desc_b = B[0];
     auto desc_c = C[0];
 
-    XE4_AMMA_FP4<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
+    XE4_AMMA_FP4FP8<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
       traits.ctrl_, desc_d, desc_a, desc_b, desc_c, traits.sf_a_, traits.sf_b_
     );
   }
@@ -526,19 +526,19 @@ struct MMA_Traits<
        uint32_t sf_a, uint32_t sf_b, Args... args) {
     if constexpr (Method == AMMA::Tracking::None) {
       return MMA_Traits<
-        XE4_AMMA_FP4<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+        XE4_AMMA_FP4FP8<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
         {ctrl, sf_a, sf_b};
     } else if constexpr (Method == AMMA::Tracking::D) {
       return MMA_Traits<
-        XE4_AMMA_FP4_D<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+        XE4_AMMA_FP4FP8_D<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
         {ctrl, sf_a, sf_b, args...};
     } else if constexpr (Method == AMMA::Tracking::AB) {
       return MMA_Traits<
-        XE4_AMMA_FP4_AB<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+        XE4_AMMA_FP4FP8_AB<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
         {ctrl, sf_a, sf_b, args...};
     } else if constexpr (Method == AMMA::Tracking::DAB) {
       return MMA_Traits<
-        XE4_AMMA_FP4_DAB<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+        XE4_AMMA_FP4FP8_DAB<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
         {ctrl, sf_a, sf_b, args...};
     } else {
       static_assert(dependent_false<AMMA::TrackMethod<Method>>,
@@ -553,7 +553,7 @@ struct MMA_Traits<
 template <class d_type, class a_type, class b_type, class c_type, class sf_type,
          int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
 struct MMA_Traits<
-  XE4_AMMA_FP4_D<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+  XE4_AMMA_FP4FP8_D<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
 {
   using ValTypeD = d_type;
   using ValTypeA = a_type;
@@ -598,7 +598,7 @@ struct MMA_Traits<
     auto desc_b = B[0];
     auto desc_c = C[0];
 
-    XE4_AMMA_FP4_D<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
+    XE4_AMMA_FP4FP8_D<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
       traits.ctrl_, desc_d, desc_a, desc_b, desc_c, traits.sf_a_, traits.sf_b_,
       traits.d_barrier_
     );
@@ -609,7 +609,7 @@ struct MMA_Traits<
 template <class d_type, class a_type, class b_type, class c_type, class sf_type,
          int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
 struct MMA_Traits<
-  XE4_AMMA_FP4_AB<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+  XE4_AMMA_FP4FP8_AB<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
 {
   using ValTypeD = d_type;
   using ValTypeA = a_type;
@@ -655,7 +655,7 @@ struct MMA_Traits<
     auto desc_b = B[0];
     auto desc_c = C[0];
 
-    XE4_AMMA_FP4_AB<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
+    XE4_AMMA_FP4FP8_AB<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
       traits.ctrl_, desc_d, desc_a, desc_b, desc_c, traits.sf_a_, traits.sf_b_,
       traits.a_barrier_, traits.b_barrier_
     );
@@ -666,7 +666,7 @@ struct MMA_Traits<
 template <class d_type, class a_type, class b_type, class c_type, class sf_type,
          int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
 struct MMA_Traits<
-  XE4_AMMA_FP4_DAB<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+  XE4_AMMA_FP4FP8_DAB<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
 {
   using ValTypeD = d_type;
   using ValTypeA = a_type;
@@ -713,7 +713,7 @@ struct MMA_Traits<
     auto desc_b = B[0];
     auto desc_c = C[0];
 
-    XE4_AMMA_FP4_DAB<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
+    XE4_AMMA_FP4FP8_DAB<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
       traits.ctrl_, desc_d, desc_a, desc_b, desc_c, traits.sf_a_, traits.sf_b_,
       traits.d_barrier_, traits.a_barrier_, traits.b_barrier_
     );

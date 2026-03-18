@@ -97,6 +97,7 @@ class DataType(enum.Enum):
   e2m1 = enum_auto()     
   ue8m0 = enum_auto()    
   ue4m3 = enum_auto()    
+  ue5m3 = enum_auto()    
   f16 = enum_auto()
   bf16 = enum_auto()
   f32 = enum_auto()
@@ -163,6 +164,7 @@ DataTypeNames = {
   DataType.e2m1: 'e2m1',       
   DataType.ue8m0: 'ue8m0',     
   DataType.ue4m3: 'ue4m3',     
+  DataType.ue5m3: 'ue5m3',     
   DataType.f16: "f16",
   DataType.bf16: "bf16",
   DataType.f32: "f32",
@@ -212,6 +214,7 @@ DataTypeTag = {
   DataType.e2m1: 'cutlass::float_e2m1_t',                       
   DataType.ue8m0: 'cutlass::float_ue8m0_t',                     
   DataType.ue4m3: 'cutlass::float_ue4m3_t',                     
+  DataType.ue5m3: 'cutlass::float_ue5m3_t',                     
   DataType.f16: "cutlass::half_t",
   DataType.bf16: "cutlass::bfloat16_t",
   DataType.f32: "float",
@@ -261,6 +264,7 @@ DataTypeSize = {
   DataType.e2m1: 4,
   DataType.ue8m0: 8,
   DataType.ue4m3: 8,
+  DataType.ue5m3: 8,
   DataType.f16: 16,
   DataType.bf16: 16,
   DataType.f32: 32,

@@ -265,7 +265,7 @@ struct XE4_AMMA_DAB_CLUSTER {
 // Block-scaled AMMA, barrier tracking: D only
 template <class d_type, class a_type, class b_type, class c_type, class sf_type,
          int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
-struct XE4_AMMA_FP4_D {
+struct XE4_AMMA_FP4FP8_D {
   using DRegisters   = void;
   using ARegisters   = void;
   using BRegisters   = void;
@@ -299,7 +299,7 @@ struct XE4_AMMA_FP4_D {
 // Block-scaled AMMA, barrier tracking: A and B
 template <class d_type, class a_type, class b_type, class c_type, class sf_type,
          int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
-struct XE4_AMMA_FP4_AB {
+struct XE4_AMMA_FP4FP8_AB {
   using DRegisters   = void;
   using ARegisters   = void;
   using BRegisters   = void;
@@ -333,7 +333,7 @@ struct XE4_AMMA_FP4_AB {
 // Block-scaled AMMA, barrier tracking: D, A, and B
 template <class d_type, class a_type, class b_type, class c_type, class sf_type,
          int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
-struct XE4_AMMA_FP4_DAB {
+struct XE4_AMMA_FP4FP8_DAB {
   using DRegisters   = void;
   using ARegisters   = void;
   using BRegisters   = void;
@@ -367,7 +367,7 @@ struct XE4_AMMA_FP4_DAB {
 // Block-scaled AMMA, no barrier tracking
 template <class d_type, class a_type, class b_type, class c_type, class sf_type,
          int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
-struct XE4_AMMA_FP4 {
+struct XE4_AMMA_FP4FP8 {
   using DRegisters   = void;
   using ARegisters   = void;
   using BRegisters   = void;

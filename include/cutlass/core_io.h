@@ -153,6 +153,11 @@ std::ostream & operator<<(std::ostream &out, float_ue4m3_t const &x) {
   return out << float(x);
 }
 
+inline
+std::ostream & operator<<(std::ostream &out, float_ue5m3_t const &x) {
+  return out << float(x);
+}
+
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 

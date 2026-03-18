@@ -116,6 +116,8 @@ enum class NumericTypeID {
   kCU16,
   kCU32,
   kCU64,
+  // New IDs appended at end to preserve existing numeric values
+  kFUE5M3,
   kInvalid
 };
 

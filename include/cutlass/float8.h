@@ -1145,6 +1145,72 @@ struct sizeof_bits<float_ue4m3_t> {
 
 ///////////////////////////////////////////////////////////////
 ///
+/// floating-point 8 type : UE5M3
+///
+///////////////////////////////////////////////////////////////
+// UE5M3:
+//   5 Exponent bits, 3 Mantissa bits (unsigned)
+//   Range: [0:114688]
+//   has_inf: false
+//   has_NaN: true
+//   has_denorm: true
+//   Exponent bias (exp_bias): 15
+//   Used as scale factor type for NVFP4+ block-scaled format.
+struct float_ue5m3_t : public float_exmy_base<cutlass::detail::FpEncoding::UE5M3, float_ue5m3_t> {
+  using Base = float_exmy_base<cutlass::detail::FpEncoding::UE5M3, float_ue5m3_t>;
+
+  float_ue5m3_t() = default;
+
+  CUTLASS_HOST_DEVICE
+  float_ue5m3_t convert_from_float(float const &flt) const {
+    Base::FP32BitRepresentation::Storage fp32_bits = Base::FP32BitRepresentation::to_bits(flt);
+    return bitcast(BitRepresentation::convert_from(fp32_bits, Base::FP32BitRepresentation{}));
+  }
+
+  CUTLASS_HOST_DEVICE
+  float convert_to_float(float_ue5m3_t const &x) const {
+    Base::FP32BitRepresentation::Storage fp32_bits;
+    fp32_bits = Base::BitRepresentation::convert_to(x.storage, Base::FP32BitRepresentation{});
+    return detail::copy_bits<Base::FP32BitRepresentation::Storage, float>(fp32_bits);
+  }
+
+  CUTLASS_HOST_DEVICE
+  explicit float_ue5m3_t(double x) : Base(float(x)) {
+  }
+
+  CUTLASS_HOST_DEVICE
+  explicit float_ue5m3_t(float x) : Base(x) {
+  }
+
+  CUTLASS_HOST_DEVICE
+  explicit float_ue5m3_t(int x) : Base(x) {
+  }
+
+  CUTLASS_HOST_DEVICE
+  explicit float_ue5m3_t(unsigned x) : Base(x) {
+  }
+
+  CUTLASS_HOST_DEVICE
+  float_ue5m3_t(Base x) : Base(x) {
+  }
+
+  CUTLASS_HOST_DEVICE
+  friend bool isnan(float_ue5m3_t const& x) {
+    return x.storage == uint8_t(0xff);
+  }
+
+};
+
+/// Defines the size of an element in bits - specialized for float_ue5m3_t
+template <>
+struct sizeof_bits<float_ue5m3_t> {
+  static constexpr int value = sizeof_bits<float_exmy_base<cutlass::detail::FpEncoding::UE5M3, float_ue5m3_t>>::value;
+};
+
+
+
+///////////////////////////////////////////////////////////////
+///
 /// floating-point 8 type : UE8M0
 ///
 ///////////////////////////////////////////////////////////////
@@ -1467,6 +1533,21 @@ public:
   static type denorm_min() { return type::bitcast(0x01); }
 };
 
+/// Numeric limits for float_ue5m3_t
+template <>
+struct numeric_limits<cutlass::float_ue5m3_t> :
+    public float8_exmy_numeric_limits<cutlass::float_ue5m3_t> {
+  static bool const has_infinity = false;
+  static bool const is_signed = false;
+
+  /// Minimum finite value
+  static cutlass::float_ue5m3_t lowest() { return cutlass::float_ue5m3_t::bitcast(0xfe); }
+
+  /// Machine epsilon: difference between 1.0 and the next representable value (2^-3 = 0.125)
+  /// 1.0 = 0x78 (exp=15,mant=000), next = 0x79 (1.125), epsilon = 0.125 = 0x60 (exp=12,mant=000)
+  static cutlass::float_ue5m3_t epsilon() { return cutlass::float_ue5m3_t::bitcast(0x60); }
+};
+
 /// Numeric limits for float_ue8m0_t
 template <>
 struct numeric_limits<cutlass::float_ue8m0_t> :
@@ -1623,6 +1704,21 @@ public:
   static type denorm_min() { return type::bitcast(0x01); }
 };
 
+/// Numeric limits for float_ue5m3_t
+template <>
+struct numeric_limits<cutlass::float_ue5m3_t> :
+    public float8_exmy_numeric_limits<cutlass::float_ue5m3_t> {
+  static bool const has_infinity = false;
+  static bool const is_signed = false;
+
+  /// Minimum finite value
+  static cutlass::float_ue5m3_t lowest() { return cutlass::float_ue5m3_t::bitcast(0xfe); }
+
+  /// Machine epsilon: difference between 1.0 and the next representable value (2^-3 = 0.125)
+  /// 1.0 = 0x78 (exp=15,mant=000), next = 0x79 (1.125), epsilon = 0.125 = 0x60 (exp=12,mant=000)
+  static cutlass::float_ue5m3_t epsilon() { return cutlass::float_ue5m3_t::bitcast(0x60); }
+};
+
 /// Numeric limits for float_ue8m0_t
 template <>
 struct numeric_limits<cutlass::float_ue8m0_t> :
@@ -1667,6 +1763,17 @@ cutlass::float_ue4m3_t operator ""_fue4m3(long double x) {
 CUTLASS_HOST_DEVICE
 cutlass::float_ue4m3_t operator ""_fue4m3(unsigned long long int x) {
   return cutlass::float_ue4m3_t(int(x));
+}
+
+
+CUTLASS_HOST_DEVICE
+cutlass::float_ue5m3_t operator ""_fue5m3(long double x) {
+  return cutlass::float_ue5m3_t(float(x));
+}
+
+CUTLASS_HOST_DEVICE
+cutlass::float_ue5m3_t operator ""_fue5m3(unsigned long long int x) {
+  return cutlass::float_ue5m3_t(int(x));
 }
 
 

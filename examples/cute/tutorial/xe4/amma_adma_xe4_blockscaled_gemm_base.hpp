@@ -29,31 +29,38 @@
  *
  **************************************************************************************************/
 
+#pragma once
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// XE4 NVFP4 Block-Scaled GEMM with AMMA + ADMA Pipelining
+// XE4 Block-Scaled GEMM Base — Parameterized Test Infrastructure
 //
-// D = (A * diag(SFA)) x (B * diag(SFB))
+// This header provides a reusable, config-driven test harness for block-scaled
+// GEMM on XE4 using AMMA + ADMA pipelining.
 //
-// Data types:
-//   A, B  : cutlass::float_e2m1_t  (4-bit NVFP4)
-//   SFA, SFB : cutlass::float_ue4m3_t (8-bit e4m3 block scale factors)
-//   C, D  : float (FP32 accumulator)
+// Driver files supply a Config struct specifying:
+//   - Element types (A, B, C, D, SF)
+//   - Scale factor block size (SFVecSize)
+//   - Tile shape (TileShape_MNK)
+//   - Pipeline stages
+//   - MMA atom (TiledMma)
+//   - MMAControl BlockScaleType encoding
+//   - Default problem shape and transpositions
 //
-// Block scaling: every SFVecSize=16 consecutive K-elements share one scale factor.
-//
-// Architecture (Warp-Specialized):
-//   Sub-group 0 (ADMA): loads A, B, SFA, SFB into SLM; stores C to GMEM
-//   Sub-group 1 (AMMA): executes block-scaled MMA with scale factor descriptors
+// Entry point: run_blockscaled_gemm<Config>(m, n, k, transA, transB)
+// Convenience:  run_blockscaled_gemm_defaults<Config>()  — uses Config defaults
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <cassert>
 #include <algorithm>
 #include <iostream>
 #include <vector>
+#include <random>
+#include <type_traits>
 
 #include <sycl/sycl.hpp>
 #include <cute/tensor.hpp>
@@ -72,14 +79,17 @@
 #include <cute/layout.hpp>
 #include <cute/atom/mma_atom.hpp>
 
-#include <cutlass/float_subbyte.h>            
+#include <cutlass/float_subbyte.h>
 
 #include "../../../common/sycl_cute_common.hpp"
 #include "../../../xe4/utils/validation.hpp"
+#include "cutlass/detail/xe4_blockscaled_layout.hpp"
+
+namespace xe4_blockscaled_gemm {
 
 using namespace cute;
-
 using sycl::ext::oneapi::this_work_item::get_nd_item;
+using cutlass::detail::Xe4BlockScaledConfig;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -87,202 +97,102 @@ using sycl::ext::oneapi::this_work_item::get_nd_item;
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-constexpr static size_t SmemAlignment = 512;   // Minimum 512-byte alignment recommended by HW spec
-constexpr static int SFVecSize = 16;           // NVFP4: one scale factor per 16 K-elements
+constexpr static size_t SmemAlignment = 512;  // Minimum 512-byte alignment recommended by HW spec
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// NVFP4 Data Type Definitions
+// SMEM tensor construction helper — sub-byte vs regular pointer dispatch
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-// NVFP4 data types:
-// The raw data element is float_e2m1_t (4-bit, sub-byte) — used for ADMA and SMEM.
-
-// ADMA infrastructure requires the raw sub-byte type (float_e2m1_t), not the
-// nv_float4_t wrapper, because rd_type / sizeof_bits dispatch needs the raw type.
-using ElementA    = cutlass::float_e2m1_t;   // 4-bit raw data element for A
-using ElementB    = cutlass::float_e2m1_t;   // 4-bit raw data element for B
-using ElementSF   = cutlass::float_ue4m3_t;     // 8-bit scale factor type (e4m3)
-using ElementC    = float;                       // Accumulator type
-using ElementD    = float;                       // Output type
-
-
-///////////////////////////////////////////////////////////////////////////////////////////////////
-//
-// Xe4BlockScaledConfig: Scale Factor Layout Deduction
-//
-// Derives both global memory and SMEM layouts for NVFP4 scale factor tensors.
-//
-///////////////////////////////////////////////////////////////////////////////////////////////////
-
-template<int SFVecSize_>
-struct Xe4BlockScaledBasicChunk {
-  using Blk_MN = _1;
-  using Blk_SF = _1;
-  using SfMNMajorAtom = Layout<Shape<_1, Int<SFVecSize_>>,
-                               Stride<_1, _0>>;
-  using SfAtom = SfMNMajorAtom;
-};
-
-template<int SFVecSize_>
-struct Xe4BlockScaledConfig {
-  static constexpr int SFVecSize = SFVecSize_;
-  using Xe4BlkScaledChunk = Xe4BlockScaledBasicChunk<SFVecSize>;
-  using Blk_MN = typename Xe4BlkScaledChunk::Blk_MN;
-  using Blk_SF = typename Xe4BlkScaledChunk::Blk_SF;
-  using SfAtom = typename Xe4BlkScaledChunk::SfAtom;
-
-  using LayoutSF = decltype(blocked_product(SfAtom{}, make_layout(make_shape(int32_t(0), int32_t(0), int32_t(0)),
-                                                                  make_stride(_1{}, int32_t(0), int32_t(0)))));
-
-  CUTE_HOST_DEVICE static constexpr auto deduce_layoutSFA() { return LayoutSF{}; }
-  CUTE_HOST_DEVICE static constexpr auto deduce_layoutSFB() { return LayoutSF{}; }
-
-  // Global memory layout for SFA: (M, K) with SF atom broadcasting along K
-  template<class ProblemShape>
-  CUTE_HOST_DEVICE static constexpr auto
-  tile_atom_to_shape_SFA(ProblemShape problem_shape) {
-    if constexpr (rank(ProblemShape{}) == 3) {
-      auto [M, N, K] = problem_shape;
-      return tile_to_shape(SfAtom{}, make_shape(M, K), Step<_1, _2>{});
-    } else {
-      auto [M, N, K, L] = problem_shape;
-      return tile_to_shape(SfAtom{}, make_shape(M, K, L), Step<_1, _2, _3>{});
-    }
+template <typename T, typename Storage, typename Layout>
+auto make_data_smem_tensor(Storage& storage, Layout layout) {
+  if constexpr (cute::sizeof_bits_v<T> < 8) {
+    return make_tensor(make_smem_ptr(subbyte_iterator<T>(storage.data())), layout);
+  } else {
+    // Cast from uint8_t* to T* so the SMEM pointer carries the correct element
+    // type.  Without this, ADMA copy deduces conflicting DataType between the
+    // typed GMEM pointer (e.g. float_e4m3_t*) and the raw uint8_t* SLM pointer.
+    return make_tensor(make_smem_ptr(reinterpret_cast<T*>(storage.begin())), layout);
   }
-
-  // Global memory layout for SFB: (N, K) with SF atom broadcasting along K
-  template<class ProblemShape>
-  CUTE_HOST_DEVICE static constexpr auto
-  tile_atom_to_shape_SFB(ProblemShape problem_shape) {
-    if constexpr (rank(ProblemShape{}) == 3) {
-      auto [M, N, K] = problem_shape;
-      return tile_to_shape(SfAtom{}, make_shape(N, K), Step<_1, _2>{});
-    } else {
-      auto [M, N, K, L] = problem_shape;
-      return tile_to_shape(SfAtom{}, make_shape(N, K, L), Step<_1, _2, _3>{});
-    }
-  }
-
-  // Deduce SMEM layout for SFA from TiledMma and TileShape_MNK.
-  // Returns a layout structured as: ((mnBasicBlock, kBasicBlock), _1, (blk_M, blk_K))
-  // This matches the hardware's SF consumption pattern for block-scaled AMMA.
-  template<class TiledMma, class TileShape_MNK>
-  CUTE_HOST_DEVICE static constexpr auto
-  deduce_smem_layoutSFA(TiledMma tiled_mma, TileShape_MNK tileshape_mnk) {
-    constexpr int MMA_K = size<2>(typename TiledMma::Shape_MNK{});
-    constexpr int MMA_NSF = MMA_K / SFVecSize;
-    constexpr int M = size<0>(typename TiledMma::Shape_MNK{});
-
-    using Blk_MN    = typename Xe4BlkScaledChunk::Blk_MN;
-    using Blk_SF    = typename Xe4BlkScaledChunk::Blk_SF;
-    using Blk_Elems = decltype(Blk_MN{} * Blk_SF{});
-
-    using TL_VMNK = typename TiledMma::ThrLayoutVMNK;
-    constexpr TL_VMNK tl_vmnk{};
-    constexpr int MMA_M    = cute::size<0>(TileShape_MNK{}) / cute::size<0>(tl_vmnk);
-    constexpr int MMA_MBlk = MMA_M / Blk_MN{};
-
-    using mnBasicBlockShape  =  Shape<_1, Int<MMA_MBlk>>;
-    using mnBasicBlockStride = Stride<_1, _1>;
-    using kBasicBlockShape   =  Shape<Int<SFVecSize>, Int<MMA_NSF>>;
-    using kBasicBlockStride  = Stride<_0, Int<MMA_MBlk>>;
-
-    using mma_SFA_shape  = decltype(make_shape(mnBasicBlockShape{}, kBasicBlockShape{}));
-    using mma_SFA_stride = decltype(make_stride(mnBasicBlockStride{}, kBasicBlockStride{}));
-
-    using blk_Shape1   = Int<size<0>(TileShape_MNK{}) / M>;
-    using blk_Shape2   = Int<size<2>(TileShape_MNK{}) / MMA_K>;
-    using blk_Stride1  = Int<MMA_M / Blk_MN{} * Blk_Elems{} * MMA_NSF>;
-    using blk_Stride2  = Int<blk_Stride1{} / blk_Shape1{}>;
-
-    constexpr auto blk_Stride1_or_0 = [=] {
-      if constexpr (blk_Shape1{} == 1) return _0{};
-      else return blk_Stride1{};
-    };
-
-    using sSFA_shape  = decltype(make_shape(mma_SFA_shape{}, _1{}, make_shape(blk_Shape1{}, blk_Shape2{})));
-    using sSFA_stride = decltype(make_stride(mma_SFA_stride{}, _0{}, make_stride(blk_Stride1_or_0(), blk_Stride2{})));
-    using SmemLayoutAtomSFA = decltype(make_layout(sSFA_shape{}, sSFA_stride{}));
-    return SmemLayoutAtomSFA{};
-  }
-
-  // Deduce SMEM layout for SFB from TiledMma and TileShape_MNK.
-  template<class TiledMma, class TileShape_MNK>
-  CUTE_HOST_DEVICE static constexpr auto
-  deduce_smem_layoutSFB(TiledMma tiled_mma, TileShape_MNK tileshape_mnk) {
-    constexpr int MMA_K = size<2>(typename TiledMma::Shape_MNK{});
-    constexpr int MMA_NSF = MMA_K / SFVecSize;
-    constexpr int N = size<1>(typename TiledMma::Shape_MNK{});
-
-    using Blk_MN    = typename Xe4BlkScaledChunk::Blk_MN;
-    using Blk_SF    = typename Xe4BlkScaledChunk::Blk_SF;
-    using Blk_Elems = decltype(Blk_MN{} * Blk_SF{});
-
-    using TL_VMNK = typename TiledMma::ThrLayoutVMNK;
-    constexpr TL_VMNK tl_vmnk{};
-    constexpr int MMA_N    = cute::size<1>(TileShape_MNK{});
-    constexpr int MMA_NBlk = MMA_N / Blk_MN{};
-
-    using mnBasicBlockShape  =  Shape<_1, Int<MMA_NBlk>>;
-    using mnBasicBlockStride = Stride<_1, _1>;
-    using kBasicBlockShape   =  Shape<Int<SFVecSize>, Int<MMA_NSF>>;
-    using kBasicBlockStride  = Stride<_0, Int<MMA_NBlk>>;
-
-    using mma_SFB_shape  = decltype(make_shape(mnBasicBlockShape{}, kBasicBlockShape{}));
-    using mma_SFB_stride = decltype(make_stride(mnBasicBlockStride{}, kBasicBlockStride{}));
-
-    using blk_Shape1   = Int<size<1>(TileShape_MNK{}) / N>;
-    using blk_Shape2   = Int<size<2>(TileShape_MNK{}) / MMA_K>;
-    using blk_Stride1  = Int<MMA_N / Blk_MN{} * Blk_Elems{} * MMA_NSF>;
-    using blk_Stride2  = Int<blk_Stride1{} / blk_Shape1{}>;
-
-    constexpr auto blk_Stride1_or_0 = [=] {
-      if constexpr (blk_Shape1{} == 1) return _0{};
-      else return blk_Stride1{};
-    };
-
-    using sSFB_shape  = decltype(make_shape(mma_SFB_shape{}, _1{}, make_shape(blk_Shape1{}, blk_Shape2{})));
-    using sSFB_stride = decltype(make_stride(mma_SFB_stride{}, _0{}, make_stride(blk_Stride1_or_0(), blk_Stride2{})));
-    using SmemLayoutAtomSFB = decltype(make_layout(sSFB_shape{}, sSFB_stride{}));
-    return SmemLayoutAtomSFB{};
-  }
-};
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// NVFP4SharedStorage: SMEM buffers for A, B, C, SFA, SFB
+// BlockScaledSharedStorage: SMEM buffers for A, B, C, SFA, SFB
 //
+// Parameterized on element types and layout/size info.
 // All aligned >= 512 bytes per HW spec for block-scaled AMMA consumption.
 //
+// NOTE: For sub-byte types (e.g. float_e2m1_t, 4-bit), sizeof(T) == 1 byte
+// because the C++ storage type is uint8_t. cute::array<T,N> allocates N*sizeof(T)
+// bytes, so using cosize_v directly would over-allocate by 2×. Instead, we store
+// the packed byte count using ceiling division: (cosize * sizeof_bits<T> + 7) / 8
+// to guarantee enough bytes even for odd sub-byte element counts.
+//
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <class SmemLayoutA,     // (M, K, PIPE) — 4-bit float_e2m1_t data
-          class SmemLayoutB,     // (N, K, PIPE) — 4-bit float_e2m1_t data
-          class SmemLayoutC,     // (M, N)       — FP32 accumulator
-          class SmemLayoutSFA,   // (sf_block, _, (blk_M, blk_K), PIPE) — 8-bit SF for A
-          class SmemLayoutSFB>   // (sf_block, _, (blk_N, blk_K), PIPE) — 8-bit SF for B
-struct NVFP4SharedStorage : cute::aligned_struct<SmemAlignment, _0>
+template <class ElementA_,  class ElementB_,  class ElementC_,  class ElementSF_, class ElementAcc_,
+          class SmemLayoutA,  class SmemLayoutB,  class SmemLayoutC,
+          class SmemLayoutSFA, class SmemLayoutSFB,
+          bool SameCD = std::is_same_v<ElementC_, ElementAcc_>>
+struct BlockScaledSharedStorage;
+
+// Specialization when ElementC != ElementAcc (e.g. FP16/BF16 output, FP32 accumulator):
+// Separate smem_D buffer required because the last MMA iteration performs a dtype change,
+// writing FP16/BF16 to smem_D while simultaneously reading FP32 from smem_C.
+template <class ElementA_,  class ElementB_,  class ElementC_,  class ElementSF_, class ElementAcc_,
+          class SmemLayoutA,  class SmemLayoutB,  class SmemLayoutC,
+          class SmemLayoutSFA, class SmemLayoutSFB>
+struct BlockScaledSharedStorage<ElementA_, ElementB_, ElementC_, ElementSF_, ElementAcc_,
+                                SmemLayoutA, SmemLayoutB, SmemLayoutC,
+                                SmemLayoutSFA, SmemLayoutSFB, false>
+  : cute::aligned_struct<SmemAlignment, _0>
 {
-  // Data operand buffers (4-bit sub-byte elements)
-  //NOTE: ElementA/B are float_e2m1_t (4-bit), but sizeof(float_e2m1_t) == 1 byte
-  // because the C++ storage type is uint8_t.  cute::array<T,N> allocates N*sizeof(T)
-  // bytes, so using cosize_v directly would over-allocate by 2×.  Instead, we store
-  // the packed byte count: cosize * sizeof_bits<T> / 8.
   cute::array_aligned<uint8_t,
-     cute::cosize_v<SmemLayoutA> * cutlass::sizeof_bits<ElementA>::value / 8,
+     (cute::cosize_v<SmemLayoutA> * cutlass::sizeof_bits<ElementA_>::value + 7) / 8,
      SmemAlignment> smem_A;
- cute::array_aligned<uint8_t,
-     cute::cosize_v<SmemLayoutB> * cutlass::sizeof_bits<ElementB>::value / 8,
+  cute::array_aligned<uint8_t,
+     (cute::cosize_v<SmemLayoutB> * cutlass::sizeof_bits<ElementB_>::value + 7) / 8,
      SmemAlignment> smem_B;
 
-  // Accumulator / output buffer (FP32)
-  cute::array_aligned<ElementC,  cute::cosize_v<SmemLayoutC>,   SmemAlignment> smem_C;
+  // Accumulator buffer (FP32) — used by AMMA mainloop for D = A*B + C accumulation
+  cute::array_aligned<ElementAcc_,  cute::cosize_v<SmemLayoutC>,   SmemAlignment> smem_C;
 
-  // NVFP4 scale factor buffers (8-bit float_ue4m3_t)
-  cute::array_aligned<ElementSF, cute::cosize_v<SmemLayoutSFA>, SmemAlignment> smem_SFA;
-  cute::array_aligned<ElementSF, cute::cosize_v<SmemLayoutSFB>, SmemAlignment> smem_SFB;
+  // D output buffer (FP16/BF16) — separate from accumulator.
+  // On the last MMA iteration, the dtype change writes FP16/BF16 result here,
+  // while C (FP32 accumulator) is read from smem_C. Avoids C/D overlap error.
+  cute::array_aligned<ElementC_,  cute::cosize_v<SmemLayoutC>,   SmemAlignment> smem_D;
+
+  // Scale factor buffers
+  cute::array_aligned<ElementSF_, cute::cosize_v<SmemLayoutSFA>, SmemAlignment> smem_SFA;
+  cute::array_aligned<ElementSF_, cute::cosize_v<SmemLayoutSFB>, SmemAlignment> smem_SFB;
+};
+
+// Specialization when ElementC == ElementAcc (e.g. both FP32):
+// No dtype change needed on the last MMA iteration — D is written in-place to smem_C.
+// Saves one full C-sized SLM buffer and avoids the extra dtype-change write.
+template <class ElementA_,  class ElementB_,  class ElementC_,  class ElementSF_, class ElementAcc_,
+          class SmemLayoutA,  class SmemLayoutB,  class SmemLayoutC,
+          class SmemLayoutSFA, class SmemLayoutSFB>
+struct BlockScaledSharedStorage<ElementA_, ElementB_, ElementC_, ElementSF_, ElementAcc_,
+                                SmemLayoutA, SmemLayoutB, SmemLayoutC,
+                                SmemLayoutSFA, SmemLayoutSFB, true>
+  : cute::aligned_struct<SmemAlignment, _0>
+{
+  cute::array_aligned<uint8_t,
+     (cute::cosize_v<SmemLayoutA> * cutlass::sizeof_bits<ElementA_>::value + 7) / 8,
+     SmemAlignment> smem_A;
+  cute::array_aligned<uint8_t,
+     (cute::cosize_v<SmemLayoutB> * cutlass::sizeof_bits<ElementB_>::value + 7) / 8,
+     SmemAlignment> smem_B;
+
+  // Accumulator buffer (FP32) — also serves as D output buffer since types match.
+  cute::array_aligned<ElementAcc_,  cute::cosize_v<SmemLayoutC>,   SmemAlignment> smem_C;
+
+  // Scale factor buffers
+  cute::array_aligned<ElementSF_, cute::cosize_v<SmemLayoutSFA>, SmemAlignment> smem_SFA;
+  cute::array_aligned<ElementSF_, cute::cosize_v<SmemLayoutSFB>, SmemAlignment> smem_SFB;
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -292,12 +202,13 @@ struct NVFP4SharedStorage : cute::aligned_struct<SmemAlignment, _0>
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 inline void xe4_syncthreads() {
-  auto group = get_nd_item<1>().get_group();
+  auto group = get_nd_item<3>().get_group();
   sycl::group_barrier(group);
 }
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// Device Kernel: NVFP4 Block-Scaled GEMM with AMMA + ADMA Pipelining
+// Device Kernel: Block-Scaled GEMM with AMMA + ADMA Pipelining
 //
 // Barrier Allocation (6 abar slots: 0-5):
 //   abar 0 : load_a_abar  — Tracks A data load completion
@@ -314,7 +225,8 @@ inline void xe4_syncthreads() {
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <class ProblemShape, class CtaTiler, class TileShape,
+template <class Config,
+          class ProblemShape, class CtaTiler, class TileShape,
           class SmemLayoutA, class SmemLayoutC, class ADMA_A,
           class SmemLayoutB, class ADMA_B, class ADMA_C,
           class CStride,
@@ -323,15 +235,24 @@ template <class ProblemShape, class CtaTiler, class TileShape,
           class TiledMma,
           class Alpha, class Beta>
 void
-gemm_device_nvfp4(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape,
-                 ElementA const* A, SmemLayoutA sA_layout, SmemLayoutC sC_layout, ADMA_A adma_load_a,
-                 ElementB const* B, SmemLayoutB sB_layout, ADMA_B adma_load_b, ADMA_C adma_store_c,
-                 ElementC* C, CStride dC,
-                 ElementSF const* SFA, SmemLayoutSFA sSFA_layout, ADMA_SFA adma_load_sfa,
-                 ElementSF const* SFB, SmemLayoutSFB sSFB_layout, ADMA_SFB adma_load_sfb,
-                 Alpha alpha, Beta beta,
-                 sycl::nd_item<3> item)
+gemm_device_blockscaled(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape,
+                        typename Config::ElementA const* A,
+                        SmemLayoutA sA_layout, SmemLayoutC sC_layout, ADMA_A adma_load_a,
+                        typename Config::ElementB const* B,
+                        SmemLayoutB sB_layout, ADMA_B adma_load_b, ADMA_C adma_store_c,
+                        typename Config::ElementC* C, CStride dC,
+                        typename Config::ElementSF const* SFA, SmemLayoutSFA sSFA_layout, ADMA_SFA adma_load_sfa,
+                        typename Config::ElementSF const* SFB, SmemLayoutSFB sSFB_layout, ADMA_SFB adma_load_sfb,
+                        Alpha alpha, Beta beta,
+                        sycl::nd_item<3> item)
 {
+  using ElementA  = typename Config::ElementA;
+  using ElementB  = typename Config::ElementB;
+  using ElementC  = typename Config::ElementC;
+  using ElementSF = typename Config::ElementSF;
+  using ElementAcc = typename Config::ElementAcc;
+  static constexpr int SFVecSize = Config::SFVecSize;
+
   // Preconditions
   static_assert(rank(ProblemShape{}) == 3);
   static_assert(rank(CtaTiler{}) == 3);
@@ -360,18 +281,31 @@ gemm_device_nvfp4(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_sha
   adma_load_sfb.cache_.set_tensor_desc(tdesc_sfb);
 
   // ---- Allocate SLM and create SMEM tensors ----
-  using SharedStorageType = NVFP4SharedStorage<
+  using SharedStorageType = BlockScaledSharedStorage<
+    ElementA, ElementB, ElementC, ElementSF, ElementAcc,
     SmemLayoutA, SmemLayoutB, SmemLayoutC, SmemLayoutSFA, SmemLayoutSFB>;
 
   auto ptr = alloc_slm_buffer<uint8_t, sizeof(SharedStorageType)>(item.get_group());
   auto& smem = *reinterpret_cast<SharedStorageType*>(ptr);
 
   // SMEM tensors for data operands — flat 3-mode layout (BLK_MN, BLK_K, PIPE)
-  Tensor sA = make_tensor(make_smem_ptr(subbyte_iterator<ElementA>(smem.smem_A.data())), SmemLayoutA{});     // (BLK_M, BLK_K, PIPE)
-  Tensor sB = make_tensor(make_smem_ptr(subbyte_iterator<ElementB>(smem.smem_B.data())), SmemLayoutB{});     // (BLK_N, BLK_K, PIPE)
-  Tensor sC = make_tensor(make_smem_ptr(smem.smem_C.begin()), SmemLayoutC{});     // (BLK_M, BLK_N)
+  Tensor sA = make_data_smem_tensor<ElementA>(smem.smem_A, SmemLayoutA{});     // (BLK_M, BLK_K, PIPE)
+  Tensor sB = make_data_smem_tensor<ElementB>(smem.smem_B, SmemLayoutB{});     // (BLK_N, BLK_K, PIPE)
+  Tensor sC = make_tensor(make_smem_ptr(smem.smem_C.begin()), SmemLayoutC{});  // (BLK_M, BLK_N) — FP32 accumulator
 
-  // SMEM tensors for NVFP4 scale factors
+  // When ElementC == ElementAcc (both FP32), D aliases C — no separate buffer needed.
+  // When ElementC != ElementAcc (FP16/BF16 output), D uses a separate smem_D buffer
+  // because the last MMA iteration performs a dtype change, writing to D while reading C.
+  [[maybe_unused]] auto sD_tensor = [&]() {
+    if constexpr (std::is_same_v<ElementC, ElementAcc>) {
+      return make_tensor(make_smem_ptr(reinterpret_cast<ElementC*>(smem.smem_C.begin())), SmemLayoutC{});
+    } else {
+      return make_tensor(make_smem_ptr(smem.smem_D.begin()), SmemLayoutC{});
+    }
+  }();
+  auto sD = sD_tensor;  // (BLK_M, BLK_N)
+
+  // SMEM tensors for scale factors
   Tensor sSFA = make_tensor(make_smem_ptr(smem.smem_SFA.begin()), SmemLayoutSFA{}); // (sf_block, _, blk, PIPE)
   Tensor sSFB = make_tensor(make_smem_ptr(smem.smem_SFB.begin()), SmemLayoutSFB{}); // (sf_block, _, blk, PIPE)
 
@@ -443,13 +377,13 @@ gemm_device_nvfp4(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_sha
   uint32_t elect_one_thr = cute::elect_one_sync();
   uint32_t warp_idx      = get_sg_id();
 
-// ---- Allocate asynchronous barriers ----
-  auto load_a_abar  = allocate_abar<0, K_PIPE_MAX>();  // A data
+  // ---- Allocate asynchronous barriers ----
+  auto load_a_abar  = allocate_abar<0, K_PIPE_MAX>();   // A data
   auto load_sfa_abar = allocate_abar<1, K_PIPE_MAX>();  // SFA scale factors
-  auto load_b_abar  = allocate_abar<2, K_PIPE_MAX>();  // B data 
+  auto load_b_abar  = allocate_abar<2, K_PIPE_MAX>();   // B data
   auto load_sfb_abar = allocate_abar<3, K_PIPE_MAX>();  // SFB scale factors
-  auto mma_abar     = allocate_abar<4, K_PIPE_MAX>();  // MMA completion
-  auto store_c_abar = allocate_abar<5>();               // C store completion
+  auto mma_abar     = allocate_abar<4, K_PIPE_MAX>();   // MMA completion
+  auto store_c_abar = allocate_abar<5>();                // C store completion
 
   // Initialize barriers
   if (elect_one_thr && warp_idx == 0) {
@@ -483,6 +417,11 @@ gemm_device_nvfp4(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_sha
   Tensor tCrB = thr_mma.make_fragment_B(tCsB);
   Tensor tCrC = thr_mma.make_fragment_C(tCsC);
 
+  // D output partition — when ElementC == ElementAcc, D aliases C (same buffer).
+  // When ElementC != ElementAcc, D uses a separate SLM buffer for dtype-changed output.
+  Tensor tCsD = thr_mma.partition_C(sD);                                          // (MMA, MMA_M, MMA_N)
+  Tensor tCrD = thr_mma.make_fragment_C(tCsD);
+
   // Create SF descriptor tensors via MakeTensor<AMMA::smem_sf_desc>.
   // This builds a DescriptorIterator-based tensor from the rank-4 SF SMEM layout.
   // Indexing by pipeline stage yields a MatrixDescriptor (implicitly convertible to
@@ -493,6 +432,7 @@ gemm_device_nvfp4(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_sha
   // Clear accumulators in SLM
   clear(tCsC);
   xe4_syncthreads();
+
   // ==================================================================
   // Warp-Specialized Pipeline: ADMA Producer + AMMA Consumer
   //
@@ -515,15 +455,11 @@ gemm_device_nvfp4(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_sha
   //   computing D = A*B. After the first AMMA writes D to SLM, subsequent iterations
   //   use NullC=0 to read AMMA-written SLM and accumulate: D = A*B + C.
   //
-  //   IMPORTANT: BLK_K must equal MMA_K (=64) so K_unroll=1. With K_unroll>1,
-  //   NullC=1 applies to ALL fma() calls within one cute::gemm, causing each call
-  //   to overwrite D instead of accumulating (losing all but the last partial sum).
-  //
-  // A_BlockScaleType = 5 (ue4m3k16), B_BlockScaleType = 5 (ue4m3k16)
+  //   BlockScaleType from Config.
   MMAControl mma_ctrl{};
   mma_ctrl.NullC = 1;               // First iteration: bypass C read (D = A*B)
-  mma_ctrl.A_BlockScaleType = 5;    // ue4m3 with VecSize=16
-  mma_ctrl.B_BlockScaleType = 5;    // ue4m3 with VecSize=16
+  mma_ctrl.A_BlockScaleType = Config::BlockScaleType;
+  mma_ctrl.B_BlockScaleType = Config::BlockScaleType;
 
   // ==================================================================
   // Warp 0: ADMA Producer — Load A, B, SFA, SFB into SLM
@@ -542,13 +478,13 @@ gemm_device_nvfp4(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_sha
         xe4_set_barrier_transaction_bytes(load_sfa_abar[pipe], dma_bytes_SFA);
         xe4_set_barrier_transaction_bytes(load_sfb_abar[pipe], dma_bytes_SFB);
 
-        // Load A data 
-        copy(adma_load_a.with(&load_a_abar[pipe]),     tAgA(_, k_tile),     tAsA(_, pipe));
+        // Load A data
+        copy(adma_load_a.with(&load_a_abar[pipe]),       tAgA(_, k_tile),     tAsA(_, pipe));
         // Load A's SFA scale factors
         copy(adma_load_sfa.with(&load_sfa_abar[pipe]),   tSFAgSFA(_, k_tile), tSFAsSFA(_, pipe));
 
-        // Load B data 
-        copy(adma_load_b.with(&load_b_abar[pipe]),     tBgB(_, k_tile),     tBsB(_, pipe));
+        // Load B data
+        copy(adma_load_b.with(&load_b_abar[pipe]),       tBgB(_, k_tile),     tBsB(_, pipe));
         // Load B's SFB scale factors
         copy(adma_load_sfb.with(&load_sfb_abar[pipe]),   tSFBgSFB(_, k_tile), tSFBsSFB(_, pipe));
         ++k_tile;
@@ -568,9 +504,9 @@ gemm_device_nvfp4(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_sha
         xe4_set_barrier_transaction_bytes(load_sfa_abar[pipe], dma_bytes_SFA);
         xe4_set_barrier_transaction_bytes(load_sfb_abar[pipe], dma_bytes_SFB);
 
-        copy(adma_load_a.with(&load_a_abar[pipe]),     tAgA(_, k_tile),     tAsA(_, pipe));
+        copy(adma_load_a.with(&load_a_abar[pipe]),       tAgA(_, k_tile),     tAsA(_, pipe));
         copy(adma_load_sfa.with(&load_sfa_abar[pipe]),   tSFAgSFA(_, k_tile), tSFAsSFA(_, pipe));
-        copy(adma_load_b.with(&load_b_abar[pipe]),     tBgB(_, k_tile),     tBsB(_, pipe));
+        copy(adma_load_b.with(&load_b_abar[pipe]),       tBgB(_, k_tile),     tBsB(_, pipe));
         copy(adma_load_sfb.with(&load_sfb_abar[pipe]),   tSFBgSFB(_, k_tile), tSFBsSFB(_, pipe));
 
         ++write_state;
@@ -596,10 +532,11 @@ gemm_device_nvfp4(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_sha
         xe4_wait_barrier(load_sfa_abar[read_pipe], read_state.phase());
         xe4_wait_barrier(load_sfb_abar[read_pipe], read_state.phase());
 
-        // Set MMA completion barrier and execute block-scaled GEMM.
-        // SF descriptors are obtained via tensor indexing into tCrSFA/tCrSFB.
+        // Set MMA completion barrier and execute block-scaled GEMM
+        // SF descriptors are obtained via tensor indexing into tCrSFA/tCrSFB
         xe4_set_barrier_transaction_bytes(mma_abar[read_pipe], 2);
         auto new_mma = mma.with(
+          ElementAcc{},
           AMMA::TrackMethod<AMMA::Tracking::AB>{},
           mma_ctrl,
           tCrSFA(0, 0, 0, read_pipe), tCrSFB(0, 0, 0, read_pipe),
@@ -620,12 +557,28 @@ gemm_device_nvfp4(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_sha
         xe4_wait_barrier(load_sfb_abar[read_pipe], read_state.phase());
 
         xe4_set_barrier_transaction_bytes(mma_abar[read_pipe], 1);
-        auto new_mma = mma.with(
-          AMMA::TrackMethod<AMMA::Tracking::D>{},
-          mma_ctrl,
-          tCrSFA(0, 0, 0, read_pipe), tCrSFB(0, 0, 0, read_pipe),
-          &mma_abar[read_pipe]);
-        cute::gemm(new_mma, tCrA(_,_,_,read_pipe), tCrB(_,_,_,read_pipe), tCrC);
+        if constexpr (std::is_same_v<ElementC, ElementAcc>) {
+          // ElementC == ElementAcc (both FP32): no dtype change needed.
+          // Use 3-operand gemm with D-tracking — result stays in smem_C (which D aliases).
+          auto new_mma = mma.with(
+            ElementAcc{},
+            AMMA::TrackMethod<AMMA::Tracking::D>{},
+            mma_ctrl,
+            tCrSFA(0, 0, 0, read_pipe), tCrSFB(0, 0, 0, read_pipe),
+            &mma_abar[read_pipe]);
+          cute::gemm(new_mma, tCrA(_,_,_,read_pipe), tCrB(_,_,_,read_pipe), tCrC);
+        } else {
+          // ElementC != ElementAcc (e.g. FP16/BF16 output, FP32 accumulator):
+          // 4-operand gemm with dtype change — D(FP16/BF16) written to separate smem_D buffer
+          // while reading C(FP32) from smem_C.
+          auto new_mma = mma.with(
+            ElementC{},
+            AMMA::TrackMethod<AMMA::Tracking::D>{},
+            mma_ctrl,
+            tCrSFA(0, 0, 0, read_pipe), tCrSFB(0, 0, 0, read_pipe),
+            &mma_abar[read_pipe]);
+          cute::gemm(new_mma, tCrD, tCrA(_,_,_,read_pipe), tCrB(_,_,_,read_pipe), tCrC);
+        }
       }
     }
     sycl::group_barrier(item.get_sub_group());
@@ -649,7 +602,13 @@ gemm_device_nvfp4(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_sha
       int last_phase   = (last_k_tile / int(K_PIPE_MAX)) % 2;
       xe4_wait_barrier(mma_abar[last_pipe], last_phase);
       xe4_set_barrier_transaction_bytes(store_c_abar[0], dma_bytes_C);
-      copy(adma_store_c.with(&store_c_abar[0]), tCsC, tCgC);
+      // When ElementC == ElementAcc, D aliases C — store from smem_C directly.
+      // When types differ, store from the separate smem_D buffer.
+      if constexpr (std::is_same_v<ElementC, ElementAcc>) {
+        copy(adma_store_c.with(&store_c_abar[0]), tCsC, tCgC);
+      } else {
+        copy(adma_store_c.with(&store_c_abar[0]), tCsD, tCgC);
+      }
       xe4_wait_barrier(store_c_abar[0], store_c_phase_bit);
       store_c_phase_bit ^= 1;
     }
@@ -660,30 +619,41 @@ gemm_device_nvfp4(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_sha
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// Host Setup: TN GEMM (Row-major A, Row-major B) with NVFP4 Block Scaling
+// Host Setup: TN GEMM with Block Scaling (parameterized on Config)
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <class TensorA, class TensorB, class TensorC,
+template <class Config,
+          class TensorA, class TensorB, class TensorC,
           class TensorSFA, class TensorSFB,
           class Alpha, class Beta>
 void
-gemm_tn_nvfp4(int m, int n, int k,
-             Alpha alpha,
-             TensorA const& A,
-             TensorB const& B,
-             Beta beta,
-             TensorC& C,
-             TensorSFA const& SFA,
-             TensorSFB const& SFB,
-             sycl::queue& queue)
+gemm_tn_blockscaled(int m, int n, int k,
+                    Alpha alpha,
+                    TensorA const& A,
+                    TensorB const& B,
+                    Beta beta,
+                    TensorC& C,
+                    TensorSFA const& SFA,
+                    TensorSFB const& SFB,
+                    sycl::queue& queue)
 {
+  using ElementA  = typename Config::ElementA;
+  using ElementB  = typename Config::ElementB;
+  using ElementC  = typename Config::ElementC;
+  using ElementSF = typename Config::ElementSF;
+  using TiledMma  = typename Config::TiledMma;
+  using TileShape_MNK = typename Config::TileShape_MNK;
+  static constexpr int SFVecSize       = Config::SFVecSize;
+  static constexpr int PipelineStages  = Config::PipelineStages;
+  static constexpr auto majorA = Config::MajorA;
+  static constexpr auto majorB = Config::MajorB;
+
   auto M = int(m);
   auto N = int(n);
   auto K = int(k);
   auto prob_shape = make_shape(M, N, K);
 
-  // A/B tensors use float_e2m1_t directly — no nv_float4_t wrapper needed for ADMA.
   ElementA  const* A_ptr   = &*A.data();
   ElementB  const* B_ptr   = &*B.data();
   auto C_ptr   = &*C.data();
@@ -709,36 +679,15 @@ gemm_tn_nvfp4(int m, int n, int k,
   Tensor mSFB = make_tensor(make_gmem_ptr(SFB_ptr), layout_SFB);
 
   // ---- Tile and cluster shapes ----
-  // BLK_K must equal MMA_K (64) so K_unroll=1. See NullC comment above.
-  using TileShape_MNK    = cute::Shape<cute::_128, cute::_256, cute::_128>;
   using ClusterShape_MNK = cute::Shape<cute::_1, cute::_1, cute::_1>;
 
   constexpr auto bM = get<0>(TileShape_MNK{});
   constexpr auto bN = get<1>(TileShape_MNK{});
   constexpr auto bK = get<2>(TileShape_MNK{});
   auto cta_tiler = make_shape(bM, bN, bK);
-  constexpr auto bP = Int<4>{};  // Pipeline stages
+  constexpr auto bP = Int<PipelineStages>{};
 
-  // ---- MMA configuration: bs_op_selector for FP4 block-scaled GEMM ----
-  static constexpr auto majorA = cute::AMMA::Major::K;
-  static constexpr auto majorB = cute::AMMA::Major::K;
-
-  // Use bs_op_selector to automatically select the correct block-scaled MMA op.
-  // Pass ElementA/B (float_e2m1_t) directly, matching ss_op_selector convention.
-  using TiledMma = decltype(cute::make_tiled_mma(
-    cute::AMMA::bs_op_selector<
-      ElementC,                            // d_type:  float accumulator
-      ElementA,                            // a_type:  float_e2m1_t
-      ElementB,                            // b_type:  float_e2m1_t
-      ElementC,                            // c_type:  float accumulator input
-      ElementSF,                           // sf_type: float_ue4m3_t (ue4m3 scale factor)
-      SFVecSize,                           // VS: scale factor vector size = 16
-      TileShape_MNK,                       // Tile shape — selector computes MMA dims via gcd
-      ClusterShape_MNK,                    // Cluster shape (1,1,1 for single-CTA)
-      majorA, majorB>()                    // A and B layout majors
-  ));
-  TiledMma tiled_mma{};
-
+  // ---- SMEM layouts derived from tile shape and majors ----
   using SmemLayoutAtomA =
     cute::conditional_t<
       majorA == cute::AMMA::Major::K,
@@ -752,7 +701,7 @@ gemm_tn_nvfp4(int m, int n, int k,
       decltype(make_layout(cute::select<1, 2>(TileShape_MNK{}), GenColMajor{}))
     >;
 
-  using SmemLayoutA = decltype(tile_to_shape( //tile_to_mma_shape
+  using SmemLayoutA = decltype(tile_to_shape(
     SmemLayoutAtomA{},
     make_shape(shape<0>(TileShape_MNK{}), shape<2>(TileShape_MNK{}), bP),
     cute::conditional_t<majorA == cute::AMMA::Major::K, Step<_2, _1, _3>, Step<_1, _2, _3>>{}));
@@ -774,12 +723,13 @@ gemm_tn_nvfp4(int m, int n, int k,
     make_shape(shape<0>(TileShape_MNK{}), shape<1>(TileShape_MNK{})),
     Step<_2, _1>{}));
 
-  // ---- SMEM layouts for NVFP4 scale factors ----
+  // ---- SMEM layouts for scale factors ----
   // Deduced from TiledMma and TileShape_MNK to match hardware's SF consumption pattern.
   // The layout is structured as ((mnBlock, kBlock), _1, (blk_MN, blk_K)) to align with
   // type-3 Matrix Descriptor requirements for block-scaled AMMA.
-  auto xe4_sfA_layout_atom = BlkScaledConfig::deduce_smem_layoutSFA(tiled_mma, TileShape_MNK{});
-  auto xe4_sfB_layout_atom = BlkScaledConfig::deduce_smem_layoutSFB(tiled_mma, TileShape_MNK{});
+  TiledMma tiled_mma_inst{};
+  auto xe4_sfA_layout_atom = BlkScaledConfig::deduce_smem_layoutSFA(tiled_mma_inst, TileShape_MNK{});
+  auto xe4_sfB_layout_atom = BlkScaledConfig::deduce_smem_layoutSFB(tiled_mma_inst, TileShape_MNK{});
 
   // Add pipeline stages to SF SMEM layouts
   using SmemLayoutSFA = decltype(make_layout(
@@ -802,26 +752,18 @@ gemm_tn_nvfp4(int m, int n, int k,
   using GmemTiledCopyA =
     cute::conditional_t<
       size(ClusterShape_MNK{}) == 1,
-      cute::XE4_ADMA_LOAD,
-      cute::XE4_ADMA_LOAD_MULTICAST
-    >;
-
+      cute::XE4_ADMA_LOAD, cute::XE4_ADMA_LOAD_MULTICAST>;
   using GmemTiledCopyB =
     cute::conditional_t<
       size(ClusterShape_MNK{}) == 1,
-      cute::XE4_ADMA_LOAD,
-      cute::XE4_ADMA_LOAD_MULTICAST
-    >;
-
-  using GmemTiledCopySF =   
+      cute::XE4_ADMA_LOAD, cute::XE4_ADMA_LOAD_MULTICAST>;
+  using GmemTiledCopySF =
     cute::conditional_t<
       size(ClusterShape_MNK{}) == 1,
-      cute::XE4_ADMA_LOAD,
-      cute::XE4_ADMA_LOAD_MULTICAST
-    >;
-  using GmemTiledCopyC  = cute::XE4_ADMA_STORE;
-    
+      cute::XE4_ADMA_LOAD, cute::XE4_ADMA_LOAD_MULTICAST>;
+  using GmemTiledCopyC = cute::XE4_ADMA_STORE;
 
+  TiledMma tiled_mma{};
   auto cluster_layout_vmnk = tiled_divide(
     make_layout(ClusterShape_MNK{}),
     make_tile(typename TiledMma::AtomThrID{}));
@@ -841,7 +783,7 @@ gemm_tn_nvfp4(int m, int n, int k,
   auto cta_tiler_mn = make_shape(bM, bN);
   auto adma_store_c = make_adma_copy<ElementC>(GmemTiledCopyC{}, mC, SmemLayoutC{}, cta_tiler_mn, Int<1>{});
 
-  // ADMA load atoms for NVFP4 scale factors.
+  // ADMA load atoms for scale factors.
   // Reuses make_adma_atom_A/B_xe4 directly — the stride-0 broadcast modes in the
   // hierarchical SF SMEM layout are detected at compile time, automatically producing
   // Type3 matrix descriptors instead of Type1/Type2.
@@ -855,8 +797,8 @@ gemm_tn_nvfp4(int m, int n, int k,
     SmemLayoutSFB{}(_, _, _, cute::Int<0>{}),
     TileShape_MNK{}, TiledMma{}, cluster_layout_vmnk);
 
-  // ---- Kernel launch configuration ----
-  constexpr int NumControlWarps = 2;       // Sub-group 0 = ADMA, Sub-group 1 = AMMA
+  // ---- Launch configuration ----
+  constexpr int NumControlWarps = 2;  // Sub-group 0 = ADMA, Sub-group 1 = AMMA
   constexpr int NumThreadsPerWarp = 32;
 
   namespace syclexp = sycl::ext::oneapi::experimental;
@@ -873,7 +815,8 @@ gemm_tn_nvfp4(int m, int n, int k,
   auto launch_cfg = syclexp::launch_config(Range, Props);
   syclexp::submit_with_event(queue, [&](sycl::handler& handler) {
     syclexp::nd_launch(handler, launch_cfg, [=](sycl::nd_item<3> item) ALWAYS_INLINE {
-      gemm_device_nvfp4<decltype(prob_shape), decltype(cta_tiler), decltype(TileShape_MNK{}),
+      gemm_device_blockscaled<Config,
+                       decltype(prob_shape), decltype(cta_tiler), decltype(TileShape_MNK{}),
                        decltype(sA), decltype(sC), decltype(adma_load_a),
                        decltype(sB), decltype(adma_load_b), decltype(adma_store_c),
                        decltype(dC),
@@ -899,135 +842,143 @@ gemm_tn_nvfp4(int m, int n, int k,
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <class TensorA, class TensorB, class TensorC,
+template <class Config,
+          class TensorA, class TensorB, class TensorC,
           class TensorSFA, class TensorSFB,
           class Alpha, class Beta>
 void
-gemm(char transA, char transB, int m, int n, int k,
-     Alpha alpha,
-     TensorA const& A,
-     TensorB const& B,
-     Beta beta,
-     TensorC& C,
-     TensorSFA const& SFA,
-     TensorSFB const& SFB,
-     sycl::queue& queue)
+gemm_dispatch(char transA, char transB, int m, int n, int k,
+              Alpha alpha,
+              TensorA const& A, TensorB const& B,
+              Beta beta,
+              TensorC& C,
+              TensorSFA const& SFA, TensorSFB const& SFB,
+              sycl::queue& queue)
 {
   if (transA == 'T' && transB == 'N') {
-    return gemm_tn_nvfp4(m, n, k, alpha, A, B, beta, C, SFA, SFB, queue);
+    return gemm_tn_blockscaled<Config>(m, n, k, alpha, A, B, beta, C, SFA, SFB, queue);
   }
   assert(false && "Not implemented");
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// Main
+// Entry Point: run_blockscaled_gemm<Config>(m, n, k, transA, transB)
+//
+// Allocates tensors, initializes data, runs the GEMM, and validates.
+// Runtime problem shape and transpositions are passed as parameters.
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-int main(int argc, char** argv)
+template <class Config>
+int run_blockscaled_gemm(int m, int n, int k, char transA, char transB)
 {
+  using ElementA  = typename Config::ElementA;
+  using ElementB  = typename Config::ElementB;
+  using ElementC  = typename Config::ElementC;
+  using ElementSF = typename Config::ElementSF;
+  static constexpr int SFVecSize = Config::SFVecSize;
+  using TileShape_MNK = typename Config::TileShape_MNK;
+
   sycl::queue queue{sycl::gpu_selector_v};
 
   std::cout << "Running on device: "
             << queue.get_device().get_info<sycl::info::device::name>()
             << std::endl;
-  std::cout << "=== XE4 NVFP4 Block-Scaled GEMM with AMMA + ADMA Pipelining ===" << std::endl;
+  std::cout << "=== XE4 Block-Scaled GEMM with AMMA + ADMA Pipelining ===" << std::endl;
+  std::cout << "  A type: " << type_str<ElementA>()
+            << "  B type: " << type_str<ElementB>()
+            << "  C type: " << type_str<ElementC>()
+            << "  SF type: " << type_str<ElementSF>()
+            << "  SFVecSize: " << SFVecSize << std::endl;
 
-  int m = 512;
-  if (argc >= 2) sscanf(argv[1], "%d", &m);
-  int n = 1024;
-  if (argc >= 3) sscanf(argv[2], "%d", &n);
-  int k = 2048;
-  if (argc >= 4) sscanf(argv[3], "%d", &k);
+  std::cout << "  Problem: M=" << m << " N=" << n << " K=" << k
+            << "  transA=" << transA << " transB=" << transB << std::endl;
 
-  char transA = 'T';
-  if (argc >= 5) sscanf(argv[4], "%c", &transA);
-  char transB = 'N';
-  if (argc >= 6) sscanf(argv[5], "%c", &transB);
-
-  // ---- NVFP4 Data Types ----
-  // A, B: cutlass::float_e2m1_t (4-bit sub-byte NVFP4 data elements)
-  // SFA, SFB: cutlass::float_ue4m3_t (8-bit e4m3 block scale factors)
-  // C: float (FP32 accumulator)
-  using TA  = ElementA;                    // cutlass::float_e2m1_t — 4-bit
-  using TB  = ElementB;                    // cutlass::float_e2m1_t — 4-bit
-  using TC  = ElementC;                    // float — 32-bit accumulator
-  using TSF = ElementSF;                   // cutlass::float_ue4m3_t — 8-bit scale factor
-  using TI  = float;
-
+  using TI = float;
   TI alpha = TI(1.0f);
   TI beta  = TI(0.0f);
 
-  auto prob_shape = make_shape(m, n, k);
-
   // ---- Allocate data tensors ----
-  uint32_t sizeA = size(select<0, 2>(prob_shape));
-  uint32_t sizeB = size(select<1, 2>(prob_shape));
-  uint32_t sizeC = size(select<0, 1>(prob_shape));
+  auto A = make_shared_usm_tensor<ElementA, 'R'>(queue, m, k);
+  auto B = make_shared_usm_tensor<ElementB, 'R'>(queue, n, k);
+  auto C = make_shared_usm_tensor<ElementC, 'R'>(queue, m, n);
 
-  auto A = make_shared_usm_tensor<TA, 'R'>(queue, m, k);
-  auto B = make_shared_usm_tensor<TB, 'R'>(queue, n, k);
-  auto C = make_shared_usm_tensor<TC, 'R'>(queue, m, n);
-
-  // ---- Allocate NVFP4 scale factor tensors ----
-  // SFA: M rows x (K / SFVecSize) columns — one float_ue4m3_t per 16 K-elements per M-row
-  // SFB: N rows x (K / SFVecSize) columns — one float_ue4m3_t per 16 K-elements per N-row
-  // Allocated as column-major (M/N-contiguous) per design doc: A's MX metadata is m-major,
-  // B's MX metadata is n-major.
+  // ---- Allocate scale factor tensors (column-major: M/N-contiguous) ----
+   if (k % SFVecSize != 0) {
+    std::cerr << "Error: K dimension (" << k
+              << ") must be a multiple of SFVecSize (" << SFVecSize
+              << ") for block-scaled GEMM. "
+              << "Adjust K or SFVecSize so that K % SFVecSize == 0."
+              << std::endl;
+    std::exit(EXIT_FAILURE);
+  }
   int sf_k = k / SFVecSize;
-  auto SFA = make_shared_usm_tensor<TSF, 'C'>(queue, m, sf_k);
-  auto SFB = make_shared_usm_tensor<TSF, 'C'>(queue, n, sf_k);
+  auto SFA = make_shared_usm_tensor<ElementSF, 'C'>(queue, m, sf_k);
+  auto SFB = make_shared_usm_tensor<ElementSF, 'C'>(queue, n, sf_k);
 
   // ---- Initialize tensors ----
   constexpr uint64_t seed_base = 42;
-  random_fill_fp4(A,   seed_base + 2022);   // FP4 data A
-  random_fill_fp4(B,   seed_base + 2021);   // FP4 data B
-  random_fill_sf(SFA,  seed_base + 2024);   // Scale factors A
-  random_fill_sf(SFB,  seed_base + 2025);   // Scale factors B   
-  zero_fill(C);                             // Accumulator starts at zero
+  random_fill_data(A,   seed_base + 2022); 
+  random_fill_data(B,   seed_base + 2021);
+  random_fill_sf(SFA,   seed_base + 2024);
+  random_fill_sf(SFB,   seed_base + 2025);
+  zero_fill(C);
 
   // ---- Reference tensors for validation ----
-  auto A_ref = make_shared_usm_tensor<TA, 'R'>(queue, m, k);
-  auto B_ref = make_shared_usm_tensor<TB, 'R'>(queue, n, k);
+  auto A_ref = make_shared_usm_tensor<ElementA, 'R'>(queue, m, k);
+  auto B_ref = make_shared_usm_tensor<ElementB, 'R'>(queue, n, k);
   copy(A, A_ref);
   copy(B, B_ref);
 
-  // Pack 4-bit sub-byte elements: two float_e2m1_t values per byte
-  subbyte_pack(A); 
+  // Pack sub-byte elements if needed (no-op for >= 8-bit types)
+  subbyte_pack(A);
   subbyte_pack(B);
 
-  // ---- Run NVFP4 Block-Scaled GEMM ----
-  gemm(transA, transB, m, n, k, alpha, A, B, beta, C, SFA, SFB, queue);
+  // ---- Run Block-Scaled GEMM ----
+  gemm_dispatch<Config>(transA, transB, m, n, k, alpha, A, B, beta, C, SFA, SFB, queue);
   queue.wait_and_throw();
 
-  // ---- Validate against block-scaled reference ----
+ // ---- Validate against block-scaled reference ----
   // validate_blockscaled_gemm_result applies SF to A/B before computing the golden reference:
   //   golden = (A_ref * diag(SFA)) x (B_ref * diag(SFB))
   mem_layout layout_a = mem_layout::row_major;
   mem_layout layout_b = mem_layout::col_major;
 
-  TA* A_ref_ptr = &*A_ref.data();
-  TB* B_ref_ptr = &*B_ref.data();
-  TC* C_ptr     = &*C.data();
-  TSF*   SFA_ptr   = &*SFA.data();
-  TSF*   SFB_ptr   = &*SFB.data();
+  ElementA*  A_ref_ptr = &*A_ref.data();
+  ElementB*  B_ref_ptr = &*B_ref.data();
+  ElementC*  C_ptr     = &*C.data();
+  ElementSF* SFA_ptr   = &*SFA.data();
+  ElementSF* SFB_ptr   = &*SFB.data();
 
-  // Use block-scaled validation: upscales A/B by per-block scale factors, then computes golden GEMM.
-  int err_cnt = validate_mxfp_gemm_result<TA, TB, TC, TSF, float>(
-    A_ref_ptr, B_ref_ptr, C_ptr,
-    m, n, k,
-    true, true,           // a_scaling, b_scaling
-    SFA_ptr, SFB_ptr,
-    layout_a, layout_b,
-    false,                // negative_axb
-    tolerance<float>{},
-    SFVecSize);           // scale_ele_num = 16 (NVFP4 block size)
+  int err_cnt = validate_mxfp_gemm_result<ElementA, ElementB, ElementC, ElementSF, float>(
+        A_ref_ptr, B_ref_ptr, C_ptr,
+        m, n, k,
+        true, true,
+        SFA_ptr, SFB_ptr,
+        layout_a, layout_b,
+        false,
+        tolerance<ElementC>{},
+        SFVecSize);
+
   printf("Verification: %s\n", (err_cnt == 0) ? "PASSED" : "FAILED");
 
   if (err_cnt != 0) {
-    throw std::runtime_error("NVFP4 Block-Scaled GEMM verification failed!");
+    throw std::runtime_error("Block-Scaled GEMM verification failed!");
   }
 
   return 0;
 }
+
+/// Convenience wrapper: runs GEMM with compile-time defaults from Config.
+/// Does NOT parse command-line arguments; use the (m,n,k,transA,transB) overload
+/// for runtime parameters.
+template <class Config>
+int run_blockscaled_gemm_defaults()
+{
+  return run_blockscaled_gemm<Config>(
+    Config::DefaultM, Config::DefaultN, Config::DefaultK,
+    Config::DefaultTransA, Config::DefaultTransB);
+}
+
+} // namespace xe4_blockscaled_gemm

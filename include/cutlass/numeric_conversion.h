@@ -2539,6 +2539,75 @@ struct NumericArrayConverterPacked4Element<float_ue8m0_t, float, Round> {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 //
+// Partial specializations for Array<float, N> <=> Array<float_ue5m3_t, N>
+//
+/////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// Partial specialization for Array<float, 4> <= Array<float_ue5m3_t, 4>
+template <
+  FloatRoundStyle Round
+>
+struct NumericArrayConverterPacked4Element<float, float_ue5m3_t, Round> {
+  using result_element = float;
+  using source_element = float_ue5m3_t;
+
+  using result_type = Array<result_element, 4>;
+  using source_type = Array<source_element, 4>;
+  static FloatRoundStyle const round_style = Round;
+
+  CUTLASS_HOST_DEVICE
+  static result_type convert(source_type const & source) {
+    result_type result;
+    NumericConverter<result_element, source_element, Round> converter;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < 4; ++i) {
+      result[i] = converter(source[i]);
+    }
+
+    return result;
+  }
+
+  CUTLASS_HOST_DEVICE
+  result_type operator()(source_type const &s) const {
+    return convert(s);
+  }
+};
+
+/// Partial specialization for Array<float_ue5m3_t, 4> <= Array<float, 4>
+template <
+  FloatRoundStyle Round
+>
+struct NumericArrayConverterPacked4Element<float_ue5m3_t, float, Round> {
+  using result_element = float_ue5m3_t;
+  using source_element = float;
+
+  using result_type = Array<result_element, 4>;
+  using source_type = Array<source_element, 4>;
+  static FloatRoundStyle const round_style = Round;
+
+  CUTLASS_HOST_DEVICE
+  static result_type convert(source_type const & source) {
+    result_type result;
+    NumericConverter<result_element, source_element, Round> converter;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < 4; ++i) {
+      result[i] = converter(source[i]);
+    }
+
+    return result;
+  }
+
+  CUTLASS_HOST_DEVICE
+  result_type operator()(source_type const &s) const {
+    return convert(s);
+  }
+};
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////
+//
 // Partial specializations for Array<float, N> <=> Array<float_e2m3_unpack8bits_t, N>
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////

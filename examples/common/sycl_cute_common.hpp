@@ -126,6 +126,31 @@ void random_fill_sf(Tensor& X, uint64_t seed) {
   for (int i = 0; i < size(X); ++i)
     X(i) = T(dist(rng));
 }
+
+//  Random fill for data tensors, with value ranges chosen to be representative of each type's dynamic range 
+//  while avoiding overflow in scaled products.
+template <typename Tensor>
+void random_fill_data(Tensor& X, uint64_t seed) {
+  using T = typename Tensor::element_type;
+  std::mt19937 rng(seed);
+  if constexpr (cute::sizeof_bits_v<T> == 4) {
+    // FP4 (e2m1): representable range [-6, 6], use [-2, 2]
+    random_fill_fp4(X, seed);
+  } else if constexpr (cute::sizeof_bits_v<T> == 8) {
+    // FP8 (e4m3): representable range [-448, 448]
+    // Use [-4, 4] to exercise more codepoints while keeping
+    // scaled products in safe FP16 range (4 * SF_max=4 * K=2048 → manageable)
+    std::uniform_real_distribution<float> dist(-4.0f, 4.0f);
+    for (int i = 0; i < cute::size(X); ++i)
+      X(i) = T(dist(rng));
+  } else {
+    // FP16/BF16/FP32: [-1, 1] is fine
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    for (int i = 0; i < cute::size(X); ++i)
+      X(i) = T(dist(rng));
+  }
+}
+
 // Pack sub-byte types in a gmem tensor.
 // On input, the backing array holds one sub-byte value per byte.
 // On exit, the backing array contains packed values.
@@ -165,6 +190,9 @@ const char *type_str()
   CASE(float_e5m2_t, e5m2)
   CASE(float_e4m3_t, e4m3)
   CASE(float_e2m1_t, e2m1)
+  CASE(float_ue4m3_t, ue4m3)
+  CASE(float_ue5m3_t, ue5m3)
+  CASE(float_ue8m0_t, ue8m0)
   CASE(int32_t, int32)
   CASE(uint32_t, uint32)
   CASE(int8_t, int8)
@@ -174,6 +202,8 @@ const char *type_str()
   // to resolve the ambiguity and ensure we use the intended CuTe types.
   CASE(cute::int4_t, int4) 
   CASE(cute::uint4_t, uint4)
+  CASE(sycl::half, half)
+  CASE(sycl::ext::oneapi::bfloat16, bf16)
 #undef CASE
   return "<unknown type>";
 }

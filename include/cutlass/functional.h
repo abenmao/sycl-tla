@@ -332,6 +332,14 @@ struct reciprocal_approximate<cutlass::float_ue8m0_t> {
   }
 };
 
+template <>
+struct reciprocal_approximate<cutlass::float_ue5m3_t> {
+  CUTLASS_HOST_DEVICE
+  cutlass::float_ue5m3_t operator()(cutlass::float_ue5m3_t lhs) const {
+    return cutlass::float_ue5m3_t(1.0f / float(lhs));
+  }
+};
+
 
 /// reciprocal_approximate with ftz
 template<typename T>

@@ -51,6 +51,7 @@ template <> struct vector_element_helper<half_t>       { using type = uint16_t; 
 template <> struct vector_element_helper<float_e5m2_t> { using type = uint8_t;  };
 template <> struct vector_element_helper<float_e4m3_t> { using type = uint8_t;  };
 template <> struct vector_element_helper<float_ue8m0_t> { using type = uint8_t;  };
+template <> struct vector_element_helper<float_ue5m3_t> { using type = uint8_t;  };
 
 template <class T, int N> struct vector_helper {
     using U = typename vector_element_helper<T>::type;

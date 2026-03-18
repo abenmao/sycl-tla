@@ -514,6 +514,18 @@ struct nv_float4_t
 
 using type_erased_dynamic_nv_float4_t = nv_float4_t<type_erased_dynamic_float4_t>;
 
+template <class F4Type>
+struct nv_float4_plus_t
+{
+  static_assert(cute::is_same_v<F4Type,cutlass::float_e2m1_t>
+                || cute::is_same_v<F4Type,type_erased_dynamic_float4_t>
+                , "Only float_e2m1_t type_erased_dynamic_float4_t can have scale factors for NVFP4+");
+  using ScaleFactorType = cutlass::float_ue5m3_t;
+  using DataType = F4Type;
+};
+
+using type_erased_dynamic_nv_float4_plus_t = nv_float4_plus_t<type_erased_dynamic_float4_t>;
+
 
 namespace detail {
 

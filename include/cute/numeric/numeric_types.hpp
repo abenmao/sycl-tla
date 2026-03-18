@@ -103,6 +103,7 @@ using cutlass::float_e5m2_t;
 
 
 using cutlass::float_ue4m3_t;
+using cutlass::float_ue5m3_t;
 using cutlass::float_ue8m0_t;
 
 using cutlass::float_e2m1_t;

@@ -32,6 +32,7 @@ template <> struct fixed_type<sycl::ext::oneapi::bfloat16> { static constexpr fi
 // NVF / MXFP block-scaled element types for AMMA assembly
 template <> struct fixed_type<cutlass::float_e2m1_t>  { static constexpr fixstr::fixed_string value {"E2M1"};};
 template <> struct fixed_type<cutlass::float_ue4m3_t> { static constexpr fixstr::fixed_string value {"HF8"};};
+template <> struct fixed_type<cutlass::float_ue5m3_t> { static constexpr fixstr::fixed_string value {"UF8"};};
 template <> struct fixed_type<cutlass::float_ue8m0_t> { static constexpr fixstr::fixed_string value {"E8M0"};};
 template <> struct fixed_type<cutlass::float_e4m3_t>  { static constexpr fixstr::fixed_string value {"HF8"};};
 template <> struct fixed_type<cutlass::float_e5m2_t>  { static constexpr fixstr::fixed_string value {"BF8"};};
@@ -221,6 +222,7 @@ template <> struct rd_type<unsigned char> {static constexpr fixstr::fixed_string
 // NVF / MXFP block-scaled element types for ADMA rd_type dispatch
 template <> struct rd_type<cutlass::float_e2m1_t> {static constexpr fixstr::fixed_string value {".4b.fp"};};
 template <> struct rd_type<cutlass::float_ue4m3_t> {static constexpr fixstr::fixed_string value {".8b.fp"};};
+template <> struct rd_type<cutlass::float_ue5m3_t> {static constexpr fixstr::fixed_string value {".8b.fp"};};
 template <> struct rd_type<cutlass::float_e5m2_t> {static constexpr fixstr::fixed_string value {".8b.bf"};};
 template <> struct rd_type<cutlass::float_e4m3_t> {static constexpr fixstr::fixed_string value {".8b.fp"};};
 template <> struct rd_type<cutlass::float_ue8m0_t> {static constexpr fixstr::fixed_string value {".8b.fp"};};

@@ -23,7 +23,7 @@ constexpr uint32_t getMinMmaK() {
   if constexpr (std::is_same_v<T, bf16> || std::is_same_v<T, fp16>) {
     return 16;
   }
-  if constexpr (std::is_same_v<T, bf8> || std::is_same_v<T, int8_t>) {
+  if constexpr (std::is_same_v<T, bf8> || std::is_same_v<T, int8_t> || std::is_same_v<T, cutlass::float_e4m3_t>) {
     return 32;
   }
   if constexpr (std::is_same_v<T, cutlass::float_e2m1_t>) {
@@ -41,7 +41,7 @@ constexpr uint32_t getMaxMmaK() {
   if constexpr (std::is_same_v<T, bf16> || std::is_same_v<T, fp16>) {
     return 128;
   }
-  if constexpr (std::is_same_v<T, bf8> || std::is_same_v<T, int8_t>) {
+  if constexpr (std::is_same_v<T, bf8> || std::is_same_v<T, int8_t> || std::is_same_v<T, cutlass::float_e4m3_t>) {
     return 256;
   }
   if constexpr (std::is_same_v<T, cutlass::float_e2m1_t>) {
@@ -120,9 +120,9 @@ bs_op_selector()
   static_assert(rank(TileShape_MNK{}) == 3, "TileShape_MNK must be rank 3.");
   static_assert(VS == 16 || VS == 32, "Vector size must be 16 or 32.");
 
-  constexpr uint32_t M_MIN = 32;
+  constexpr uint32_t M_MIN = 64;
   constexpr uint32_t M_MAX = 256;
-  constexpr uint32_t N_MIN = 32;
+  constexpr uint32_t N_MIN = 64;
   constexpr uint32_t N_MAX = 512;
 
   // K_MIN accounts for both the element-type hardware minimum and the
@@ -140,17 +140,21 @@ bs_op_selector()
   constexpr uint32_t N = cute::gcd(Tile_N, N_MAX);
   constexpr uint32_t K = cute::gcd(Tile_K, K_MAX);
 
-  static_assert(M >= M_MIN, "MMA_M must be >= 32.");
-  static_assert(N >= N_MIN, "MMA_N must be >= 32.");
+  // According to the whitepaper, M_MIN/N_MIN was originally set to 32, but when using
+  // block scaling, we encounter the error: "failed on (matrix_stride_in_elems % 64 == 0
+  // && 'Type3 matrix_stride needs to be 64-elem aligned')". Therefore, M_MIN/N_MIN
+  // is currently set to 64 to satisfy the alignment requirement.
+  static_assert(M >= M_MIN, "MMA_M must be >= 64 as Type3 matrix_stride needs to be 64-elem aligned");
+  static_assert(N >= N_MIN, "MMA_N must be >= 64 as Type3 matrix_stride needs to be 64-elem aligned");
   static_assert(K >= K_MIN, "MMA_K must be >= K_MIN (element type minimum and 8*VS SF descriptor constraint).");
   static_assert(K % VS == 0, "MMA_K must be a multiple of the scale factor vector size (VS).");
 
   // Currently only single-CTA variant implemented for block-scaled
-  // TODO: Add cluster support when XE4_AMMA_FP4_CLUSTER is implemented
+  // TODO: Add cluster support when XE4_AMMA_FP4FP8_CLUSTER is implemented
   static_assert(size(ClusterShape_MNK{}) == 1, 
     "Block-scaled cluster operations not yet implemented for XE4.");
 
-  return XE4_AMMA_FP4<
+  return XE4_AMMA_FP4FP8<
     ElementD, ElementA, ElementB, ElementC, ElementSF, M, N, K, VS, MajorA, MajorB>();
 
   CUTE_GCC_UNREACHABLE;

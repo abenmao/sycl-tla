@@ -300,6 +300,12 @@ bool relatively_equal<float_ue4m3_t>(float_ue4m3_t a, float_ue4m3_t b, float_ue4
   return detail::relatively_equal_float<float>(a, b, epsilon, nonzero_floor);
 }
 
+template <>
+CUTLASS_HOST_DEVICE
+bool relatively_equal<float_ue5m3_t>(float_ue5m3_t a, float_ue5m3_t b, float_ue5m3_t epsilon, float_ue5m3_t nonzero_floor) {
+  return detail::relatively_equal_float<float>(a, b, epsilon, nonzero_floor);
+}
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 } // namespace cutlass

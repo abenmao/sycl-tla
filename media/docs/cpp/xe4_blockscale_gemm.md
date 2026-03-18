@@ -163,8 +163,7 @@ As we can see that for every 4 accumulations it requires loading of two scale fa
 
 ### MMA Operations
 
-- `XE4_AMMA_FP4` supports `mxfp4` and `nvfp4+`.
-- `XE4_AMMA_MXFP8` supports `mxfp8`, `mxfp6` and mixed precision euqal to and below 8-bit.
+- `XE4_AMMA_FP4FP8` supports `mxfp4` /`nvfp4`/ `nvfp4+`/`mxfp8`
 - `XE4_AMMA_MIX` (optional) supports 16-bit floating-point mix with low precision.
 
 In addition to normal A-MMA Operation, MX variants need more information about scaling factors to instantiate template. For example, mxfp4 variant needs `sf_type` and `VS`, with extra sf register types.
@@ -172,7 +171,7 @@ In addition to normal A-MMA Operation, MX variants need more information about s
 ```cpp
 template <class d_type, class a_type, class b_type, class c_type, class sf_type,
          int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
-struct XE4_AMMA_FP4 {
+struct XE4_AMMA_FP4FP8 {
 ...
   using DRegisters = void;
   using ARegisters = void;
