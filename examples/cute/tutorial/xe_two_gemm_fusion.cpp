@@ -211,13 +211,10 @@ gemm_two_stage_device(ATensor   const& A,     // (M, K)
 
   auto prefetch_a = make_block_2d_prefetch(copy_a);
   auto prefetch_b = make_block_2d_prefetch(copy_b);
-  auto prefetch_c = make_block_2d_prefetch(copy_c2);
   auto thr_pf_A   = prefetch_a.get_slice(local_id);
   auto thr_pf_B   = prefetch_b.get_slice(local_id);
-  auto thr_pf_C   = prefetch_c.get_slice(local_id);
   auto pAgA       = thr_pf_A.partition_S(gA_1);
   auto pBgB       = thr_pf_B.partition_S(gB_1);
-  auto pCgC       = thr_pf_C.partition_S(gC_2);
 
   const int prefetch_dist = 3;
   constexpr int barrier_scope = 2;
@@ -247,32 +244,27 @@ gemm_two_stage_device(ATensor   const& A,     // (M, K)
   reorder(tCrAcc, r16);
   copy(slm_store, tOrO, tOsO);
 
-  // Warm up C prefetch while waiting for SLM barrier — overlap L1
-  // fill with SLM write completion.
-  int k2_tile_count  = ceil_div(shape<1>(C), get<2>(wg_tile));
-  int k2_pf = 0;
-  CUTE_UNROLL
-  for (; k2_pf < cute::min(prefetch_dist, k2_tile_count); k2_pf++) {
-    prefetch(prefetch_c, pCgC(_,_,_,k2_pf));
-  }
-
   barrier_arrive(SPIRVScope::ScopeWorkgroup,
                  SPIRVMemorySemantics::SemanticsRelease | SPIRVMemorySemantics::SemanticsWGMemory);
   barrier_wait  (SPIRVScope::ScopeWorkgroup,
                  SPIRVMemorySemantics::SemanticsAcquire | SPIRVMemorySemantics::SemanticsWGMemory);
 
-  // Stage 2 — SLM is read-only after the barrier above.
+  // Stage 2
+  int k2_tile_count = ceil_div(shape<1>(C), get<2>(wg_tile));
   clear(tCrAcc);
 
-  for (int k_tile = 0; k_tile < k2_tile_count; k_tile++, k2_pf++) {
-    barrier_arrive(barrier_scope);
+  for (int k_tile = 0; k_tile < k2_tile_count; k_tile++) {
     copy(slm_load, tIsI(_,_,k_tile), tIrI(_,_,0));
     copy(copy_c2, tBgC_2(_,_,_,k_tile), tBrB_2);
-    prefetch(prefetch_c, pCgC(_,_,_,k2_pf));
+
+    barrier_arrive(SPIRVScope::ScopeWorkgroup,
+                   SPIRVMemorySemantics::SemanticsRelease | SPIRVMemorySemantics::SemanticsWGMemory);
+    barrier_wait  (SPIRVScope::ScopeWorkgroup,
+                   SPIRVMemorySemantics::SemanticsAcquire | SPIRVMemorySemantics::SemanticsWGMemory);
+
     reorder(tArA_2, tCrA_2);
     reorder(tBrB_2, tCrB_2);
     gemm(mma, tCrA_2, tCrB_2, tCrAcc);
-    barrier_wait(barrier_scope);
   }
 
   copy(copy_d, tCrAcc, tCgD);
@@ -393,12 +385,7 @@ verify_two_stage(sycl::queue &Q,
           ab += AccType(A(p, h)) * AccType(B(i, h));   // AB(p, i)
         d_val += ab * AccType(C(j, p));
       }
-      // Tolerance scales with the reduction dimensions: stage-1 reduces over K
-      // with half_t intermediates, and stage-2 reduces over N.  Each FP16 multiply-
-      // add has ~2^{-10} relative error, so after K (or N) accumulations the
-      // absolute error is O(sqrt(K) * magnitude * 2^{-10}).  A simple heuristic:
-      //   tol = max(1.0, sqrt(max(k,n)) * 0.1)
-      AccType tol = AccType(fmax(1.0, sqrt(double(k > n ? k : n)) * 0.1));
+      auto tol = AccType(2e-1f);   // two-stage accumulation has larger error
       if (std::abs(SignedAccType(d_val - AccType(D(i, j)))) > tol) {
         printf("Error at (%d,%d): got %f, expected %f\n", i, j, double(D(i, j)), double(d_val));
         *ok = false;

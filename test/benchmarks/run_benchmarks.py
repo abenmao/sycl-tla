@@ -67,12 +67,12 @@ def run_command(command, cwd, log_path=None):
         with open(log_path, "w") as log_file:
             try:
                 results = subprocess.run(command, cwd=cwd, text=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                for line in results.stdout.splitlines(keepends=True):
+                for line in results.stdout:
                     sys.stdout.write(line)
                     log_file.write(line)
             except subprocess.CalledProcessError as e:
                 print(f"Error: Command failed with return code {e.returncode}")
-                print("Output:", e.output)
+                print("Stderr:", e.stderr)
         print(f"Log written to: {log_path}")
     else:
         subprocess.run(command, cwd=cwd, check=True)
@@ -179,7 +179,7 @@ def main():
         "--push-to-dashboard",
         dest="grafana",
         action="store_true",
-        help="Push benchmark results to the Grafana/InfluxDB dashboard"
+        help="Increase output verbosity"
     )
     args = parser.parse_args()
 
@@ -190,7 +190,7 @@ def main():
     repo_root = Path.cwd()
     logs_root = repo_root / "logs"
     logs_root.mkdir(parents=True, exist_ok=True)
-    workdir = f"{datetime.now().strftime('%Y%m%d%H%M')}_benchmarks_{branch}"
+    workdir = f"{datetime.now().strftime('%Y%m%d%I%M')}_benchmarks_{branch}"
     logs_dir = logs_root / workdir
     logs_dir.mkdir(parents=True, exist_ok=True)
     git_commit_id = get_git_commit_id(repo_root)
