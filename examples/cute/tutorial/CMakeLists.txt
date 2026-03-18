@@ -120,6 +120,8 @@ if (CUTLASS_ENABLE_SYCL)
       sgemm_sm80_sycl.cpp
     )
   endif()
-else()
-  add_subdirectory(xe4)
+
+  if (SYCL_INTEL_TARGET EQUAL 40)
+    add_subdirectory(xe4)
+  endif()
 endif()
