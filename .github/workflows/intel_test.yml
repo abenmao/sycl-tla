@@ -20,7 +20,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-<<<<<<< HEAD
   run-tests:
     strategy:
       matrix:
@@ -145,24 +144,3 @@ jobs:
           unset CC CXX CPLUS_INCLUDE_PATH C_INCLUDE_PATH LD_LIBRARY_PATH
           unset IGC_ExtraOCLOptions SYCL_PROGRAM_COMPILE_OPTIONS ONEAPI_DEVICE_SELECTOR IGC_VectorAliasBBThreshold
           echo "DPC++ cleanup completed"
-=======
-  # Quick validation for PRs - single configuration 
-  test-pr:
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    uses: ./.github/workflows/intel_test_reusable.yml
-    with:
-      gpu: '["PVC", "BMG"]'
-      compiler: '["RELEASE"]'
-      intel_graphics: '["ROLLING"]'
-      DPCPP_VERSION: ${{ inputs.DPCPP_VERSION }}
-
-  # Full testing for pushes - 4 configurations
-  test-push:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' 
-    uses: ./.github/workflows/intel_test_reusable.yml
-    with:
-      compiler: '["RELEASE", "NIGHTLY"]'
-      gpu: '["PVC", "BMG"]'
-      intel_graphics: '["ROLLING", "STAGING"]'
-      DPCPP_VERSION: ${{ inputs.DPCPP_VERSION }}
->>>>>>> main
