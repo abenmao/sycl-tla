@@ -247,71 +247,23 @@ struct CollectiveMma<
     return {adma_load_a, adma_load_b};
   }
 
-  CUTLASS_HOST_DEVICE
-  static constexpr auto
-  compute_raster_order() {
-    constexpr int cluster_size_m = size<0>(ClusterShape{});
-    constexpr int cluster_size_n = size<1>(ClusterShape{});
-    constexpr uint32_t mcast_size_a = SlmBytesA / cluster_size_n;
-    constexpr uint32_t mcast_size_b = SlmBytesB / cluster_size_m;
-    constexpr bool greater_mcast_size_a = mcast_size_a > mcast_size_b;
-
-    using RasterOrder = cutlass::gemm::kernel::detail::RasterOrder;
-    return greater_mcast_size_a ? RasterOrder::AlongM : RasterOrder::AlongN;
-  }
-
   CUTLASS_DEVICE void
   initialize_mcast_masks() {
-    using RasterOrder = cutlass::gemm::kernel::detail::RasterOrder;
-
-    constexpr auto raster_order = compute_raster_order();
-    auto cluster_layout_mn = [&]() {
-      if constexpr (raster_order == RasterOrder::AlongM) {
-        return make_layout(select<0,1>(ClusterShape{}), make_stride(_1{}, get<0>(ClusterShape{})));
-      } else {
-        return make_layout(select<0,1>(ClusterShape{}), make_stride(get<1>(ClusterShape{}), _1{}));
-      }
-    }();
+    uint32_t cluster_mask_a = 0;
+    uint32_t cluster_mask_b = 0;
 
     uint32_t cluster_wgid_x = get_cluster_wgid<0>();
     uint32_t cluster_wgid_y = get_cluster_wgid<1>();
-    block_rank_in_cluster_ = cluster_layout_mn(make_coord(cluster_wgid_y, cluster_wgid_x));
+    auto cluster_layout_mn = make_layout(select<0,1>(ClusterShape{}));
+    block_rank_in_cluster_ = cluster_layout_mn(make_coord(cluster_wgid_x, cluster_wgid_y));
 
-    auto [cluster_size_m, cluster_size_n, _] = ClusterShape{};
-
-    uint32_t cluster_mask_a = 0;
-    uint32_t cluster_mask_b = 0;
-    uint32_t coop_set_id_a = cluster_wgid_y;
-    uint32_t coop_set_id_b = cluster_wgid_x;
-
-    uint32_t coop_num_a = cluster_size_n;
-    uint32_t coop_num_b = cluster_size_m;
-
-    if (raster_order == RasterOrder::AlongM) {
-      cluster_mask_a = ((1u << coop_num_a) - 1) << (coop_set_id_a * coop_num_a); //0011
-      uint32_t cluster_mask_b_base = 1u << coop_set_id_b;
-      #pragma unroll
-      for (uint32_t i = 0; i < coop_num_b; i++) {
-        cluster_mask_b |= cluster_mask_b_base << (i * coop_num_a);
-      }
-    } else {
-      cluster_wgid_x = block_rank_in_cluster_ % coop_num_b;
-      cluster_wgid_y = block_rank_in_cluster_ / coop_num_b;
-      coop_set_id_a = cluster_wgid_x;
-      coop_set_id_b = cluster_wgid_y;
-
-      cluster_mask_b = ((1u << coop_num_b) - 1) << (coop_set_id_b * coop_num_b); //0011
-      uint32_t cluster_mask_a_base = 1u << coop_set_id_a;
-      #pragma unroll
-      for (uint32_t i = 0; i < coop_num_a; i++) {
-        cluster_mask_a |= cluster_mask_a_base << (i * coop_num_b);
-      } //0101
-    }
-
-    coop_set_ids_ = make_tuple(coop_set_id_a, coop_set_id_b);
-    cluster_masks_ = make_tuple(cluster_mask_a, cluster_mask_b);
+    Layout cta_layout_mnk  = make_layout(cluster_shape_);
+    Layout cta_layout_vmnk = tiled_divide(cta_layout_mnk, make_tile(typename TiledMma::AtomThrID{}));
+    auto cta_coord_vmnk  = cta_layout_vmnk.get_flat_coord(block_rank_in_cluster_);
+    uint16_t mcast_mask_a = create_tma_multicast_mask<2>(cta_layout_vmnk, cta_coord_vmnk);
+    uint16_t mcast_mask_b = create_tma_multicast_mask<1>(cta_layout_vmnk, cta_coord_vmnk);
+    cluster_masks_ = make_tuple(static_cast<uint32_t>(mcast_mask_a), static_cast<uint32_t>(mcast_mask_b));
   }
-
 
   template <class ProblemShape, class DescTuple>
   CUTLASS_DEVICE auto
@@ -499,7 +451,6 @@ public:
   uint32_t block_rank_in_cluster_;
 
   cute::tuple<uint32_t, uint32_t> cluster_masks_;
-  cute::tuple<uint32_t, uint32_t> coop_set_ids_;
 };
 
 }

@@ -67,7 +67,7 @@ CUTE_DEVICE void cluster_sync()
 // Returns the relative dim3 block rank local to the cluster.
 CUTE_DEVICE dim3 block_id_in_cluster()
 {
-  return {0,0,0};
+  return {get_cluster_wgid<0>(), get_cluster_wgid<1>(), get_cluster_wgid<2>()};
 }
 
 // Returns the dim3 cluster shape.

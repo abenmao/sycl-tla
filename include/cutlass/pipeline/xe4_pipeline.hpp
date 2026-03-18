@@ -266,6 +266,49 @@ PipelineState<Pipeline::Stages> make_producer_start_state() {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
+// Empty Pipeline class
+//
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+class PipelineEmpty {
+public:
+  static constexpr uint32_t Stages = 0;
+  using PipelineState = cutlass::PipelineState<0>;
+  struct Params {};
+  struct SharedStorage {};
+
+  // Constructor
+  CUTLASS_DEVICE
+  PipelineEmpty(SharedStorage& storage, Params const& params) {}
+
+  // Constructor
+  CUTLASS_DEVICE
+  PipelineEmpty(SharedStorage&& storage, Params const& params) {}
+
+  // Constructor with throwaway ClusterShape
+  template <class ClusterShape = Shape<int,int,_1>>
+  CUTLASS_DEVICE
+  PipelineEmpty(SharedStorage&& storage, Params const& params, ClusterShape) {}
+
+ CUTLASS_DEVICE
+  void producer_acquire(PipelineState state, ProducerToken barrier_token = {BarrierStatus::WaitAgain}) {
+  }
+
+  CUTLASS_DEVICE
+  void producer_commit(PipelineState state) {
+  }
+
+  CUTLASS_DEVICE
+  void consumer_wait(PipelineState state, ConsumerToken barrier_token = {BarrierStatus::WaitAgain}) {
+  }
+
+  CUTLASS_DEVICE
+  void consumer_release(PipelineState state) {
+  }
+};
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
 // TMA load (producer) Async Pipeline class
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////

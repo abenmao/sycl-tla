@@ -72,6 +72,8 @@ public:
   using TileSchedulerTag = TileScheduler_;
   using TileScheduler = typename detail::TileSchedulerSelector<
     TileSchedulerTag, ArchTag, TileShape, ClusterShape, SchedulerPipelineStageCount>::Scheduler;
+  using TileSchedulerArguments = typename TileScheduler::Arguments;
+  using TileSchedulerParams = typename TileScheduler::Params;
 
   static constexpr bool IsSchedDynamicPersistent = TileScheduler::IsDynamicPersistent;
 
@@ -81,6 +83,8 @@ public:
   static constexpr uint32_t NumMainloopLoadThreads = NumThreadsPerWarp; // 1 warp
   static constexpr uint32_t NumEpilogueLoadThreads = NumThreadsPerWarp; // 1 warp
   static constexpr uint32_t NumEpilogueThreads     = CollectiveEpilogue::ThreadCount;
+  constexpr static int NumControlWarps = 4;
+  constexpr static int NumEpilogueWarps = 16;
 
   static constexpr uint32_t MaxThreadsPerBlock = NumSchedThreads +
                                                  NumMainloopLoadThreads + NumMMAThreads +
@@ -144,6 +148,7 @@ public:
     ProblemShape problem_shape;
     MainloopArguments mainloop;
     EpilogueArguments epilogue;
+    TileSchedulerArguments scheduler{};
   };
 
   // Kernel device entry point API
@@ -151,6 +156,8 @@ public:
     ProblemShape problem_shape;
     MainloopParams mainloop;
     EpilogueParams epilogue;
+    KernelHardwareInfo hw_info;
+    TileSchedulerParams scheduler;
   };
 
   enum class WarpCategory : int32_t {
@@ -177,11 +184,46 @@ public:
   static
   Params
   to_underlying_arguments(Arguments const& args, void* workspace) {
+    // Default: query hardware info if not provided
+    int device_id = 0;
+    int sm_count = KernelHardwareInfo::query_device_multiprocessor_count(device_id);
+    KernelHardwareInfo hw_info{device_id, sm_count, 0};
+    return to_underlying_arguments(args, hw_info, workspace);
+  }
+
+  // Convert to underlying arguments with provided hardware info
+  static
+  Params
+  to_underlying_arguments(Arguments const& args, KernelHardwareInfo const& hw_info, void* workspace) {
+    auto problem_shape_MNKL = append<4>(args.problem_shape, Int<1>{});
     return {
       args.problem_shape,
       CollectiveMainloop::to_underlying_arguments(args.problem_shape, args.mainloop, workspace),
-      CollectiveEpilogue::to_underlying_arguments(args.problem_shape, args.epilogue, workspace)
+      CollectiveEpilogue::to_underlying_arguments(args.problem_shape, args.epilogue, workspace),
+      hw_info,
+      TileScheduler::to_underlying_arguments(
+        problem_shape_MNKL, TileShape{}, ClusterShape{},
+        hw_info, args.scheduler, workspace
+      )
     };
+  }
+
+  // Computes the kernel launch grid shape based on runtime parameters
+  static dim3
+  get_grid_shape(Params const& params) {
+    // Given device SM count, set grid size s.t. we do not launch more thread blocks than we can run concurrently
+    TileSchedulerArguments args{};
+    if constexpr (!std::is_const_v<decltype(args.max_swizzle_size)>) {
+      args.max_swizzle_size = 1 << params.scheduler.log_swizzle_size_;
+    }
+    
+    return TileScheduler::get_grid_shape(params.scheduler, params.problem_shape, TileShape{}, ClusterShape{}, params.hw_info, args);
+  }
+
+  static dim3
+  get_block_shape() {
+    static constexpr int TotalSubGroups = NumControlWarps + NumEpilogueWarps;
+    return dim3(cutlass::NumThreadsPerWarp, TotalSubGroups, 1);
   }
 
   CUTLASS_DEVICE
@@ -334,10 +376,8 @@ public:
     auto load_inputs = collective_mainloop.load_init(problem_shape, shared_tensors.mainloop, make_tuple(tdesc_a, tdesc_b));
     auto intermedia_tensor = CollectiveEpilogue::get_intermedia_tensor(shared_tensors.epilogue);
 
-    auto coop_set_ids = collective_mainloop.coop_set_ids_;
-    auto problem_blocks_shape = TileScheduler::calculate_problem_blocks_shape(problem_shape_MNKL, CtaShape_MNK{});
-    auto scheduler = TileScheduler(&shared_tensors.clc_response[0], problem_blocks_shape, coop_set_ids);
-    auto work_tile_info = scheduler.initial_work_tile_info();
+    auto scheduler = TileScheduler(&shared_tensors.clc_response[0], params.scheduler);
+    auto work_tile_info = scheduler.initial_work_tile_info(cluster_shape);
 
     if (is_participant.main_load) {
       do {

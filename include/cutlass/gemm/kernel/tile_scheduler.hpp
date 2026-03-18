@@ -72,6 +72,7 @@ struct StaticPersistentScheduler { };
 
 #if (SYCL_INTEL_TARGET == 40)
 #include "cutlass/gemm/kernel/xe4_tile_scheduler.hpp"
+#include "cutlass/gemm/kernel/xe4_static_tile_scheduler.hpp"
 #elif defined (SYCL_INTEL_TARGET)
 #include "cutlass/gemm/kernel/xe_tile_scheduler_streamk.hpp"
 #include "cutlass/gemm/kernel/xe_tile_scheduler_group.hpp"
@@ -201,6 +202,21 @@ struct TileSchedulerSelector<
     SchedulerPipelineStageCount
   > {
   using Scheduler = PersistentTileSchedulerXe4<SchedulerPipelineStageCount,ClusterShape>;
+};
+
+template <
+  class TileShape,
+  class ClusterShape,
+  uint32_t SchedulerPipelineStageCount
+>
+struct TileSchedulerSelector<
+    StaticPersistentScheduler,
+    cutlass::arch::Xe4,
+    TileShape,
+    ClusterShape,
+    SchedulerPipelineStageCount
+  > {
+  using Scheduler = StaticPersistentTileSchedulerXe4<ClusterShape>;
 };
 #elif defined (SYCL_INTEL_TARGET)
 template <

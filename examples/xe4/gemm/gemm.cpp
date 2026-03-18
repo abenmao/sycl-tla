@@ -15,7 +15,6 @@ struct GEMM_TEST_CONFIG {
   using ClusterShape_MNK = Shape<_1, _1, _1>;
 
   static constexpr int StagesA = 2;
-  static constexpr bool is_persistent = false;
   static constexpr auto activation_type = ActivationType::SiLu;
   static constexpr auto operationC_type = OperationCType::Mul;
   static constexpr cute::array<int, 4> ProblemShape_MNKL = {512, 768, 384, 1};
