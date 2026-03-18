@@ -204,7 +204,6 @@ struct Options {
 
   int iterations = 1000, verify = 1;
   int m = 16, n = 8, k = 64, l = 1;
-  int verify = 1;
   double eps = 1e-5;
 
   // Parses the command line

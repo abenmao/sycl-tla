@@ -3103,6 +3103,7 @@ struct TestbedImpl {
         CUTLASS_TRACE_HOST("TestbedImpl::run: cudaGetLastError() is " << error_str);
         test::unit::LogUnsupportedOnce(printed_unsupported_once, error_str);
     #endif
+        return true;
       }
 #if (CUTLASS_DEBUG_TRACE_LEVEL > 1)
       CUTLASS_TRACE_HOST("TestbedImpl::run: Calling gemm_op.run");
