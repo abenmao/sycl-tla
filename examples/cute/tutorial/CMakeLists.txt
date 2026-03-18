@@ -38,8 +38,7 @@ if (CUTLASS_ENABLE_SYCL)
     set(SGEMM_ARGS "")
     set(BMG_ARGS "")
   endif()
-endif()
-if(NOT SYCL_INTEL_TARGET EQUAL 40)
+
   cutlass_example_add_executable(
     cute_tutorial_sgemm_1
     sgemm_1_sycl.cpp
@@ -86,8 +85,28 @@ if(NOT SYCL_INTEL_TARGET EQUAL 40)
       TEST_COMMAND_OPTIONS
       BMG_ARGS
     )
-  endif()
 
+    cutlass_example_add_executable(
+      cute_tutorial_xe_gemm_quantization
+      xe_gemm_quantization.cpp
+      TEST_COMMAND_OPTIONS
+      BMG_ARGS
+    )
+
+    cutlass_example_add_executable(
+      cute_tutorial_xe_gemm_subgroup_specialization_slm
+      xe_gemm_subgroup_specialization_slm.cpp
+      TEST_COMMAND_OPTIONS
+      BMG_ARGS
+    )
+
+    cutlass_example_add_executable(
+      cute_tutorial_xe_two_gemm_fusion
+      xe_two_gemm_fusion.cpp
+      TEST_COMMAND_OPTIONS
+      BMG_ARGS
+    )
+  endif()
   if (SYCL_NVIDIA_TARGET)
     message(STATUS "Building CuTE examples for NVIDIA GPU targets with SYCL")
 
@@ -101,7 +120,6 @@ if(NOT SYCL_INTEL_TARGET EQUAL 40)
       sgemm_sm80_sycl.cpp
     )
   endif()
-
 else()
   add_subdirectory(xe4)
 endif()

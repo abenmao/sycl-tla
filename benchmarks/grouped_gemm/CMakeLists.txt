@@ -35,7 +35,7 @@ cutlass_benchmark_add_suite(cutlass_benchmarks_grouped_gemm)
 if(CUTLASS_ENABLE_SYCL)
 
 # TODO: support grouped gemm benchmark on more platforms
-if(SYCL_INTEL_TARGET EQUAL 35)
+if(DEFINED SYCL_INTEL_TARGET AND SYCL_TARGET_INTEL_GPU_CRI)
 
 cutlass_benchmark_add_executable(
     cutlass_benchmarks_grouped_gemm_sycl

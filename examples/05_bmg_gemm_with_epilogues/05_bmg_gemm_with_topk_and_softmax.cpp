@@ -1,6 +1,6 @@
 /***************************************************************************************************
- * Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
- * Copyright (C) 2025 Intel Corporation, All rights reserved.
+ * Copyright (C) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (C) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -220,8 +220,8 @@ struct Options {
     cmd.get_cmd_line_argument("k", k);
     cmd.get_cmd_line_argument("l", l);
     cmd.get_cmd_line_argument("iterations", iterations);
-    cmd.get_cmd_line_argument("eps", eps);
     cmd.get_cmd_line_argument("verify", verify, 1);
+    cmd.get_cmd_line_argument("eps", eps);
   }
 
   /// Prints the usage statement.
@@ -235,9 +235,9 @@ struct Options {
       << "  --n=<int>                   Sets the N extent of the GEMM\n"
       << "  --k=<int>                   Sets the K extent of the GEMM\n"
       << "  --l=<int>                   Sets the l extent (batch) of the GEMM\n"
-      << "  --iterations=<int>          Number of profiling iterations to perform.\n\n"
-      << "  --eps=<float>               Threshold of numerical verification. Default: 1e-5.\n\n"
-      << "  --verify=<int>              Specify whether to verify.\n\n";
+      << "  --iterations=<int>          Number of profiling iterations to perform.\n"
+      << "  --verify=<int>              Specify whether to verify. Default: 1\n"
+      << "  --eps=<float>               Threshold of numerical verification. Default: 1e-5.\n\n";
 
     out
       << "\n\nExamples:\n\n"
@@ -473,12 +473,13 @@ int run(Options &options) {
   if (options.verify != 0) {
     // Check if output from CUTLASS kernel and reference kernel are equal or not
     result.passed = result.verify(options);
+    std::cout << "Disposition: " << (result.passed ? "Passed" : "Failed") << std::endl;
 
     if (!result.passed) {
-      exit(-1);
+      return -1;
     }
   } else {
-    std::cout << "Disposition is skipped.\n";
+    std::cout << "Disposition is skipped." << std::endl;
   }
 
   // Run profiling loop

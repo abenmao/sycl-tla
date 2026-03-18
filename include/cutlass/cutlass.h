@@ -36,6 +36,15 @@
 
 #pragma once
 
+#if defined(SYCL_INTEL_TARGET)
+#undef SYCL_INTEL_TARGET
+#if __SYCL_TARGET_INTEL_GPU_CRI__
+#define SYCL_INTEL_TARGET 35
+#else
+#define SYCL_INTEL_TARGET 20
+#endif
+#endif
+
 #include "cutlass/detail/helper_macros.hpp"
 #include <cutlass/gpu_generics.h>
 

@@ -7,13 +7,20 @@ on:
     branches: [ "cri","master_next","cri_pathfinding","v0.1.0_next" ]
   merge_group:
     branches: [ "cri","master_next","cri_pathfinding","v0.1.0_next" ]
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  BUILD_SERVER: "shliclel4165.sh.intel.com"
+  BUILD_SERVER_USER: "gta"
+  SSH_OPTS: "-o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+
 jobs:
   run-tests:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - compiler: RELEASE
@@ -37,7 +44,127 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
-      - name: Setup virtual environment
+
+      # ---- BMG: Remote Docker build with local fallback ----
+      - name: Remote Build (BMG)
+        id: remote-build
+        if: matrix.gpu == 'BMG'
+        continue-on-error: true
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          BUILD_ID="${{ github.run_id }}-${{ github.run_attempt }}-common"
+          echo "BUILD_ID=${BUILD_ID}" >> $GITHUB_ENV
+
+          # Detect the runner's compiler version for ABI compatibility
+          RUNNER_ICPX_VER=$(/opt/intel/oneapi/compiler/latest/bin/icpx --version | head -1)
+          echo "Runner compiler: ${RUNNER_ICPX_VER}"
+
+          # Layer 1: Quick connectivity check (30s timeout)
+          ssh ${SSH_OPTS} \
+            ${BUILD_SERVER_USER}@${BUILD_SERVER} "timeout 30 docker info > /dev/null 2>&1"
+
+          # Find a oneAPI installation on build server with matching compiler version
+          ONEAPI_REAL_PATH=$(readlink -f /opt/intel/oneapi)
+          MATCH=$(ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} "
+            # First try the same path as runner
+            if [ -d '${ONEAPI_REAL_PATH}' ] && \
+               '${ONEAPI_REAL_PATH}/compiler/latest/bin/icpx' --version 2>/dev/null | head -1 | grep -qF '${RUNNER_ICPX_VER}'; then
+              echo '${ONEAPI_REAL_PATH}'
+            else
+              # Search all installed versions
+              for d in /opt/intel/oneapi-pytorch/*/; do
+                if [ -x \"\${d}compiler/latest/bin/icpx\" ] && \
+                   \"\${d}compiler/latest/bin/icpx\" --version 2>/dev/null | head -1 | grep -qF '${RUNNER_ICPX_VER}'; then
+                  echo \"\${d%/}\"
+                  break
+                fi
+              done
+            fi
+          ")
+
+          if [ -n "${MATCH}" ]; then
+            ONEAPI_REAL_PATH="${MATCH}"
+            echo "Build server matching oneAPI found at: ${ONEAPI_REAL_PATH}"
+          else
+            echo "::warning::Build server has no oneAPI matching '${RUNNER_ICPX_VER}'. Falling back to local build."
+            exit 1
+          fi
+
+          # Cleanup build artifacts older than 24 hours (by creation time, falling back to mtime)
+          # Only deletes directories matching our BUILD_ID pattern (digits-digits-common/small)
+          ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} "
+            cutoff=\$(date -d '24 hours ago' +%s)
+            for d in /home/${BUILD_SERVER_USER}/ci-builds/*/ /shared/builds/*/; do
+              [ -d \"\$d\" ] || continue
+              bname=\$(basename \"\$d\")
+              [[ \"\$bname\" =~ ^[0-9]+-[0-9]+-(common|small)$ ]] || continue
+              created=\$(stat -c %W \"\$d\" 2>/dev/null || echo 0)
+              if [ \"\$created\" -le 0 ]; then
+                created=\$(stat -c %Y \"\$d\" 2>/dev/null || echo 0)
+              fi
+              if [ \"\$created\" -gt 0 ] && [ \"\$created\" -lt \"\$cutoff\" ]; then
+                sudo -n rm -rf \"\$d\"
+              fi
+            done
+          " || true
+
+          # Layer 2: Full remote build (protected by 30-min step timeout)
+          # Clean up any leftover ci-build dir for this BUILD_ID.
+          # Docker may leave root-owned artifacts (e.g. mount stubs)
+          # that rsync (running as gta) cannot overwrite.
+          ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} \
+            "sudo -n rm -rf /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID} && \\
+             mkdir -p /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source"
+          rsync -a --delete --exclude='.git' -e "ssh ${SSH_OPTS}" \
+            ${{ github.workspace }}/ \
+            ${BUILD_SERVER_USER}@${BUILD_SERVER}:/home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source/
+
+          ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} "
+            docker run --rm \
+              -v ${ONEAPI_REAL_PATH}:/opt/intel/oneapi:ro \
+              -v /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source:/workspace/source:ro \
+              -v /shared/builds/${BUILD_ID}:/workspace/output \
+              -v /home/${BUILD_SERVER_USER}/tools/bmg-ocloc:/workspace/tools/bmg-ocloc:ro \
+              -v /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source/.github/docker/build.sh:/workspace/bin/build.sh:ro \
+              -e SYCL_TARGET=${{ matrix.sycl_target }} \
+              -e BUILD_TARGETS=all \
+              -e NINJA_JOBS=52 \
+              -e REMOTE_BUILD_DIR=/tmp/cutlass-build-${BUILD_ID} \
+              -e REMOTE_SOURCE_DIR=${{ github.workspace }} \
+              -e CMAKE_EXTRA_FLAGS='-DCUTLASS_ENABLE_BENCHMARKS=ON -DCUTLASS_SYCL_PROFILING_ENABLED=ON -DCUTLASS_SYCL_RUNNING_CI=ON' \
+              cutlass-builder:latest
+          "
+
+          rsync -a -e "ssh ${SSH_OPTS}" ${BUILD_SERVER_USER}@${BUILD_SERVER}:/shared/builds/${BUILD_ID}/build/ /tmp/cutlass-build-${BUILD_ID}/
+          echo "BUILD_DIR=/tmp/cutlass-build-${BUILD_ID}" >> $GITHUB_ENV
+
+      - name: Fallback Local Build (BMG)
+        if: matrix.gpu == 'BMG' && steps.remote-build.outcome != 'success'
+        shell: bash
+        run: |
+          echo "::warning::Remote build failed or timed out. Falling back to local build on BMG runner."
+          source /opt/intel/oneapi/setvars.sh --force
+          export CC=icx
+          export CXX=icpx
+          # Disable flash attention for BMG (build time too long, causes OOM)
+          if [ -f examples/06_bmg_flash_attention/CMakeLists.txt ]; then
+            cat /dev/null > examples/06_bmg_flash_attention/CMakeLists.txt
+          fi
+          mkdir -p build && cd build
+          cmake .. -G Ninja \
+            -DCUTLASS_ENABLE_SYCL=ON \
+            -DDPCPP_SYCL_TARGET=${{ matrix.sycl_target }} \
+            -DCUTLASS_ENABLE_BENCHMARKS=ON \
+            -DCUTLASS_SYCL_PROFILING_ENABLED=ON \
+            -DCUTLASS_SYCL_RUNNING_CI=ON
+          ninja test/all
+          ninja examples/all
+          ninja benchmarks/all
+          echo "BUILD_DIR=$(pwd)" >> $GITHUB_ENV
+
+      # ---- Common: Setup environment ----
+      - name: Setup Virtual Environment
         shell: bash
         run: |
           source /opt/intel/oneapi/setvars.sh --force
@@ -49,12 +176,18 @@ jobs:
           export CC=icx
           export CXX=icpx
           export CUTLASS_SYCL_PROFILING_ENABLED=ON
+          if [ "${{ matrix.gpu }}" = "BMG" ]; then
+            export LD_LIBRARY_PATH=${BUILD_DIR}/deps/oneMKL/lib:${LD_LIBRARY_PATH:-}
+          fi
           # Persist environment variables to following steps 
           env >> $GITHUB_ENV
           which $CXX
           $CXX --version
           sycl-ls
-      - name: Build
+
+      # ---- PVC: Local build ----
+      - name: Configure Cmake Options
+        if: matrix.gpu != 'BMG'
         shell: bash
         run: |
           # Temporarily disable 06_bmg_flash_attention for BMG target:
@@ -70,19 +203,85 @@ jobs:
             -DCUTLASS_ENABLE_BENCHMARKS=ON \
             -DCUTLASS_SYCL_PROFILING_ENABLED=ON \
             -DCUTLASS_SYCL_RUNNING_CI=ON
-          cmake --build .
-      - name: Unit test
+      - name: Build Unit Tests
+        if: matrix.gpu != 'BMG'
         working-directory: build
         shell: bash
         run: |
-          cmake --build . --target test_unit
-      - name: Examples
+          ninja test/all
+      - name: Build Examples
+        if: matrix.gpu != 'BMG'
         working-directory: build
         shell: bash
         run: |
-          cmake --build . --target test_examples -j 1
+          ninja examples/all
+
+      # ---- BMG: Verify remote build output ----
+      - name: Verify Build Output
+        if: matrix.gpu == 'BMG' && steps.remote-build.outcome == 'success'
+        shell: bash
+        run: |
+          set +o pipefail
+          echo "BUILD_DIR: ${BUILD_DIR}"
+          echo "=== Test executables ==="
+          find ${BUILD_DIR}/test -maxdepth 5 -name 'cutlass_test_unit_*' -type f 2>/dev/null | head -5
+          SAMPLE=$(find ${BUILD_DIR}/test -maxdepth 5 -name 'cutlass_test_unit_*' -type f 2>/dev/null | head -1)
+          set -o pipefail
+          if [ -z "$SAMPLE" ]; then
+            echo "::error::No test executables found in build output!"
+            exit 1
+          fi
+          echo "=== Sample executable: $SAMPLE ==="
+          file "$SAMPLE"
+          ldd "$SAMPLE" 2>&1 | head -20 || true
+
+      # ---- Common: Run tests ----
+      - name: Run Unit Tests
+        shell: bash
+        run: |
+          cd ${BUILD_DIR:-build}
+          ctest -R test_unit --output-on-failure
+      - name: Run Examples
+        shell: bash
+        run: |
+          cd ${BUILD_DIR:-build}
+          ctest -R test_example --output-on-failure
+
+      # ---- PVC: Build benchmarks ----
       - name: Build Benchmarks
+        if: matrix.gpu != 'BMG'
         working-directory: build
         shell: bash
         run: |
-          cmake --build . --target cutlass_benchmarks
+          ninja benchmarks/all
+
+      # ---- Common: Run benchmarks ----
+      - name: Run Benchmarks
+        shell: bash
+        run: |
+          cd ${BUILD_DIR:-build}
+          if [ "${{ matrix.gpu }}" = "BMG" ]; then
+            ctest -R cbenchmarks -E "pvc|flash_attention" --output-on-failure
+          else
+            ctest -R cbenchmarks -E "fp8|prefill_xe_config_file_prefill_bf16|prefill_legacy_xe_config_file_pvc" --output-on-failure
+          fi
+
+      # ---- BMG: Cleanup build artifacts ----
+      # Always attempts both local and remote cleanup regardless of build path:
+      #   Local:  rm -rf /tmp/cutlass-build-* (no-op if local fallback was used)
+      #   Remote: ssh + sudo rm -rf (handles 3 scenarios):
+      #     - Server unreachable: SSH times out (~30s), || true prevents job failure
+      #     - Server reachable, no artifacts: rm -rf silently succeeds (~1s)
+      #     - Server reachable, artifacts exist: normal cleanup (~few seconds)
+      #   Residual artifacts (if any) are cleaned by 24h auto-cleanup on next run.
+      - name: Cleanup Build Artifacts
+        if: always() && matrix.gpu == 'BMG'
+        shell: bash
+        run: |
+          if [ -n "${BUILD_ID}" ] && [[ "${BUILD_ID}" =~ ^[0-9]+-[0-9]+-(common|small)$ ]]; then
+            rm -rf /tmp/cutlass-build-${BUILD_ID} || true
+            ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} \
+              "sudo -n rm -rf /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID} /shared/builds/${BUILD_ID}" || true
+          else
+            echo "Skipping cleanup: BUILD_ID '${BUILD_ID}' is empty or does not match expected pattern"
+          fi

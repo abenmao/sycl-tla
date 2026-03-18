@@ -30,39 +30,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
-      - name: Build and run tests with simulator
+      - name: Build
         shell: bash
-        run: |
-          source ./.github/scripts/cri_simulator_compile.sh
-      - name: Clean sessions and collect logs
-        working-directory: build
+        run: bash ./.github/scripts/cri_simulator_compile.sh build
+      - name: Run example tests
         shell: bash
-        run: |
-          FLAG_FILE="finish_compilation_job.log"
-          echo "waiting for compilation session..."
-          while [[ ! -f "$FLAG_FILE" ]]; do
-              sleep 2
-          done
-          echo "Compilation finished, now checking test result..."
-          TEST_EXIT_CODE=$(cat test_exit_code.log)
-          echo "Test exit code: $TEST_EXIT_CODE"
-          echo "Collecting logs..."
-          echo "cmake build log: "
-          cat cmake_build.log
-          echo "build log: "
-          cat build.log
-          echo "test example log: "
-          cat test_example.log
-          echo "test ut log: "
-          cat test_ut.log
-          echo "Cleaning up sessions..."
-          tmux kill-session -t session_simulator
-          tmux kill-session -t session_compile
-          if [[ $TEST_EXIT_CODE -ne 0 ]]; then
-          echo "Test failed with exit code $TEST_EXIT_CODE"
-          exit $TEST_EXIT_CODE
-          else
-          echo "Tests passed!"
-          fi
+        run: bash ./.github/scripts/cri_simulator_compile.sh test examples
+      - name: Run unit tests
+        shell: bash
+        run: bash ./.github/scripts/cri_simulator_compile.sh test ut

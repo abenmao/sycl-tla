@@ -1,6 +1,6 @@
 /***************************************************************************************************
- * Copyright (c) 2025 - 2025 Codeplay Software Ltd. All rights reserved.
- * Copyright (C) 2025 Intel Corporation, All rights reserved.
+ * Copyright (C) 2025 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (C) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -95,7 +95,7 @@ struct Options {
   Options():
     help(false),
     error(false),
-    m(5120), n(4096), k(4096), l(1), iterations(100),
+    m(5120), n(4096), k(4096), l(1), iterations(100), verify(1),
     alpha(1.f), beta(0.f)
   { }
 
@@ -129,8 +129,8 @@ struct Options {
       << "  --k=<int>                   Sets the K extent of the GEMM\n"
       << "  --l=<int>                   Sets the L extent (batch count) of the GEMM\n"
       << "  --alpha=<s32>               Epilogue scalar alpha\n"
-      << "  --beta=<s32>                Epilogue scalar beta\n\n"
-      << "  --iterations=<int>          Iterations\n\n"
+      << "  --beta=<s32>                Epilogue scalar beta\n"
+      << "  --iterations=<int>          Iterations\n"
       << "  --verify=<int>              Specify whether to verify.\n\n";
 
     return out;
@@ -311,7 +311,7 @@ struct ExampleRunner {
 
       if (!passed) return cutlass::Status::kErrorInternal;
     } else {
-      std::cout << "Disposition is skipped.\n";
+      std::cout << "Disposition is skipped." << std::endl;
     }
 
     if (options.iterations > 0) {

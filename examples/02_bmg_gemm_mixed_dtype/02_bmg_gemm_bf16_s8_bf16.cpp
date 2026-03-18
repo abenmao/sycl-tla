@@ -1,6 +1,6 @@
 /***************************************************************************************************
- * Copyright (c) 2025 - 2025 Codeplay Software Ltd. All rights reserved.
- * Copyright (C) 2025 Intel Corporation, All rights reserved.
+ * Copyright (C) 2025 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (C) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -112,7 +112,7 @@ struct Options {
   Options():
     help(false),
     error(false),
-    m(5120), n(4096), k(4096), l(1), iterations(20),
+    m(5120), n(4096), k(4096), l(1), iterations(20), verify(1),
     g(128), mode(2), a_narrower(false),
     alpha(1.f), beta(0.f)
   { }
@@ -155,8 +155,8 @@ struct Options {
       << "  --mode=<int>                The mode to run the gemm. 0 is Convert Only, 1 is Convert and Scale, 2 is Convert and Scale with Zero Point\n"
       << "  --a_narrower                If specified, make A the narrower type (B is narrower by default).\n"
       << "  --alpha=<s32>               Epilogue scalar alpha\n"
-      << "  --beta=<s32>                Epilogue scalar beta\n\n"
-      << "  --iterations=<int>          Iterations\n\n"
+      << "  --beta=<s32>                Epilogue scalar beta\n"
+      << "  --iterations=<int>          Iterations\n"
       << "  --verify=<int>              Specify whether to verify.\n\n";
 
     return out;

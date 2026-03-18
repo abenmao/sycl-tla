@@ -1,6 +1,6 @@
 /***************************************************************************************************
- * Copyright (c) 2024 - 2024 Codeplay Software Ltd. All rights reserved.
- * Copyright (C) 2026 Intel Corporation, All rights reserved.
+ * Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (C) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -95,7 +95,7 @@ struct Options {
   Options():
     help(false),
     error(false),
-    m(5120), n(4096), k(4096), l(1), iterations(20),
+    m(5120), n(4096), k(4096), l(1), iterations(20), verify(1),
     alpha(1.f), beta(1.f)
   { }
 
@@ -130,8 +130,8 @@ struct Options {
       << "  --l=<int>                   Sets the L extent (batch count) of the GEMM\n"
       << "  --alpha=<s32>               Epilogue scalar alpha\n"
       << "  --beta=<s32>                Epilogue scalar beta\n"
-      << "  --verify=<int>              Verify\n"
-      << "  --iterations=<int>          Iterations\n\n";
+      << "  --iterations=<int>          Iterations\n"
+      << "  --verify=<int>              Specify whether to verify.\n\n";
 
     return out;
   }
@@ -275,16 +275,16 @@ struct ExampleRunner {
 
     compat::wait();
 
-    bool passed = true;
     if (options.verify != 0) {
-      passed = verify(problem_size, options.alpha, options.beta);
-      std::cout << (passed ? "passed" : "failed");
-      // TODO: Throw exception or error when verification fails, this requires refactor for the whole example.
+      // Verify that the result is correct
+      bool passed = verify(problem_size, options.alpha, options.beta);
+      std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
+      if (!passed) return cutlass::Status::kErrorInternal;
     } else {
-      std::cout << "verification skipped";
+      std::cout << "Disposition is skipped." << std::endl;
     }
 
-    if (passed && options.iterations > 0) {
+    if (options.iterations > 0) {
       GPU_Clock timer;
       timer.start();
       for (int i = 0; i < options.iterations; ++i) {

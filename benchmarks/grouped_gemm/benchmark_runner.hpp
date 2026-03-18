@@ -722,7 +722,7 @@ struct BenchmarkRunnerGemm {
       } else {
         return typename Gemm::GemmKernel::MainloopArguments{
           ptr_A.get(), stride_A.get(), ptr_B.get(), stride_B.get(),
-          ptr_SFA.get(), stride_SFA.get(), ptr_SFB.get(), stride_SFB.get(), GROUP_SIZE
+          ptr_SFA.get(), stride_SFA.get(), ptr_SFB.get(), stride_SFB.get(),
         };
       }
     }();
@@ -829,7 +829,7 @@ struct BenchmarkRunnerGemm {
         } else {
           return typename Gemm::GemmKernel::MainloopArguments{
             ptr_A.get(), stride_A.get(), ptr_B.get(), stride_B.get(),
-            ptr_SFA.get(), stride_SFA.get(), ptr_SFB.get(), stride_SFB.get(), GROUP_SIZE
+            ptr_SFA.get(), stride_SFA.get(), ptr_SFB.get(), stride_SFB.get(),
           };
         }
       }();

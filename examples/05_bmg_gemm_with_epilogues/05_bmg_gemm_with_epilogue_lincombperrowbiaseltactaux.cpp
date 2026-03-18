@@ -89,7 +89,7 @@ struct Options {
   Options():
     help(false),
     error(false),
-    m(5120), n(4096), k(4096), l(1), iterations(100),
+    m(5120), n(4096), k(4096), l(1), iterations(100), verify(1),
     alpha(1.f), beta(0.f)
   { }
 
@@ -291,7 +291,7 @@ struct ExampleRunner {
 
       if (!passed) return cutlass::Status::kErrorInternal;
     } else {
-      std::cout << "Disposition is skipped.\n";
+      std::cout << "Disposition is skipped." << std::endl;
     }
 
     if (options.iterations > 0) {

@@ -686,8 +686,7 @@ struct BenchmarkRunnerGemm {
       arguments.mainloop = {block_A.get(), stride_A, block_B.get(), stride_B};
     } else {
       arguments.mainloop = {block_A.get(), stride_A, block_B.get(), stride_B,
-        block_scaleA.get(), stride_SA, block_scaleB.get(), stride_SB,
-        GROUP_SIZE};
+        block_scaleA.get(), stride_SA, block_scaleB.get(), stride_SB};
     }
 
 
@@ -787,8 +786,7 @@ struct BenchmarkRunnerGemm {
             gemm::GemmUniversalMode::kGemm,
             problem_size,
             {block_A.get(), stride_A, block_B.get(), stride_B,
-              block_scaleA.get(), stride_SA, block_scaleB.get(), stride_SB,
-              GROUP_SIZE},
+              block_scaleA.get(), stride_SA, block_scaleB.get(), stride_SB},
             {{ElementAccumulator(options.alpha), ElementAccumulator(options.beta)}, block_C.get(), stride_C, block_D.get(), stride_D},
             hw_info
           };
