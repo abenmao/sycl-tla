@@ -50,4 +50,11 @@ cutlass_example_add_executable(
   TEST_BASE
 )
 
+cutlass_example_add_executable(
+  51_xe35_block_scaled_grouped_gemm_fp8_e4m3
+  51_xe35_block_scaled_grouped_gemm_fp8_e4m3.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_BASE
+)
+
 endif()

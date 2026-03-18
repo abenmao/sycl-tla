@@ -104,7 +104,7 @@ struct Options {
     cmd.get_cmd_line_argument("iterations", iterations, 100);
     cmd.get_cmd_line_argument("verify", verify, 1);
 
-    assert(groups > 2);
+    assert(groups >= 2);
     problem_sizes_host.clear();
     problem_sizes_host.reserve(groups);
     for(int i = 0; i < groups; i++) {
@@ -151,6 +151,45 @@ struct Options {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
+template <class DispatchPolicy>
+struct RunnerScalePolicy;
+
+template <int Stages, int GroupSize, class KernelSchedule>
+struct RunnerScalePolicy<cutlass::gemm::MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, cute::Int<GroupSize>, KernelSchedule>> {
+  static constexpr int group_k = GroupSize;
+  static constexpr int group_n = 1;
+  static constexpr bool has_n_block_scale = false;
+
+  CUTE_HOST_DEVICE
+  static int scale_n_extent(int N) {
+    return N;
+  }
+
+  CUTE_HOST_DEVICE
+  static int scale_n_coord(int n) {
+    return n;
+  }
+};
+
+template <int Stages, class GroupSizeM, class GroupSizeN, class GroupSizeK, class KernelSchedule>
+struct RunnerScalePolicy<cutlass::gemm::MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, cute::tuple<GroupSizeM, GroupSizeN, GroupSizeK>, KernelSchedule>> {
+  static constexpr int group_k = GroupSizeK::value;
+  static constexpr int group_n = GroupSizeN::value;
+  static constexpr bool has_n_block_scale = true;
+
+  CUTE_HOST_DEVICE
+  static int scale_n_extent(int N) {
+    return cute::ceil_div(N, group_n);
+  }
+
+  CUTE_HOST_DEVICE
+  static int scale_n_coord(int n) {
+    return n / group_n;
+  }
+};
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
 template <
   class Gemm
 >
@@ -186,7 +225,10 @@ struct ExampleRunner {
   using ElementCompute = typename CollectiveEpilogue::ElementCompute;
 
   using ProblemShapeType = typename Gemm::GemmKernel::ProblemShape;
-  static constexpr int scaleGroupSize = CollectiveMainloop::GroupK;
+  using DispatchPolicy = typename CollectiveMainloop::DispatchPolicy;
+  using ScalePolicy = RunnerScalePolicy<DispatchPolicy>;
+  static constexpr int scaleGroupK = ScalePolicy::group_k;
+  static constexpr int scaleGroupN = ScalePolicy::group_n;
 
   //
   // Data members
@@ -348,7 +390,7 @@ struct ExampleRunner {
   class Layout,
   class ElementScale,
   class ScaleLayout>
-  static void apply_scale(DstElement* dq_buffer,
+  static void apply_scale_A(DstElement* dq_buffer,
                        SrcElement const* q_buffer,
                        Layout const operand_layout,
                        ElementScale const* scale_buffer,
@@ -399,8 +441,77 @@ struct ExampleRunner {
             }
           }();
 
-          auto scale_data = (ret_type)(scale_tensor(mn, k / scaleGroupSize, l));
+          auto scale_data = (ret_type)(scale_tensor(mn, k / scaleGroupK, l));
+
           dst_tensor(mn, k, l) = (src_data) * scale_data;
+        }
+      }
+    }
+
+    cutlass::device_memory::copy_to_device(dq_buffer, (DstElement*)(raw_pointer_cast(dst_tensor.data())), dst_tensor.size());
+    compat::wait();
+  }
+
+  template <
+  class DstElement,
+  class SrcElement,
+  class Layout,
+  class ElementScale,
+  class ScaleLayout>
+  static void apply_scale_B(DstElement* dq_buffer,
+                       SrcElement const* q_buffer,
+                       Layout const operand_layout,
+                       ElementScale const* scale_buffer,
+                       ScaleLayout const scale_layout) {
+    if constexpr (std::is_same_v<DstElement, SrcElement>) {
+      return;
+    }
+
+    std::vector<uint8_t> dst(size(operand_layout) * sizeof_bits_v<DstElement> / 8, 0);
+    cutlass::device_memory::copy_to_host(dst.data(), (uint8_t*)dq_buffer, dst.size());
+
+    std::vector<uint8_t> src(size(operand_layout) * sizeof_bits_v<SrcElement> / 8, 0);
+    cutlass::device_memory::copy_to_host(src.data(), (uint8_t*)q_buffer, src.size());
+
+    std::vector<uint8_t> scale(size(scale_layout) * sizeof_bits_v<ElementScale> / 8, 0);
+    cutlass::device_memory::copy_to_host(scale.data(), (uint8_t*)scale_buffer, scale.size());
+
+    compat::wait();
+
+    static_assert(sizeof_bits_v<DstElement> >= 8);
+
+    auto dst_tensor = make_tensor(make_gmem_ptr(reinterpret_cast<DstElement*>(dst.data())), operand_layout);
+
+    auto src_tensor = [&]() {
+      if constexpr (sizeof_bits_v<SrcElement> < 8) {
+        return make_tensor(cute::subbyte_iterator<const SrcElement>(src.data()), operand_layout);
+      } else {
+        return make_tensor(make_gmem_ptr(reinterpret_cast<SrcElement const *>(src.data())), operand_layout);
+      }
+    }();
+
+    auto scale_tensor = make_tensor(make_gmem_ptr(reinterpret_cast<ElementScale const *>(scale.data())), scale_layout);
+
+    auto N = size<0>(src_tensor);
+    auto K = size<1>(src_tensor);
+    auto L = size<2>(src_tensor);
+
+    using ret_type = float;
+
+    for (int l = 0; l < L; l++) {
+      for (int k= 0; k < K; k++) {
+        for (int n = 0; n < N; n++) {
+          auto src_data = [&]() {
+            if constexpr (sizeof_bits_v<SrcElement> >= 8) {
+              return  (ret_type)(src_tensor(n, k, l));
+            } else {
+              return (ret_type)(src_tensor(n, k, l).get());
+            }
+          }();
+
+          auto scale_data = (ret_type)(scale_tensor(ScalePolicy::scale_n_coord(n), k / scaleGroupK, l));
+
+          dst_tensor(n, k, l) = (src_data) * scale_data;
         }
       }
     }
@@ -421,9 +532,9 @@ struct ExampleRunner {
       int64_t elements_C = M * N;
       int64_t elements_D = M * N;
       
-      const int scale_k = cute::ceil_div(K, scaleGroupSize);
+      const int scale_k = cute::ceil_div(K, scaleGroupK);
       int64_t elements_SFA = scale_k * M;
-      int64_t elements_SFB = scale_k * N;
+      int64_t elements_SFB = static_cast<int64_t>(scale_k) * ScalePolicy::scale_n_extent(N);
       cutlass::DeviceAllocation<ElementA> a;
       a.reset(elements_A);
       block_A.push_back(a);
@@ -480,9 +591,9 @@ struct ExampleRunner {
       auto shape_A = cute::make_shape(M, K, L);
       auto shape_B = cute::make_shape(N, K, L);
       auto shape_CD = cute::make_shape(M, N, L);
-      const int scale_k = cute::ceil_div(K, scaleGroupSize);
+      const int scale_k = cute::ceil_div(K, scaleGroupK);
       auto shape_scale_A = cute::make_shape(M, scale_k, L);
-      auto shape_scale_B = cute::make_shape(N, scale_k, L);
+      auto shape_scale_B = cute::make_shape(ScalePolicy::scale_n_extent(N), scale_k, L);
 
       auto stride_a = cutlass::make_cute_packed_stride(StrideA{}, shape_A);
       auto stride_b = cutlass::make_cute_packed_stride(StrideB{}, shape_B);
@@ -519,8 +630,8 @@ struct ExampleRunner {
       auto layout_scale_A = make_layout(shape_scale_A, stride_sfa);
       auto layout_scale_B = make_layout(shape_scale_B, stride_sfb);
 
-      apply_scale(block_A_dq.at(i).get(), block_A.at(i).get(), layout_A, block_scaleA.at(i).get(),  layout_scale_A);
-      apply_scale(block_B_dq.at(i).get(), block_B.at(i).get(), layout_B, block_scaleB.at(i).get(),  layout_scale_B);
+      apply_scale_A(block_A_dq.at(i).get(), block_A.at(i).get(), layout_A, block_scaleA.at(i).get(),  layout_scale_A);
+      apply_scale_B(block_B_dq.at(i).get(), block_B.at(i).get(), layout_B, block_scaleB.at(i).get(),  layout_scale_B);
 
       ptr_A_host.at(i) = block_A.at(i).get();
       ptr_B_host.at(i) = block_B.at(i).get();
@@ -637,7 +748,11 @@ struct ExampleRunner {
         std::cout << "Datatype: float_e5m2_t"<< std::endl;
       }
       std::cout << "Groups: " << options.groups << std::endl;
-      printf("Cutlass Grouped GEMM Performance:     [%4.3f]TFLOP/s  (%6.4f)ms\n", tflops_result, cute_time*1000);
+      if constexpr (ScalePolicy::has_n_block_scale) {
+        printf("Cutlass FP8 BlockScaled Grouped GEMM Performance:     [%4.3f]TFLOP/s  (%6.4f)ms\n", tflops_result, cute_time*1000);
+      } else {
+        printf("Cutlass Grouped GEMM Performance:     [%4.3f]TFLOP/s  (%6.4f)ms\n", tflops_result, cute_time*1000);
+      }
     }
     return cutlass::Status::kSuccess;
   }
