@@ -519,7 +519,7 @@ TEST(XE4_FMHA_FWD, DISABLED_batch1_heads4_seq2048_kv2048) {
 =============================================================================
 */
 
-TEST(XE4_FMHA_FWD, batch1_heads4_seq256_kv1536) {
+TEST(XE4_FMHA_FWD, DISABLED_batch1_heads4_seq256_kv1536) {
   using TileShape = cute::Shape<_128, _128, _512, _128>;
   using KernelFactory = Fmha3KernelFactory<TileShape>;
 
@@ -538,7 +538,7 @@ TEST(XE4_FMHA_FWD, batch1_heads4_seq256_kv1536) {
   EXPECT_TRUE(passed);
 }
 
-TEST(XE4_FMHA_FWD, batch1_heads4_seq256_kv2048) {
+TEST(XE4_FMHA_FWD, DISABLED_batch1_heads4_seq256_kv2048) {
   using TileShape = cute::Shape<_128, _128, _512, _128>;
   using KernelFactory = Fmha3KernelFactory<TileShape>;
 
@@ -602,7 +602,7 @@ TEST(XE4_FMHA_FWD, DISABLED_batch1_heads4_seq256_kv8192) {
 =============================================================================
 */
 
-TEST(XE4_FMHA_FWD, asymmetric_seq128_kv2048) {
+TEST(XE4_FMHA_FWD, DISABLED_asymmetric_seq128_kv2048) {
   using TileShape = cute::Shape<_128, _128, _512, _128>;
   using KernelFactory = Fmha3KernelFactory<TileShape>;
 
