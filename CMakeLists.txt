@@ -135,9 +135,11 @@ if (CUTLASS_ENABLE_SYCL)
     set(SYCL_NVIDIA_TARGET ON)
     add_compile_definitions(SYCL_NVIDIA_TARGET)
     list(REMOVE_ITEM DPCPP_SYCL_TARGET_LIST "nvptx64-nvidia-cuda")
-  elseif("intel_gpu_pvc" IN_LIST DPCPP_SYCL_TARGET_LIST OR
-         "spir64" IN_LIST DPCPP_SYCL_TARGET_LIST OR
-         "intel_gpu_bmg_g21" IN_LIST DPCPP_SYCL_TARGET_LIST)
+    elseif("intel_gpu_pvc" IN_LIST DPCPP_SYCL_TARGET_LIST OR
+      "pvc" IN_LIST DPCPP_SYCL_TARGET_LIST OR
+      "spir64" IN_LIST DPCPP_SYCL_TARGET_LIST OR
+      "intel_gpu_bmg_g21" IN_LIST DPCPP_SYCL_TARGET_LIST OR
+      "bmg" IN_LIST DPCPP_SYCL_TARGET_LIST)
     # Xe_Core Architecture_number(SYCL_INTEL_TARGET)
     # XeHPC 12
     # Xe2 20
@@ -146,10 +148,12 @@ if (CUTLASS_ENABLE_SYCL)
     # Xe4 40
     set(SYCL_INTEL_TARGET 20)
     add_compile_definitions(SYCL_INTEL_TARGET=${SYCL_INTEL_TARGET})
-  elseif("intel_gpu_cri" IN_LIST DPCPP_SYCL_TARGET_LIST)
+    elseif("intel_gpu_cri" IN_LIST DPCPP_SYCL_TARGET_LIST OR
+      "cri" IN_LIST DPCPP_SYCL_TARGET_LIST)
     set(SYCL_INTEL_TARGET 35)
     add_compile_definitions(SYCL_INTEL_TARGET=${SYCL_INTEL_TARGET})
-  elseif("intel_gpu_jgs" IN_LIST DPCPP_SYCL_TARGET_LIST)
+    elseif("intel_gpu_jgs" IN_LIST DPCPP_SYCL_TARGET_LIST OR
+      "jgs" IN_LIST DPCPP_SYCL_TARGET_LIST)
     set(SYCL_INTEL_TARGET 40)
     add_compile_definitions(SYCL_INTEL_TARGET=${SYCL_INTEL_TARGET})
     add_compile_definitions(SYCL_INTEL_XE4_TARGET)
@@ -172,14 +176,6 @@ if (CUTLASS_ENABLE_SYCL)
     intel_gpu_jgs
     jgs
   )
-
-  foreach(ITEM IN LISTS DPCPP_SYCL_TARGET_LIST)
-    if(ITEM IN_LIST INTEL_SYCL_TARGETS)
-      set(SYCL_INTEL_TARGET ON)
-    else()
-      message(FATAL_ERROR "In SYCL target list '${DPCPP_SYCL_TARGET}' ${ITEM} is invalid.")
-    endif()
-  endforeach()
 
   if (SYCL_NVIDIA_TARGET AND SYCL_INTEL_TARGET)
     message(FATAL_ERROR "Both SYCL_NVIDIA_TARGET and SYCL_INTEL_TARGET are set. Only one is allowed.")
