@@ -194,18 +194,18 @@ auto choose_xe_dequantize_impl()
 }
 
 template <class IntermediateType = float,
-          class Engine, class LayoutWI, class Layout,
+          class Engine, class Layout,
           class ScaleType>
 CUTE_HOST_DEVICE
 void
-dequantize(SubgroupTensor<Engine,LayoutWI,Layout>& sg_tensor,
-           ScaleType                               scale)
+dequantize(Tensor<Engine, Layout>& tensor,
+           ScaleType               scale)
 {
     using ElemType = typename Engine::element_type;
 
-    auto impl = choose_xe_dequantize_impl<IntermediateType, LayoutWI, ElemType>();
+    auto impl = choose_xe_dequantize_impl<IntermediateType, Layout, ElemType>();
 
-    dequantize_impl(impl, sg_tensor, scale);
+    dequantize_impl(impl, tensor, scale);
 }
 
 } // end namespace cute

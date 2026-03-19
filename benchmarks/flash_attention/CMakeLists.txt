@@ -33,40 +33,57 @@ set(CUTLASS_APPLICATIONS_DIR ${CUTLASS_DIR}/applications)
 cutlass_benchmark_add_suite(cutlass_benchmarks_flash_attention)
 
 # Pass these configuration files for the CI
-set(CONFIG_FILE_DECODE_BF16 --config_file=${CUTLASS_DIR}/benchmarks/device/bmg/input_files/input_flash_attention_decode_bf16.in)
-set(CONFIG_FILE_DECODE_FP8 --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_sglang_flash_attention_decode_fp8.in)
-set(CONFIG_FILE_DECODE_FP8KV_FP16MMA --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_sglang_flash_attention_decode_fp8kv_fp16mma.in)
+if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
+  set(CONFIG_FILE_DECODE_FP8 --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_flash_attention_decode_fp8.in)
+  set(CONFIG_FILE_DECODE_FP8KV_FP16MMA --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_flash_attention_decode_fp8kv_fp16mma.in)
 
-set(CONFIG_FILE_PREFILL_BF16 --config_file=${CUTLASS_DIR}/benchmarks/device/bmg/input_files/input_flash_attention_prefill_bf16.in)
-set(CONFIG_FILE_PREFILL_FP8 --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_sglang_flash_attention_prefill_fp8.in)
-set(CONFIG_FILE_PREFILL_FP8KV_FP16MMA --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_sglang_flash_attention_prefill_fp8kv_fp16mma.in)
+  set(CONFIG_FILE_PREFILL_FP8 --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_flash_attention_prefill_fp8.in)
+  set(CONFIG_FILE_PREFILL_FP8KV_FP16MMA --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_flash_attention_prefill_fp8kv_fp16mma.in)
+  set(CONFIG_FILE_PREFILL_MXFP8 --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_flash_attention_prefill_mxfp8.in)
+  set(CONFIG_FILE_PREFILL_MXFP4 --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_flash_attention_prefill_mxfp4.in)
 
-if(SYCL_INTEL_TARGET EQUAL 35)
-  set(CONFIG_FILE_PREFILL_MXFP8 --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_sglang_flash_attention_prefill_mxfp8.in)
-  set(CONFIG_FILE_PREFILL_MXFP4 --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_sglang_flash_attention_prefill_mxfp4.in)
+  set(DECODE_TEST_COMMAND_OPTIONS CONFIG_FILE_DECODE_FP8 CONFIG_FILE_DECODE_FP8KV_FP16MMA)
+  set(PREFILL_TEST_COMMAND_OPTIONS CONFIG_FILE_PREFILL_FP8 CONFIG_FILE_PREFILL_FP8KV_FP16MMA CONFIG_FILE_PREFILL_MXFP8 CONFIG_FILE_PREFILL_MXFP4)
+else()
+  set(CONFIG_FILE_DECODE_BF16 --config_file=${CUTLASS_DIR}/benchmarks/device/bmg/input_files/input_flash_attention_decode_bf16.in)
+  set(CONFIG_FILE_DECODE_FP8 --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_flash_attention_decode_fp8.in)
+  set(CONFIG_FILE_DECODE_FP8KV_FP16MMA --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_flash_attention_decode_fp8kv_fp16mma.in)
+
+  set(CONFIG_FILE_PREFILL_BF16 --config_file=${CUTLASS_DIR}/benchmarks/device/bmg/input_files/input_flash_attention_prefill_bf16.in)
+  set(CONFIG_FILE_PREFILL_FP8 --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_flash_attention_prefill_fp8.in)
+  set(CONFIG_FILE_PREFILL_FP8KV_FP16MMA --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_flash_attention_prefill_fp8kv_fp16mma.in)
+
+  set(DECODE_TEST_COMMAND_OPTIONS CONFIG_FILE_DECODE_BF16 CONFIG_FILE_DECODE_FP8 CONFIG_FILE_DECODE_FP8KV_FP16MMA)
+  set(PREFILL_TEST_COMMAND_OPTIONS CONFIG_FILE_PREFILL_BF16 CONFIG_FILE_PREFILL_FP8 CONFIG_FILE_PREFILL_FP8KV_FP16MMA)
 endif()
 
 # Create the decode subsuite under flash_attention
 cutlass_benchmark_add_suite(cutlass_benchmarks_flash_attention_decode
                             SUPERSUITE cutlass_benchmarks_flash_attention)
 
-add_library(decode_lib SHARED
-            benchmarks_decode_bf16.cpp
-            benchmarks_decode_fp8.cpp
-            benchmarks_decode_fp8kv_fp16mma.cpp
+set(DECODE_SOURCES
+    benchmarks_decode_fp8.cpp
+    benchmarks_decode_fp8kv_fp16mma.cpp
 )
+if(NOT (CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI))
+  list(APPEND DECODE_SOURCES benchmarks_decode_bf16.cpp)
+endif()
+
+add_library(decode_lib SHARED ${DECODE_SOURCES})
 
 # Create the prefill subsuite under flash_attention
 cutlass_benchmark_add_suite(cutlass_benchmarks_flash_attention_prefill
                             SUPERSUITE cutlass_benchmarks_flash_attention)
 
 set(PREFILL_SOURCES
-    benchmarks_prefill_bf16.cpp
     benchmarks_prefill_fp8.cpp
     benchmarks_prefill_fp8kv_fp16mma.cpp
 )
+if(NOT (CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI))
+  list(APPEND PREFILL_SOURCES benchmarks_prefill_bf16.cpp)
+endif()
 
-if(SYCL_INTEL_TARGET EQUAL 35)
+if(SYCL_TARGET_INTEL_GPU_CRI)
   list(APPEND PREFILL_SOURCES
        benchmarks_prefill_mxfp8.cpp
        benchmarks_prefill_mxfp4.cpp
@@ -83,21 +100,19 @@ foreach(name IN LISTS LIB_LIST)
   add_onemkl_to_target(TARGET ${name})
   # Add only SYCL include directories, not the full SYCL flags (to avoid duplication)
   add_sycl_include_directories_to_target(${name})
+  if(SYCL_TARGET_INTEL_GPU_CRI)
+    target_compile_definitions(${name} PRIVATE __SYCL_TARGET_INTEL_GPU_CRI__)
+  endif()
 endforeach()
 
 cutlass_benchmark_add_executable(
     cutlass_benchmarks_flash_attention_decode_xe
     main.cpp
-    TEST_COMMAND_OPTIONS CONFIG_FILE_DECODE_BF16 CONFIG_FILE_DECODE_FP8 CONFIG_FILE_DECODE_FP8KV_FP16MMA
+    TEST_COMMAND_OPTIONS ${DECODE_TEST_COMMAND_OPTIONS}
     LIBRARIES decode_lib
     INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
     SUITE cutlass_benchmarks_flash_attention_decode
 )
-
-set(PREFILL_TEST_COMMAND_OPTIONS CONFIG_FILE_PREFILL_BF16 CONFIG_FILE_PREFILL_FP8 CONFIG_FILE_PREFILL_FP8KV_FP16MMA)
-if(SYCL_INTEL_TARGET EQUAL 35)
-  list(APPEND PREFILL_TEST_COMMAND_OPTIONS CONFIG_FILE_PREFILL_MXFP8 CONFIG_FILE_PREFILL_MXFP4)
-endif()
 
 cutlass_benchmark_add_executable(
     cutlass_benchmarks_flash_attention_prefill_xe
