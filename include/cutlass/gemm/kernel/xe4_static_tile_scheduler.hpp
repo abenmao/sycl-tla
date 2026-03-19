@@ -51,7 +51,20 @@ public:
   CUTLASS_DEVICE
   auto
   get_k_tile_iterator(WorkTileInfo const& work_tile_info, ProblemShapeMNKL problem_shape_MNKL, TileShape tile_shape) {
-    return BaseScheduler::get_k_tile_iterator(work_tile_info, problem_shape_MNKL, tile_shape, cute::tuple<>{});
+    constexpr int32_t rank_t = cute::rank<2>(ProblemShapeMNKL{});
+    auto k_tiles = cute::ceil_div(cute::get<2>(problem_shape_MNKL), cute::get<2>(tile_shape));
+    if constexpr (rank_t == 4) {
+      return cute::make_coord_iterator<cute::Step<_3, _0, _1, _2>>(k_tiles);
+    }
+    else if constexpr (rank_t == 3) {
+      return cute::make_coord_iterator<cute::Step<_2, _0, _1>>(k_tiles);
+    }
+    else if constexpr (rank_t == 2) {
+      return cute::make_coord_iterator<cute::Step<_1, _0>>(k_tiles);
+    }
+    else {
+      return cute::make_coord_iterator(k_tiles);
+    }
   }
 
   CUTLASS_DEVICE

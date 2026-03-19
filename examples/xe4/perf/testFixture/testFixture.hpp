@@ -295,7 +295,7 @@ class testFixture : public ::testing::TestWithParam<TestParamInfo> {
             Shape<int, int, int, int>,
             CollectiveMainloop,
             CollectiveEpilogue,
-            void>;
+            cutlass::gemm::StaticPersistentScheduler>;
 
         using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
 
@@ -351,27 +351,12 @@ class testFixture : public ::testing::TestWithParam<TestParamInfo> {
         auto [cluster_size_y, cluster_size_x, cluster_size_z] = ClusterShape{};
         sycl::range<3> cluster_size(cluster_size_z, cluster_size_y, cluster_size_x);
 
-        auto num_groups = ceil_div(problem_shape_mnkl, TileShape{});
-        range<3> local_range(1, NumControlWarps + NumEpilogueWarps, cutlass::NumThreadsPerWarp);
-        range<3> group_range(1, get<0>(num_groups), get<1>(num_groups));
-
-        constexpr bool is_persistent = Config::is_persistent;
-        if constexpr (is_persistent) {
-            auto [cta_num_y, cta_num_x] = typename Config::CtaNum_MN{};
-            group_range[1] = min(group_range[1], cta_num_y * cluster_size_y);
-            group_range[2] = min(group_range[2], cta_num_x * cluster_size_x);
-        }
-
+        auto num_groups = ceil_div(problem_shape_mnkl, TileShape{});        
         print("\n=========== GEMM Configuration ===========\n");
         print("Problem Shape (M,N,K,L): "); print(problem_shape_mnkl); print("\n");
         print("CTA Tile (M,N,K): "); print(TileShape{}); print("\n");
         print("Cluster Shape (M,N,K): "); print(ClusterShape{}); print("\n");
-        if constexpr (is_persistent) {
-            auto [cta_num_y, cta_num_x] = typename Config::CtaNum_MN{};
-            print("CTA Numbers (M,N): ("); print(cta_num_y); print(","); print(cta_num_x); print(")\n");
-        }
         print("Pipeline Stages: "); print(Config::StagesA); print("\n");
-        print("Persistent Mode: "); print(is_persistent ? "true" : "false"); print("\n");
         print("Activation: ");
         if constexpr (activation_type == ActivationType::SiLu) {
             print("SiLu");
@@ -391,7 +376,6 @@ class testFixture : public ::testing::TestWithParam<TestParamInfo> {
         }
         print("\n");
         print("ceil_div(ProblemShape,TileShape): "); print(num_groups); print("\n");
-        print("Group range: {"); print(group_range[0]); print(", "); print(group_range[1]); print(", "); print(group_range[2]); print("}\n");
         print("=================================\n\n");
 
         auto stride_A = cutlass::make_cute_packed_stride(StrideA{}, select<0, 2, 3>(problem_shape_mnkl));
@@ -422,6 +406,14 @@ class testFixture : public ::testing::TestWithParam<TestParamInfo> {
 
         GemmKernel kernel;
         auto params = kernel.to_underlying_arguments(args, nullptr);
+
+        // Get grid and block shapes from kernel
+        dim3 const grid = GemmKernel::get_grid_shape(params);
+        dim3 const block = GemmKernel::get_block_shape();
+
+        // Convert to SYCL range format: (z, y, x) ordering
+        range<3> group_range(grid.z, grid.y, grid.x);
+        range<3> local_range(block.z, block.y, block.x);
 
         int smem_size = 0;
         cutlass::SyclClusterLaunchParams launch_params = {group_range, local_range, cluster_size, smem_size, q};
