@@ -30,98 +30,98 @@
 if (CUTLASS_ENABLE_SYCL)
   message(STATUS "Building CuTE tutorial examples with SYCL")
 
-  if (CUTLASS_TEST_FOR_CRI)
-    set(TEST_BASE "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=${CRI_DEFAULT_ITERATIONS}")
-    set(SGEMM_ARGS ${TEST_BASE})
-    set(BMG_ARGS ${TEST_BASE} "--verify=${CRI_DEFAULT_VERIFY}")
+  if (NOT SYCL_INTEL_TARGET EQUAL 40)
+    if (CUTLASS_TEST_FOR_CRI)
+      set(TEST_BASE "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=${CRI_DEFAULT_ITERATIONS}")
+      set(SGEMM_ARGS ${TEST_BASE})
+      set(BMG_ARGS ${TEST_BASE} "--verify=${CRI_DEFAULT_VERIFY}")
+    else()
+      set(SGEMM_ARGS "")
+      set(BMG_ARGS "")
+    endif()
+
+    cutlass_example_add_executable(
+      cute_tutorial_sgemm_1
+      sgemm_1_sycl.cpp
+      TEST_COMMAND_OPTIONS
+      SGEMM_ARGS
+    )
+
+    cutlass_example_add_executable(
+      cute_tutorial_sgemm_2
+      sgemm_2_sycl.cpp
+      TEST_COMMAND_OPTIONS
+      SGEMM_ARGS
+    )
+
+    cutlass_example_add_executable(
+      cute_tutorial_tiled_copy
+      tiled_copy_sycl.cpp
+    )
+
+    cutlass_example_add_executable(
+      cute_tutorial_tiled_copy_if
+      tiled_copy_if_sycl.cpp
+    )
+
+    if (SYCL_INTEL_TARGET)
+      message(STATUS "Building CuTE examples for Intel GPU targets")
+      cutlass_example_add_executable(
+        cute_tutorial_bmg
+        bgemm_bmg_legacy.cpp
+        TEST_COMMAND_OPTIONS
+        BMG_ARGS
+      )
+
+      cutlass_example_add_executable(
+        cute_tutorial_xe_gemm
+        xe_gemm.cpp
+        TEST_COMMAND_OPTIONS
+        BMG_ARGS
+      )
+
+      cutlass_example_add_executable(
+        cute_tutorial_xe_gemm_slm
+        xe_gemm_slm.cpp
+        TEST_COMMAND_OPTIONS
+        BMG_ARGS
+      )
+
+      cutlass_example_add_executable(
+        cute_tutorial_xe_gemm_quantization
+        xe_gemm_quantization.cpp
+        TEST_COMMAND_OPTIONS
+        BMG_ARGS
+      )
+
+      cutlass_example_add_executable(
+        cute_tutorial_xe_gemm_subgroup_specialization_slm
+        xe_gemm_subgroup_specialization_slm.cpp
+        TEST_COMMAND_OPTIONS
+        BMG_ARGS
+      )
+
+      cutlass_example_add_executable(
+        cute_tutorial_xe_two_gemm_fusion
+        xe_two_gemm_fusion.cpp
+        TEST_COMMAND_OPTIONS
+        BMG_ARGS
+      )
+    endif()
+    if (SYCL_NVIDIA_TARGET)
+      message(STATUS "Building CuTE examples for NVIDIA GPU targets with SYCL")
+
+      cutlass_example_add_executable(
+        cute_tutorial_sgemm_sm70
+        sgemm_sm70_sycl.cpp
+      )
+
+      cutlass_example_add_executable(
+        cute_tutorial_sgemm_sm80
+        sgemm_sm80_sycl.cpp
+      )
+    endif()
   else()
-    set(SGEMM_ARGS "")
-    set(BMG_ARGS "")
-  endif()
-
-  cutlass_example_add_executable(
-    cute_tutorial_sgemm_1
-    sgemm_1_sycl.cpp
-    TEST_COMMAND_OPTIONS
-    SGEMM_ARGS
-  )
-
-  cutlass_example_add_executable(
-    cute_tutorial_sgemm_2
-    sgemm_2_sycl.cpp
-    TEST_COMMAND_OPTIONS
-    SGEMM_ARGS
-  )
-
-  cutlass_example_add_executable(
-    cute_tutorial_tiled_copy
-    tiled_copy_sycl.cpp
-  )
-
-  cutlass_example_add_executable(
-    cute_tutorial_tiled_copy_if
-    tiled_copy_if_sycl.cpp
-  )
-
-  if (SYCL_INTEL_TARGET)
-    message(STATUS "Building CuTE examples for Intel GPU targets")
-    cutlass_example_add_executable(
-      cute_tutorial_bmg
-      bgemm_bmg_legacy.cpp
-      TEST_COMMAND_OPTIONS
-      BMG_ARGS
-    )
-
-    cutlass_example_add_executable(
-      cute_tutorial_xe_gemm
-      xe_gemm.cpp
-      TEST_COMMAND_OPTIONS
-      BMG_ARGS
-    )
-
-    cutlass_example_add_executable(
-      cute_tutorial_xe_gemm_slm
-      xe_gemm_slm.cpp
-      TEST_COMMAND_OPTIONS
-      BMG_ARGS
-    )
-
-    cutlass_example_add_executable(
-      cute_tutorial_xe_gemm_quantization
-      xe_gemm_quantization.cpp
-      TEST_COMMAND_OPTIONS
-      BMG_ARGS
-    )
-
-    cutlass_example_add_executable(
-      cute_tutorial_xe_gemm_subgroup_specialization_slm
-      xe_gemm_subgroup_specialization_slm.cpp
-      TEST_COMMAND_OPTIONS
-      BMG_ARGS
-    )
-
-    cutlass_example_add_executable(
-      cute_tutorial_xe_two_gemm_fusion
-      xe_two_gemm_fusion.cpp
-      TEST_COMMAND_OPTIONS
-      BMG_ARGS
-    )
-  endif()
-  if (SYCL_NVIDIA_TARGET)
-    message(STATUS "Building CuTE examples for NVIDIA GPU targets with SYCL")
-
-    cutlass_example_add_executable(
-      cute_tutorial_sgemm_sm70
-      sgemm_sm70_sycl.cpp
-    )
-
-    cutlass_example_add_executable(
-      cute_tutorial_sgemm_sm80
-      sgemm_sm80_sycl.cpp
-    )
-  endif()
-
-  if (SYCL_INTEL_TARGET EQUAL 40)
     add_subdirectory(xe4)
   endif()
 endif()
