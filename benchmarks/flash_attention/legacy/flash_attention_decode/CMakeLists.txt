@@ -29,7 +29,11 @@
 set(CUTLASS_APPLICATIONS_DIR ${CUTLASS_DIR}/applications)
 
 # Pass these configuration files for the CI
-set(CONFIG_FILE_NO_KV_CACHE --config_file=${CUTLASS_DIR}/benchmarks/device/bmg/input_files/input_sglang_flash_attention_decode_nokvcache.in)
+if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
+  set(CONFIG_FILE_NO_KV_CACHE --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/legacy/input_sglang_flash_attention_decode_nokvcache.in)
+else()
+  set(CONFIG_FILE_NO_KV_CACHE --config_file=${CUTLASS_DIR}/benchmarks/device/bmg/input_files/legacy/input_sglang_flash_attention_decode_nokvcache.in)
+endif()
 
 cutlass_benchmark_add_suite(cutlass_benchmarks_flash_attention_decode_legacy
                             SUPERSUITE cutlass_benchmarks_flash_attention_legacy)
