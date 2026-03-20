@@ -116,7 +116,7 @@ def main():
         
         cmd = (
             f"{binary_path} "
-            f"--iterations=20 --batch={batch} --verify=0 "
+            f"--iterations=100 --batch={batch} --verify=0 "
             f"--num_heads_q={nh_q} --num_heads_kv={nh_kv} "
             f"--seq_len_qo={seq_qo} --seq_len_kv={seq_kv} "
             f"{causal_flag} {varlen_flag}"

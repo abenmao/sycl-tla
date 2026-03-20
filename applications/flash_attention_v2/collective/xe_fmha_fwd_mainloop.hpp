@@ -403,7 +403,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
       }
 
       /* Apply softmax and scaling */
-      softmax(K == blk_k0, tSrS, tA_max, tA_sum, tArA);
+      //softmax(K == blk_k0, tSrS, tA_max, tA_sum, tArA);
+      /* Apply softmax and scaling (tA rescaling fused into GEMM2 VTile loop) */
+      auto rescale = softmax(K == blk_k0, tSrS, tA_max, tA_sum);
       reorder(tSrS, tArP);
 
       /* GEMM 2: A += P * V, split in v dimension */
@@ -411,6 +413,11 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
       for (int VV = 0; VV < VTiles; VV++) {
         copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
         reorder(tVrV, tArV);
+        if (K != blk_k0) {
+          CUTLASS_PRAGMA_UNROLL
+          for (int i = 0; i < tArA.size() / VTiles; i++)
+            tArA(_,_,_,VV)(i) *= broadcast<0>(rescale, tArA, i);
+        }
         cute::gemm(mma_pv, tArP, tArV, tArA(_,_,_,VV));
       }
 
@@ -456,12 +463,13 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
 
   // Single step of blocked softmax.
   CUTLASS_DEVICE
-  void
+  //void
+  FragSRow
   softmax(bool       first_block, // First softmax block?
           FragS    & tS,          // Softmax src/dst block
           FragSRow & tS_max,      // Softmax row-wise max accumulator
-          FragSRow & tS_sum,      // Softmax row-wise sum accumulator
-          FragA    & tA) {        // O accumulator (for rescaling)
+          FragSRow & tS_sum) {      // Softmax row-wise sum accumulator
+//          FragA    & tA) {        // O accumulator (for rescaling)
 
     /* Compute row-wise maxima for this block */
     auto tS_bmax = reduce<1>(tS, sycl::maximum{});
@@ -486,9 +494,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
         tS_sum(i) *= rescale(i);
       }
 
-      CUTLASS_PRAGMA_UNROLL
-      for (int i = 0; i < tA.size(); i++)
-        tA(i) *= broadcast<0>(rescale, tA, i);
+      //CUTLASS_PRAGMA_UNROLL
+      //for (int i = 0; i < tA.size(); i++)
+      //  tA(i) *= broadcast<0>(rescale, tA, i);
     }
 
     /* Update sums */
@@ -496,6 +504,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < tS_sum.size(); i++)
       tS_sum(i) += tS_bsum(i);
+
+    return rescale;
   }
 };
 

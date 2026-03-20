@@ -339,12 +339,17 @@ reduce(SubgroupTensor<Engine,FragLayout,SubgroupTVLayout> const& src, BinaryOp o
 
   [[maybe_unused]] T temp[size<1>(rcoord_to_v)];  /* array of partial reductions */
 
+  constexpr bool use_native_fmax = is_same_v<T, float> && is_same_v<BinaryOp, sycl::maximum<void>>;
   CUTE_UNROLL
   for (int j = 0; j < size<1>(rcoord_to_v); j++) {
     T acc = src_r(0, j);
     CUTE_UNROLL
     for (int i = 1; i < size<0>(rcoord_to_v); i++) {
-      acc = op(acc, src_r(i, j));
+      //acc = op(acc, src_r(i, j));
+      if constexpr (use_native_fmax)
+        acc = sycl::fmax(acc, src_r(i, j));
+      else
+        acc = op(acc, src_r(i, j));
     }
 
     if constexpr (hadd16 || hmax16 || hadd8 || hmax8)
