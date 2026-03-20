@@ -72,7 +72,6 @@ def run_command(command, cwd, log_path=None):
                     log_file.write(line)
             except subprocess.CalledProcessError as e:
                 print(f"Error: Command failed with return code {e.returncode}")
-                print("Stderr:", e.stderr)
                 if e.stdout:
                     print("Stdout:", e.stdout)
                     print(e.stdout)
@@ -184,7 +183,7 @@ def main():
         "--push-to-dashboard",
         dest="grafana",
         action="store_true",
-        help="Increase output verbosity"
+        help="Push benchmark results to the Grafana/InfluxDB dashboard"
     )
     args = parser.parse_args()
 
