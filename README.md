@@ -1,10 +1,10 @@
-![ALT](./media/images/gemm-hierarchy-with-epilogue-no-labels.png "Complete CUDA GEMM decomposition")
+![ALT](https://raw.githubusercontent.com/intel/sycl-tla/main/media/images/gemm-hierarchy-with-epilogue-no-labels.png "Complete CUDA GEMM decomposition")
 
 # SYCL\* Templates for Linear Algebra (SYCL\*TLA)
 
 **This repository is forked from the NVIDIA CUTLASS repository and extends CUTLASS and CuTe API support to Intel GPUs through SYCL enablement.**
 *This project was previously referred to as CUTLASS-SYCL, you may see references to CUTLASS-SYCL in the code and documentation.*
-*For SYCL support instructions, refer to the [SYCL build documentation](./media/docs/cpp/build/building_with_sycl_support.md)*
+*For SYCL support instructions, refer to the [SYCL build documentation](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/build/building_with_sycl_support.md)*
 
 *SYCL is a trademark of the Khronos Group Inc, Other names and brands may be claimed as the property of others.*
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/intel/sycl-tla/badge)](https://scorecard.dev/viewer/?uri=github.com/intel/sycl-tla)
@@ -28,9 +28,9 @@ multiply operations targeting Intel's programmable, high-throughput execution
 units implemented in Intel Data Center GPU Max/Flex Series (Intel Xe
 architecture, codename: Ponte-Vecchio) and Intel Arc B580 GPUs.
 
-See the [Quick Start Guide](./media/docs/cpp/quickstart.md) to get started quickly.
+See the [Quick Start Guide](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/quickstart.md) to get started quickly.
 
-See the [functionality docs](./media/docs/cpp/functionality.md) for a more comprehensive
+See the [functionality docs](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/functionality.md) for a more comprehensive
 list of kernel level features, data types, instructions, and minimum supported by CUTLASS on each GPU
 architecture.
 
@@ -49,41 +49,37 @@ Base NVIDIA CUTLASS Versions for SYCL*TLA releases:
 |0.7 | 4.2.1 |
 |0.7-cri | 4.2.1 |
 
-# What's New in SYCL*TLA [0.7-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.7-cri)
-### New Features (Notes: all the tests based on CRI simulator)
-  - Support different tile configurations in Block Scaled GEMM (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/174)
-  - Support extended reorder APIs type conversions (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/230)
-  - Support benchmark for GEMM and Flash Attention with new CUTE APIs (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/177 , https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/241)
-  - Support scaled for V matrix in Flash Attention (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/161)
-  - Support scale data preloading and prefetching algorithm for Block Scaled GEMM (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/189 , https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/216)
-  - Refine Grouped GEMM implementation (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/149)
-  - Optimize extra move instructions, improve scale copy efficiency for Block Scaled GEMM (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/184 , https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/195 , https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/204)
-  - Optimize prefetch algorithm for Flash Attention (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/246)
+# What's New in SYCL*TLA 0.7 
 
-### Performance (Internal Only)
-  - Systolic data is relative accurate(CRI simulator can correctly simulate systolic behaviors), E2E data for reference only(CRI simulator cannot correctly simulate memory behaviors).
-  - GEMM Performance
-      | **Data Type**    | **% of Peak (E2E)** | **% of Peak (Systolic)** |
-      |:-----------------|:--------|:---------|
-      |MXFP4 (E2M1)      |  42% |  88%  |
-      |MXFP8 (E4M3, E5M2)|  61% |  92%  |
-      |BF16              |  73% |  96%  |
-
-  - MOE Performance
-      | **Data Type**    | **% of Peak (E2E)** |
-      |:-----------------|:--------|
-      |MXFP4 (E2M1)      |  38% |
-      |MXFP8 (E4M3, E5M2)|  54% |
-      |BF16              |  72% |
-
-  - Flash Attention Performance
-      | **Data Type** | **Prefill/Decode** | **% of Peak (E2E)** |
-      |:--------------|:-------------------|:---------|
-      |BF16           |     Prefill        |  18%  |
-      |BF16           |     Decode         |  22%  |
-
-
-**See the [CHANGELOG](CHANGELOG-SYCL.md) for details of all past releases and updates.**
+## [SYCL*TLA 0.7](https://github.com/intel/sycl-tla/releases/tag/v0.7) (2026-01-28)
+ 
+### Major Architecture Changes
+- Epilogue Visitor Tree (EVT):
+  - Extended Xe epilogue fusion support for various post-GEMM computations ([#647](https://github.com/intel/sycl-tla/pull/647), [#650](https://github.com/intel/sycl-tla/pull/650))
+  - Added support for XeAuxLoad ([#674](https://github.com/intel/sycl-tla/pull/674)), XeAuxStore ([#691](https://github.com/intel/sycl-tla/pull/691), [#698](https://github.com/intel/sycl-tla/pull/698), [#704](https://github.com/intel/sycl-tla/pull/704)), XeRow/XeCol broadcast ([#690](https://github.com/intel/sycl-tla/pull/690)) and XeRow/XeCol/XeScalar reduction ([#680](https://github.com/intel/sycl-tla/pull/680), [#694](https://github.com/intel/sycl-tla/pull/694))
+  - Added Python EVT support with comprehensive test coverage
+- Xe Epilogue Rearchitecture ([#621](https://github.com/intel/sycl-tla/pull/621)): redesigned epilogue path for the new Xe architecture.
+ 
+### Enhancements
+- Flash Attention: performance improvements (BF16 speedup headline) and continued feature maturation ([#679](https://github.com/intel/sycl-tla/pull/679)).
+- GEMM: Column Major C bias support ([#656](https://github.com/intel/sycl-tla/pull/656)).
+- Shared Local Memory (SLM): new SLM copy helper functions ([#673](https://github.com/intel/sycl-tla/pull/673)).
+- Build: multi-target builds via `DPCPP_SYCL_TARGET` ([#630](https://github.com/intel/sycl-tla/pull/630)).
+- Reorder: API updates and fixes ([#639](https://github.com/intel/sycl-tla/pull/639)), ([#635](https://github.com/intel/sycl-tla/pull/635))).
+ 
+### Bug Fixes / Notes
+- Flash Attention KV cache / prefill fixes ([#617](https://github.com/intel/sycl-tla/pull/617)).
+- CuTe atom partitioning edge-case fix ([#628](https://github.com/intel/sycl-tla/pull/628)).
+- Fix CMake path issue ([#700](https://github.com/intel/sycl-tla/pull/700)).
+- Unit tests for VNNI load disabled due to driver issue ([#707](https://github.com/intel/sycl-tla/pull/707)).
+ 
+### Known Issues
+- **CuTe Column Major Support**: Column Major support for C matrix may introduce stability issues with older versions of driver. Please update to the latest driver version for optimal stability.
+ 
+### Deprecation Notice
+- Legacy APIs with old CuTe atoms are deprecated and will be removed in future releases. Users are encouraged to migrate to the new CuTe atom APIs for better performance and support. Refer [Xe Rearchitecture](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/xe_rearchitecture.md) for new APIs.
+ 
+**See the [CHANGELOG](https://github.com/intel/sycl-tla/blob/main/CHANGELOG-SYCL.md) for details of all past releases and updates.**
 
 # CuTe
 
@@ -105,7 +101,7 @@ Layouts can also be combined and manipulated via functional composition, on whic
 SYCL\*TLA and beyond adopts CuTe throughout the GEMM hierarchy in its templates.
 This greatly simplifies the design and improves code composability and readability.
 More documentation specific to CuTe can be found in its
-[dedicated documentation directory](./media/docs/cpp/cute/00_quickstart.md).
+[dedicated documentation directory](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/cute/00_quickstart.md).
 
 # Compatibility
 
@@ -158,7 +154,7 @@ cmake .. -DDPCPP_SYCL_TARGET="intel_gpu_cri"
 ```
 
 
-Please refer to the [functionality documentation](./media/docs/cpp/functionality.md)
+Please refer to the [functionality documentation](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/functionality.md)
 for details on which kernels require which target architectures.
 
 # Documentation
@@ -166,19 +162,19 @@ for details on which kernels require which target architectures.
 CUTLASS is described in the following documents and the accompanying
 [Doxygen documentation](https://nvidia.github.io/cutlass).
 
-- [Quick Start Guide](./media/docs/cpp/quickstart.md) - basics of building and running CUTLASS
-- [Functionality](./media/docs/cpp/functionality.md) - summarizes functionality available in CUTLASS
-- [Efficient GEMM in CUDA](./media/docs/cpp/efficient_gemm.md) - describes how GEMM kernels may be implemented efficiently in CUDA
-- [CUTLASS 3.x Design](./media/docs/cpp/cutlass_3x_design.md) - describes the CUTLASS 3.x design, its benefits, and how CuTe enables us to write much more composable components
-- [GEMM API 3.x](./media/docs/cpp/gemm_api_3x.md) - describes the CUTLASS 3.x GEMM model and C++ template concepts
-- [Implicit GEMM Convolution](./media/docs/cpp/implicit_gemm_convolution.md) - describes 2-D and 3-D convolution in CUTLASS
-- [Code Organization](./media/docs/cpp/code_organization.md) - describes the organization and contents of the CUTLASS project
-- [Terminology](./media/docs/cpp/terminology.md) - describes terms used in the code
-- [Programming Guidelines](./media/docs/cpp/programming_guidelines.md) - guidelines for writing efficient modern CUDA C++
-- [Fundamental types](./media/docs/cpp/fundamental_types.md) - describes basic C++ classes used in CUTLASS to represent numeric quantities and arrays
-- [Layouts](./media/docs/cpp/layout.md) - describes layouts of matrices and tensors in memory
-- [Tile Iterators](./media/docs/cpp/tile_iterator_concept.md) - describes C++ concepts for iterating over tiles of matrices in memory
-- [CUTLASS Utilities](./media/docs/cpp/utilities.md) - additional templates used to facilitate rapid development
+- [Quick Start Guide](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/quickstart.md) - basics of building and running CUTLASS
+- [Functionality](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/functionality.md) - summarizes functionality available in CUTLASS
+- [Efficient GEMM in CUDA](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/efficient_gemm.md) - describes how GEMM kernels may be implemented efficiently in CUDA
+- [CUTLASS 3.x Design](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/cutlass_3x_design.md) - describes the CUTLASS 3.x design, its benefits, and how CuTe enables us to write much more composable components
+- [GEMM API 3.x](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/gemm_api_3x.md) - describes the CUTLASS 3.x GEMM model and C++ template concepts
+- [Implicit GEMM Convolution](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/implicit_gemm_convolution.md) - describes 2-D and 3-D convolution in CUTLASS
+- [Code Organization](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/code_organization.md) - describes the organization and contents of the CUTLASS project
+- [Terminology](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/terminology.md) - describes terms used in the code
+- [Programming Guidelines](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/programming_guidelines.md) - guidelines for writing efficient modern CUDA C++
+- [Fundamental types](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/fundamental_types.md) - describes basic C++ classes used in CUTLASS to represent numeric quantities and arrays
+- [Layouts](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/layout.md) - describes layouts of matrices and tensors in memory
+- [Tile Iterators](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/tile_iterator_concept.md) - describes C++ concepts for iterating over tiles of matrices in memory
+- [CUTLASS Utilities](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/utilities.md) - additional templates used to facilitate rapid development
 
 # Resources
 
@@ -190,7 +186,7 @@ projects. Client applications should target SYCL*TLA's `include/` directory in t
 paths.
 
 SYCL*TLA unit tests, examples, and utilities can be built with CMake.
-The minimum version of CMake is given in the [Quickstart guide](./media/docs/cpp/quickstart.md).
+The minimum version of CMake is given in the [Quickstart guide](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/quickstart.md).
 Make sure you have Intel oneAPI DPC++ compiler installed and the environment is properly set up.
 
 ```bash
@@ -250,7 +246,7 @@ All tests should pass on supported Intel GPU platforms, though the exact number 
 SYCL*TLA is arranged as a header-only library along with Utilities, Tools, Examples, and unit tests.
 
 A detailed explanation of the source code organization may be found in the
-[SYCL*TLA documentation](./media/docs/cpp/code_organization.md), but several main components are summarized below.
+[SYCL*TLA documentation](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/code_organization.md), but several main components are summarized below.
 
 ## SYCL*TLA
 
@@ -299,7 +295,7 @@ include/                     # client applications should target this directory 
 
 ### SYCL*TLA Examples
 
-[SYCL*TLA examples](./examples) apply SYCL*TLA templates to implement basic computations.
+[SYCL*TLA examples](https://github.com/intel/sycl-tla/tree/main/examples) apply SYCL*TLA templates to implement basic computations.
 
 ### Tools
 
@@ -324,16 +320,16 @@ tools/
 The `test/unit/` directory consist of unit tests implemented with Google Test that demonstrate
 basic usage of Core API components and complete tests of the CUTLASS GEMM computations.
 
-Instructions for building and running the Unit tests are described in the [Quickstart guide](./media/docs/cpp/quickstart.md).
+Instructions for building and running the Unit tests are described in the [Quickstart guide](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/quickstart.md).
 
 # About
 
 SYCL*TLA is released by INTEL Corporation as Open Source software under the
-[3-clause "New" BSD license](LICENSE.txt).
+[3-clause "New" BSD license](https://github.com/intel/sycl-tla/blob/main/LICENSE.txt).
 
 # Contributors
 
-The official list of SYCL*TLA developers and contributors is available here: [CONTRIBUTORS](CONTRIBUTORS.md).
+The official list of SYCL*TLA developers and contributors is available here: [CONTRIBUTORS](https://github.com/intel/sycl-tla/blob/main/CONTRIBUTORS.md).
 
 # Contributing
 
@@ -361,7 +357,7 @@ gh pr create --template .github/PULL_REQUEST_TEMPLATE/refactoring.md
 - 🔨 **Refactoring** → `refactoring.md` - Refactored/Redesigned code
 - 📝 **Mixed/Other** → Default template
 
-See [`.github/PULL_REQUEST_TEMPLATE/README.md`](.github/PULL_REQUEST_TEMPLATE/README.md) for details.
+See [`.github/PULL_REQUEST_TEMPLATE`](https://github.com/intel/sycl-tla/tree/main/.github/PULL_REQUEST_TEMPLATE) for details.
 
 # Copyright
 
