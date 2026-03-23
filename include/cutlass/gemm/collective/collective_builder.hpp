@@ -63,6 +63,7 @@
 
 #if (SYCL_INTEL_TARGET == 40)
 #include "cutlass/gemm/collective/builders/xe4_amma_builder.inl"
+#include "cutlass/gemm/collective/builders/xe4_blockscaled_amma_builder.inl"
 #elif defined(SYCL_INTEL_TARGET)
 #include "cutlass/gemm/collective/builders/xe_mma_builder.inl"
 #endif
