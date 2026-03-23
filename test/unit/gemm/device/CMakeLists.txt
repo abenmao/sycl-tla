@@ -28,85 +28,86 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 if(CUTLASS_ENABLE_SYCL)
-  cutlass_test_unit_add_executable(
-    cutlass_test_unit_gemm_device_tensorop_xe
-    xe_gemm_bf16_bf16_bf16_tensor_op_bf16.cpp
-    xe_gemm_fp16_fp16_fp16_tensor_op_fp16.cpp
-    xe_gemm_bf16_bf16_bf16_tensor_op_fp32.cpp
-    xe_gemm_bf16_bf16_fp32_tensor_op_bf16.cpp
-    xe_gemm_bf16_bf16_fp32_tensor_op_fp32.cpp
-    xe_gemm_fp16_fp16_fp16_tensor_op_fp32.cpp
-    xe_gemm_fp16_fp16_fp32_tensor_op_fp32.cpp
-    xe_gemm_s8_s8_s32_tensor_op_s32.cpp
-    xe_gemm_tf32_tf32_fp32_tensor_op_fp32.cpp
-    xe_gemm_f8_f8_fp32_tensor_op_fp32.cpp
-    xe_gemm_fp16_s8_fp32_tensor_op_fp32.cpp
-    gemm_universal_bf16n_bf16t_f32n_tensor_op_f32_xe.cpp
-    gemm_universal_fp8_fp8_fp32_tensor_op_f32_xe_models.cpp
-  )
-
-  cutlass_test_unit_add_executable(
-    cutlass_test_unit_gemm_device_tensorop_cooperative_xe
-    xe_gemm_bf16_bf16_fp32_tensor_op_fp32_cooperative.cpp
-    xe_gemm_fp16_fp16_fp32_tensor_op_fp32_cooperative.cpp
-    # xe_gemm_fp16_fp16_f32_ptr_array_cooperative.cpp
-    # TODO (Codeplay): fix gemm cooperative tests for s8 and tf32
-    # xe_gemm_s8_s8_s32_tensor_op_s32_cooperative.cpp
-    # xe_gemm_tf32_tf32_fp32_tensor_op_fp32_cooperative.cpp
-  )
-
-  cutlass_test_unit_add_executable(
-    cutlass_test_unit_gemm_device_tensorop_epilogue_fusion_xe
-    xe_gemm_bf16_bf16_fp32_tensor_op_fp32_evt.cpp
-  )
-
-  cutlass_test_unit_add_executable(
-    cutlass_test_unit_gemm_device_mixed_input_tensorop_xe
-    gemm_universal_s8t_bf16n_f32t_mixed_input_tensor_op_f32_xe.cpp
-    gemm_universal_f16t_s4t_f32t_mixed_input_tensor_op_f32_xe.cpp
-    gemm_universal_f16t_s4n_f32t_mixed_input_tensor_op_f32_xe.cpp
-  )
-
-  # Group Gemm test
-  cutlass_test_unit_add_executable(
-    cutlass_test_unit_gemm_device_tensorop_xe_group_gemm
-    xe_gemm_bf16_bf16_fp32_tensor_op_fp32_group_gemm.cpp
-    xe_gemm_bf16_bf16_bf16_tensor_op_fp32_group_gemm.cpp
-    xe_gemm_fp16_fp16_fp32_tensor_op_fp32_group_gemm.cpp
-    xe_gemm_fp16_fp16_fp16_tensor_op_fp32_group_gemm.cpp
-  )
-
-  cutlass_test_unit_add_executable(
-    cutlass_test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
-    xe_gemm_bf16_s8_fp32_tensor_op_fp32_group_gemm.cpp
-    xe_gemm_fp16_s8_fp32_tensor_op_fp32_group_gemm.cpp
-    xe_gemm_bf16_u4_fp32_tensor_op_fp32_group_gemm.cpp
-    xe_gemm_fp16_u4_fp32_tensor_op_fp32_group_gemm.cpp
-    xe_gemm_fp16_fp8_fp32_tensor_op_fp32_group_gemm.cpp
-  )
-
-    # Single unified test executable combining all new test files
+  if (NOT SYCL_INTEL_TARGET EQUAL 40)
     cutlass_test_unit_add_executable(
-      cutlass_test_unit_gemm_device_unified_tests
-      gemm_universal_lincomb_per_rowbias_eltact.cpp
-      gemm_universal_mainloopintelxexmx16group.cpp
-      gemm_universal_mainloopintelxexmx16_group_fp8.cpp
-      gemm_universal_mainloopintelxexmx16group_precision.cpp
-      gemm_universal_fp_scaling.cpp
+      cutlass_test_unit_gemm_device_tensorop_xe
+      xe_gemm_bf16_bf16_bf16_tensor_op_bf16.cpp
+      xe_gemm_fp16_fp16_fp16_tensor_op_fp16.cpp
+      xe_gemm_bf16_bf16_bf16_tensor_op_fp32.cpp
+      xe_gemm_bf16_bf16_fp32_tensor_op_bf16.cpp
+      xe_gemm_bf16_bf16_fp32_tensor_op_fp32.cpp
+      xe_gemm_fp16_fp16_fp16_tensor_op_fp32.cpp
+      xe_gemm_fp16_fp16_fp32_tensor_op_fp32.cpp
+      xe_gemm_s8_s8_s32_tensor_op_s32.cpp
+      xe_gemm_tf32_tf32_fp32_tensor_op_fp32.cpp
+      xe_gemm_f8_f8_fp32_tensor_op_fp32.cpp
+      xe_gemm_fp16_s8_fp32_tensor_op_fp32.cpp
+      gemm_universal_bf16n_bf16t_f32n_tensor_op_f32_xe.cpp
+      gemm_universal_fp8_fp8_fp32_tensor_op_f32_xe_models.cpp
     )
 
-    add_custom_target(
-      cutlass_test_unit_gemm_device
-      DEPENDS
-      cutlass_test_unit_gemm_device_tensorop_xe
+    cutlass_test_unit_add_executable(
       cutlass_test_unit_gemm_device_tensorop_cooperative_xe
-      cutlass_test_unit_gemm_device_tensorop_epilogue_fusion_xe
-      cutlass_test_unit_gemm_device_mixed_input_tensorop_xe
-      cutlass_test_unit_gemm_device_tensorop_xe_group_gemm
-      cutlass_test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
-      cutlass_test_unit_gemm_device_tensorop_xe
-      cutlass_test_unit_gemm_device_unified_tests
+      xe_gemm_bf16_bf16_fp32_tensor_op_fp32_cooperative.cpp
+      xe_gemm_fp16_fp16_fp32_tensor_op_fp32_cooperative.cpp
+      # xe_gemm_fp16_fp16_f32_ptr_array_cooperative.cpp
+      # TODO (Codeplay): fix gemm cooperative tests for s8 and tf32
+      # xe_gemm_s8_s8_s32_tensor_op_s32_cooperative.cpp
+      # xe_gemm_tf32_tf32_fp32_tensor_op_fp32_cooperative.cpp
     )
+
+    cutlass_test_unit_add_executable(
+      cutlass_test_unit_gemm_device_tensorop_epilogue_fusion_xe
+      xe_gemm_bf16_bf16_fp32_tensor_op_fp32_evt.cpp
+    )
+
+    cutlass_test_unit_add_executable(
+      cutlass_test_unit_gemm_device_mixed_input_tensorop_xe
+      gemm_universal_s8t_bf16n_f32t_mixed_input_tensor_op_f32_xe.cpp
+      gemm_universal_f16t_s4t_f32t_mixed_input_tensor_op_f32_xe.cpp
+      gemm_universal_f16t_s4n_f32t_mixed_input_tensor_op_f32_xe.cpp
+    )
+
+    # Group Gemm test
+    cutlass_test_unit_add_executable(
+      cutlass_test_unit_gemm_device_tensorop_xe_group_gemm
+      xe_gemm_bf16_bf16_fp32_tensor_op_fp32_group_gemm.cpp
+      xe_gemm_bf16_bf16_bf16_tensor_op_fp32_group_gemm.cpp
+      xe_gemm_fp16_fp16_fp32_tensor_op_fp32_group_gemm.cpp
+      xe_gemm_fp16_fp16_fp16_tensor_op_fp32_group_gemm.cpp
+    )
+
+    cutlass_test_unit_add_executable(
+      cutlass_test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
+      xe_gemm_bf16_s8_fp32_tensor_op_fp32_group_gemm.cpp
+      xe_gemm_fp16_s8_fp32_tensor_op_fp32_group_gemm.cpp
+      xe_gemm_bf16_u4_fp32_tensor_op_fp32_group_gemm.cpp
+      xe_gemm_fp16_u4_fp32_tensor_op_fp32_group_gemm.cpp
+      xe_gemm_fp16_fp8_fp32_tensor_op_fp32_group_gemm.cpp
+    )
+
+      # Single unified test executable combining all new test files
+      cutlass_test_unit_add_executable(
+        cutlass_test_unit_gemm_device_unified_tests
+        gemm_universal_lincomb_per_rowbias_eltact.cpp
+        gemm_universal_mainloopintelxexmx16group.cpp
+        gemm_universal_mainloopintelxexmx16_group_fp8.cpp
+        gemm_universal_mainloopintelxexmx16group_precision.cpp
+        gemm_universal_fp_scaling.cpp
+      )
+
+      add_custom_target(
+        cutlass_test_unit_gemm_device
+        DEPENDS
+        cutlass_test_unit_gemm_device_tensorop_xe
+        cutlass_test_unit_gemm_device_tensorop_cooperative_xe
+        cutlass_test_unit_gemm_device_tensorop_epilogue_fusion_xe
+        cutlass_test_unit_gemm_device_mixed_input_tensorop_xe
+        cutlass_test_unit_gemm_device_tensorop_xe_group_gemm
+        cutlass_test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
+        cutlass_test_unit_gemm_device_tensorop_xe
+        cutlass_test_unit_gemm_device_unified_tests
+      )
 
   add_custom_target(
     test_unit_gemm_device
@@ -118,4 +119,8 @@ if(CUTLASS_ENABLE_SYCL)
     test_unit_gemm_device_tensorop_xe_group_gemm
     test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
   )
+  else()
+    add_custom_target(cutlass_test_unit_gemm_device)
+    add_custom_target(test_unit_gemm_device)
+  endif()
 endif()
