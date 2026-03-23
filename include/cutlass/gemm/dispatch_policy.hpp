@@ -1335,6 +1335,23 @@ struct MainloopXe4DmaGmmaWarpSpecialized {
   constexpr static bool IsOverlappingAccum = false;
 };
 
+// Block-scaled variant of MainloopXe4DmaGmmaWarpSpecialized.
+// SF handling lives entirely inside the CollectiveMma mainloop; this tag
+// exists so the Builder and Mainloop can partial-specialize on it.
+template<
+  int Stages_,
+  int SchedulerPipelineStageCount_,
+  int AccumulatorPipelineStageCount_,
+  class ClusterShape_ = Shape<_1,_1,_1>
+>
+struct MainloopXe4DmaGmmaWarpSpecializedBlockScaled {
+  constexpr static int Stages = Stages_;
+  using ClusterShape = ClusterShape_;
+  using ArchTag = arch::Xe4;
+  using Schedule = KernelTmaWarpSpecializedXe4<SchedulerPipelineStageCount_, AccumulatorPipelineStageCount_>;
+  constexpr static bool IsOverlappingAccum = false;
+};
+
 template<
   conv::Operator ConvOp_,
   int Stages_,
