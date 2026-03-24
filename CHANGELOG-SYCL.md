@@ -1,5 +1,21 @@
 # SYCL*TLA (previously referred to as cutlass-sycl) Changelog
 
+## [SYCL*TLA 0.8-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.8-cri) (2026-03-25)
+### New Features (Notes: all the tests based on CRI simulator)
+  - Support SLM Copy API functionalities and examples ([#d7fb251](https://github.com/intel-innersource/libraries.ai.cutlass.internal/commit/d7fb251), [#330](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/330), [#348](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/348))
+  - Support FP8 block scaled GEMM for different scaled data type and dimentions ([#324](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/324))
+  - Support quantization and de-quantization API ([#315](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/315), [#285](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/285))
+  
+### Performance (Internal Only)
+  - Systolic data is relatively accurate (CRI simulator can correctly simulate systolic behaviors), E2E data for reference only (CRI simulator cannot correctly simulate memory behaviors).
+
+  - Flash Attention Performance (for CRI and BF16)
+      - Improved Flash Attention performance from 23% to 42% peak
+        
+      | **Data Type** | **Prefill/Decode** | **% of Peak (E2E)** |
+      |:--------------|:-------------------|:---------|
+      |BF16           |     Prefill        |  42%  |
+
 ## [SYCL*TLA 0.8](https://github.com/intel/sycl-tla/releases/tag/v0.8) (2026-03-25)
 ### Major Architecture Changes
 - **Support BMG G31 Platform ([#755](https://github.com/intel/sycl-tla/pull/755))**
@@ -34,7 +50,7 @@
   - Optimize prefetch algorithm for Flash Attention (https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/246)
 
 ### Performance (Internal Only)
-  - Systolic data is relative accurate(CRI simulator can correctly simulate systolic behaviors), E2E data for reference only(CRI simulator cannot correctly simulate memory behaviors).
+  - Systolic data is relatively accurate (CRI simulator can correctly simulate systolic behaviors), E2E data for reference only (CRI simulator cannot correctly simulate memory behaviors).
   - GEMM Performance
       | **Data Type**    | **% of Peak (E2E)** | **% of Peak (Systolic)** |
       |:-----------------|:--------|:---------|
