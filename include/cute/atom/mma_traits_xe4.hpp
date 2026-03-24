@@ -9,6 +9,27 @@
 namespace cute {
 namespace AMMA {
 
+// Standard Rank-2 tensor descriptor //
+template<typename T, int M, int K, int FullK, typename tdesc_ptr_t=uint64_t*>
+CUTE_HOST_DEVICE
+void make_local_tile_tensor_descriptor(tdesc_ptr_t tdesc) {
+  using namespace cute;
+
+  uint32_t dim_sizes[2] = {M, K};
+  tensordesc_fill_dim_size<2>(tdesc, dim_sizes);
+
+  uint64_t dim_strides[1] = { FullK*sizeof(T) }; 
+  tensordesc_fill_dim_stride<2>(tdesc, dim_strides); 
+
+  // element_stride: packed stride within each dimension (1 means contiguous)
+  uint32_t elem_strides[2] = { 1, 1 };
+  tensordesc_fill_element_stride<2>(tdesc, elem_strides);
+
+  // roitensor_dim_size: how much of the tensor to actually copy (= full tile)
+  uint32_t roi_sizes[2] = { M, K };
+  tensordesc_fill_roitensor_dim_size<2>(tdesc, roi_sizes);
+}
+
 template <Major major, bool is_A, class TEngine, class TLayout>
 CUTE_HOST_DEVICE constexpr
 MatrixDescriptor
@@ -30,6 +51,15 @@ make_matrix_desc(Tensor<TEngine, TLayout> const& tensor) {
     MatrixDescriptor::Type2 : MatrixDescriptor::Type1;
 
   return desc;
+}
+
+template <Major major, class T>
+CUTE_HOST_DEVICE constexpr
+MatrixDescriptor
+make_matrix_desc(T const& tensor) {
+  using Engine = typename T::engine_type;
+  using Layout = typename T::layout_type;
+  return make_matrix_desc<major, false, Engine, Layout>(tensor);
 }
 
 // Create a Type3 (scale factor) MatrixDescriptor from a rank-2 SMEM tensor.

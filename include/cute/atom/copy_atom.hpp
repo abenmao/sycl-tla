@@ -49,11 +49,13 @@ template <class CopyOperation, class CopyInternalType>
 struct Copy_Atom<CopyOperation, CopyInternalType> : Copy_Atom<Copy_Traits<CopyOperation>, CopyInternalType>
 {};
 
+
 template <class... Args, class CopyInternalType>
 struct Copy_Atom<Copy_Traits<Args...>, CopyInternalType>
   : Copy_Traits<Args...>
 {
   using Traits = Copy_Traits<Args...>;
+
 
   // Bit and Thr layouts from the Copy_Traits
   using ThrID        = typename Traits::ThrID;
@@ -66,6 +68,7 @@ struct Copy_Atom<Copy_Traits<Args...>, CopyInternalType>
   using ValLayoutSrc = decltype(recast_layout<uint1_t, ValType>(BitLayoutSrc{}));
   using ValLayoutDst = decltype(recast_layout<uint1_t, ValType>(BitLayoutDst{}));
   using ValLayoutRef = decltype(recast_layout<uint1_t, ValType>(BitLayoutRef{}));
+
 
   CUTE_STATIC_ASSERT_V(size<0>(ValLayoutSrc{}) == size(ThrID{}), "CopyOperation is not valid for Src of ValType.");
   CUTE_STATIC_ASSERT_V(size<0>(ValLayoutDst{}) == size(ThrID{}), "CopyOperation is not valid for Dst of ValType.");
@@ -734,6 +737,7 @@ print(ThrCopy<TiledCopy, ThrIdx> const& thr_copy)
 #if (SYCL_INTEL_TARGET == 40)
 #include <cute/atom/copy_traits_xe4_tma.hpp>
 #include <cute/atom/copy_traits_xe4_adma.hpp>
+#include <cute/atom/copy_traits_xe4_eu_copy.hpp>
 #endif
 #if defined(CUTE_COPY_ATOM_TMA_SM90_ENABLED)
 #include <cute/atom/copy_traits_sm90_tma.hpp>

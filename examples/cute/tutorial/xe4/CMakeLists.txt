@@ -40,6 +40,62 @@ target_link_options(${AMMA_ADMA_TARGET} PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)
 
+######################## EU_COPY_TARGET ########################################
+# Check if the environment variable is specified
+if(NOT DEFINED ENV{CUTLASS_DIR})
+    # Set a default value if it's not found
+    set(CUTLASS_DIR "../../")
+    message(STATUS 
+			"CUTLASS_DIR not found in environment, using default: ${CUTLASS_DIR}")
+else()
+    # Use the environment variable value
+    set(CUTLASS_DIR $ENV{CUTLASS_DIR})
+    message(STATUS "Using CUTLASS_DIR from environment: ${CUTLASS_DIR}")
+endif()
+set(EU_COPY_TARGET xe4_gemm_eu_copy_matrix_atoms)
+add_xe4_test(${EU_COPY_TARGET} gemm_eu_copy_matrix_atoms.cpp)
+
+target_include_directories(
+	${EU_COPY_TARGET} PRIVATE 
+    ${CUTLASS_DIR}/include
+    ${CUTLASS_DIR}/examples/cute/tutorial/xe4/
+) 
+target_link_options(${EU_COPY_TARGET} PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)
+
+add_executable(xe4_gemm_asymmetric gemm_epilogue_asymmetric_adma_amma.cpp)
+# Compile options  PRIVATE 
+target_compile_options(xe4_gemm_asymmetric PRIVATE -fsycl -fsycl-targets=pisa)
+target_link_options(xe4_gemm_asymmetric PRIVATE -fsycl -fsycl-targets=pisa)
+target_compile_definitions(xe4_gemm_asymmetric PRIVATE
+    CUTLASS_ENABLE_SYCL=1
+    SYCL_INTEL_TARGET=40
+    SYCL_INTEL_XE4_TARGET
+)
+# Include dirs
+target_include_directories(xe4_gemm_asymmetric PRIVATE
+    ${CUTLASS_DIR}/include
+    ${CUTLASS_DIR}/examples/cute/tutorial/xe4/
+)
+
+add_executable(xe4_gemm_non_asymmetric gemm_epilogue_adma_amma.cpp)
+# Compile options  PRIVATE 
+target_compile_options(xe4_gemm_non_asymmetric PRIVATE -fsycl -fsycl-targets=pisa)
+target_link_options(xe4_gemm_non_asymmetric PRIVATE -fsycl -fsycl-targets=pisa)
+target_compile_definitions(xe4_gemm_asymmetric PRIVATE
+    CUTLASS_ENABLE_SYCL=1
+    SYCL_INTEL_TARGET=40
+    SYCL_INTEL_XE4_TARGET
+)
+# Include dirs
+target_include_directories(xe4_gemm_non_asymmetric PRIVATE
+    ${CUTLASS_DIR}/include
+    ${CUTLASS_DIR}/examples/cute/tutorial/xe4/
+)
+################################################################################
+
+
 set(AMMA_ADMA_BLOCKSCALE_TARGET xe4_amma_adma_blockscaled_gemm)
 add_xe4_test(${AMMA_ADMA_BLOCKSCALE_TARGET} amma_adma_xe4_blockscaled_gemm.cpp)
 target_include_directories(${AMMA_ADMA_BLOCKSCALE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

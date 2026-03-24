@@ -39,6 +39,7 @@ add_custom_target(
   cutlass_test_unit_cute_xe4_ldsm_adma_aov
   cutlass_test_unit_cute_xe4_ldsm_adma_uaov
   cutlass_test_unit_cute_xe4_ldsm_red
+  cutlass_test_unit_cute_xe4_eu_slm_copy
 )
 
 add_custom_target(
@@ -92,4 +93,9 @@ cutlass_test_unit_add_executable(
 cutlass_test_unit_add_executable(
   cutlass_test_unit_cute_xe4_ldsm_red
   ldsm_red.cpp
+)
+
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_eu_slm_copy
+  slm_copy_test.cpp
 )
