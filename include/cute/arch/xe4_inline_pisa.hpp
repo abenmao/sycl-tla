@@ -17,7 +17,7 @@
 #define ALLOCATE_TDESC(reg_name, tdesc_name, ret)
 #else
 #define ALLOCATE_ABAR(reg_name, abar_name, abar_bytes) \
-  INLINE_PISA(".abarrier .align 8 .8b @" #abar_name "[%0];" ::"i"(abar_bytes)); \
+  INLINE_PISA(".abarrier .align 8 @" #abar_name "[%0];" ::"i"(abar_bytes)); \
   INLINE_PISA(".reg .32b %%" #reg_name \
               ";\n\t" \
               "addrof.32b %%" #reg_name ", @" #abar_name \
@@ -27,7 +27,7 @@
               :)
 
 #define ALLOCATE_TDESC(reg_name, tdesc_name, ret) \
-  INLINE_PISA(".tensordesc .align 64 .8b @" #tdesc_name \
+  INLINE_PISA(".tensordesc .align 64 @" #tdesc_name \
               "[64];\n\t" \
               ".reg .32b %%" #reg_name \
               ";\n\t" \
