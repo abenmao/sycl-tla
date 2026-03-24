@@ -349,8 +349,8 @@ public:
       , wave_order_barrier(wave_order_barrier_) {
     if constexpr (!is_im2col_C && !is_im2col_D) {
        auto [tensor_desc_c, tensor_desc_d] = tdesc_tuple;
-       params.adma_load_c.cache_.set_tensor_desc(tensor_desc_c);
-       params.adma_store_d.cache_.set_tensor_desc(tensor_desc_d);
+       params.adma_load_c.set_tensor_desc(tensor_desc_c);
+       params.adma_store_d.set_tensor_desc(tensor_desc_d);
     }
   }
 

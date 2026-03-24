@@ -274,11 +274,11 @@ gemm_device_blockscaled(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape ti
   auto tdesc_sfb = allocate_tdesc<4>();    // SFB scale factors
 
   // Set tensor descriptors for ADMA copy atoms
-  adma_load_a.cache_.set_tensor_desc(tdesc_a);
-  adma_load_b.cache_.set_tensor_desc(tdesc_b);
-  adma_store_c.cache_.set_tensor_desc(tdesc_c);
-  adma_load_sfa.cache_.set_tensor_desc(tdesc_sfa);
-  adma_load_sfb.cache_.set_tensor_desc(tdesc_sfb);
+  adma_load_a.set_tensor_desc(tdesc_a);
+  adma_load_b.set_tensor_desc(tdesc_b);
+  adma_store_c.set_tensor_desc(tdesc_c);
+  adma_load_sfa.set_tensor_desc(tdesc_sfa);
+  adma_load_sfb.set_tensor_desc(tdesc_sfb);
 
   // ---- Allocate SLM and create SMEM tensors ----
   using SharedStorageType = BlockScaledSharedStorage<

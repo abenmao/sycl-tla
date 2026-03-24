@@ -62,8 +62,8 @@ tma_test_device_cute(sycl::nd_item<3> &item, T* g_in, T* g_out,
 {
   using namespace cute;
 
-  adma_load.cache_.set_tensor_desc(allocate_tdesc<0>());
-  adma_store.cache_.set_tensor_desc(allocate_tdesc<1>());
+  adma_load.set_tensor_desc(allocate_tdesc<0>());
+  adma_store.set_tensor_desc(allocate_tdesc<1>());
 
   CUTE_STATIC_ASSERT_V(product_each(shape(cta_tiler)) == product_each(shape(smem_layout)));
 

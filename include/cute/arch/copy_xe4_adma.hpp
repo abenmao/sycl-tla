@@ -14,7 +14,7 @@ struct XE4_ADMA_LOAD
   CUTE_HOST_DEVICE static void
   copy(
       uint64_t* tdesc_ptr, DataType const* gmem_ptr, const uint32_t mat_desc,
-      uint64_t *abar_ptr, uint32_t, DataType* slm_ptr, const sycl::vec_t<int, Dim>& coord
+      uint64_t *abar_ptr, DataType* slm_ptr, const sycl::vec_t<int, Dim>& coord
   ) {
     MatrixDescriptor mat_desc_(mat_desc);
     mat_desc_.StartAddress = static_cast<uint32_t>(
@@ -35,8 +35,8 @@ struct XE4_ADMA_STORE
   template <typename DataType, size_t Dim>
   CUTE_HOST_DEVICE static void
   copy(
-      uint64_t* tdesc_ptr, DataType const* gmem_ptr, const uint32_t mat_desc,
-      uint64_t* abar_ptr, uint32_t, DataType* slm_ptr, const sycl::vec_t<int, Dim>& coord
+      DataType* gmem_ptr, uint64_t* tdesc_ptr, const uint32_t mat_desc,
+      uint64_t* abar_ptr, DataType* slm_ptr, const sycl::vec_t<int, Dim>& coord
   ) {
     MatrixDescriptor mat_desc_(mat_desc);
     mat_desc_.StartAddress = static_cast<uint32_t>(

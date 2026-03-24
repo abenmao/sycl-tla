@@ -274,8 +274,8 @@ struct CollectiveMma<
     auto [M, N, K, L] = problem_shape;
 
     auto [tdesc_a, tdesc_b] = tdesc_tuple;
-    observed_adma_load_a_->cache_.set_tensor_desc(tdesc_a);
-    observed_adma_load_b_->cache_.set_tensor_desc(tdesc_b);
+    observed_adma_load_a_->set_tensor_desc(tdesc_a);
+    observed_adma_load_b_->set_tensor_desc(tdesc_b);
 
     // Represent the full tensors -- get these from TMA
     auto mA_mkl = observed_adma_load_a_->get_tma_tensor(make_shape(M, K, L));   // (m,k,l)

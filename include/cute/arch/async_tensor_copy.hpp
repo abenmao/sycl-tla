@@ -100,7 +100,7 @@ struct AsyncTensorGlobal2SLM {
 
 template <int BitWidth, CacheCtrl CacheType> struct AsyncTensorSLM2Global {
   template <size_t N> static inline void
-  Copy(void const * GmemPtr, MatrixDescriptor Mat, uint64_t* pAbar, TensorPayload* pTDesc,
+  Copy(void * GmemPtr, MatrixDescriptor Mat, uint64_t* pAbar, TensorPayload* pTDesc,
       sycl::vec_t<int32_t, N> const& coord) {
 #if defined (__SYCL_DEVICE_ONLY__)
     asm volatile (

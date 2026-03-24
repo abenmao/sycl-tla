@@ -460,15 +460,15 @@ struct CollectiveMma<
 
     // --- Set tensor descriptors for data ADMA atoms (from kernel) ---
     auto [tdesc_a, tdesc_b] = tdesc_tuple;
-    observed_adma_load_a_->cache_.set_tensor_desc(tdesc_a);
-    observed_adma_load_b_->cache_.set_tensor_desc(tdesc_b);
+    observed_adma_load_a_->set_tensor_desc(tdesc_a);
+    observed_adma_load_b_->set_tensor_desc(tdesc_b);
 
     // --- Allocate SF tensor descriptors internally ---
     // The kernel passes indices 0-3 (A, B, C, D); we use 4 and 5 for SF.
     auto tdesc_sfa = allocate_tdesc<4>();
     auto tdesc_sfb = allocate_tdesc<5>();
-    observed_adma_load_sfa_->cache_.set_tensor_desc(tdesc_sfa);
-    observed_adma_load_sfb_->cache_.set_tensor_desc(tdesc_sfb);
+    observed_adma_load_sfa_->set_tensor_desc(tdesc_sfa);
+    observed_adma_load_sfb_->set_tensor_desc(tdesc_sfb);
 
     // --- Data tensors ---
     // GMEM tensor views from ADMA atoms

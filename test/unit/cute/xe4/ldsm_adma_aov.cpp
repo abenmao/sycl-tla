@@ -61,7 +61,7 @@ ldsm_test_device_cute(T* g_in, T* g_out,
     auto t_smem  = make_tensor(make_smem_ptr(smem),  smem_layout);
 
     // ADMA
-    adma_load.cache_.set_tensor_desc(allocate_tdesc<0>());
+    adma_load.set_tensor_desc(allocate_tdesc<0>());
     uint64_t* adma_load_mbar = allocate_abar<0>();
     Tensor mA = adma_load.get_tma_tensor(shape(smem_layout));
     // Tensor gA = flat_divide(mA, ctile);

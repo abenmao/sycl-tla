@@ -108,9 +108,9 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape,
   auto tdesc_c = allocate_tdesc<2>();
 
   // Setting tensor descriptors for ADMA copy atoms.
-  adma_load_a.cache_.set_tensor_desc(tdesc_a);
-  adma_load_b.cache_.set_tensor_desc(tdesc_b);
-  adma_store_c.cache_.set_tensor_desc(tdesc_c);
+  adma_load_a.set_tensor_desc(tdesc_a);
+  adma_load_b.set_tensor_desc(tdesc_b);
+  adma_store_c.set_tensor_desc(tdesc_c);
 
   using SharedStorageType = SharedStorage<TA, TB, TC, SmemLayoutA, SmemLayoutB, SmemLayoutAcc>;
   auto ptr = alloc_slm_buffer<uint8_t, sizeof(SharedStorageType)>(item.get_group());

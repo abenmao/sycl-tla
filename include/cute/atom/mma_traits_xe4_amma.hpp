@@ -223,7 +223,7 @@ struct MMA_Traits<
   uint64_t* b_barrier_;
 
   // Dummy mask
-  uint32_t mask_[2];
+  uint32_t mask0_, mask1_;
 
   template <class TD, class DLayout,
             class TA, class ALayout,
@@ -279,7 +279,7 @@ struct MMA_Traits<
   uint64_t* b_barrier_;
 
   // Dummy mask
-  uint32_t mask_[2];
+  uint32_t mask0_, mask1_;
 
   template <class TD, class DLayout,
             class TA, class ALayout,
@@ -419,7 +419,6 @@ struct MMA_Traits<
   uint64_t* a_barrier_;
   uint64_t* b_barrier_;
 
-  // Dummy mask
   uint32_t a_mask_;
   uint32_t b_mask_;
 

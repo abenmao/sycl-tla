@@ -14,97 +14,68 @@
 namespace cute {
 
 template <class CopyOp, class... Args>
-struct ADMA_LOAD_Unpack {
-  template <class TS, class SLayout,
-            class TD, class DLayout>
-  CUTE_HOST_DEVICE friend constexpr void
-  copy_unpack(
-      Copy_Traits<CopyOp, Args...> const& traits,
-      Tensor<TS, SLayout>          const& src,
-      Tensor<TD, DLayout>               & dst) {
-    static_assert(is_smem<TD>::value, "XE4_ADMA_LOAD requires the destination be shared memory.");
-
-    auto src_coord = src.data().coord_;
-    auto* dst_ptr = cute::raw_pointer_cast(dst.data());
-#if 0
-    auto [c0,c1,c2,c3,c4] = append<5>(src_coord, 0);
-    // TODO: change it to sycl concepts
-    printf("THR (%d,%d,%d) BLK (%d,%d,%d) TMACRD (%d,%d,%d,%d,%d) SMEMADDR (%p)\n",
-          threadIdx.x, threadIdx.y, threadIdx.z,
-          blockIdx.x, blockIdx.y, blockIdx.z,
-          int32_t(c0), int32_t(c1), int32_t(c2), int32_t(c3), int32_t(c4), dst_ptr);
-#endif
-    return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
-                                traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
-                                make_tuple(dst_ptr, src_coord), seq<0, 1>{});
-  }
-};
-
-template <class CopyOp>
-struct Obsolete_XE4_COPY_Unpack
+struct ADMA_LOAD_Unpack
 {
-  template <class... Args,
-            class TS, class SLayout,
+  template <class TS, class SLayout,
             class TD, class DLayout>
   CUTE_HOST_DEVICE friend constexpr void
   copy_unpack(Copy_Traits<CopyOp, Args...> const& traits,
               Tensor<TS,SLayout>           const& src,
               Tensor<TD,DLayout>                & dst)
   {
-    constexpr auto isLoadOperation = !cute::is_base_of<XE4_ADMA_STORE, CopyOp>::value;
-    constexpr auto isIm2ColOperation = false;
+    // static_assert(is_smem<TD>::value, "XE4_ADMA_LOAD requires the destination be shared memory.");
 
     auto as_xe4_coord = [](auto const& t) {
       return to_vec<int32_t>(flatten_to_tuple(t));
     };
-
-    if constexpr (isLoadOperation) {
-      auto dst_ptr = cute::raw_pointer_cast(dst.data());
-      if constexpr(isIm2ColOperation) {
-        auto src_coord = as_xe4_coord(src(Int<0>{}));
-        return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
-                                    traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
-                                    make_tuple(dst_ptr, src_coord), seq<0, 1>{});
-      } else {
-        auto src_coord = as_xe4_coord(src.data().coord_);
-        return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
-                                    traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
-                                    make_tuple(dst_ptr, src_coord), seq<0, 1>{});
-      }
-    } else {
-      auto src_ptr = cute::raw_pointer_cast(src.data());
-      if constexpr(isIm2ColOperation) {
-        auto dst_coord = as_xe4_coord(take<0,3>(dst(Int<0>{})));
-        return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
-                                    traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
-                                    make_tuple(src_ptr, dst_coord), seq<0, 1>{});
-      } else {
-        auto dst_coord = as_xe4_coord(dst.data().coord_);
-        return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
-                                    traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
-                                    make_tuple(src_ptr, dst_coord), seq<0, 1>{});
-      }
-    }
+    auto src_coord = as_xe4_coord(src.data().coord_);
+    auto dst_ptr = cute::raw_pointer_cast(dst.data());
+    return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
+                                traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
+                                make_tuple(dst_ptr, src_coord), seq<0, 1>{});
   }
 };
 
-template <typename CopyOperation>
-struct Obsolete_Xe4CopyOp {};
+template <class CopyOp, class... Args>
+struct ADMA_STORE_Unpack
+{
+  template <class TS, class SLayout,
+            class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits<CopyOp, Args...> const& traits,
+              Tensor<TS,SLayout>           const& src,
+              Tensor<TD,DLayout>                & dst)
+  {
+    // static_assert(is_smem<TS>::value, "XE4_ADMA_STORE requires the source be shared memory.");
 
-template <typename CopyOperation>
-struct Obsolete_Xe4CopyOpWrapper : CopyOperation {};
+    auto as_xe4_coord = [](auto const& t) {
+      return to_vec<int32_t>(flatten_to_tuple(t));
+    };
+    auto dst_coord = as_xe4_coord(dst.data().coord_);
+    auto src_ptr = cute::raw_pointer_cast(src.data());
+    return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
+                                traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
+                                make_tuple(src_ptr, dst_coord), seq<0, 1>{});
+  }
+};
 
-template <typename T, class AuxParams>
-struct Obsolete_Xe4DmaCache {
-  template <typename CopyOp>
-  using OpUnpack = Obsolete_XE4_COPY_Unpack<CopyOp>;
+struct XE4_ADMA_LOAD_OP : XE4_ADMA_LOAD {};
 
-  Obsolete_Xe4DmaCache() = default;
+template <typename T, class NumBitsPerADMA, class AuxParams_>
+struct Copy_Traits<XE4_ADMA_LOAD, T, NumBitsPerADMA, AuxParams_>
+{
+  using ThrID     = Layout<_1>;
+  // Map from (src-thr,src-val) to bit
+  using SrcLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  // Map from (dst-thr,dst-val) to bit
+  using DstLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  // Reference map from (thr,val) to bit
+  using RefLayout = SrcLayout;
 
-  Obsolete_Xe4DmaCache(
-      TensorDescriptor<T>& tdesc, AuxParams const& aux_params)
-    : tensorDesc_(tdesc), aux_params_(aux_params) {
-    }
+  TensorDescriptor<T> tensorDesc_;
+  using AuxParams = AuxParams_;
+  AuxParams aux_params_;
+  mutable uint64_t* tdesc_ptr_ { nullptr };
 
   CUTE_DEVICE void
   set_tensor_desc(uint64_t* tensor_desc) const {
@@ -113,10 +84,11 @@ struct Obsolete_Xe4DmaCache {
   }
 
   CUTE_HOST_DEVICE constexpr
-  auto get_tensor_desc() const {
-    return tdesc_ptr_;
+  TensorDescriptor<T>* get_tensor_desc() const {
+    return reinterpret_cast<TensorDescriptor<T>*>(tdesc_ptr_);
   }
 
+  // TODO: rename, get_adma_tensor
   template <class GShape>
   CUTE_HOST_DEVICE constexpr
   auto get_tma_tensor(GShape const& g_shape) const {
@@ -132,53 +104,13 @@ struct Obsolete_Xe4DmaCache {
         tensorDesc_.matrix_desc, static_cast<Args&&>(args)...);
   }
 
-  mutable TensorDescriptor<T> tensorDesc_;
-  AuxParams aux_params_;
-  mutable uint64_t* tdesc_ptr_ { nullptr };
-};
-
-template <class CopyOperation, class NumBitsPerTMA, class DmaCache>
-struct Copy_Traits<Obsolete_Xe4CopyOp<CopyOperation>, NumBitsPerTMA, DmaCache>
-{
-  using ThrID     = Layout<_1>;
-  using SrcLayout = Layout<Shape<_1, NumBitsPerTMA>>;
-  using DstLayout = SrcLayout;
-  using RefLayout = SrcLayout;
-
-  DmaCache cache_;
-
-  template<class ABarrier>
   CUTE_HOST_DEVICE constexpr
-  auto with(ABarrier * abar_ptr, [[maybe_unused]] uint32_t const& multicast_mask = 0) const {
-    using Wrapper = Obsolete_Xe4CopyOpWrapper<CopyOperation>;
-    using OpUnpack = typename DmaCache::template OpUnpack<Wrapper>;
-
-    auto opargs = cache_.make_args_tuple(abar_ptr, multicast_mask);
-    return Copy_Traits<Wrapper, NumBitsPerTMA, decltype(opargs), OpUnpack>{opargs};
+  Copy_Traits<XE4_ADMA_LOAD_OP, T, NumBitsPerADMA>
+  with(uint64_t* abar_ptr, [[maybe_unused]] uint32_t const& multicast_mask = 0) const {
+    return {tdesc_ptr_, tensorDesc_.g_pointer, tensorDesc_.matrix_desc, abar_ptr};
   }
 
-  template<class ABarrier, class DimIndex>
-  CUTE_HOST_DEVICE constexpr
-  auto with(DimIndex const& dim_index, uint32_t const& dim_size, ABarrier * abar_ptr, [[maybe_unused]] uint32_t const& multicast_mask = 0) const {
-    using Wrapper = Obsolete_Xe4CopyOpWrapper<CopyOperation>;
-    using OpUnpack = typename DmaCache::template OpUnpack<Wrapper>;
-
-    auto opargs = cache_.make_args_tuple(dim_index, dim_size, abar_ptr);
-    return Copy_Traits<Wrapper, NumBitsPerTMA, decltype(opargs), OpUnpack>{opargs};
-  }
-
-  CUTE_HOST_DEVICE constexpr
-  auto get_tensor_desc() const {
-    return cache_.get_tensor_desc();
-  }
-
-  template <class GShape>
-  CUTE_HOST_DEVICE constexpr
-  auto get_tma_tensor(GShape const& g_shape) const {
-    return cache_.get_tma_tensor(g_shape);
-  }
-
-  // Don't try to execute a copy with XE4_TMA_LOAD before calling .with()
+  // Don't try to execute a copy with this Copy_Traits specialization before calling .with()
   template <class TS, class SLayout,
             class TD, class DLayout>
   CUTE_HOST_DEVICE friend constexpr void
@@ -187,17 +119,224 @@ struct Copy_Traits<Obsolete_Xe4CopyOp<CopyOperation>, NumBitsPerTMA, DmaCache>
               Tensor<TD,DLayout>      & dst) = delete;
 };
 
-template <class CopyOperation, class NumBitsPerTMA, class OpArgsTuple, template<class> class OpUnpack>
-struct Copy_Traits<Obsolete_Xe4CopyOpWrapper<CopyOperation>, NumBitsPerTMA, OpArgsTuple, OpUnpack<Obsolete_Xe4CopyOpWrapper<CopyOperation>>> : OpUnpack<Obsolete_Xe4CopyOpWrapper<CopyOperation>>
+template <typename T, class NumBitsPerADMA>
+struct Copy_Traits<XE4_ADMA_LOAD_OP, T, NumBitsPerADMA>
+  : ADMA_LOAD_Unpack<XE4_ADMA_LOAD_OP, T, NumBitsPerADMA>
 {
   using ThrID     = Layout<_1>;
-  using SrcLayout = Layout<Shape<_1, NumBitsPerTMA>>;
-  using DstLayout = SrcLayout;
+  // Map from (src-thr,src-val) to bit
+  using SrcLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  // Map from (dst-thr,dst-val) to bit
+  using DstLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  // Reference map from (thr,val) to bit
   using RefLayout = SrcLayout;
 
-  OpArgsTuple const opargs_;
+  // XE4_ADMA_LOAD arguments
+  tuple<
+  uint64_t*,
+  T const*,
+  uint32_t,
+  uint64_t*
+  > const opargs_;
 
-  Copy_Traits(OpArgsTuple const& opargs) : opargs_(opargs) {}
+  CUTE_HOST_DEVICE
+  Copy_Traits(uint64_t * desc, T const* adrs, uint32_t mdesc, uint64_t* mbar)
+    : opargs_(desc, adrs, mdesc, mbar) {}
+
+  CUTE_HOST_DEVICE constexpr
+  TensorDescriptor<T> const*
+  get_tma_descriptor() const {
+    return reinterpret_cast<TensorDescriptor<T> const*>(get<0>(opargs_));
+  }
+};
+
+struct XE4_ADMA_LOAD_MULTICAST_OP : XE4_ADMA_LOAD_MULTICAST {};
+
+template <typename T, class NumBitsPerADMA, class AuxParams_>
+struct Copy_Traits<XE4_ADMA_LOAD_MULTICAST, T, NumBitsPerADMA, AuxParams_>
+{
+  using ThrID     = Layout<_1>;
+  // Map from (src-thr,src-val) to bit
+  using SrcLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  // Map from (dst-thr,dst-val) to bit
+  using DstLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  // Reference map from (thr,val) to bit
+  using RefLayout = SrcLayout;
+
+  TensorDescriptor<T> tensorDesc_;
+  using AuxParams = AuxParams_;
+  AuxParams aux_params_;
+  mutable uint64_t* tdesc_ptr_ { nullptr };
+
+  CUTE_DEVICE void
+  set_tensor_desc(uint64_t* tensor_desc) const {
+    dupTensorPayload(tensor_desc, (uint64_t *)&tensorDesc_.payload);
+    tdesc_ptr_ = tensor_desc;
+  }
+
+  CUTE_HOST_DEVICE constexpr
+  TensorDescriptor<T>* get_tensor_desc() const {
+    return reinterpret_cast<TensorDescriptor<T>*>(tdesc_ptr_);
+  }
+
+  // TODO: rename, get_adma_tensor
+  template <class GShape>
+  CUTE_HOST_DEVICE constexpr
+  auto get_tma_tensor(GShape const& g_shape) const {
+    static_assert(is_congruent<decltype(g_shape), decltype(aux_params_.g_stride_)>::value);
+    return make_coord_tensor(make_layout(g_shape, aux_params_.g_stride_));
+  }
+
+  template <typename... Args>
+  CUTE_HOST_DEVICE constexpr
+  auto make_args_tuple(Args&&... args) const {
+    return make_tuple(
+        tdesc_ptr_, tensorDesc_.g_pointer,
+        tensorDesc_.matrix_desc, static_cast<Args&&>(args)...);
+  }
+
+  CUTE_HOST_DEVICE constexpr
+  Copy_Traits<XE4_ADMA_LOAD_MULTICAST_OP, T, NumBitsPerADMA>
+  with(uint64_t* abar_ptr, [[maybe_unused]] uint32_t const& multicast_mask = 0) const {
+    return {tdesc_ptr_, tensorDesc_.g_pointer, tensorDesc_.matrix_desc, abar_ptr, multicast_mask};
+  }
+
+  // Don't try to execute a copy with XE4_ADMA_LOAD_MULTICAST before calling .with()
+  template <class TS, class SLayout,
+            class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits        const& traits,
+              Tensor<TS,SLayout> const& src,
+              Tensor<TD,DLayout>      & dst) = delete;
+};
+
+// The executable version
+template <typename T, class NumBitsPerADMA>
+struct Copy_Traits<XE4_ADMA_LOAD_MULTICAST_OP, T, NumBitsPerADMA>
+  : ADMA_LOAD_Unpack<XE4_ADMA_LOAD_MULTICAST_OP, T, NumBitsPerADMA>
+{
+  using ThrID     = Layout<_1>;
+  // Map from (src-thr,src-val) to bit
+  using SrcLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  // Map from (dst-thr,dst-val) to bit
+  using DstLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  // Reference map from (thr,val) to bit
+  using RefLayout = SrcLayout;
+
+  // XE4_ADMA_LOAD_MULTICAST arguments
+  tuple<
+  uint64_t*,
+  T const*,
+  uint32_t,
+  uint64_t*,
+  uint32_t
+  > const opargs_;
+
+  CUTE_HOST_DEVICE
+  Copy_Traits(uint64_t * desc, T const* adrs, uint32_t mdesc, uint64_t* mbar, uint32_t mask)
+    : opargs_(desc, adrs, mdesc, mbar, mask) {}
+
+  CUTE_HOST_DEVICE constexpr
+  TensorDescriptor<T> const*
+  get_tma_descriptor() const {
+    return reinterpret_cast<TensorDescriptor<T> const*>(get<0>(opargs_));
+  }
+};
+
+struct XE4_ADMA_STORE_OP : XE4_ADMA_STORE {};
+
+template <typename T, class NumBitsPerADMA, class AuxParams_>
+struct Copy_Traits<XE4_ADMA_STORE, T, NumBitsPerADMA, AuxParams_>
+{
+  using ThrID     = Layout<_1>;
+  // Map from (src-thr,src-val) to bit
+  using SrcLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  // Map from (dst-thr,dst-val) to bit
+  using DstLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  // Reference map from (thr,val) to bit
+  using RefLayout = SrcLayout;
+
+  TensorDescriptor<T> tensorDesc_;
+  using AuxParams = AuxParams_;
+  AuxParams aux_params_;
+  mutable uint64_t* tdesc_ptr_ { nullptr };
+
+  CUTE_DEVICE void
+  set_tensor_desc(uint64_t* tensor_desc) const {
+    dupTensorPayload(tensor_desc, (uint64_t *)&tensorDesc_.payload);
+    tdesc_ptr_ = tensor_desc;
+  }
+
+  CUTE_HOST_DEVICE constexpr
+  TensorDescriptor<T>* get_tensor_desc() const {
+    return reinterpret_cast<TensorDescriptor<T>*>(tdesc_ptr_);
+  }
+
+  // TODO: rename, get_adma_tensor
+  template <class GShape>
+  CUTE_HOST_DEVICE constexpr
+  auto get_tma_tensor(GShape const& g_shape) const {
+    static_assert(is_congruent<decltype(g_shape), decltype(aux_params_.g_stride_)>::value);
+    return make_coord_tensor(make_layout(g_shape, aux_params_.g_stride_));
+  }
+
+  template <typename... Args>
+  CUTE_HOST_DEVICE constexpr
+  auto make_args_tuple(Args&&... args) const {
+    return make_tuple(
+        const_cast<T*>(tensorDesc_.g_pointer), tdesc_ptr_,
+        tensorDesc_.matrix_desc, static_cast<Args&&>(args)...);
+  }
+
+  CUTE_HOST_DEVICE constexpr
+  Copy_Traits<XE4_ADMA_STORE_OP, T, NumBitsPerADMA>
+  with(uint64_t* abar_ptr) const {
+    // Store writes to global memory (gmem_ptr first per store(gmem_ptr, desc, ...) convention).
+    // TensorDescriptor::g_pointer is const T* for shared load/store descriptor representation,
+    // but STORE always targets writable memory, so the cast is safe here.
+    return {const_cast<T*>(tensorDesc_.g_pointer), tdesc_ptr_, tensorDesc_.matrix_desc, abar_ptr};
+  }
+
+  // Don't try to execute a copy with XE4_ADMA_STORE before calling .with()
+  template <class TS, class SLayout,
+            class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits        const& traits,
+              Tensor<TS,SLayout> const& src,
+              Tensor<TD,DLayout>      & dst) = delete;
+};
+
+// The executable version
+template <typename T, class NumBitsPerADMA>
+struct Copy_Traits<XE4_ADMA_STORE_OP, T, NumBitsPerADMA>
+  : ADMA_STORE_Unpack<XE4_ADMA_STORE_OP, T, NumBitsPerADMA>
+{
+  using ThrID     = Layout<_1>;
+  // Map from (src-thr,src-val) to bit
+  using SrcLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  // Map from (dst-thr,dst-val) to bit
+  using DstLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  // Reference map from (thr,val) to bit
+  using RefLayout = SrcLayout;
+
+  // XE4_ADMA_STORE arguments: (address, desc, matrix_desc, mbar)
+  // address is non-const and comes first: store(gmem_ptr, desc, ...) convention
+  tuple<
+  T*,
+  uint64_t*,
+  uint32_t,
+  uint64_t*
+  > const opargs_;
+
+  CUTE_HOST_DEVICE
+  Copy_Traits(T* adrs, uint64_t* desc, uint32_t mdesc, uint64_t* mbar)
+    : opargs_(adrs, desc, mdesc, mbar) {}
+
+  CUTE_HOST_DEVICE constexpr
+  TensorDescriptor<T> const*
+  get_tma_descriptor() const {
+    return reinterpret_cast<TensorDescriptor<T> const*>(get<1>(opargs_));
+  }
 };
 
 namespace detail {
@@ -469,22 +608,11 @@ make_adma_copy_atom(
   //
   // Construct the Copy_Traits
   //
-
   constexpr int num_bits_per_tma = size(adma_gbasis) * sizeof_bits_v<InternalType>;
-#if (SYCL_INTEL_TARGET == 40)
-  using DmaCache = Obsolete_Xe4DmaCache<InternalType, decltype(aux_params)>;
-  using Traits = Copy_Traits<Obsolete_Xe4CopyOp<CopyOp>, cute::C<num_bits_per_tma>, DmaCache>;
-  using Atom   = Copy_Atom<Traits, typename GEngine::value_type>;
-
-  Traits tma_traits{{tma_desc, aux_params}};
-
-#else
-  using Traits = Copy_Traits<CopyOp, cute::C<num_bits_per_tma>, decltype(aux_params)>;
+  using Traits = Copy_Traits<CopyOp, InternalType, cute::C<num_bits_per_tma>, decltype(aux_params)>;
   using Atom   = Copy_Atom<Traits, typename GEngine::value_type>;
 
   Traits tma_traits{tma_desc, aux_params};
-
-#endif
 
 #if 0
   print("num_bits_per_tma :  "); print(num_bits_per_tma); print("\n");
