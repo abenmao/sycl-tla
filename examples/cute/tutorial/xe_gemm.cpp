@@ -43,9 +43,9 @@
 #include "cutlass/util/reference/device/gemm_complex.h"
 #include "cutlass/util/reference/device/tensor_compare.h"
 #include "cutlass/util/reference/host/tensor_fill.h"
-#include "cutlass/util/command_line.h"
 
 #include "../../common/sycl_cute_common.hpp"
+#include "cutlass/util/command_line.h"
 
 #if defined(__clang__)
   #pragma clang diagnostic ignored "-Wpass-failed"
@@ -238,11 +238,7 @@ gemm_cute(sycl::queue &Q,
 
   syclex::properties kernel_props {
     syclex::sub_group_size<16>,
-#if (SYCL_INTEL_TARGET == 35)
-    intelex::grf_size<512>
-#else
     intelex::grf_size<256>
-#endif
   };
 
   auto event = Q.parallel_for<GemmCuteName<TA, TB, TC, layoutA, layoutB>>(sycl::nd_range<2>(global, local), kernel_props,
@@ -276,20 +272,13 @@ gemm_verify(sycl::queue &Q,
     using SignedAccType = ensure_signed_t<AccType>;
 
     auto c = AccType(0);
-    for (int h = 0; h < k; h++)
+    for (int h = 0; h < k; h++) {
       c += AccType(A(i,h)) * AccType(B(j,h));
-
-    auto tol = AccType(static_cast<float>(std::numeric_limits<AccType>::epsilon()) * 2 * k);
-    if constexpr (std::is_same_v<AccType, float>)
-    {
-      //loose tolerance for float AccType
-      tol = 1e-5f * k;
     }
 
+    auto tol = AccType(1e-5f * k);
     if (std::abs(SignedAccType(c - AccType(C(i,j)))) > tol) {
-#ifdef SHOW_DIFF
       printf("Error at (%d,%d): got %f, expected %f\n", i, j, double(C(i,j)), double(c));
-#endif
       *ok = false;
     }
   }).wait();
@@ -322,8 +311,6 @@ test_case(sycl::queue &Q, int m, int n, int k, int iterations, int verify)
   random_fill(B);
   zero_fill(C);
 
-  bool ok = true;
-  
   auto A_ref = make_shared_usm_tensor<float,  layoutA>(Q, m, k);
   auto B_ref = make_shared_usm_tensor<float, tlayoutB>(Q, n, k);
 
@@ -337,48 +324,38 @@ test_case(sycl::queue &Q, int m, int n, int k, int iterations, int verify)
   gemm_cute<decltype(A), decltype(B), decltype(C), TA, TB, TC, layoutA, layoutB>(Q, A, B, C);
   Q.wait_and_throw();
 
-  if (verify != 0) {  
+  bool ok = true;
+  if (verify) {
     ok = gemm_verify(Q, A_ref, B_ref, C);
     std::cout << (ok ? "passed" : "failed");
-    // TODO: Throw exception or error when verification fails, this requires refactor for the whole example.
   } else {
     std::cout << "verification skipped";
   }
 
-  free_usm_tensor(A_ref, Q);
-  free_usm_tensor(B_ref, Q);
+  if (ok) {
+    // Test performance:
+    const int timing_iterations = iterations;
+    GPU_Clock timer;
 
-  if (ok) { 
-    // If verification passed or skipped, run performance test
-    if (iterations > 0) {
-      // Test performance:
-      GPU_Clock timer;
-
-      timer.start();
-      for (int i = 0; i < iterations; ++i)
-        gemm_cute<decltype(A), decltype(B), decltype(C), TA, TB, TC, layoutA, layoutB>(Q, A, B, C);
-      Q.wait_and_throw();
-
-      double avg = timer.seconds() / iterations;
-#if defined(CUTLASS_TEST_FOR_CRI)      
-      // Use MF/s instead of TF/s as we always use small problem size on CRI 
-      // simulator, will remove this when HW is available
-      double tops = (2.0*m*n*k) * 1e-12 * 1e6;
-      printf(", %4.3f MF/s", tops / avg, avg*1000);
-#else
-      double tops = (2.0*m*n*k) * 1e-12;
-      printf(", %4.3f TF/s", tops / avg, avg*1000);
-#endif
-    } else {
-      printf(", performance benchmark skipped due to 0 iterations");
+    timer.start();
+    for (int i = 0; i < timing_iterations; ++i) {
+      gemm_cute<decltype(A), decltype(B), decltype(C), TA, TB, TC, layoutA, layoutB>(Q, A, B, C);
     }
-  } else {
-    printf(", performance benchmark skipped due to verification failure");
+    Q.wait_and_throw();
+
+    double avg = timer.seconds() / timing_iterations;
+    double tops = (2.0*m*n*k) * 1e-12;
+    double io = (m * k * sizeof(TA) + n * k * sizeof(TB) +
+                 m * n * sizeof(TC)) * 1e-9;
+    printf(", [%4.3f]GB/s, %4.3f TF/s", io / avg, tops / avg, avg*1000);
   }
 
   free_usm_tensor(A, Q);
   free_usm_tensor(B, Q);
   free_usm_tensor(C, Q);
+
+  free_usm_tensor(A_ref, Q);
+  free_usm_tensor(B_ref, Q);
 
   std::cout << '\n';
 

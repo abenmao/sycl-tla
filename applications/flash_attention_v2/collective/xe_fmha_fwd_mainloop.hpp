@@ -35,7 +35,7 @@
 
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/dispatch_policy.hpp"
-#include "cutlass/gemm/collective/xe_blockscaled_common.hpp"
+#include "cutlass/gemm/collective/xe_common_blockscaled_mxfp.hpp"
 #include "cute/algorithm/functional.hpp"
 #include "cute/algorithm/gemm.hpp"
 #include "cute/algorithm/subgroup_algorithms.hpp"
@@ -535,8 +535,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
           cute::gemm(mma_qk, zipped_q, zipped_k, tSrS);
         } else {
           if constexpr (F8kvF16mma) {
-            for (int i = 0; i < tSrK.size(); i++)
-              tSrK(i) = static_cast<typename TiledMMAQK::ValTypeB>(scale_k * static_cast<float>(tSrK(i)));
+            dequantize(tSrK, scale_k);
           }
           cute::gemm(mma_qk, tSrQ, tSrK, tSrS);
         }
@@ -560,7 +559,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       }
       /* Causal masking - only in non-cache mode */
       if constexpr (!is_cache && CausalMask) {
-        if (K == blk_k1 - 1) {
+        if (K == total_blk - 1) {
+          // Need to get global col and row indices to mask the elements
           Tensor cPgP = make_identity_tensor(make_shape(seq_len, seq_len));
           Tensor gP = local_tile(cPgP, take<0,2>(TileShapeQK{}), make_coord(get<0>(blk_qv), K));
           auto cS_thread = thr_mma_qk.partition_C(gP);
@@ -629,8 +629,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
           cute::gemm(mma_pv, zipped_p, zipped_v, tArA(_,_,_,VV));
         } else {
           if constexpr (F8kvF16mma) {
-            for (int i = 0; i < tArV.size(); i++)
-              tArV(i) = static_cast<typename TiledMMAQK::ValTypeB>(scale_v * static_cast<float>(tArV(i)));
+            dequantize(tArV, scale_v);
           }
           cute::gemm(mma_pv, tArP, tArV, tArA(_,_,_,VV));
         }

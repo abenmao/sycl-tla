@@ -26,7 +26,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-if (DEFINED SYCL_INTEL_TARGET AND "${SYCL_INTEL_TARGET}" STREQUAL "35")
+if (DEFINED SYCL_INTEL_TARGET AND SYCL_TARGET_INTEL_GPU_CRI)
   set(TEST_BASE "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
 
 cutlass_example_add_executable(
@@ -46,6 +46,13 @@ cutlass_example_add_executable(
 cutlass_example_add_executable(
   51_xe35_block_scaled_grouped_gemm_e2m1
   51_xe35_block_scaled_grouped_gemm_e2m1.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_BASE
+)
+
+cutlass_example_add_executable(
+  51_xe35_block_scaled_grouped_gemm_fp8_e4m3
+  51_xe35_block_scaled_grouped_gemm_fp8_e4m3.cpp
   TEST_COMMAND_OPTIONS
   TEST_BASE
 )

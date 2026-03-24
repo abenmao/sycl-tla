@@ -126,15 +126,20 @@ if (CUTLASS_ENABLE_SYCL)
   set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
   string(REPLACE "," ";" DPCPP_SYCL_TARGET_LIST "${DPCPP_SYCL_TARGET}")
-  message(STATUS "DPCPP_SYCL_TARGET as list ${DPCPP_SYCL_TARGET_LIST}")
+  list(LENGTH DPCPP_SYCL_TARGET_LIST DPCPP_SYCL_TARGET_LIST_LENGTH)
+  if(DPCPP_HOST_COMPILER AND NOT DPCPP_SYCL_TARGET_LIST_LENGTH EQUAL 1)
+    message(FATAL_ERROR "DPCPP_SYCL_TARGET_LIST_LENGTH should be 1 if g++ is specified.")
+  endif()
 
   if("nvptx64-nvidia-cuda" IN_LIST DPCPP_SYCL_TARGET_LIST)
     set(SYCL_NVIDIA_TARGET ON)
     add_compile_definitions(SYCL_NVIDIA_TARGET)
     list(REMOVE_ITEM DPCPP_SYCL_TARGET_LIST "nvptx64-nvidia-cuda")
-  elseif("intel_gpu_pvc" IN_LIST DPCPP_SYCL_TARGET_LIST OR
-         "spir64" IN_LIST DPCPP_SYCL_TARGET_LIST OR
-         "intel_gpu_bmg_g21" IN_LIST DPCPP_SYCL_TARGET_LIST)
+    elseif("intel_gpu_pvc" IN_LIST DPCPP_SYCL_TARGET_LIST OR
+      "pvc" IN_LIST DPCPP_SYCL_TARGET_LIST OR
+      "spir64" IN_LIST DPCPP_SYCL_TARGET_LIST OR
+      "intel_gpu_bmg_g21" IN_LIST DPCPP_SYCL_TARGET_LIST OR
+      "bmg" IN_LIST DPCPP_SYCL_TARGET_LIST)
     # Xe_Core Architecture_number(SYCL_INTEL_TARGET)
     # XeHPC 12
     # Xe2 20
@@ -143,10 +148,12 @@ if (CUTLASS_ENABLE_SYCL)
     # Xe4 40
     set(SYCL_INTEL_TARGET 20)
     add_compile_definitions(SYCL_INTEL_TARGET=${SYCL_INTEL_TARGET})
-  elseif("intel_gpu_cri" IN_LIST DPCPP_SYCL_TARGET_LIST)
+    elseif("intel_gpu_cri" IN_LIST DPCPP_SYCL_TARGET_LIST OR
+      "cri" IN_LIST DPCPP_SYCL_TARGET_LIST)
     set(SYCL_INTEL_TARGET 35)
     add_compile_definitions(SYCL_INTEL_TARGET=${SYCL_INTEL_TARGET})
-  elseif("intel_gpu_jgs" IN_LIST DPCPP_SYCL_TARGET_LIST)
+    elseif("intel_gpu_jgs" IN_LIST DPCPP_SYCL_TARGET_LIST OR
+      "jgs" IN_LIST DPCPP_SYCL_TARGET_LIST)
     set(SYCL_INTEL_TARGET 40)
     add_compile_definitions(SYCL_INTEL_TARGET=${SYCL_INTEL_TARGET})
     add_compile_definitions(SYCL_INTEL_XE4_TARGET)
@@ -159,23 +166,16 @@ if (CUTLASS_ENABLE_SYCL)
   endif()
 
   set(INTEL_SYCL_TARGETS
-    intel_gpu_pvc
     spir64
-    intel_gpu_bmg_g21
-    intel_gpu_cri
-    bmg
+    intel_gpu_pvc
     pvc
+    intel_gpu_bmg_g21
+    bmg
+    intel_gpu_cri
+    cri
     intel_gpu_jgs
     jgs
   )
-
-  foreach(ITEM IN LISTS DPCPP_SYCL_TARGET_LIST)
-    if(ITEM IN_LIST INTEL_SYCL_TARGETS)
-      #set(SYCL_INTEL_TARGET ON)
-    else()
-      message(FATAL_ERROR "In SYCL target list '${DPCPP_SYCL_TARGET}' ${ITEM} is invalid.")
-    endif()
-  endforeach()
 
   if (SYCL_NVIDIA_TARGET AND SYCL_INTEL_TARGET)
     message(FATAL_ERROR "Both SYCL_NVIDIA_TARGET and SYCL_INTEL_TARGET are set. Only one is allowed.")
@@ -183,8 +183,30 @@ if (CUTLASS_ENABLE_SYCL)
     message(FATAL_ERROR "Both SYCL_NVIDIA_TARGET and SYCL_INTEL_TARGET are unset.")
   endif()
 
+  if(CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 2026.0)
+    message(STATUS "IntelLLVM version greater than or equal to 2026.x")
+    set(COMPILER_VERSION_2026_ONWARDS ON)
+  else()
+    message(STATUS "IntelLLVM version less than 2026.x")
+    set(COMPILER_VERSION_2026_ONWARDS OFF)
+  endif()
+
   if(SYCL_INTEL_TARGET)
-      #add_compile_definitions(SYCL_INTEL_TARGET)
+    add_compile_definitions(SYCL_INTEL_TARGET)
+    if(("intel_gpu_cri" IN_LIST DPCPP_SYCL_TARGET_LIST) OR ("cri" IN_LIST DPCPP_SYCL_TARGET_LIST))
+      if((NOT COMPILER_VERSION_2026_ONWARDS) AND (NOT DPCPP_SYCL_TARGET_LIST_LENGTH EQUAL 1))
+        message(FATAL_ERROR "CRI Target with multi-target build is supported only with compiler version 2026 onwards")
+      endif()
+      set(SYCL_TARGET_INTEL_GPU_CRI ON)
+    endif()
+
+    option(CUTLASS_TEST_FOR_CRI "Enable CUTLASS_TEST_FOR_CRI" OFF)
+    if(CUTLASS_TEST_FOR_CRI)
+      add_compile_definitions(CUTLASS_TEST_FOR_CRI)
+    endif()
+  endif()
+
+  if(SYCL_INTEL_TARGET)
       add_compile_options(
         -Wall
         -Wno-unused-variable

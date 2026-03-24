@@ -99,6 +99,7 @@ template <int M, typename TD, typename TA, typename TB, typename TC>
 struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT<M, TD, TA, TB, TC>>
 {
   using MMAOp = XE_BDPAS_TT<M, TD, TA, TB, TC>;
+  using BaseOp = XE_DPAS_TT<M, TD, TA, TB, TC>;
 
   template <class TD1, class DLayout,
             class TA1, class ALayout,
@@ -116,42 +117,75 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
     static_assert(is_rmem<TB>::value, "Expected registers in MMA_Atom::call");
     static_assert(is_rmem<TC>::value, "Expected registers in MMA_Atom::call");
 
-    // Register value types from the MMA_Operation register arrays
-    using          RegTypeD = typename remove_extent<typename MMAOp::DRegisters>::type;
-    using          RegTypeA = typename remove_extent<typename MMAOp::ARegisters>::type;
-    using          RegTypeB = typename remove_extent<typename MMAOp::BRegisters>::type;
-    using          RegTypeC = typename remove_extent<typename MMAOp::CRegisters>::type;
+    using RegTypeD = typename remove_extent<typename MMAOp::DRegisters>::type;
+    using RegTypeA = typename remove_extent<typename MMAOp::ARegisters>::type;
+    using RegTypeB = typename remove_extent<typename MMAOp::BRegisters>::type;
+    using RegTypeC = typename remove_extent<typename MMAOp::CRegisters>::type;
 
-    constexpr int   RegNumD = extent<typename MMAOp::DRegisters>::value;
-    constexpr int   RegNumA = extent<typename MMAOp::ARegisters>::value;
-    constexpr int   RegNumB = extent<typename MMAOp::BRegisters>::value;
-    constexpr int   RegNumC = extent<typename MMAOp::CRegisters>::value;
+    constexpr int RegNumD = extent<typename MMAOp::DRegisters>::value;
+    constexpr int RegNumA = extent<typename MMAOp::ARegisters>::value;
+    constexpr int RegNumB = extent<typename MMAOp::BRegisters>::value;
+    constexpr int RegNumC = extent<typename MMAOp::CRegisters>::value;
 
-    auto  [A, SFA, SFA_M_OFFSET, SFA_K_OFFSET] = unzip_tensor(A_zipped);
-    auto  [B, SFB, SFB_N_OFFSET, SFB_K_OFFSET] = unzip_tensor(B_zipped);
+    auto unzipped_A = unzip_tensor(A_zipped);
+    auto unzipped_B = unzip_tensor(B_zipped);
+
+    auto& A   = get<0>(unzipped_A);
+    auto& SFA = get<1>(unzipped_A);
+    auto& B   = get<0>(unzipped_B);
+    auto& SFB = get<1>(unzipped_B);
 
     Tensor rA = recast<RegTypeA>(A);
     Tensor rB = recast<RegTypeB>(B);
-    CUTE_STATIC_ASSERT_V(size(rA) == Int<RegNumA>{});
-    CUTE_STATIC_ASSERT_V(size(rB) == Int<RegNumB>{});
-
     Tensor rD = recast<RegTypeD>(D);
     Tensor rC = recast<RegTypeC>(C);
+
+    CUTE_STATIC_ASSERT_V(size(rA) == Int<RegNumA>{});
+    CUTE_STATIC_ASSERT_V(size(rB) == Int<RegNumB>{});
     CUTE_STATIC_ASSERT_V(size(rD) == Int<RegNumD>{});
     CUTE_STATIC_ASSERT_V(size(rC) == Int<RegNumC>{});
 
-    auto sfa_offset = SFA_M_OFFSET[0] + SFA_K_OFFSET[0];
-    auto sfb_offset = SFB_N_OFFSET[0] + SFB_K_OFFSET[0];
+    // Detect zip payload to choose between hardware BDPAS and software-scaled DPAS.
+    // Hardware BDPAS (MX path):          4-element zip (data + scale + m_offset + k_offset)
+    // Software DPAS  (FP8/BF16/FP16...): 2-element zip (data + scale)
+    // The zip arity is set by the mainloop (xe_blockscaled_mma vs xe_fp8_blockscaled_mma)
+    constexpr auto zip_arity = tuple_size<decltype(unzipped_A)>::value;
+    constexpr bool use_hardware_bdpas = (zip_arity == 4);
 
-    cute::detail::explode_mma<MMAOp>(
-            rD,   make_int_sequence<RegNumD>{},
-            rA,   make_int_sequence<RegNumA>{},
-            rB,   make_int_sequence<RegNumB>{},
-            rC,   make_int_sequence<RegNumC>{},
-            SFA, make_int_sequence<1>{},
-            SFB, make_int_sequence<1>{},
-            sfa_offset,
-            sfb_offset);
+    if constexpr (use_hardware_bdpas) {
+      // === Hardware BDPAS path ===
+      auto& SFA_M_OFFSET = get<2>(unzipped_A);
+      auto& SFA_K_OFFSET = get<3>(unzipped_A);
+      auto& SFB_N_OFFSET = get<2>(unzipped_B);
+      auto& SFB_K_OFFSET = get<3>(unzipped_B);
+
+      auto sfa_offset = SFA_M_OFFSET[0] + SFA_K_OFFSET[0];
+      auto sfb_offset = SFB_N_OFFSET[0] + SFB_K_OFFSET[0];
+
+      cute::detail::explode_mma<MMAOp>(
+              rD,   make_int_sequence<RegNumD>{},
+              rA,   make_int_sequence<RegNumA>{},
+              rB,   make_int_sequence<RegNumB>{},
+              rC,   make_int_sequence<RegNumC>{},
+              SFA, make_int_sequence<1>{},
+              SFB, make_int_sequence<1>{},
+              sfa_offset,
+              sfb_offset);
+    } else {
+      // === Software-scaled DPAS path ===
+      RegTypeD product{};
+      RegTypeC zero{};
+      BaseOp::fma(product, rA[0], rB[0], zero);
+
+      RegTypeD out{};
+      for (int i = 0; i < M; ++i) {
+        float const scale = static_cast<float>(SFA(i)) * static_cast<float>(SFB(i));
+        float const value = static_cast<float>(product[i]) * scale + static_cast<float>(rC[0][i]);
+        out[i] = static_cast<TD>(value);
+      }
+
+      rD[0] = out;
+    }
   }
 
 };

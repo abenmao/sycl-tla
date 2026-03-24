@@ -1,6 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2025 - 2025 Codeplay Software Ltd. All rights reserved.
- * Copyright (c) 2025 Intel Corporation, All rights reserved.
+ * Copyright (c) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -67,7 +67,6 @@ struct Options {
   bool help;
   bool error;
 
-  int mode;
   int m, n, k, l, iterations, verify;
   int const_scale;
   float alpha, beta;
@@ -76,7 +75,6 @@ struct Options {
     help(false),
     error(false),
     m(5120), n(4096), k(4096), l(1), iterations(20),
-    mode(0),
     alpha(1.f), beta(0.f),
     const_scale(0)
   { }
@@ -94,7 +92,6 @@ struct Options {
     cmd.get_cmd_line_argument("n", n, 4096);
     cmd.get_cmd_line_argument("k", k, 4096);
     cmd.get_cmd_line_argument("l", l, 1);
-    cmd.get_cmd_line_argument("mode", mode, 1);
     cmd.get_cmd_line_argument("alpha", alpha, 1.f);
     cmd.get_cmd_line_argument("beta", beta, 0.f);
     cmd.get_cmd_line_argument("iterations", iterations, 100);
@@ -112,7 +109,6 @@ struct Options {
       << "  --n=<int>                   Sets the N extent of the GEMM\n"
       << "  --k=<int>                   Sets the K extent of the GEMM\n"
       << "  --l=<int>                   Sets the L extent (batch count) of the GEMM\n"
-      << "  --mode=<int>                The mode to run the gemm. 0 is Convert Only, 1 is Convert and Scale\n"
       << "  --alpha=<s32>               Epilogue scalar alpha\n"
       << "  --beta=<s32>                Epilogue scalar beta\n\n"
       << "  --iterations=<int>          Iterations\n\n"
@@ -174,7 +170,6 @@ struct ExampleRunner {
   StrideScaleB stride_SB;
 
   uint64_t seed = 0;
-  static constexpr int GROUP_SIZE = 32;
 
   cutlass::DeviceAllocation<ElementA> block_A;
   cutlass::DeviceAllocation<ElementB> block_B;
@@ -262,7 +257,9 @@ struct ExampleRunner {
                        SrcElement const* q_buffer,
                        Layout const operand_layout,
                        ElementScale const* scale_buffer,
-                       ScaleLayout const scale_layout) {
+                       ScaleLayout const scale_layout,
+                       Options const& options,
+                       int group_size) {
 
     std::vector<uint8_t> dst(size(operand_layout) * sizeof_bits_v<DstElement> / 8, 0);
     cutlass::device_memory::copy_to_host(dst.data(), (uint8_t*)dq_buffer, dst.size());
@@ -306,7 +303,7 @@ struct ExampleRunner {
             }
           }();
 
-          auto scale_data = (ret_type)(scale_tensor(mn, k / 32, l));
+          auto scale_data = (ret_type)(scale_tensor(mn, k / group_size, l));
 
           dst_tensor(mn, k, l) = (src_data) * scale_data;
         }
@@ -321,7 +318,8 @@ struct ExampleRunner {
   void initialize(Options const& options) {
     auto [M, N, K, L] = ProblemShapeType{options.m, options.n, options.k, options.l};
 
-    const int scale_k = cute::ceil_div(options.k, GROUP_SIZE);
+    constexpr int scaleGroupSize = CollectiveMainloop::GroupK;
+    const int scale_k = cute::ceil_div(options.k, scaleGroupSize);
     auto shape_A = cute::make_shape(M, K, L);
     auto shape_B = cute::make_shape(N, K, L);
     auto shape_CD = cute::make_shape(M, N, L);
@@ -369,8 +367,8 @@ struct ExampleRunner {
     auto layout_scale_A = make_layout(shape_scale_A, stride_SA);
     auto layout_scale_B = make_layout(shape_scale_B, stride_SB);
 
-    apply_scale(block_A_dq.get(), block_A.get(), layout_A, block_scaleA.get(),  layout_scale_A);
-    apply_scale(block_B_dq.get(), block_B.get(), layout_B, block_scaleB.get(),  layout_scale_B);
+    apply_scale(block_A_dq.get(), block_A.get(), layout_A, block_scaleA.get(),  layout_scale_A, options, scaleGroupSize);
+    apply_scale(block_B_dq.get(), block_B.get(), layout_B, block_scaleB.get(),  layout_scale_B, options, scaleGroupSize);
   }
   
   cutlass::Status run(const Options& options, const cutlass::KernelHardwareInfo& hw_info) {
@@ -382,8 +380,7 @@ struct ExampleRunner {
       cutlass::gemm::GemmUniversalMode::kGemm,
       problem_size,
       {block_A.get(), stride_A, block_B.get(), stride_B,
-      block_scaleA.get(), stride_SA, block_scaleB.get(), stride_SB,
-      GROUP_SIZE},
+      block_scaleA.get(), stride_SA, block_scaleB.get(), stride_SB},
       {{options.alpha, options.beta}, block_C.get(), stride_C, block_D.get(), stride_D},
       hw_info
     };

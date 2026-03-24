@@ -28,7 +28,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 if(CUTLASS_ENABLE_SYCL)
-  if(NOT SYCL_INTEL_TARGET EQUAL 40)
+  if (NOT SYCL_INTEL_TARGET EQUAL 40)
     cutlass_test_unit_add_executable(
       cutlass_test_unit_gemm_device_tensorop_xe
       xe_gemm_bf16_bf16_bf16_tensor_op_bf16.cpp
@@ -86,41 +86,40 @@ if(CUTLASS_ENABLE_SYCL)
       xe_gemm_fp16_fp8_fp32_tensor_op_fp32_group_gemm.cpp
     )
 
-    # Single unified test executable combining all new test files
-    cutlass_test_unit_add_executable(
-      cutlass_test_unit_gemm_device_unified_tests
-      gemm_universal_lincomb_per_rowbias_eltact.cpp
-      gemm_universal_mainloopintelxexmx16group.cpp
-      gemm_universal_mainloopintelxexmx16_group_fp8.cpp
-      gemm_universal_mainloopintelxexmx16group_precision.cpp
-      gemm_universal_fp_scaling.cpp
-    )
+      # Single unified test executable combining all new test files
+      cutlass_test_unit_add_executable(
+        cutlass_test_unit_gemm_device_unified_tests
+        gemm_universal_lincomb_per_rowbias_eltact.cpp
+        gemm_universal_mainloopintelxexmx16group.cpp
+        gemm_universal_mainloopintelxexmx16_group_fp8.cpp
+        gemm_universal_mainloopintelxexmx16group_precision.cpp
+        gemm_universal_fp_scaling.cpp
+      )
 
-    add_custom_target(
-      cutlass_test_unit_gemm_device
-      DEPENDS
-      cutlass_test_unit_gemm_device_tensorop_xe
-      cutlass_test_unit_gemm_device_tensorop_cooperative_xe
-      cutlass_test_unit_gemm_device_tensorop_epilogue_fusion_xe
-      cutlass_test_unit_gemm_device_mixed_input_tensorop_xe
-      cutlass_test_unit_gemm_device_tensorop_xe_group_gemm
-      cutlass_test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
-      cutlass_test_unit_gemm_device_tensorop_xe
-      cutlass_test_unit_gemm_device_unified_tests
-    )
+      add_custom_target(
+        cutlass_test_unit_gemm_device
+        DEPENDS
+        cutlass_test_unit_gemm_device_tensorop_xe
+        cutlass_test_unit_gemm_device_tensorop_cooperative_xe
+        cutlass_test_unit_gemm_device_tensorop_epilogue_fusion_xe
+        cutlass_test_unit_gemm_device_mixed_input_tensorop_xe
+        cutlass_test_unit_gemm_device_tensorop_xe_group_gemm
+        cutlass_test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
+        cutlass_test_unit_gemm_device_tensorop_xe
+        cutlass_test_unit_gemm_device_unified_tests
+      )
 
-    add_custom_target(
-      test_unit_gemm_device
-      DEPENDS
-      test_unit_gemm_device_tensorop_xe
-      test_unit_gemm_device_tensorop_cooperative_xe
-      test_unit_gemm_device_tensorop_epilogue_fusion_xe
-      test_unit_gemm_device_mixed_input_tensorop_xe
-      test_unit_gemm_device_tensorop_xe_group_gemm
-      test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
-    )
+  add_custom_target(
+    test_unit_gemm_device
+    DEPENDS
+    test_unit_gemm_device_tensorop_xe
+    test_unit_gemm_device_tensorop_cooperative_xe
+    test_unit_gemm_device_tensorop_epilogue_fusion_xe
+    test_unit_gemm_device_mixed_input_tensorop_xe
+    test_unit_gemm_device_tensorop_xe_group_gemm
+    test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
+  )
   else()
-    # Dummy targets if not building for Intel
     add_custom_target(cutlass_test_unit_gemm_device)
     add_custom_target(test_unit_gemm_device)
   endif()

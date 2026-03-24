@@ -1,6 +1,6 @@
 /***************************************************************************************************
- * Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
- * Copyright (C) 2025 Intel Corporation, All rights reserved.
+ * Copyright (C) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (C) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -105,13 +105,11 @@ struct Options {
   bool help = false;
 
   float alpha, beta;
-
-  int iterations;
-  int m, n, k, groups, verify;
+  int m, n, k, groups, iterations, verify;
 
   std::vector<typename ProblemShape::UnderlyingProblemShape> problem_sizes_host;
 
-  Options() : error(false), help(false), alpha(FLT_MAX), beta(FLT_MAX), iterations(100),
+  Options() : error(false), help(false), alpha(FLT_MAX), beta(FLT_MAX), iterations(100), verify(1),
               m(5120), n(4096), k(4096), groups(2) {
     problem_sizes_host.reserve(groups);
     for(int i = 0; i < groups; i++) {
@@ -156,8 +154,8 @@ struct Options {
       << "  --k=<int>                   Sets the K extent of the GEMM for all groups\n"
       << "  --groups=<int>              Sets the number of individual GEMM problems for Grouped GEMM\n"
       << "  --alpha=<f32>               Epilogue scalar alpha\n"
-      << "  --beta=<f32>                Epilogue scalar beta\n\n"
-      << "  --iterations=<int>          Number of profiling iterations to perform\n\n"
+      << "  --beta=<f32>                Epilogue scalar beta\n"
+      << "  --iterations=<int>          Number of profiling iterations to perform\n"
       << "  --verify=<int>              Specify whether to verify.\n\n";
 
     out
