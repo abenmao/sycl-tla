@@ -52,6 +52,23 @@ Base NVIDIA CUTLASS Versions for SYCL*TLA releases:
 |0.7-jgs | 4.2.1 |
 |0.8 | 4.2.1 |
 |0.8-cri | 4.2.1 |
+|0.8-jgs | 4.2.1 |
+
+# What's New in SYCL*TLA [0.8-jgs](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.8-jgs)
+### Architecture
+  - Block-scaled collective builder & collective MMA for GEMM ([#326](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/326))
+  - Static & dynamic persistent tile schedulers ([#242](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/242), [#322](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/322)) · MXFP8/NVFP4+ block-scaled MMA ([#202](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/202))
+  - Cluster barrier APIs ([#288](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/288)) · Asymmetric register allocation & EU Copy atoms ([#336](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/336))
+  - Matrix reduction `ired_matrix`/`fred_matrix` ([#306](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/306)) · ArrayOfVectors Load/Store Matrix ([#295](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/295))
+### Features
+  - FP8 block-scaled grouped GEMM ([#324](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/324)) · TF32 A/B, FP32 C/D kernel support ([#217](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/217))
+  - FlashAttention 3 & 4 for Xe4 ([#150](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/150), [#236](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/236))
+### Validation & Performance
+  - GTest-based GEMM performance test suite ([#222](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/222), [#247](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/247)) · BF16 GEMM reaches **91% of SIMT target** on 2048³ (256×512×128 tile)
+### Bug Fixes
+  - Fix Xe4 FMHA4 segfault ([#311](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/311)) · Fix unordered load/store matrix ([#273](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/273))
+
+> **API Reference:** [Xe4 Feature Implementation Status](media/docs/cpp/xe4_features_apis.md) — full list of Xe4 CuTe atoms, data types, and APIs.
 
 # What's New in SYCL*TLA [0.8-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.8-cri)
 ### New Features (Notes: all the tests based on CRI simulator)
@@ -173,20 +190,20 @@ CUTLASS is described in the following documents and the accompanying
 - [Layouts](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/layout.md) - describes layouts of matrices and tensors in memory
 - [Tile Iterators](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/tile_iterator_concept.md) - describes C++ concepts for iterating over tiles of matrices in memory
 - [CUTLASS Utilities](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/utilities.md) - additional templates used to facilitate rapid development
-- [Xe4 Feature Implementation Status](./media/docs/cpp/xe4_feature_implementation_status.md) - Xe4 CuTe atom and API implementation status for Intel Xe4 GPUs
+- [Xe4 Feature Implementation Status](./media/docs/cpp/xe4_features_apis.md) - Xe4 CuTe atom and API implementation status for Intel Xe4 GPUs
 
   | # | Feature | Summary |
   |---|---|---|
-  | 1 | [Async MMA (AMMA)](./media/docs/cpp/xe4_feature_implementation_status.md#1-async-mma-amma--compute-apis) | AMMA compute atoms with barrier tracking and cluster multicast variants |
-  | 2 | [Data Types for MMA](./media/docs/cpp/xe4_feature_implementation_status.md#2-data-types-for-mma) | Standard and block-scaled MMA data types (TF32, BF16, FP16, FP8, FP4, MXFP4/8) |
-  | 3 | [Async DMA (ADMA)](./media/docs/cpp/xe4_feature_implementation_status.md#3-async-dma-adma--data-movement) | Async load, store, and multicast DMA atoms |
-  | 4 | [LDSM/STSM](./media/docs/cpp/xe4_feature_implementation_status.md#4-slm--register-ldsmstsm--eu-access-to-core-matrix) | Load/store matrix atoms for SLM ↔ register data movement |
-  | 5 | [A-Barriers](./media/docs/cpp/xe4_feature_implementation_status.md#5-addressable-barriers-a-barriers) | Addressable barrier init, arrive, wait, and transaction APIs |
-  | 6 | [Cluster APIs](./media/docs/cpp/xe4_feature_implementation_status.md#6-cluster-apis) | Cluster synchronization, relaxed barriers, and leader election |
-  | 7 | [Tile Scheduler](./media/docs/cpp/xe4_feature_implementation_status.md#7-tile-scheduler) | Static and dynamic persistent tile schedulers with CLC support |
-  | 8 | [Collective Builder & Block-Scaled GEMM](./media/docs/cpp/xe4_feature_implementation_status.md#8-collective-builder--block-scaled-gemm-support) | Collective MMA builders for standard and block-scaled GEMM |
-  | 9 | [Asymmetric Register Allocation](./media/docs/cpp/xe4_feature_implementation_status.md#9-asymmetric-register-allocation) | Control/worker sub-group register partitioning for epilogue |
-  | 10 | [EU Copy Atoms](./media/docs/cpp/xe4_feature_implementation_status.md#10-eu-copy-atoms) | EU-based copy atoms for GMEM/SLM/register data movement |
+  | 1 | [Async MMA (AMMA)](./media/docs/cpp/xe4_features_apis.md#1-async-mma-amma--compute-apis) | AMMA compute atoms with barrier tracking and cluster multicast variants |
+  | 2 | [Data Types for MMA](./media/docs/cpp/xe4_features_apis.md#2-data-types-for-mma) | Standard and block-scaled MMA data types (TF32, BF16, FP16, FP8, FP4, MXFP4/8) |
+  | 3 | [Async DMA (ADMA)](./media/docs/cpp/xe4_features_apis.md#3-async-dma-adma--data-movement) | Async load, store, and multicast DMA atoms |
+  | 4 | [LDSM/STSM](./media/docs/cpp/xe4_features_apis.md#4-slm--register-ldsmstsm--eu-access-to-core-matrix) | Load/store matrix atoms for SLM ↔ register data movement |
+  | 5 | [A-Barriers](./media/docs/cpp/xe4_features_apis.md#5-addressable-barriers-a-barriers) | Addressable barrier init, arrive, wait, and transaction APIs |
+  | 6 | [Cluster APIs](./media/docs/cpp/xe4_features_apis.md#6-cluster-apis) | Cluster synchronization, relaxed barriers, and leader election |
+  | 7 | [Tile Scheduler](./media/docs/cpp/xe4_features_apis.md#7-tile-scheduler) | Static and dynamic persistent tile schedulers with CLC support |
+  | 8 | [Collective Builder & Block-Scaled GEMM](./media/docs/cpp/xe4_features_apis.md#8-collective-builder--block-scaled-gemm-support) | Collective MMA builders for standard and block-scaled GEMM |
+  | 9 | [Asymmetric Register Allocation](./media/docs/cpp/xe4_features_apis.md#9-asymmetric-register-allocation) | Control/worker sub-group register partitioning for epilogue |
+  | 10 | [EU Copy Atoms](./media/docs/cpp/xe4_features_apis.md#10-eu-copy-atoms) | EU-based copy atoms for GMEM/SLM/register data movement |
 
 # Resources
 

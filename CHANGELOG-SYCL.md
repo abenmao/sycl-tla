@@ -1,5 +1,55 @@
 # SYCL*TLA (previously referred to as cutlass-sycl) Changelog
 
+## [SYCL*TLA 0.8-jgs](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.8-jgs) (2026-03-25)
+
+### Architecture
+  - Collective builder and collective MMA for block-scaled GEMMs ([#326](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/326))
+  - Static and dynamic persistent tile schedulers for Xe4 ([#242](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/242), [#322](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/322))
+  - MXFP8 and NVFP4+ block-scaled MMA support ([#202](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/202))
+  - Block scale support in ADMA and MMA atoms ([#296](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/296))
+  - Cluster barrier APIs using cluster.barrier instructions ([#288](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/288))
+  - Asymmetric register allocation example and EU Copy matrix atoms ([#336](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/336))
+  - Matrix reduction operations: `ired_matrix` and `fred_matrix` ([#306](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/306))
+  - ArrayOfVectors access mode in Load/Store Matrix ([#295](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/295))
+  - MXFP/NVFP layout configuration utility ([#277](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/277))
+
+### Features
+  - FP8 block-scaled grouped GEMM with configurable block size and scale data type ([#324](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/324))
+  - Configurable GEMM testbed for block-scale datatypes ([#333](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/333))
+  - TF32 A/B and FP32 C/D CUTLASS kernel support ([#217](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/217))
+  - FlashAttention 3 & 4 optimizations for Xe4 ([#150](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/150), [#236](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/236), [#208](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/208))
+
+### Validation
+  - GTest-based performance test framework for Xe4 GEMM ([#222](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/222), [#247](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/247), [#231](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/231))
+  - FlashAttention unit tests for Xe4 ([#225](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/225))
+  - Extended tensor pipe unit test coverage ([#300](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/300), [#310](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/310))
+
+### Performance (Xe4 Simulator)
+  - Systolic data is relatively accurate (simulator correctly models systolic behaviors); E2E data is for reference only.
+
+  **GEMM BF16 — Cluster1×1×1, CTA 2×2, MMA 256×512×128, No Activation/Post-Op**
+
+  | M | N | K | Layout | GFlops | SIMT GFlop/s | SYCL\*TLA GFlop/s | % of Target |
+  |---:|---:|---:|--------|-------:|-------------:|------------------:|------------:|
+  | 2048 | 2048 | 2048 | AB | 17.18 | 115,764 | 105,398 | 91% |
+  | 2048 | 2048 | 2048 | A&#7511;B | 17.18 | 115,764 | 105,398 | 91% |
+  | 2048 | 2112 | 4163 | AB | 36.01 | 79,966 | 75,184 | 94% |
+  | 2048 | 2112 | 4163 | A&#7511;B | 36.01 | 79,995 | 71,739 | 90% |
+
+  **GEMM BF16 — Cluster1×1×1, CTA 2×2, MMA 256×256×128, No Activation/Post-Op**
+
+  | M | N | K | Layout | GFlops | SIMT GFlop/s | SYCL\*TLA GFlop/s | % of Target |
+  |---:|---:|---:|--------|-------:|-------------:|------------------:|------------:|
+  | 2048 | 2048 | 2048 | A&#7511;B | 17.18 | 115,894 | 81,809 | 71% |
+
+### Bug Fixes
+  - Fix Xe4 FMHA4 segfault ([#311](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/311))
+  - Fix unordered load/store matrix ([#273](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/273))
+  - Fix CI tests using static scheduler ([#363](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/363))
+  - Fix FMHA example build failure on Xe4 ([#219](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/219))
+
+> **API Reference:** See [Xe4 Feature Implementation Status](media/docs/cpp/xe4_features_apis.md) for the complete list of Xe4 CuTe atoms and APIs.
+
 ## [SYCL*TLA 0.8-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.8-cri) (2026-03-25)
 ### New Features (Notes: all the tests based on CRI simulator)
   - Support SLM Copy API functionalities and examples ([#d7fb251](https://github.com/intel-innersource/libraries.ai.cutlass.internal/commit/d7fb251), [#330](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/330), [#348](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/348))
