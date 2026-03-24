@@ -28,7 +28,11 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 # Pass these configuration files for the CI
-set(CONFIG_FILE_INTEL_DEFAULT --config_file=${CMAKE_SOURCE_DIR}/benchmarks/device/bmg/input_files/input_small_group_gemm.in)
+if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
+  set(CONFIG_FILE_INTEL_DEFAULT --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_small_grouped_gemm.in)
+else()
+  set(CONFIG_FILE_INTEL_DEFAULT --config_file=${CUTLASS_DIR}/benchmarks/device/bmg/input_files/input_small_grouped_gemm.in)
+endif()
 
 cutlass_benchmark_add_suite(cutlass_benchmarks_grouped_gemm)
 

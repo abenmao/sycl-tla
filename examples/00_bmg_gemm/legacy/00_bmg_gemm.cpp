@@ -133,7 +133,7 @@ struct Options {
       << "  --alpha=<s32>               Epilogue scalar alpha\n"
       << "  --beta=<s32>                Epilogue scalar beta\n"
       << "  --iterations=<int>          Iterations\n"
-      << "  --verify=<int>              Specify whether to verify.\n\n";      
+      << "  --verify=<int>              Specify whether to verify.\n\n";
 
     return out;
   }

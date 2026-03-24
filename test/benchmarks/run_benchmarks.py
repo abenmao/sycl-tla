@@ -72,7 +72,11 @@ def run_command(command, cwd, log_path=None):
                     log_file.write(line)
             except subprocess.CalledProcessError as e:
                 print(f"Error: Command failed with return code {e.returncode}")
-                print("Output:", e.output)
+                if e.stdout:
+                    print("Stdout:", e.stdout)
+                    print(e.stdout)
+                else:
+                    print("No output captured.")
         print(f"Log written to: {log_path}")
     else:
         subprocess.run(command, cwd=cwd, check=True)
@@ -190,7 +194,7 @@ def main():
     repo_root = Path.cwd()
     logs_root = repo_root / "logs"
     logs_root.mkdir(parents=True, exist_ok=True)
-    workdir = f"{datetime.now().strftime('%Y%m%d%H%M')}_benchmarks_{branch}"
+    workdir = f"{datetime.now().strftime('%Y%m%d%I%M')}_benchmarks_{branch}"
     logs_dir = logs_root / workdir
     logs_dir.mkdir(parents=True, exist_ok=True)
     git_commit_id = get_git_commit_id(repo_root)

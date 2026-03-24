@@ -170,6 +170,7 @@ if (CUTLASS_ENABLE_SYCL)
     intel_gpu_pvc
     pvc
     intel_gpu_bmg_g21
+    intel_gpu_bmg_g31
     bmg
     intel_gpu_cri
     cri

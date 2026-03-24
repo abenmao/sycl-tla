@@ -111,11 +111,12 @@ void FilterArchitecture() {
     {architecture::nvidia_gpu_sm_90, 90},
     {architecture::nvidia_gpu_sm_90a, 90},
     {architecture::intel_gpu_pvc, 0},
-    {architecture::intel_gpu_bmg_g21, 1}
 #if (SYCL_INTEL_TARGET == 40)
-   ,{architecture::intel_gpu_jgs, 2}
+    {architecture::intel_gpu_jgs, 2},
 #endif
     // TODO: Update this code section once we can retrieve arch info from oneAPI APIs.
+    {architecture::intel_gpu_bmg_g21, 1},
+    {architecture::intel_gpu_bmg_g31, 1}
   };
   // TODO: This is a temporary solution to support CRI. 
   // Once we can retrieve arch info from oneAPI APIs, we can remove this.
