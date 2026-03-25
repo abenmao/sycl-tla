@@ -43,6 +43,10 @@ public:
 
   // clc_response_ptr is a placeholder; it is just to make the StaticPersistentTileSchedulerXe4 and PersistentTileSchedulerXe4 constructor interfaces consistent
   CUTLASS_DEVICE explicit
+  StaticPersistentTileSchedulerXe4(CLCResponse* /* clc_response_ptr */, Params const& params, dim3 block_id_in_cluster)
+    : BaseScheduler(params) {}
+  
+  CUTLASS_DEVICE explicit
   StaticPersistentTileSchedulerXe4(CLCResponse* /* clc_response_ptr */, Params const& params)
     : BaseScheduler(params) {}
 

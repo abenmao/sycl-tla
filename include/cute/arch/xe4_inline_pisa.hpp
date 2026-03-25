@@ -4777,3 +4777,32 @@ inline void fp_tile_cvt(dtype_dst *dst_ptr, dtype_src *src_ptr) {
     }
   }
 }
+
+inline auto cluster_scheduler_get_next() {
+  vector_t<uint32_t, 4> ret;
+  INLINE_PISA("cscheduler.get_next.v4.32b %0;" : "=r"(ret) :);
+  auto ret_array = sycl::bit_cast<sycl::marray<uint32_t, 4>>(ret);
+  return ret_array;
+}
+
+inline bool cluster_scheduler_query(uint32_t status) {
+  bool pred;
+  pred = status & 1u;
+  return pred;
+}
+
+template <typename slm_dtype>
+inline slm_dtype *get_dsm_addr(slm_dtype *slm_ptr, uint32_t wg_rank) {
+  uint32_t remote_addr;
+  uint32_t slm_addr = static_cast<uint32_t>(reinterpret_cast<uint64_t>(slm_ptr));
+  INLINE_PISA("getdsmaddr.32b %0, %1, %2;" : "=r"(remote_addr) : "r"(slm_addr), "r"(wg_rank));
+  uint64_t remote_addr_u64 = (uint64_t)remote_addr;
+  slm_dtype *dsm_addr = (slm_dtype *)remote_addr_u64;
+  return dsm_addr;
+}
+
+template <uint32_t vs, typename slm_dtype, typename reg_dtype>
+static void dsm_vstore(slm_dtype *slm_ptr, const reg_dtype *reg_ptr, uint32_t wg_rank) {
+  slm_dtype *dsm_addr = get_dsm_addr(slm_ptr, wg_rank);
+  slm_vstore<vs>(dsm_addr, reg_ptr);
+}

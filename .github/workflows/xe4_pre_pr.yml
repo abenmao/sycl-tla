@@ -91,14 +91,6 @@ jobs:
           source ~/xe4_toolkit/source_oneapi_env.sh
           source ~/xe4_toolkit/source_simulator_env.sh
           echo "--------------------------------------"
-          echo "Running Xe4 GEMM Static Workload"
-          ninja xe4_gemm_static
-          ./examples/xe4/gemm/xe4_gemm_static
-          echo "--------------------------------------"
-          echo "Running Xe4 GEMM Cluster Static Workload"
-          ninja xe4_gemm_cluster_static
-          ./examples/xe4/gemm/xe4_gemm_cluster_static
-          echo "--------------------------------------"
           echo "Running Xe4 GEMM Workload"
           ninja xe4_gemm
           ./examples/xe4/gemm/xe4_gemm
@@ -106,6 +98,20 @@ jobs:
           echo "Running Xe4 GEMM Cluster Workload"
           ninja xe4_gemm_cluster
           ./examples/xe4/gemm/xe4_gemm_cluster
+          echo "--------------------------------------"
+          echo "Running Xe4 GEMM Dynamic Workload"
+          ninja xe4_gemm_dynamic
+          ./examples/xe4/gemm/xe4_gemm_dynamic
+          echo "--------------------------------------"
+          echo "Running Xe4 GEMM Cluster Dynamic Workload"
+          ninja xe4_gemm_cluster_dynamic
+          ./examples/xe4/gemm/xe4_gemm_cluster_dynamic
+          echo "--------------------------------------"
+          echo "Running Xe4 GEMM Block-Scaled FP4/FP8 Workload"
+          ninja xe4_gemm_blockscaled_fp4
+          ./examples/xe4/gemm/xe4_gemm_blockscaled_fp4
+          ninja xe4_gemm_blockscaled_fp8
+          ./examples/xe4/gemm/xe4_gemm_blockscaled_fp8
           echo "--------------------------------------"
           echo "Running Xe4 CuTe AMMA w/o DMA GEMM Tutorial Workload"
           ninja xe4_amma

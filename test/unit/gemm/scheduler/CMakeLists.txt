@@ -1,4 +1,4 @@
-# Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2025 INTEL CORPORATION. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # Redistribution and use in source and binary forms, with or without
@@ -26,48 +26,10 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-if(NOT CUTLASS_ENABLE_SYCL)
-  add_subdirectory(thread)
-  add_subdirectory(warp)
-  add_subdirectory(threadblock)
-  add_subdirectory(device)
-
-  add_custom_target(
-    cutlass_test_unit_gemm
-    DEPENDS
-    cutlass_test_unit_gemm_thread
-    cutlass_test_unit_gemm_warp
-    cutlass_test_unit_gemm_threadblock
-    cutlass_test_unit_gemm_device
+# Xe4 device tests for CLC dynamic scheduling (advance_to_next_work / fetch_next_work)
+if(SYCL_INTEL_TARGET EQUAL 40)
+  cutlass_test_unit_add_executable(
+    cutlass_test_unit_gemm_scheduler_xe4_device
+    xe4_tile_scheduler_device.cpp
   )
-
-  add_custom_target(
-    test_unit_gemm
-    DEPENDS
-    test_unit_gemm_thread
-    test_unit_gemm_warp
-    test_unit_gemm_threadblock
-    test_unit_gemm_device
-  )
-else()
-
-  add_subdirectory(device)
-
-  add_custom_target(
-    cutlass_test_unit_gemm
-    DEPENDS
-    cutlass_test_unit_gemm_device
-  )
-
-  add_custom_target(
-    test_unit_gemm
-    DEPENDS
-    test_unit_gemm_device
-  )
-
-  if(SYCL_INTEL_TARGET EQUAL 40)
-    add_subdirectory(scheduler)
-    add_dependencies(cutlass_test_unit_gemm cutlass_test_unit_gemm_scheduler_xe4_device)
-    add_dependencies(test_unit_gemm test_unit_gemm_scheduler_xe4_device)
-  endif()
 endif()

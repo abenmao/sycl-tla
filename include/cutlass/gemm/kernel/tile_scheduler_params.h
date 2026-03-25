@@ -1853,6 +1853,201 @@ struct PersistentTileSchedulerSm90GroupParams {
 
 
 //
+// Parameters for Xe4 tile schedulers
+//
+// TODO: Rename to PersistentTileSchedulerXe4Params after perf regression fixed.
+struct DynamicPersistentTileSchedulerXe4Params {
+
+  using UnderlyingParams = PersistentTileSchedulerSm90Params;
+  using RasterOrder = UnderlyingParams::RasterOrder;
+  using RasterOrderOptions = UnderlyingParams::RasterOrderOptions;
+
+  UnderlyingParams underlying_params_{};
+  uint32_t problem_tiles_m_ = 0;
+  uint32_t problem_tiles_n_ = 0;
+  uint32_t problem_tiles_l_ = 0;
+  FastDivmod divmod_cluster_shape_m_{};
+  FastDivmod divmod_cluster_shape_n_{};
+  FastDivmod divmod_swizzle_size_{};
+  int32_t log_swizzle_size_ = 0;
+  RasterOrder raster_order_ = RasterOrder::AlongM;
+
+  CUTLASS_HOST_DEVICE
+  static DynamicPersistentTileSchedulerXe4Params
+  from_underlying(UnderlyingParams const& params, int max_swizzle_size) {
+    DynamicPersistentTileSchedulerXe4Params result{};
+    result.underlying_params_ = params;
+    result.divmod_cluster_shape_m_ = FastDivmod(params.cluster_shape_m_);
+    result.divmod_cluster_shape_n_ = FastDivmod(params.cluster_shape_n_);
+    result.problem_tiles_m_ = params.problem_tiles_m_;
+    result.problem_tiles_n_ = params.problem_tiles_n_;
+    result.problem_tiles_l_ = params.problem_tiles_l_;
+    result.log_swizzle_size_ = params.log_swizzle_size_;
+    result.raster_order_ = params.raster_order_;
+    // Compute swizzle divmod from max_swizzle_size argument
+    if (max_swizzle_size <= 1) {
+      result.divmod_swizzle_size_.divisor = 0;  // marks swizzle as disabled
+    }
+    else {
+      result.divmod_swizzle_size_ = FastDivmod(max_swizzle_size);
+    }
+    return result;
+  }
+
+  void
+  initialize_swizzle(
+      dim3 problem_blocks,
+      GemmCoord cluster_shape,
+      KernelHardwareInfo const& hw_info,
+      int max_swizzle_size,
+      RasterOrderOptions raster_order_option) {
+
+    raster_order_ = UnderlyingParams::get_rasterization_order(problem_tiles_m_, problem_tiles_n_, raster_order_option);
+    if (max_swizzle_size <= 1) {
+      // Set divisor directly to zero to mark as unused
+      divmod_swizzle_size_.divisor = 0;
+    }
+    else {
+      divmod_swizzle_size_ = FastDivmod(max_swizzle_size);
+    }
+  }
+
+  void
+  initialize(
+    BatchedGemmCoord problem_shape,
+    GemmCoord tile_shape,
+    GemmCoord cluster_shape,
+    KernelHardwareInfo const& hw_info,
+    int max_swizzle_size,
+    RasterOrderOptions raster_order_option
+  ) {
+    UnderlyingParams params;
+    params.initialize(problem_shape, tile_shape, cluster_shape, hw_info, max_swizzle_size, raster_order_option);
+    underlying_params_ = params;
+    divmod_cluster_shape_m_ = FastDivmod(params.cluster_shape_m_);
+    divmod_cluster_shape_n_ = FastDivmod(params.cluster_shape_n_);
+    problem_tiles_m_ = params.problem_tiles_m_;
+    problem_tiles_n_ = params.problem_tiles_n_;
+    problem_tiles_l_ = params.problem_tiles_l_;
+    log_swizzle_size_ = params.log_swizzle_size_;
+    dim3 problem_blocks = UnderlyingParams::get_tiled_cta_shape_mnl(problem_shape, tile_shape, cluster_shape);
+    initialize_swizzle(problem_blocks, cluster_shape, hw_info, max_swizzle_size, raster_order_option);
+  }
+
+  void
+  initialize(
+    dim3 problem_blocks,
+    GemmCoord cluster_shape,
+    KernelHardwareInfo const& hw_info,
+    int max_swizzle_size,
+    RasterOrderOptions raster_order_option
+  ) {
+    UnderlyingParams params;
+    params.initialize(problem_blocks, cluster_shape, hw_info, max_swizzle_size, raster_order_option);
+    underlying_params_ = params;
+    divmod_cluster_shape_m_ = FastDivmod(params.cluster_shape_m_);
+    divmod_cluster_shape_n_ = FastDivmod(params.cluster_shape_n_);
+    problem_tiles_m_ = params.problem_tiles_m_;
+    problem_tiles_n_ = params.problem_tiles_n_;
+    problem_tiles_l_ = params.problem_tiles_l_;
+    log_swizzle_size_ = params.log_swizzle_size_;
+    initialize_swizzle(problem_blocks, cluster_shape, hw_info, max_swizzle_size, raster_order_option);
+  }
+
+  CUTLASS_HOST_DEVICE
+  static dim3
+  get_tiled_cta_shape_mnl(
+    BatchedGemmCoord problem_shape,
+    GemmCoord cta_shape,
+    GemmCoord cluster_shape) {
+    return UnderlyingParams::get_tiled_cta_shape_mnl(problem_shape, cta_shape, cluster_shape);
+  }
+
+  static size_t
+  get_workspace_size(
+    BatchedGemmCoord problem_shape,
+    GemmCoord tile_shape,
+    GemmCoord cluster_shape,
+    KernelHardwareInfo const& hw_info,
+    int max_swizzle_size,
+    RasterOrderOptions raster_order_option
+  ) {
+    CUTLASS_UNUSED(problem_shape);
+    CUTLASS_UNUSED(tile_shape);
+    CUTLASS_UNUSED(cluster_shape);
+    CUTLASS_UNUSED(hw_info);
+    CUTLASS_UNUSED(max_swizzle_size);
+    CUTLASS_UNUSED(raster_order_option);
+    return 0;
+  }
+
+  static size_t
+  get_workspace_size(
+    dim3 problem_blocks,
+    GemmCoord cluster_shape,
+    KernelHardwareInfo const& hw_info,
+    int max_swizzle_size,
+    RasterOrderOptions raster_order_option
+  ) {
+    CUTLASS_UNUSED(problem_blocks);
+    CUTLASS_UNUSED(cluster_shape);
+    CUTLASS_UNUSED(hw_info);
+    CUTLASS_UNUSED(max_swizzle_size);
+    CUTLASS_UNUSED(raster_order_option);
+    return 0;
+  }
+
+  static cutlass::Status
+  initialize_workspace(
+    void* workspace,
+    cudaStream_t stream,
+    BatchedGemmCoord problem_shape,
+    GemmCoord tile_shape,
+    GemmCoord cluster_shape,
+    KernelHardwareInfo const& hw_info,
+    int max_swizzle_size,
+    RasterOrderOptions raster_order_option,
+    CudaHostAdapter *cuda_adapter = nullptr
+  ) {
+    CUTLASS_UNUSED(workspace);
+    CUTLASS_UNUSED(stream);
+    CUTLASS_UNUSED(problem_shape);
+    CUTLASS_UNUSED(tile_shape);
+    CUTLASS_UNUSED(cluster_shape);
+    CUTLASS_UNUSED(hw_info);
+    CUTLASS_UNUSED(max_swizzle_size);
+    CUTLASS_UNUSED(raster_order_option);
+    CUTLASS_UNUSED(cuda_adapter);
+    return cutlass::Status::kSuccess;
+  }
+
+  static cutlass::Status
+  initialize_workspace(
+    void* workspace,
+    cudaStream_t stream,
+    dim3 problem_blocks,
+    GemmCoord cluster_shape,
+    KernelHardwareInfo const& hw_info,
+    int max_swizzle_size,
+    RasterOrderOptions raster_order_option,
+    CudaHostAdapter *cuda_adapter = nullptr
+  ) {
+    CUTLASS_UNUSED(workspace);
+    CUTLASS_UNUSED(stream);
+    CUTLASS_UNUSED(problem_blocks);
+    CUTLASS_UNUSED(cluster_shape);
+    CUTLASS_UNUSED(hw_info);
+    CUTLASS_UNUSED(max_swizzle_size);
+    CUTLASS_UNUSED(raster_order_option);
+    CUTLASS_UNUSED(cuda_adapter);
+    return cutlass::Status::kSuccess;
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////
+
+
+//
 // Parameters for SM100 tile schedulers
 //
 

@@ -613,7 +613,7 @@ private:
   CUTLASS_DEVICE
   void producer_commit(uint32_t stage, uint32_t bytes) {
       if (!params_.is_leader) {
-        return full_barrier_ptr_[stage].arrive(bytes);
+        return full_barrier_ptr_[stage].arrive();
       }
 
     // Below code is used only for unit-testing (in the absence of TMA commit)
@@ -700,6 +700,192 @@ private:
   CUTLASS_DEVICE
   ConsumerBarrierType* consumer_get_barrier(uint32_t stage) {
     return reinterpret_cast<ConsumerBarrierType*>(&empty_barrier_ptr_[stage]);
+  }
+};
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// CLC fetch async pipeline for XE4 dynamic persistent scheduling
+//
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+namespace PipelineDetail {
+  template<int Stages>
+  using PipelineCLCFetchAsyncPipelineState = cutlass::PipelineState<Stages>;
+
+  template<int Stages>
+  struct PipelineCLCFetchAsyncSharedStorage {
+    using FullBarrier = cutlass::arch::ClusterBarrier;
+    using EmptyBarrier = cutlass::arch::ClusterBarrier;
+
+    FullBarrier full_barrier_[Stages];
+    EmptyBarrier empty_barrier_[Stages];
+  };
+};
+
+template <int Stages_, class ClusterShape = Shape<int,int,_1>>
+class PipelineCLCFetchAsync {
+public:
+  static constexpr uint32_t Stages = Stages_;
+  using PipelineState = PipelineDetail::PipelineCLCFetchAsyncPipelineState<Stages>;
+  using SharedStorage = PipelineDetail::PipelineCLCFetchAsyncSharedStorage<Stages>;
+  using FullBarrier = typename SharedStorage::FullBarrier;
+  using EmptyBarrier = typename SharedStorage::EmptyBarrier;
+
+  enum class ThreadCategory {
+    NonParticipant,
+    Producer,
+    Consumer,
+    ProducerConsumer
+  };
+
+  struct Params {
+    uint32_t transaction_bytes = 0;
+    ThreadCategory role = ThreadCategory::NonParticipant;
+    uint32_t producer_blockid = 0;
+    uint32_t producer_arv_count = 1;
+    uint32_t consumer_arv_count = 1;
+    int initializing_warp = 0;
+  };
+
+  CUTLASS_DEVICE
+  static void
+  init_barriers(SharedStorage& storage, Params const& params) {
+    int warp_idx = canonical_warp_idx_sync();
+    bool is_initializing_warp = (warp_idx == params.initializing_warp);
+    if (is_initializing_warp) {
+      cutlass::arch::detail::initialize_barrier_array_pair_aligned<decltype(storage.full_barrier_), decltype(storage.empty_barrier_), Stages>(
+          storage.full_barrier_, storage.empty_barrier_, params.producer_arv_count, params.consumer_arv_count);
+    }
+    cutlass::arch::fence_barrier_init();
+  }
+
+  CUTLASS_DEVICE
+  PipelineCLCFetchAsync(SharedStorage& storage, Params const& params)
+      : params_(params)
+      , full_barrier_ptr_(&storage.full_barrier_[0])
+      , empty_barrier_ptr_(&storage.empty_barrier_[0]) {
+    init_barriers(storage, params_);
+    cluster_size_ = []() {
+      auto cs = cute::cluster_shape();
+      return cs.x * cs.y * cs.z;
+    }();
+  }
+
+  CUTLASS_DEVICE
+  PipelineCLCFetchAsync(SharedStorage& storage, Params const& params, ClusterShape cluster_shape)
+      : params_(params)
+      , full_barrier_ptr_(&storage.full_barrier_[0])
+      , empty_barrier_ptr_(&storage.empty_barrier_[0]) {
+    init_barriers(storage, params_);
+    cluster_size_ = cute::size<0>(cluster_shape)
+                  * cute::size<1>(cluster_shape)
+                  * cute::size<2>(cluster_shape);
+  }
+
+  CUTLASS_DEVICE
+  ProducerToken producer_try_acquire(PipelineState state, uint32_t skip_wait = false) {
+    return producer_try_acquire(state.index(), state.phase(), skip_wait);
+  }
+
+  CUTLASS_DEVICE
+  void producer_acquire(PipelineState state, ProducerToken barrier_token = {BarrierStatus::WaitAgain}) {
+    producer_acquire(state.index(), state.phase(), barrier_token);
+  }
+
+  CUTLASS_DEVICE
+  void producer_commit(PipelineState state) {
+    producer_commit(state.index());
+  }
+
+  CUTLASS_DEVICE
+  void producer_tail(PipelineState state) {
+    detail::pipeline_check_is_producer(params_.role);
+    for (int count = 0; count < Stages; ++count) {
+      producer_acquire(state);
+      ++state;
+    }
+  }
+
+  CUTLASS_DEVICE
+  ConsumerToken consumer_try_wait(PipelineState state, uint32_t skip_wait = false) {
+    return consumer_try_wait(state.index(), state.phase(), skip_wait);
+  }
+
+  CUTLASS_DEVICE
+  void consumer_wait(PipelineState state, ConsumerToken barrier_token = {BarrierStatus::WaitAgain}) {
+    consumer_wait(state.index(), state.phase(), barrier_token);
+  }
+
+  CUTLASS_DEVICE
+  void consumer_release(PipelineState state) {
+    consumer_release(state.index());
+  }
+
+private:
+  Params params_;
+  FullBarrier *full_barrier_ptr_ = nullptr;
+  EmptyBarrier *empty_barrier_ptr_ = nullptr;
+  uint32_t cluster_size_ = 1;
+
+  CUTLASS_DEVICE
+  ProducerToken producer_try_acquire(uint32_t stage, uint32_t phase, uint32_t skip_wait) {
+    detail::pipeline_check_is_producer(params_.role);
+    if (skip_wait) {
+      return {BarrierStatus::WaitDone};
+    }
+    bool barrier_status = empty_barrier_ptr_[stage].try_wait(phase);
+    return {static_cast<BarrierStatus>(barrier_status)};
+  }
+
+  CUTLASS_DEVICE
+  void producer_acquire(uint32_t stage, uint32_t phase, ProducerToken barrier_token) {
+    detail::pipeline_check_is_producer(params_.role);
+    if (barrier_token == BarrierStatus::WaitAgain) {
+      empty_barrier_ptr_[stage].wait(phase);
+    }
+  }
+
+  CUTLASS_DEVICE
+  void producer_commit(uint32_t stage) {
+    detail::pipeline_check_is_producer(params_.role);
+    if (cluster_size_ > 1) {
+      for (uint32_t wg_id = 0; wg_id < cluster_size_; ++wg_id) {
+        full_barrier_ptr_[stage].arrive(wg_id);
+      }
+    }
+    else {
+      full_barrier_ptr_[stage].arrive();
+    }
+  }
+
+  CUTLASS_DEVICE
+  ConsumerToken consumer_try_wait(uint32_t stage, uint32_t phase, uint32_t skip_wait) {
+    detail::pipeline_check_is_consumer(params_.role);
+    if (skip_wait) {
+      return {BarrierStatus::WaitDone};
+    }
+    bool barrier_status = full_barrier_ptr_[stage].try_wait(phase);
+    return {static_cast<BarrierStatus>(barrier_status)};
+  }
+
+  CUTLASS_DEVICE
+  void consumer_wait(uint32_t stage, uint32_t phase, ConsumerToken barrier_token) {
+    detail::pipeline_check_is_consumer(params_.role);
+    if (barrier_token == BarrierStatus::WaitAgain) {
+      full_barrier_ptr_[stage].wait(phase);
+    }
+  }
+
+  CUTLASS_DEVICE
+  void consumer_release(uint32_t stage) {
+    detail::pipeline_check_is_consumer(params_.role);
+    if (cluster_size_ > 1) {
+      empty_barrier_ptr_[stage].arrive(params_.producer_blockid);
+    }
+    else {
+      empty_barrier_ptr_[stage].arrive();
+    }
   }
 };
 
@@ -1008,7 +1194,7 @@ private:
   CUTLASS_DEVICE
   void producer_commit(uint32_t stage) {
     detail::pipeline_check_is_producer(params_.role);
-    full_barrier_ptr_[stage].arrive(params_.dst_blockid);
+    full_barrier_ptr_[stage].arrive();
   }
 
   CUTLASS_DEVICE
@@ -1047,7 +1233,7 @@ private:
   CUTLASS_DEVICE
   void consumer_release(uint32_t stage, uint32_t skip = false) {
     detail::pipeline_check_is_consumer(params_.role);
-    empty_barrier_ptr_[stage].arrive(params_.dst_blockid, (not skip));
+    empty_barrier_ptr_[stage].arrive();
   }
 };
 
@@ -1293,7 +1479,7 @@ private:
   CUTLASS_DEVICE
   void consumer_release(uint32_t stage) {
     detail::pipeline_check_is_consumer(params_.role);
-    empty_barrier_ptr_[stage].arrive(params_.dst_blockid);
+    empty_barrier_ptr_[stage].arrive();
   }
 };
 

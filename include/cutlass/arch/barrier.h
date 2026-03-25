@@ -514,7 +514,10 @@ public:
 
     cutlass::arch::synclog_emit_cluster_barrier_arrive_cluster(__LINE__, smem_addr, cta_id, pred);
 #elif (SYCL_INTEL_TARGET == 40)
-    abarrier_workgroup_arrive(smem_ptr, 1);
+    if (pred) {
+      auto remote_abar = get_remote_abar_address(smem_ptr, cta_id);
+      abarrier_cluster_arrive(remote_abar, 1);
+    }
 #elif defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
 #endif
@@ -637,7 +640,10 @@ struct ClusterTransactionBarrier : public ClusterBarrier {
         :
         : "r"(smem_addr), "r"(cta_id), "r"(pred), "r"(transaction_bytes));
 #elif (SYCL_INTEL_TARGET == 40)
-    abarrier_workgroup_arrive_expect_tx(smem_ptr, transaction_bytes);
+    if (pred) {
+      auto remote_abar = get_remote_abar_address(smem_ptr, cta_id);
+      abarrier_cluster_arrive_expect_tx(remote_abar, transaction_bytes);
+    }
 #elif defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
 #endif
@@ -679,7 +685,10 @@ struct ClusterTransactionBarrier : public ClusterBarrier {
         : "r"(transaction_bytes), "r"(smem_addr), "r"(pred));
     cutlass::arch::synclog_emit_cluster_transaction_barrier_complete_transaction(__LINE__, smem_addr, dst_cta_id, transaction_bytes, pred);
 #elif (SYCL_INTEL_TARGET == 40)
-    abarrier_workgroup_complete_tx(smem_ptr, transaction_bytes);
+      if (pred) {
+        auto remote_abar = get_remote_abar_address(smem_ptr, dst_cta_id);
+        abarrier_cluster_complete_tx(remote_abar, transaction_bytes);
+      }
 #elif defined(__CUDA_ARCH__)
     asm volatile ("brkpt;\n" ::);
 #endif
