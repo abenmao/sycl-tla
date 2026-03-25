@@ -1,4 +1,4 @@
-#include "gemm.hpp"
+#include "gemm_static.hpp"
 #include <gtest/gtest.h>
 
 struct GEMM_TEST_CONFIG {
@@ -15,7 +15,6 @@ struct GEMM_TEST_CONFIG {
   using ClusterShape_MNK = Shape<_1, _1, _1>;
 
   static constexpr int StagesA = 2;
-  static constexpr bool is_persistent = false;
   static constexpr auto activation_type = ActivationType::SiLu;
   static constexpr auto operationC_type = OperationCType::Mul;
   static constexpr cute::array<int, 4> ProblemShape_MNKL = {512, 768, 384, 1};
@@ -75,8 +74,8 @@ TYPED_TEST_P(GemmTest, simple_run) {
 }
 
 REGISTER_TYPED_TEST_SUITE_P(GemmTest, simple_run);
-using GemmTests = ::testing::Types<GEMM_ROW_ROW>; // GEMM_ROW_ROW_BiasAdd,  GEMM_ROW_ROW_PERF, GEMM_ROW_COL, BATCH_GEMM_ROW_ROW, GEMM_ROW_ROW_ResidualAddC not included to reduce perf test time
-INSTANTIATE_TYPED_TEST_SUITE_P(Gemm, GemmTest, GemmTests);
+using GemmTests = ::testing::Types<GEMM_ROW_ROW>;
+INSTANTIATE_TYPED_TEST_SUITE_P(GemmStatic, GemmTest, GemmTests);
 
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);

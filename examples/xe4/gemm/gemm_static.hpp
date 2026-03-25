@@ -75,46 +75,37 @@ struct EpilogueOperationSelector<ActivationType::None, OperationCType::None, Ele
 template <ActivationType activation_type, OperationCType operationC_type, class ElementOutput, class ElementCompute>
 using select_epilogue_operation = typename EpilogueOperationSelector<activation_type, operationC_type, ElementOutput, ElementCompute>::type;
 
-// Define a macro to extract memory info (offset and raw size)
 #define GET_MEM_INFO(cls, path) std::make_tuple((size_t) & (((cls *)0)->path), sizeof(((cls *)0)->path))
 
-// Add function to get shared memory information
 template<typename GemmKernel>
 std::string get_shared_memory_info() {
   using TensorStorage = typename GemmKernel::TensorStorage;
 
   std::ostringstream oss;
 
-  // Lambda to convert bytes to KB with proper formatting
   auto bytes2kb = [](size_t bytes) -> std::string {
     double kb = bytes / 1024.0;
     std::ostringstream format;
     if (bytes < 1024) {
-      // No decimal point for integer byte values
       format << bytes << " Bytes";
     } else if (bytes >= 1024 * 1024) {
       format << std::fixed << std::setprecision(2) << kb / 1024.0 << " MB";
     } else if (bytes % 1024 == 0) {
-      // No decimal point for integer KB values
       format << static_cast<int>(kb) << " KB";
     } else {
-      // Two decimal places for non-integer KB values
       format << std::fixed << std::setprecision(2) << kb << " KB";
     }
     return format.str();
   };
 
-  // Extract memory information using the macro
   auto [offsetA, sizeA] = GET_MEM_INFO(TensorStorage, mainloop.smem_A);
   auto [offsetB, sizeB] = GET_MEM_INFO(TensorStorage, mainloop.smem_B);
   auto [offsetAcc, sizeAcc] = GET_MEM_INFO(TensorStorage, mainloop.smem_Acc);
   auto [offsetC, sizeC] = GET_MEM_INFO(TensorStorage, epilogue.collective.smem_C);
   auto [offsetD, sizeD] = GET_MEM_INFO(TensorStorage, epilogue.collective.smem_D);
 
-  // Calculate the total size of TensorStorage
   size_t total_size = sizeof(TensorStorage);
 
-  // Format output information
   oss << "Share Memory Allocation (Total: " << bytes2kb(total_size) << ")" << std::endl;
   oss << "- Mainloop" << std::endl;
   oss << "    A: size=" << bytes2kb(sizeA) << ", offset=" << bytes2kb(offsetA) << std::endl;
@@ -132,32 +123,24 @@ void run_gemm()
   constexpr int NumControlWarps = 4;
   constexpr int NumEpilogueWarps = 16;
 
-  /////////////////////////////////////////////////////////////////////////////////////////////////
-  /// GEMM kernel configurations
-  /////////////////////////////////////////////////////////////////////////////////////////////////
+  using         ElementA    = typename Config::ElementA;
+  using         LayoutA     = typename Config::LayoutA;
+  constexpr int AlignmentA  = 512;
 
-  // A matrix configuration
-  using         ElementA    = typename Config::ElementA;                      // Element type for A matrix operand
-  using         LayoutA     = typename Config::LayoutA;                       // Layout type for A matrix operand
-  constexpr int AlignmentA  = 512;                                            // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
+  using         ElementB    = typename Config::ElementB;
+  using         LayoutB     = typename Config::LayoutB;
+  constexpr int AlignmentB  = 512;
 
-  // B matrix configuration
-  using         ElementB    = typename Config::ElementB;                      // Element type for B matrix operand
-  using         LayoutB     = typename Config::LayoutB;                       // Layout type for B matrix operand
-  constexpr int AlignmentB  = 512;                                            // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
+  using         ElementC    = typename Config::ElementC;
+  using         ElementD    = typename Config::ElementD;
+  using         LayoutC     = typename Config::LayoutC;
+  constexpr int AlignmentC  = 512;
 
-  // C/D matrix configuration
-  using         ElementC    = typename Config::ElementC;                      // Element type for C matrix operands
-  using         ElementD    = typename Config::ElementD;                      // Element type for D matrix operands
-  using         LayoutC     = typename Config::LayoutC;                       // Layout type for C and D matrix operands
-  constexpr int AlignmentC  = 512;                                            // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
-
-  // Kernel functional config
-  using ElementAccumulator  = typename Config::ElementAccumulator;            // Element type for internal accumulation
-  using ArchTag             = cutlass::arch::Xe4;                             // Tag indicating the minimum SM that supports the intended feature
-  using OperatorClass       = cutlass::arch::OpClassTensorOp;                 // Operator class tag
-  using TileShape           = typename Config::CtaTileShape_MNK;              // Threadblock-level tile size
-  using ClusterShape        = typename Config::ClusterShape_MNK;              // Shape of the threadblocks in a cluster
+  using ElementAccumulator  = typename Config::ElementAccumulator;
+  using ArchTag             = cutlass::arch::Xe4;
+  using OperatorClass       = cutlass::arch::OpClassTensorOp;
+  using TileShape           = typename Config::CtaTileShape_MNK;
+  using ClusterShape        = typename Config::ClusterShape_MNK;
 
   constexpr auto activation_type = Config::activation_type;
   constexpr auto operationC_type = Config::operationC_type;
@@ -171,7 +154,6 @@ void run_gemm()
   using EpilogueScheduleType = cutlass::epilogue::collective::EpilogueScheduleAuto;
   using EpilogueOperation = select_epilogue_operation<activation_type, operationC_type, ElementD, ElementEpilogueCompute>;
 
-  // Build the epilogue
   using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
       ArchTag, OperatorClass,
       TileShape, ClusterShape,
@@ -183,7 +165,6 @@ void run_gemm()
       EpilogueOperation
     >::CollectiveOp;
 
-  // Build the mainloop
   using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder<
       ArchTag, OperatorClass,
       ElementA, LayoutA, AlignmentA,
@@ -197,7 +178,7 @@ void run_gemm()
     Shape<int,int,int,int>,
     CollectiveMainloop,
     CollectiveEpilogue,
-    void
+    cutlass::gemm::StaticPersistentScheduler
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
@@ -206,10 +187,6 @@ void run_gemm()
   using StrideB = typename GemmKernel::StrideB;
   using StrideC = typename GemmKernel::StrideC;
   using StrideD = typename GemmKernel::StrideD;
-
-  /////////////////////////////////////////////////////////////////////////////////////////////////
-  /// GEMM setup and evaluation
-  /////////////////////////////////////////////////////////////////////////////////////////////////
 
   queue q;
   auto dev = q.get_device();
@@ -245,25 +222,11 @@ void run_gemm()
     std::generate_n(Bias_s, sizeBias, [=]() { return static_cast<float>(rand()) / static_cast<float>(RAND_MAX); });
   }
 
-  auto [cluster_size_y, cluster_size_x, cluster_size_z] = ClusterShape{};
+  auto [cluster_size_x, cluster_size_y, cluster_size_z] = ClusterShape{};
   sycl::range<3> cluster_size(cluster_size_z, cluster_size_y, cluster_size_x);
 
-  auto num_groups = ceil_div(problem_shape_mnkl, TileShape {});
-  range<3> local_range(1, NumControlWarps + NumEpilogueWarps, cutlass::NumThreadsPerWarp);
-  range<3> group_range(1, get<0>(num_groups), get<1>(num_groups));
-
-  constexpr bool is_persistent = Config::is_persistent;
-  if constexpr (is_persistent) {
-    auto [cta_num_y, cta_num_x] = typename Config::CtaNum_MN {};
-    group_range[1] = min(group_range[1], cta_num_y * cluster_size_y);
-    group_range[2] = min(group_range[2], cta_num_x * cluster_size_x);
-  }
-
-  std::cout << "IsPersistentMode: " << is_persistent << std::endl;
   print("ProblemShape_MNKL: "); print(problem_shape_mnkl); print("\n");
   print("TileShape_MNK: "); print(TileShape{}); print("\n");
-  print("ceil_div(ProblemShape,TileShape): "); print(num_groups); print("\n");
-  std::cout << "Group range: {" << group_range[0] << ", " << group_range[1] << ", " << group_range[2] << "} \n";
 
   auto stride_A = cutlass::make_cute_packed_stride(StrideA{}, select<0,2,3>(problem_shape_mnkl));
   auto stride_B = cutlass::make_cute_packed_stride(StrideB{}, select<1,2,3>(problem_shape_mnkl));
@@ -286,6 +249,10 @@ void run_gemm()
     }
   }();
 
+  int device_id = 0;
+  int sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(device_id);
+  cutlass::KernelHardwareInfo kernel_hw_info{device_id, sm_count, 0};
+
   auto args = typename Gemm::GemmKernel::Arguments {
     problem_shape_mnkl,
     { A_s, stride_A, B_s, stride_B },
@@ -293,7 +260,13 @@ void run_gemm()
   };
 
   GemmKernel kernel;
-  auto params = kernel.to_underlying_arguments(args, nullptr);
+  auto params = kernel.to_underlying_arguments(args, kernel_hw_info, nullptr);
+
+  dim3 const grid = GemmKernel::get_grid_shape(params);
+  dim3 const block = GemmKernel::get_block_shape();
+
+  range<3> group_range(grid.z, grid.y, grid.x);
+  range<3> local_range(block.z, block.y, block.x);
 
   int smem_size = 0;
   cutlass::SyclClusterLaunchParams launch_params = {group_range, local_range, cluster_size, smem_size, q};

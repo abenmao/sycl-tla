@@ -91,6 +91,14 @@ jobs:
           source ~/xe4_toolkit/source_oneapi_env.sh
           source ~/xe4_toolkit/source_simulator_env.sh
           echo "--------------------------------------"
+          echo "Running Xe4 GEMM Static Workload"
+          ninja xe4_gemm_static
+          ./examples/xe4/gemm/xe4_gemm_static
+          echo "--------------------------------------"
+          echo "Running Xe4 GEMM Cluster Static Workload"
+          ninja xe4_gemm_cluster_static
+          ./examples/xe4/gemm/xe4_gemm_cluster_static
+          echo "--------------------------------------"
           echo "Running Xe4 GEMM Workload"
           ninja xe4_gemm
           ./examples/xe4/gemm/xe4_gemm

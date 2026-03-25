@@ -1364,6 +1364,20 @@ struct MainloopXe4DmaGmmaWarpSpecializedBlockScaled {
 };
 
 template<
+  int Stages_,
+  int SchedulerPipelineStageCount_,
+  int AccumulatorPipelineStageCount_,
+  class ClusterShape_ = Shape<_1,_1,_1>
+>
+struct MainloopXe4DmaGmmaWarpSpecializedStatic {
+  constexpr static int Stages = Stages_;
+  using ClusterShape = ClusterShape_;
+  using ArchTag = arch::Xe4;
+  using Schedule = KernelTmaWarpSpecializedXe4<SchedulerPipelineStageCount_, AccumulatorPipelineStageCount_>;
+  constexpr static bool IsOverlappingAccum = false;
+};
+
+template<
   conv::Operator ConvOp_,
   int Stages_,
   int NumSpatialDimensions_,

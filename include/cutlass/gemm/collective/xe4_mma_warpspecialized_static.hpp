@@ -37,7 +37,7 @@ template <
   class SmemCopyAtomB_,
   class TransformB_>
 struct CollectiveMma<
-  MainloopXe4DmaGmmaWarpSpecialized<Stages, SchedulerPipelineStageCount, AccumulatorPipelineStageCount, ClusterShape>,
+  MainloopXe4DmaGmmaWarpSpecializedStatic<Stages, SchedulerPipelineStageCount, AccumulatorPipelineStageCount, ClusterShape>,
   TileShape_,
   ElementA_,
   StrideA_,
@@ -56,7 +56,7 @@ struct CollectiveMma<
   using TiledMma = TiledMma_;
   using AtomThrShapeMNK = Shape<decltype(shape<0>(typename TiledMma::ThrLayoutVMNK{})), _1, _1>;
 
-  using DispatchPolicy = MainloopXe4DmaGmmaWarpSpecialized<
+  using DispatchPolicy = MainloopXe4DmaGmmaWarpSpecializedStatic<
                           Stages,
                           SchedulerPipelineStageCount,
                           AccumulatorPipelineStageCount,
@@ -70,7 +70,6 @@ struct CollectiveMma<
 
   using CtaShape_MNK = decltype(shape_div(TileShape{}, AtomThrShapeMNK{}));
 
-  // Define A and B block shapes for reduced size TMA_LOADs
   using MmaShapeA_MK = decltype(partition_shape_A(TiledMma{}, make_shape(size<0>(TileShape{}), size<2>(TileShape{}))));
   using MmaShapeB_NK = decltype(partition_shape_B(TiledMma{}, make_shape(size<1>(TileShape{}), size<2>(TileShape{}))));
   using MmaShapeC_MN = decltype(partition_shape_C(TiledMma{}, make_shape(size<0>(TileShape{}), size<1>(TileShape{}))));
@@ -99,14 +98,10 @@ struct CollectiveMma<
 
   static_assert(DispatchPolicy::Stages >= 2, "Specialization requires Stages set to value 2 or more.");
 
-  // Tile along K mode first before tiling over MN. PIPE mode last as usual.
-  // This maximizes TMA boxes due to better smem-K vectorization, reducing total issued TMAs.
-  // (MMA_TILE_M,MMA_TILE_K),MMA_M,MMA_K,PIPE)
   using SmemLayoutA = decltype(UMMA::tile_to_mma_shape(
       SmemLayoutAtomA{},
       append(MmaShapeA_MK{}, Int<DispatchPolicy::Stages>{}),
       cute::conditional_t<cutlass::gemm::detail::is_mn_major<StrideA>(), Step<_1,_2,_3>, Step<_2,_1,_3>>{}));
-  // (MMA_TILE_N,MMA_TILE_K),MMA_N,MMA_K,PIPE)
   using SmemLayoutB = decltype(UMMA::tile_to_mma_shape(
       SmemLayoutAtomB{},
       append(MmaShapeB_NK{}, Int<DispatchPolicy::Stages>{}),
@@ -140,22 +135,22 @@ struct CollectiveMma<
     class STensorA, class STensorB
   >
   struct LoadParams {
-    // for scheduler
     KTileCount k_tiles;
-    // for input tensor values
     GTensorPartitionedA tAgA_mkl;
     GTensorPartitionedB tBgB_nkl;
     STensorA tAsA;
     STensorB tBsB;
 
     CUTLASS_DEVICE
-    LoadParams (
+    LoadParams(
         KTileCount k_tiles_,
         GTensorPartitionedA tAgA_mkl_, GTensorPartitionedB tBgB_nkl_,
         STensorA tAsA_, STensorB tBsB_)
     : k_tiles(k_tiles_)
-    , tAgA_mkl(tAgA_mkl_), tBgB_nkl(tBgB_nkl_)
-    , tAsA(tAsA_), tBsB(tBsB_) {}
+    , tAgA_mkl(tAgA_mkl_)
+    , tBgB_nkl(tBgB_nkl_)
+    , tAsA(tAsA_)
+    , tBsB(tBsB_) {}
   };
 
   template<class FragmentA, class FragmentB, class FragmentC>
@@ -166,14 +161,15 @@ struct CollectiveMma<
     FragmentC tCrC;
 
     CUTLASS_DEVICE
-    MmaParams (
+    MmaParams(
         TiledMma tiled_mma_,
         FragmentA tCrA_, FragmentB tCrB_, FragmentC tCrC_)
     : tiled_mma(tiled_mma_)
-    , tCrA(tCrA_), tCrB(tCrB_), tCrC(tCrC_) {}
+    , tCrA(tCrA_)
+    , tCrB(tCrB_)
+    , tCrC(tCrC_) {}
   };
 
-  // Host side kernel arguments
   struct Arguments {
     ElementA const* ptr_A {nullptr};
     StrideA dA;
@@ -181,7 +177,6 @@ struct CollectiveMma<
     StrideB dB;
   };
 
-  // Device side kernel params
   struct Params {
     using ClusterLayout_VMNK = decltype(tiled_divide(make_layout(ClusterShape{}),
                                                      make_tile(typename TiledMma::AtomThrID{})));
@@ -210,11 +205,9 @@ struct CollectiveMma<
 
   CUTLASS_DEVICE
   CollectiveMma(Params const& params, ClusterShape cluster_shape) : cluster_shape_(cluster_shape) {
-    {
-      initialize_mcast_masks();
-      observed_adma_load_a_ = &params.adma_load_a;
-      observed_adma_load_b_ = &params.adma_load_b;
-    }
+    initialize_mcast_masks();
+    observed_adma_load_a_ = &params.adma_load_a;
+    observed_adma_load_b_ = &params.adma_load_b;
   }
 
   template<class ProblemShape>
@@ -247,68 +240,19 @@ struct CollectiveMma<
     return {adma_load_a, adma_load_b};
   }
 
-  CUTLASS_HOST_DEVICE
-  static constexpr auto
-  compute_raster_order() {
-    constexpr int cluster_size_m = size<0>(ClusterShape{});
-    constexpr int cluster_size_n = size<1>(ClusterShape{});
-    constexpr uint32_t mcast_size_a = SlmBytesA / cluster_size_n;
-    constexpr uint32_t mcast_size_b = SlmBytesB / cluster_size_m;
-    constexpr bool greater_mcast_size_a = mcast_size_a > mcast_size_b;
-
-    using RasterOrder = cutlass::gemm::kernel::detail::RasterOrder;
-    return greater_mcast_size_a ? RasterOrder::AlongM : RasterOrder::AlongN;
-  }
-
   CUTLASS_DEVICE void
   initialize_mcast_masks() {
-    using RasterOrder = cutlass::gemm::kernel::detail::RasterOrder;
-
-    constexpr auto raster_order = compute_raster_order();
-    auto cluster_layout_mn = [&]() {
-      if constexpr (raster_order == RasterOrder::AlongM) {
-        return make_layout(select<0,1>(ClusterShape{}), make_stride(_1{}, get<0>(ClusterShape{})));
-      } else {
-        return make_layout(select<0,1>(ClusterShape{}), make_stride(get<1>(ClusterShape{}), _1{}));
-      }
-    }();
-
     uint32_t cluster_wgid_x = get_cluster_wgid<0>();
     uint32_t cluster_wgid_y = get_cluster_wgid<1>();
-    block_rank_in_cluster_ = cluster_layout_mn(make_coord(cluster_wgid_y, cluster_wgid_x));
+    auto cluster_layout_mn = make_layout(select<0,1>(ClusterShape{}));
+    block_rank_in_cluster_ = cluster_layout_mn(make_coord(cluster_wgid_x, cluster_wgid_y));
 
-    auto [cluster_size_m, cluster_size_n, _] = ClusterShape{};
-    uint32_t cluster_mask_a = 0;
-    uint32_t cluster_mask_b = 0;
-    uint32_t coop_set_id_a = cluster_wgid_y;
-    uint32_t coop_set_id_b = cluster_wgid_x;
-
-    uint32_t coop_num_a = cluster_size_n;
-    uint32_t coop_num_b = cluster_size_m;
-
-    if (raster_order == RasterOrder::AlongM) {
-      cluster_mask_a = ((1u << coop_num_a) - 1) << (coop_set_id_a * coop_num_a);
-      uint32_t cluster_mask_b_base = 1u << coop_set_id_b;
-      #pragma unroll
-      for (uint32_t i = 0; i < coop_num_b; i++) {
-        cluster_mask_b |= cluster_mask_b_base << (i * coop_num_a);
-      }
-    } else {
-      cluster_wgid_x = block_rank_in_cluster_ % coop_num_b;
-      cluster_wgid_y = block_rank_in_cluster_ / coop_num_b;
-      coop_set_id_a = cluster_wgid_x;
-      coop_set_id_b = cluster_wgid_y;
-
-      cluster_mask_b = ((1u << coop_num_b) - 1) << (coop_set_id_b * coop_num_b);
-      uint32_t cluster_mask_a_base = 1u << coop_set_id_a;
-      #pragma unroll
-      for (uint32_t i = 0; i < coop_num_a; i++) {
-        cluster_mask_a |= cluster_mask_a_base << (i * coop_num_b);
-      }
-    }
-
-    coop_set_ids_ = make_tuple(coop_set_id_a, coop_set_id_b);
-    cluster_masks_ = make_tuple(cluster_mask_a, cluster_mask_b);
+    Layout cta_layout_mnk  = make_layout(cluster_shape_);
+    Layout cta_layout_vmnk = tiled_divide(cta_layout_mnk, make_tile(typename TiledMma::AtomThrID{}));
+    auto cta_coord_vmnk  = cta_layout_vmnk.get_flat_coord(block_rank_in_cluster_);
+    uint16_t mcast_mask_a = create_tma_multicast_mask<2>(cta_layout_vmnk, cta_coord_vmnk);
+    uint16_t mcast_mask_b = create_tma_multicast_mask<1>(cta_layout_vmnk, cta_coord_vmnk);
+    cluster_masks_ = make_tuple(static_cast<uint32_t>(mcast_mask_a), static_cast<uint32_t>(mcast_mask_b));
   }
 
   template <class ProblemShape, class DescTuple>
@@ -316,72 +260,57 @@ struct CollectiveMma<
   load_init(ProblemShape const& problem_shape, TensorStorage& shared_tensors, DescTuple const& tdesc_tuple) const {
     using X = Underscore;
 
-    // Separate out problem shape for convenience
     auto [M, N, K, L] = problem_shape;
 
     auto [tdesc_a, tdesc_b] = tdesc_tuple;
     observed_adma_load_a_->set_tensor_desc(tdesc_a);
     observed_adma_load_b_->set_tensor_desc(tdesc_b);
 
-    // Represent the full tensors -- get these from TMA
-    auto mA_mkl = observed_adma_load_a_->get_tma_tensor(make_shape(M, K, L));   // (m,k,l)
-    auto mB_nkl = observed_adma_load_b_->get_tma_tensor(make_shape(N, K, L));   // (n,k,l)
+    auto mA_mkl = observed_adma_load_a_->get_tma_tensor(make_shape(M, K, L));
+    auto mB_nkl = observed_adma_load_b_->get_tma_tensor(make_shape(N, K, L));
 
-    // Tile the tensors and defer the slice
-    auto gA_mkl = local_tile(mA_mkl, TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});    // (BLK_M, BLK_K, m, k, l)
-    auto gB_nkl = local_tile(mB_nkl, TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});    // (BLK_N, BLK_K, n, k, l)
+    auto gA_mkl = local_tile(mA_mkl, TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});
+    auto gB_nkl = local_tile(mB_nkl, TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});
 
-    // Partition for this CTA
     ThrMMA cta_mma = TiledMma{}.get_slice(0);
 
-    Tensor tCgA_mkl = cta_mma.partition_A(gA_mkl);          // (MMA, MMA_M, MMA_K, m, k, l)
-    Tensor tCgB_nkl = cta_mma.partition_B(gB_nkl);          // (MMA, MMA_N, MMA_K, n, k, l)
+    Tensor tCgA_mkl = cta_mma.partition_A(gA_mkl);
+    Tensor tCgB_nkl = cta_mma.partition_B(gB_nkl);
 
-    // Define the CTA-in-cluster Layout and Coord
     Layout cta_layout_mnk  = make_layout(cluster_shape_);
     Layout cta_layout_vmnk = tiled_divide(cta_layout_mnk, make_tile(typename TiledMma::AtomThrID{}));
     auto cta_coord_vmnk  = cta_layout_vmnk.get_flat_coord(block_rank_in_cluster_);
 
-    auto sA = make_tensor(shared_tensors.smem_A.data(), SmemLayoutA{});  // (MMA,MMA_M,MMA_K,PIPE)
-    auto sB = make_tensor(shared_tensors.smem_B.data(), SmemLayoutB{});  // (MMA,MMA_N,MMA_K,PIPE)
+    auto sA = make_tensor(shared_tensors.smem_A.data(), SmemLayoutA{});
+    auto sB = make_tensor(shared_tensors.smem_B.data(), SmemLayoutB{});
 
-    // Project the cta_layout for tma_a along the n-modes
     auto [tAgA_mkl, tAsA] = tma_partition(*observed_adma_load_a_,
                                       get<2>(cta_coord_vmnk), make_layout(size<2>(cta_layout_vmnk)),
                                       group_modes<0,3>(sA), group_modes<0,3>(tCgA_mkl));
 
-    // Project the cta_layout for tma_b along the m-modes
     auto [tBgB_nkl, tBsB] = tma_partition(*observed_adma_load_b_,
                                       get<1>(cta_coord_vmnk), make_layout(size<1>(cta_layout_vmnk)),
                                       group_modes<0,3>(sB), group_modes<0,3>(tCgB_nkl));
-    
-    Tensor rA = TiledMma::make_fragment_A(sA);
-    Tensor rB = TiledMma::make_fragment_B(sB);
-    Tensor tArA = Tensor{rA.engine(), tAsA.layout()};
-    Tensor tBrB = Tensor{rB.engine(), tBsB.layout()};
 
     LoadParams load_params {
-      shape<3>(gA_mkl),                      // for scheduler
-      tAgA_mkl, tBgB_nkl, tAsA, tBsB         // for input tensor values
+      shape<3>(gA_mkl),
+      tAgA_mkl, tBgB_nkl, tAsA, tBsB
     };
 
     return load_params;
   }
 
-
-  /// Set up the data needed by this collective for mma compute.
   CUTLASS_DEVICE auto
   mma_init(TensorStorage& shared_tensors) const {
-    auto sA = make_tensor(shared_tensors.smem_A.data(), SmemLayoutA{});     // (BLK_M,BLK_K,PIPE)
-    auto sB = make_tensor(shared_tensors.smem_B.data(), SmemLayoutB{});     // (BLK_N,BLK_K,PIPE)
-    auto sAcc = make_tensor(shared_tensors.smem_Acc.data(), SmemLayoutAcc{}); // (BLK_M,BLK_N)
+    auto sA = make_tensor(shared_tensors.smem_A.data(), SmemLayoutA{});
+    auto sB = make_tensor(shared_tensors.smem_B.data(), SmemLayoutB{});
+    auto sAcc = make_tensor(shared_tensors.smem_Acc.data(), SmemLayoutAcc{});
 
-    // Allocate "fragments/descriptors" for A and B matrices
-    auto tCsA = TiledMma::make_fragment_A(sA);                      // (MMA,MMA_M,MMA_K,PIPE)
-    auto tCsB = TiledMma::make_fragment_B(sB);                      // (MMA,MMA_N,MMA_K,PIPE)
-    auto tCsAcc = TiledMma::make_fragment_C(sAcc);                  // (MMA,MMA_M,MMA_N)
+    auto tCsA = TiledMma::make_fragment_A(sA);
+    auto tCsB = TiledMma::make_fragment_B(sB);
+    auto tCsAcc = TiledMma::make_fragment_C(sAcc);
 
-    CUTE_STATIC_ASSERT_V(Int<DispatchPolicy::Stages>{} == size<3>(sA));  // PIPE
+    CUTE_STATIC_ASSERT_V(Int<DispatchPolicy::Stages>{} == size<3>(sA));
     CUTE_STATIC_ASSERT_V(Int<DispatchPolicy::Stages>{} == size<3>(sB));
 
     TiledMma tiled_mma;
@@ -403,14 +332,11 @@ struct CollectiveMma<
     auto [m_coord, n_coord, k_coord, l_coord] = cta_coord_mnkl;
     auto [unused_k_tiles, tAgA_mkl, tBgB_nkl, tAsA, tBsB] = load_inputs;
 
-    // slice out the work coord from partitioned tensors
     Tensor tAgA = tAgA_mkl(_, m_coord / size(typename TiledMma::AtomThrID{}), _, l_coord);
     Tensor tBgB = tBgB_nkl(_, n_coord, _, l_coord);
 
-    // Issue the Mainloop loads
     CUTLASS_PRAGMA_UNROLL
     while (k_tile_count > 0) {
-      // LOCK mainloop_pipe_producer_state for _writing_
       mainloop_pipeline.producer_acquire(slm_pipe_write);
 
       uint32_t write_stage = slm_pipe_write.index();
@@ -436,7 +362,7 @@ struct CollectiveMma<
     auto [tiled_mma, tCsA, tCsB, tCsAcc] = mma_inputs;
 
     auto thread_mma = tiled_mma.get_thread_slice(0);
-    auto tCsC = thread_mma.partition_fragment_C(tensor_c);        // (MMA,MMA_M,MMA_N)
+    auto tCsC = thread_mma.partition_fragment_C(tensor_c);
 
     auto wg_expect_tx = size<1>(tCsAcc) * size<2>(tCsAcc) * size<2>(tCsA);
     auto cluster_expect_tx = wg_expect_tx * (size<0>(cluster_shape_) + size<1>(cluster_shape_));
@@ -450,7 +376,6 @@ struct CollectiveMma<
       int read_stage = mainloop_pipe_consumer_state.index();
       auto abar_cons = mainloop_pipeline.consumer_get_barrier(mainloop_pipe_consumer_state);
 
-      // Unroll the K mode manually so we can set mma_ctrl to 0
       CUTLASS_PRAGMA_UNROLL
       for (int k_block = 0; k_block < size<2>(tCsA); ++k_block) {
         bool is_last_iter = (k_tile_count == 1) && (k_block == size<2>(tCsA) - 1);
@@ -497,7 +422,6 @@ public:
   uint32_t block_rank_in_cluster_;
 
   cute::tuple<uint32_t, uint32_t> cluster_masks_;
-  cute::tuple<uint32_t, uint32_t> coop_set_ids_;
 };
 
 }

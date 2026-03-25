@@ -1,4 +1,4 @@
-#include "gemm.hpp"
+#include "gemm_static.hpp"
 
 struct GEMM_TEST_CONFIG {
   using ElementA = fp16;
@@ -14,7 +14,6 @@ struct GEMM_TEST_CONFIG {
   using ClusterShape_MNK = Shape<_2, _1, _1>;
 
   static constexpr int StagesA = 2;
-  static constexpr bool is_persistent = false;
   static constexpr auto activation_type = ActivationType::SiLu;
   static constexpr auto operationC_type = OperationCType::Mul;
   static constexpr cute::array<int, 4> ProblemShape_MNKL = {1024, 1024, 1024, 1};

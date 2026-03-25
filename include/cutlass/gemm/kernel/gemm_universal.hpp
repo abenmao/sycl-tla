@@ -82,6 +82,7 @@ struct IsCutlass3ArrayKernel<ProblemShape, cute::void_t<typename ProblemShape::U
 
 #if (SYCL_INTEL_TARGET == 40)
 #include "cutlass/gemm/kernel/xe4_gemm_dma_warpspecialized.hpp"
+#include "cutlass/gemm/kernel/xe4_gemm_dma_static_warpspecialized.hpp"
 #elif defined (SYCL_INTEL_TARGET)
 #include "cutlass/gemm/kernel/xe_gemm.hpp"
 #include "cutlass/gemm/kernel/xe_gemm_cooperative.hpp"
