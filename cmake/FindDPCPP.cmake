@@ -34,7 +34,7 @@ include(FindPackageHandleStandardArgs)
 set(DPCPP_USER_FLAGS "" CACHE STRING "Additional user-specified compiler flags for DPC++")
 
 get_filename_component(DPCPP_BIN_DIR ${CMAKE_CXX_COMPILER} DIRECTORY)
-find_library(DPCPP_LIB_DIR NAMES sycl sycl6 PATHS "${DPCPP_BIN_DIR}/../lib" NO_DEFAULT_PATH)
+find_library(DPCPP_LIB_DIR NAMES sycl sycl6 PATHS "${DPCPP_BIN_DIR}/../lib")
 
 add_library(DPCPP::DPCPP INTERFACE IMPORTED)
 
@@ -51,13 +51,13 @@ endif()
 set(DPCPP_COMPILE_ONLY_FLAGS "")
 set(DPCPP_LINK_ONLY_FLAGS "")
 
-string(REPLACE "," ";" DPCPP_SYCL_TARGET_LIST "${DPCPP_SYCL_TARGET}")
-
 option(DPCPP_DISABLE_ITT_FOR_CUTLASS "Disables linking of the Instrumentation and Tracing Technology (ITT) device libraries for VTune" ON)
 
 if(NOT "${DPCPP_USER_FLAGS}" STREQUAL "")
   list(APPEND DPCPP_FLAGS "${DPCPP_USER_FLAGS};")
 endif()
+
+string(REPLACE "," ";" DPCPP_SYCL_TARGET_LIST "${DPCPP_SYCL_TARGET}")
 
 if(NOT "${DPCPP_SYCL_ARCH}" STREQUAL "")
   if(SYCL_NVIDIA_TARGET)
@@ -69,77 +69,66 @@ if(NOT "${DPCPP_SYCL_ARCH}" STREQUAL "")
 endif()
 
 if (SYCL_INTEL_TARGET)
-  set(SYCL_TARGETS)
+  if(DPCPP_DISABLE_ITT_FOR_CUTLASS)
+    list(APPEND DPCPP_FLAGS "-fno-sycl-instrument-device-code")
+  endif()
+
   set(SYCL_DEVICES)
 
-  # For 2026 compiler onwards, sycl-target is filled with proper device.
-  # Idea of multitargets support is supposing we get DPCPP_SYCL_TARGET as bmg,pvc
-  # In that case, we will pass -fsycl-targets=spir64_gen to compiler as well as linker.
-  # But in linker, we will specify -device as bmg_g21,pvc
-  # If we want DPCPP_SYCL_TARGET as bmg,pvc,cri in that case for compiler
-  # we will pass -fsycl-targets=spir64_gen,intel_gpu_cri since code to be compiled is different for these
-  # cases. For Linking we need to pass different value of spirv-translator and device option only for
-  # spirv compile target.
+  # For multitarget build, set target as spir64_gen and if user gave spir64, then overwrite it.
+  set(SYCL_TARGET "spir64_gen")
+
+  list(LENGTH DPCPP_SYCL_TARGET_LIST SYCL_TARGET_COUNT)
+  if(SYCL_TARGET_COUNT GREATER 1)
+    list(FIND DPCPP_SYCL_TARGET_LIST "spir64" _spir64_index)
+    if(_spir64_index GREATER -1)
+      message(FATAL_ERROR "MultiTarget Build is not supported if one of target is spir64.")
+    endif()
+  endif()
 
   foreach(TGT IN LISTS DPCPP_SYCL_TARGET_LIST)
     if(TGT STREQUAL "bmg")
-      list(APPEND SYCL_TARGETS "spir64_gen")
-      list(APPEND SYCL_DEVICES "bmg_g21")
-      list(APPEND SYCL_DEVICES "bmg_g31")
+      list(APPEND SYCL_DEVICES "bmg-g21")
+      list(APPEND SYCL_DEVICES "bmg-g31")
     elseif(TGT STREQUAL "intel_gpu_bmg_g21")
-      list(APPEND SYCL_TARGETS "spir64_gen")
-      list(APPEND SYCL_DEVICES "bmg_g21")
+      list(APPEND SYCL_DEVICES "bmg-g21")
     elseif(TGT STREQUAL "intel_gpu_bmg_g31")
-      list(APPEND SYCL_TARGETS "spir64_gen")
-      list(APPEND SYCL_DEVICES "bmg_g31")
+      list(APPEND SYCL_DEVICES "bmg-g31")
     elseif(TGT STREQUAL "intel_gpu_pvc" OR TGT STREQUAL "pvc")
-      list(APPEND SYCL_TARGETS "spir64_gen")
       list(APPEND SYCL_DEVICES "pvc")
+    elseif(TGT STREQUAL "spir64")
+      set(SYCL_TARGET "spir64")
     elseif(TGT STREQUAL "intel_gpu_cri" OR TGT STREQUAL "cri")
-      # TODO: Keep CRI target as spir64 for now, since native AOT compilation causes severe performance drop
-      list(APPEND SYCL_TARGETS "spir64")
+      # TODO: Keep CRI target as spir64 for now, since native AOT compilation causes performance drop
+      set(SYCL_TARGET "spir64")
       list(APPEND DPCPP_FLAGS "-D__SYCL_TARGET_INTEL_GPU_CRI__")
       # if(COMPILER_VERSION_2026_ONWARDS)
-      #   list(APPEND SYCL_TARGETS "intel_gpu_cri")
+      #   list(APPEND SYCL_DEVICES "intel_gpu_cri")
       # else()
-      #   list(APPEND SYCL_TARGETS "spir64_gen")
+      #   set(SYCL_TARGET "spir64")
       # endif()
     elseif(TGT STREQUAL "intel_gpu_jgs" OR TGT STREQUAL "jgs")
       list(APPEND SYCL_TARGETS "intel_gpu_jgs")
     endif()
   endforeach()
 
-  list(REMOVE_DUPLICATES SYCL_TARGETS)
   list(REMOVE_DUPLICATES SYCL_DEVICES)
 
-  string(JOIN "," SYCL_TARGETS_STR ${SYCL_TARGETS})
   string(JOIN "," SYCL_DEVICES_STR ${SYCL_DEVICES})
 
-  list(APPEND DPCPP_FLAGS "-fsycl-targets=${SYCL_TARGETS_STR};")
-  if(DPCPP_DISABLE_ITT_FOR_CUTLASS)
-    list(APPEND DPCPP_FLAGS "-fno-sycl-instrument-device-code")
+  list(APPEND DPCPP_FLAGS "-fsycl-targets=${SYCL_TARGET}")
+  list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xsycl-target-backend=${SYCL_TARGET};-device ${SYCL_DEVICES_STR}")
+
+  list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xspirv-translator")
+
+  if((CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM" AND
+    CMAKE_CXX_COMPILER_VERSION VERSION_LESS 2025.2) OR CUTLASS_SYCL_BUILTIN_ENABLE)
+    set(SPIRV_EXT "+SPV_INTEL_split_barrier")
+  else()
+    set(SPIRV_EXT "+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate")
   endif()
+  list(APPEND DPCPP_LINK_ONLY_FLAGS "-spirv-ext=${SPIRV_EXT}")
 
-  set(SPIRV_EXT)
-  foreach(TARGET IN LISTS SYCL_TARGETS)
-    # SPIRV_EXT doesn't change with respect to list of sycl targets.
-    # But it is used as list to generate redundant value on different iteration.
-    # This hack is needed, else in multitarget cmake automatically removes the second -spirv-ext value.
-    # Using SHELL: as prefix also didn't help in this case.
-    if((CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM" AND
-      CMAKE_CXX_COMPILER_VERSION VERSION_LESS 2025.2) OR CUTLASS_SYCL_BUILTIN_ENABLE)
-      list(APPEND SPIRV_EXT "+SPV_INTEL_split_barrier")
-    else()
-      list(APPEND SPIRV_EXT "+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate")
-    endif()
-
-    if(${TARGET} STREQUAL "spir64_gen")
-      list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xsycl-target-backend=${TARGET};-device ${SYCL_DEVICES_STR}")
-    endif()
-    list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xspirv-translator=${TARGET}")
-    string(REPLACE ";" "," SPIRV_EXT_COMMA "${SPIRV_EXT}")
-    list(APPEND DPCPP_LINK_ONLY_FLAGS "-spirv-ext=${SPIRV_EXT_COMMA}")
-  endforeach()
 endif()
 
 if(UNIX)
@@ -172,7 +161,7 @@ function(add_sycl_to_target)
   target_compile_options(
     ${CUTLASS_ADD_SYCL_TARGET}
     PUBLIC
-    $<$<COMPILE_LANGUAGE:CXX>:${DPCPP_FLAGS} ${DPCPP_COMPILE_ONLY_FLAGS}>
+    $<$<COMPILE_LANGUAGE:CXX>:${DPCPP_FLAGS}>
   )
   get_target_property(target_type ${CUTLASS_ADD_SYCL_TARGET} TYPE)
   if (NOT target_type STREQUAL "OBJECT_LIBRARY")

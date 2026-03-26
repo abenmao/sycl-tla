@@ -1,9 +1,11 @@
 ![ALT](https://raw.githubusercontent.com/intel/sycl-tla/main/media/images/gemm-hierarchy-with-epilogue-no-labels.png "Complete CUDA GEMM decomposition")
+![ALT](https://raw.githubusercontent.com/intel/sycl-tla/main/media/images/gemm-hierarchy-with-epilogue-no-labels.png "Complete CUDA GEMM decomposition")
 
 # SYCL\* Templates for Linear Algebra (SYCL\*TLA)
 
 **This repository is forked from the NVIDIA CUTLASS repository and extends CUTLASS and CuTe API support to Intel GPUs through SYCL enablement.**
 *This project was previously referred to as CUTLASS-SYCL, you may see references to CUTLASS-SYCL in the code and documentation.*
+*For SYCL support instructions, refer to the [SYCL build documentation](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/build/building_with_sycl_support.md)*
 *For SYCL support instructions, refer to the [SYCL build documentation](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/build/building_with_sycl_support.md)*
 
 *SYCL is a trademark of the Khronos Group Inc, Other names and brands may be claimed as the property of others.*
@@ -29,7 +31,9 @@ units implemented in Intel Data Center GPU Max/Flex Series (Intel Xe
 architecture, codename: Ponte-Vecchio) and Intel Arc B580 GPUs.
 
 See the [Quick Start Guide](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/quickstart.md) to get started quickly.
+See the [Quick Start Guide](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/quickstart.md) to get started quickly.
 
+See the [functionality docs](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/functionality.md) for a more comprehensive
 See the [functionality docs](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/functionality.md) for a more comprehensive
 list of kernel level features, data types, instructions, and minimum supported by CUTLASS on each GPU
 architecture.
@@ -76,7 +80,16 @@ Base NVIDIA CUTLASS Versions for SYCL*TLA releases:
   - Support FP8 block scaled GEMM for different scaled data type and dimensions ([#324](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/324))
   - Support quantization and de-quantization API ([#315](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/315), [#285](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/285))
   
+  - Support SLM Copy API functionalities and examples ([#d7fb251](https://github.com/intel-innersource/libraries.ai.cutlass.internal/commit/d7fb251), [#330](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/330), [#348](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/348))
+  - Support FP8 block scaled GEMM for different scaled data type and dimensions ([#324](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/324))
+  - Support quantization and de-quantization API ([#315](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/315), [#285](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/285))
+  
 ### Performance (Internal Only)
+  - Systolic data is relatively accurate (CRI simulator can correctly simulate systolic behaviors), E2E data for reference only (CRI simulator cannot correctly simulate memory behaviors).
+
+  - Flash Attention Performance (for CRI and BF16)
+      - Improved Flash Attention performance from 23% to 42% peak
+        
   - Systolic data is relatively accurate (CRI simulator can correctly simulate systolic behaviors), E2E data for reference only (CRI simulator cannot correctly simulate memory behaviors).
 
   - Flash Attention Performance (for CRI and BF16)
@@ -84,6 +97,7 @@ Base NVIDIA CUTLASS Versions for SYCL*TLA releases:
         
       | **Data Type** | **Prefill/Decode** | **% of Peak (E2E)** |
       |:--------------|:-------------------|:---------|
+      |BF16           |     Prefill        |  42%  |
       |BF16           |     Prefill        |  42%  |
 
 **See the [CHANGELOG](CHANGELOG-SYCL.md) for details of all past releases and updates.**
@@ -108,6 +122,7 @@ Layouts can also be combined and manipulated via functional composition, on whic
 SYCL\*TLA and beyond adopts CuTe throughout the GEMM hierarchy in its templates.
 This greatly simplifies the design and improves code composability and readability.
 More documentation specific to CuTe can be found in its
+[dedicated documentation directory](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/cute/00_quickstart.md).
 [dedicated documentation directory](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/cute/00_quickstart.md).
 
 # Compatibility
@@ -150,6 +165,7 @@ The target architecture information is passed on to SYCL*TLA via the cmake flag
 cmake .. -DDPCPP_SYCL_TARGET="intel_gpu_pvc"
 ```
 Or
+Or
 
 ```
 cmake .. -DDPCPP_SYCL_TARGET="intel_gpu_bmg_g21" 
@@ -161,6 +177,15 @@ cmake .. -DDPCPP_SYCL_TARGET="intel_gpu_cri"
 ```
 
 
+Or
+
+```
+cmake .. -DDPCPP_SYCL_TARGET="intel_gpu_bmg_g31" 
+```
+
+> Note: `-DDPCPP_SYCL_TARGET="bmg"` will compile for both `intel_gpu_bmg_g21`, `intel_gpu_bmg_g31` targets.
+
+Please refer to the [functionality documentation](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/functionality.md)
 Or
 
 ```
@@ -216,6 +241,7 @@ paths.
 
 SYCL*TLA unit tests, examples, and utilities can be built with CMake.
 The minimum version of CMake is given in the [Quickstart guide](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/quickstart.md).
+The minimum version of CMake is given in the [Quickstart guide](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/quickstart.md).
 Make sure you have Intel oneAPI DPC++ compiler installed and the environment is properly set up.
 
 ```bash
@@ -227,6 +253,7 @@ the target Intel GPU architecture using the `DPCPP_SYCL_TARGET` flag.
 For Intel Data Center GPU Max Series (Ponte Vecchio), use `intel_gpu_pvc`.
 For Intel Arc GPU B580 Graphics, use `intel_gpu_bmg_g21`.
 For Intel Data Center GPU Crescent Island, use `intel_gpu_cri`.
+For Intel Arc GPU Battlemage (G31), use `intel_gpu_bmg_g31`.
 For Intel Arc GPU Battlemage (G31), use `intel_gpu_bmg_g31`.
 
 ```bash
@@ -245,6 +272,12 @@ Or for Intel Data Center GPU Crescent Island:
 
 ```bash
 $  CC=icx CXX=icpx cmake .. -G Ninja -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET="intel_gpu_cri" # compiles for Intel Data Center GPU Crescent Island
+```
+
+Or for Intel Arc GPU Battlemage (G31):
+
+```bash
+$  CC=icx CXX=icpx cmake .. -G Ninja -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET="intel_gpu_bmg_g31" # compiles for Intel Arc GPU Battlemage (G31)
 ```
 
 Or for Intel Arc GPU Battlemage (G31):
@@ -282,6 +315,7 @@ All tests should pass on supported Intel GPU platforms, though the exact number 
 SYCL*TLA is arranged as a header-only library along with Utilities, Tools, Examples, and unit tests.
 
 A detailed explanation of the source code organization may be found in the
+[SYCL*TLA documentation](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/code_organization.md), but several main components are summarized below.
 [SYCL*TLA documentation](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/code_organization.md), but several main components are summarized below.
 
 ## SYCL*TLA
@@ -332,6 +366,7 @@ include/                     # client applications should target this directory 
 ### SYCL*TLA Examples
 
 [SYCL*TLA examples](https://github.com/intel/sycl-tla/tree/main/examples) apply SYCL*TLA templates to implement basic computations.
+[SYCL*TLA examples](https://github.com/intel/sycl-tla/tree/main/examples) apply SYCL*TLA templates to implement basic computations.
 
 ### Tools
 
@@ -357,14 +392,17 @@ The `test/unit/` directory consist of unit tests implemented with Google Test th
 basic usage of Core API components and complete tests of the CUTLASS GEMM computations.
 
 Instructions for building and running the Unit tests are described in the [Quickstart guide](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/quickstart.md).
+Instructions for building and running the Unit tests are described in the [Quickstart guide](https://github.com/intel/sycl-tla/blob/main/media/docs/cpp/quickstart.md).
 
 # About
 
 SYCL*TLA is released by INTEL Corporation as Open Source software under the
 [3-clause "New" BSD license](https://github.com/intel/sycl-tla/blob/main/LICENSE.txt).
+[3-clause "New" BSD license](https://github.com/intel/sycl-tla/blob/main/LICENSE.txt).
 
 # Contributors
 
+The official list of SYCL*TLA developers and contributors is available here: [CONTRIBUTORS](https://github.com/intel/sycl-tla/blob/main/CONTRIBUTORS.md).
 The official list of SYCL*TLA developers and contributors is available here: [CONTRIBUTORS](https://github.com/intel/sycl-tla/blob/main/CONTRIBUTORS.md).
 
 # Contributing
@@ -393,6 +431,7 @@ gh pr create --template .github/PULL_REQUEST_TEMPLATE/refactoring.md
 - 🔨 **Refactoring** → `refactoring.md` - Refactored/Redesigned code
 - 📝 **Mixed/Other** → Default template
 
+See [`.github/PULL_REQUEST_TEMPLATE`](https://github.com/intel/sycl-tla/tree/main/.github/PULL_REQUEST_TEMPLATE) for details.
 See [`.github/PULL_REQUEST_TEMPLATE`](https://github.com/intel/sycl-tla/tree/main/.github/PULL_REQUEST_TEMPLATE) for details.
 
 # Copyright
