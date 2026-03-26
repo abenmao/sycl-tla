@@ -108,6 +108,7 @@
 
 ### Performance (Internal Only)
   - Systolic data is relatively accurate (CRI simulator can correctly simulate systolic behaviors), E2E data for reference only (CRI simulator cannot correctly simulate memory behaviors).
+  - Systolic data is relatively accurate (CRI simulator can correctly simulate systolic behaviors), E2E data for reference only (CRI simulator cannot correctly simulate memory behaviors).
   - GEMM Performance
       | **Data Type**    | **% of Peak (E2E)** | **% of Peak (Systolic)** |
       |:-----------------|:--------|:---------|
