@@ -108,7 +108,8 @@ if (SYCL_INTEL_TARGET)
       #   set(SYCL_TARGET "spir64")
       # endif()
     elseif(TGT STREQUAL "intel_gpu_jgs" OR TGT STREQUAL "jgs")
-      list(APPEND SYCL_TARGETS "intel_gpu_jgs")
+      set(SYCL_TARGET "intel_gpu_jgs")
+      list(APPEND SYCL_DEVICES "intel_gpu_jgs")
     endif()
   endforeach()
 
@@ -117,18 +118,20 @@ if (SYCL_INTEL_TARGET)
   string(JOIN "," SYCL_DEVICES_STR ${SYCL_DEVICES})
 
   list(APPEND DPCPP_FLAGS "-fsycl-targets=${SYCL_TARGET}")
-  list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xsycl-target-backend=${SYCL_TARGET};-device ${SYCL_DEVICES_STR}")
 
-  list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xspirv-translator")
+  if(SYCL_TARGET STREQUAL "spir64" OR SYCL_TARGET STREQUAL "spir64_gen")
+    list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xsycl-target-backend=${SYCL_TARGET};-device ${SYCL_DEVICES_STR}")
 
-  if((CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM" AND
-    CMAKE_CXX_COMPILER_VERSION VERSION_LESS 2025.2) OR CUTLASS_SYCL_BUILTIN_ENABLE)
-    set(SPIRV_EXT "+SPV_INTEL_split_barrier")
-  else()
-    set(SPIRV_EXT "+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate")
+    list(APPEND DPCPP_LINK_ONLY_FLAGS "-Xspirv-translator")
+
+    if((CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM" AND
+      CMAKE_CXX_COMPILER_VERSION VERSION_LESS 2025.2) OR CUTLASS_SYCL_BUILTIN_ENABLE)
+      set(SPIRV_EXT "+SPV_INTEL_split_barrier")
+    else()
+      set(SPIRV_EXT "+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate")
+    endif()
+    list(APPEND DPCPP_LINK_ONLY_FLAGS "-spirv-ext=${SPIRV_EXT}")
   endif()
-  list(APPEND DPCPP_LINK_ONLY_FLAGS "-spirv-ext=${SPIRV_EXT}")
-
 endif()
 
 if(UNIX)
