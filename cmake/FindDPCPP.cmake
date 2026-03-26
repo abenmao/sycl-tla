@@ -99,7 +99,7 @@ if (SYCL_INTEL_TARGET)
     elseif(TGT STREQUAL "spir64")
       set(SYCL_TARGET "spir64")
     elseif(TGT STREQUAL "intel_gpu_cri" OR TGT STREQUAL "cri")
-      # TODO: Keep CRI target as spir64 for now, since native AOT compilation causes severe performance drop
+      # TODO: Keep CRI target as spir64 for now, since native AOT compilation causes performance drop
       set(SYCL_TARGET "spir64")
       list(APPEND DPCPP_FLAGS "-D__SYCL_TARGET_INTEL_GPU_CRI__")
       # if(COMPILER_VERSION_2026_ONWARDS)
