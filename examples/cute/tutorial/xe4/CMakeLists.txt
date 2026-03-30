@@ -64,7 +64,8 @@ target_link_options(${EU_COPY_TARGET} PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)
 
-add_xe4_test(xe4_gemm_asymmetric gemm_epilogue_asymmetric_adma_amma.cpp)
+add_executable(xe4_gemm_asymmetric gemm_epilogue_asymmetric_adma_amma.cpp)
+add_test(ctest_examples_test_xe4_gemm_asymmetric xe4_gemm_asymmetric)
 # Compile options  PRIVATE 
 target_compile_options(xe4_gemm_asymmetric PRIVATE -fsycl -fsycl-targets=pisa)
 target_link_options(xe4_gemm_asymmetric PRIVATE -fsycl -fsycl-targets=pisa)
