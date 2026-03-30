@@ -68,11 +68,12 @@ add_executable(xe4_gemm_asymmetric gemm_epilogue_asymmetric_adma_amma.cpp)
 add_test(
   NAME ctest_examples_test_xe4_gemm_asymmetric
   COMMAND $<TARGET_FILE:xe4_gemm_asymmetric>
-  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
+add_dependencies(cutlass_examples xe4_gemm_asymmetric)
 
 # Compile options  PRIVATE 
 target_compile_options(xe4_gemm_asymmetric PRIVATE -fsycl -fsycl-targets=pisa)
+target_link_libraries(xe4_gemm_asymmetric PRIVATE -lur_loader)
 target_link_options(xe4_gemm_asymmetric PRIVATE -fsycl -fsycl-targets=pisa)
 target_compile_definitions(xe4_gemm_asymmetric PRIVATE
     CUTLASS_ENABLE_SYCL=1
