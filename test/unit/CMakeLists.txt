@@ -32,7 +32,7 @@ include(CTest)
 set(CUTLASS_UNIT_TEST_COMMON_DIR ${CMAKE_CURRENT_LIST_DIR}/common)
 
 cutlass_add_library(
-  cutlass_test_unit_infra 
+  cutlass_test_unit_infra
   OBJECT
   common/filter_architecture.cpp
   )
@@ -95,7 +95,7 @@ function(cutlass_test_unit_add_executable NAME)
     target_link_libraries(
       ${NAME}
       PUBLIC
-      GTest::gtest 
+      GTest::gtest
       # TODO: This change works for resolving 'compat.hpp' not found issue, fix this if it blocks merging
       cutlass_tools_util_includes
     )
@@ -132,7 +132,7 @@ function(cutlass_test_unit_add_executable NAME)
   else()
     set(DO_NOT_LOWERCASE_TEST_NAME)
   endif()
-  
+
   cutlass_add_executable_tests(
     ${NAME_STEM} ${NAME}
     TEST_SETS_SUPPORTED ${__TEST_SETS_SUPPORTED}
@@ -142,7 +142,7 @@ function(cutlass_test_unit_add_executable NAME)
     )
 
 endfunction()
-  
+
 
 function(cutlass_test_unit_add_executable_split_file NAME)
   # Given the input arguments to cutlass_test_unit_add_executable, creates
@@ -185,7 +185,7 @@ function(cutlass_test_unit_add_executable_split_file NAME)
     # Simply pass arguments through
     cutlass_test_unit_add_executable(${ARGV})
   endif()
-endfunction() 
+endfunction()
 
 add_custom_target(cutlass_test_unit)
 add_custom_target(test_unit)
