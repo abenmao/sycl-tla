@@ -65,8 +65,15 @@ target_link_options(${EU_COPY_TARGET} PUBLIC
 	-device\ jgs-a0)
 
 add_executable(xe4_gemm_asymmetric gemm_epilogue_asymmetric_adma_amma.cpp)
+add_test(
+  NAME ctest_examples_test_xe4_gemm_asymmetric
+  COMMAND $<TARGET_FILE:xe4_gemm_asymmetric>
+)
+add_dependencies(cutlass_examples xe4_gemm_asymmetric)
+
 # Compile options  PRIVATE 
 target_compile_options(xe4_gemm_asymmetric PRIVATE -fsycl -fsycl-targets=pisa)
+target_link_libraries(xe4_gemm_asymmetric PRIVATE -lur_loader)
 target_link_options(xe4_gemm_asymmetric PRIVATE -fsycl -fsycl-targets=pisa)
 target_compile_definitions(xe4_gemm_asymmetric PRIVATE
     CUTLASS_ENABLE_SYCL=1
@@ -79,11 +86,11 @@ target_include_directories(xe4_gemm_asymmetric PRIVATE
     ${CUTLASS_DIR}/examples/cute/tutorial/xe4/
 )
 
-add_executable(xe4_gemm_non_asymmetric gemm_epilogue_adma_amma.cpp)
+add_xe4_test(xe4_gemm_non_asymmetric gemm_epilogue_adma_amma.cpp)
 # Compile options  PRIVATE 
 target_compile_options(xe4_gemm_non_asymmetric PRIVATE -fsycl -fsycl-targets=pisa)
 target_link_options(xe4_gemm_non_asymmetric PRIVATE -fsycl -fsycl-targets=pisa)
-target_compile_definitions(xe4_gemm_asymmetric PRIVATE
+target_compile_definitions(xe4_gemm_non_asymmetric PRIVATE
     CUTLASS_ENABLE_SYCL=1
     SYCL_INTEL_TARGET=40
     SYCL_INTEL_XE4_TARGET
