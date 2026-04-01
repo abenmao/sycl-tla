@@ -20,7 +20,7 @@ struct XE4_ADMA_LOAD
     mat_desc_.StartAddress = static_cast<uint32_t>(
         reinterpret_cast<uint64_t>(slm_space_cast(slm_ptr))) >> 9;
 
-    detail::AsyncTensorGlobal2SLM<DataType, detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero>::
+    detail::AsyncTensorGlobal2SLM<DataType>::
     Copy(mat_desc_, gmem_ptr, abar_ptr, reinterpret_cast<TensorPayload *>(tdesc_ptr), coord);
   }
 };
@@ -43,7 +43,7 @@ struct XE4_ADMA_STORE
         reinterpret_cast<uint64_t>(slm_space_cast(slm_ptr))) >> 9;
 
     // Use sizeof_bits in near future
-    detail::AsyncTensorSLM2Global<sizeof(DataType) * 8, detail::CacheCtrl::L2wb_L3uc>::
+    detail::AsyncTensorSLM2Global<sizeof(DataType) * 8>::
       Copy(gmem_ptr, mat_desc_, abar_ptr, reinterpret_cast<TensorPayload *>(tdesc_ptr), coord);
   }
 };
@@ -66,7 +66,7 @@ struct XE4_ADMA_LOAD_MULTICAST
     mat_desc_.StartAddress = static_cast<uint32_t>(
         reinterpret_cast<uint64_t>(slm_space_cast(slm_ptr))) >> 9;
 
-    detail::AsyncTensorGlobal2SLM<DataType, detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero>::
+    detail::AsyncTensorGlobal2SLM<DataType>::
       Copy(mat_desc_, gmem_ptr, abar_ptr, reinterpret_cast<TensorPayload *>(tdesc_ptr), coord, multicast_mask);
   }
 };

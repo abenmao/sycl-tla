@@ -50,6 +50,14 @@ enum CacheCtrl{
 enum FillMethod {
   Zero = 0, Nan
 };
+
+template <CacheCtrl CC> struct CacheHint {
+  constexpr static CacheCtrl value = CC;
+};
+
+template <FillMethod FM> struct FillMode {
+  constexpr static FillMethod value = FM;
+};
 }
 }
 
@@ -74,11 +82,12 @@ namespace detail {
  * Tensor Descriptor will contain global memory data-type
  */
 
-template <typename DataType, CacheCtrl CacheType, FillMethod FM>
+template <typename DataType>
 struct AsyncTensorGlobal2SLM {
-  template <size_t N> static inline void Copy(
+  template <size_t N, CacheCtrl CacheType = CacheCtrl::L2c_L3uc, FillMethod FM = FillMethod::Zero>
+  static inline void Copy(
       MatrixDescriptor Mat, DataType const* GmemPtr, uint64_t* pAbar, TensorPayload* pTDesc,
-      sycl::vec_t<int32_t, N> const& coord
+      sycl::vec_t<int32_t, N> const& coord, CacheHint<CacheType> = {}, FillMode<FM> = {}
   ) {
 #if defined (__SYCL_DEVICE_ONLY__)
     asm volatile (
@@ -87,9 +96,10 @@ struct AsyncTensorGlobal2SLM {
 #endif
   }
 
-  template <size_t N> static inline void Copy(
-    MatrixDescriptor Mat, DataType const* GmemPtr, uint64_t* pAbar, TensorPayload* pTDesc,
-      sycl::vec_t<int32_t, N> const& coord, uint32_t wg_mask) {
+  template <size_t N, CacheCtrl CacheType = CacheCtrl::L2c_L3uc, FillMethod FM = FillMethod::Zero>
+  static inline void Copy(
+      MatrixDescriptor Mat, DataType const* GmemPtr, uint64_t* pAbar, TensorPayload* pTDesc,
+      sycl::vec_t<int32_t, N> const& coord, uint32_t wg_mask, CacheHint<CacheType> = {}, FillMode<FM> = {}) {
 #if defined (__SYCL_DEVICE_ONLY__)
     asm volatile (
       ("async_tensor_copy.shared_cluster.global."+_s<N>+"d"+_at<DataType>+_fl<FM>+_cc<CacheType>+".abarrier %0, [%1], [%2], [%3], %4, %5;\n")
@@ -98,10 +108,12 @@ struct AsyncTensorGlobal2SLM {
   }
 };
 
-template <int BitWidth, CacheCtrl CacheType> struct AsyncTensorSLM2Global {
-  template <size_t N> static inline void
+template <int BitWidth>
+struct AsyncTensorSLM2Global {
+  template <size_t N, CacheCtrl CacheType = CacheCtrl::L2wb_L3uc>
+  static inline void
   Copy(void * GmemPtr, MatrixDescriptor Mat, uint64_t* pAbar, TensorPayload* pTDesc,
-      sycl::vec_t<int32_t, N> const& coord) {
+      sycl::vec_t<int32_t, N> const& coord, CacheHint<CacheType> = {}) {
 #if defined (__SYCL_DEVICE_ONLY__)
     asm volatile (
       ("async_tensor_copy.global.shared_workgroup."+_s<N>+"d."+_s<BitWidth>+"b"+_cc<CacheType>+".abarrier [%0], %1, [%2], [%3], %4;\n")
