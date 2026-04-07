@@ -51,6 +51,16 @@ import time
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
+# Import compare_perf function from compare_perf.py in the same directory
+try:
+    from compare_perf import compare_perf
+except ImportError:
+    # If import fails, define a fallback that warns the user
+    def compare_perf(new_csv, baseline_csv, threshold=0.10):
+        print("⚠️  WARNING: compare_perf.py not found. Performance comparison skipped.")
+        print("   Please ensure compare_perf.py is in the same directory as this script.")
+        return 0
+
 # Global configuration
 METRICS_PARSER_SCRIPT = "cobalt_json_time_anaylze.py"
 SIMULATOR_JSON_FILE = "xesim_hltv.json"
@@ -60,9 +70,12 @@ METRICS_PARSER_TIMEOUT_SECONDS = 10  # Max time to wait for metrics parser execu
 TEST_EXECUTION_TIMEOUT_SECONDS = 6000  # Max time to wait for individual test execution
 
 class PerfTestRunner:
-    def __init__(self, perf_binary_path: str, simulator_dir: Optional[str], output_dir: Optional[str], keep_json: bool = False):
+    def __init__(self, perf_binary_path: str, simulator_dir: Optional[str], output_dir: Optional[str], 
+                 keep_json: bool = False, baseline_csv: Optional[str] = None, disable_compare_perf: bool = False):
         self.perf_binary_path = Path(perf_binary_path).resolve()
         self.keep_json = keep_json
+        self.baseline_csv = baseline_csv
+        self.disable_compare_perf = disable_compare_perf
         self.csv_file = PERF_TEST_RESULT_CSV
 
         # Validate performance test binary
@@ -554,6 +567,40 @@ class PerfTestRunner:
         print(f"CSV Report: {self.csv_file}")
         print(f"{'='*60}")
 
+        # Run performance comparison if baseline is provided and not disabled
+        if self.baseline_csv and not self.disable_compare_perf:
+            print(f"\n{'='*60}")
+            print("🔍 PERFORMANCE COMPARISON")
+            print(f"{'='*60}")
+            print(f"Comparing: {self.csv_file} vs {self.baseline_csv}")
+            
+            try:
+                # Call compare_perf with the generated CSV and baseline CSV
+                # Using 10% threshold by default (0.10)
+                comparison_result = compare_perf(self.csv_file, self.baseline_csv, threshold=0.10)
+                
+                if comparison_result == 0:
+                    print(f"\n✅ Performance comparison PASSED")
+                else:
+                    print(f"\n❌ Performance comparison FAILED (regressions detected)")
+                    print("   See details above for specific test regressions.")
+                    # Exit with error code to signal regression
+                    sys.exit(1)
+                    
+            except FileNotFoundError as e:
+                print(f"\n⚠️  ERROR: Baseline CSV file not found: {self.baseline_csv}")
+                print(f"   {e}")
+                print("   Performance comparison skipped.")
+            except Exception as e:
+                print(f"\n⚠️  ERROR during performance comparison: {e}")
+                print("   Performance comparison failed but tests completed successfully.")
+        elif self.baseline_csv and self.disable_compare_perf:
+            print(f"\n📊 Performance comparison disabled (--disable_compare_perf)")
+            print(f"   Baseline CSV provided but comparison skipped: {self.baseline_csv}")
+        else:
+            print(f"\n📊 No baseline CSV provided - skipping performance comparison")
+            print("   Use --baseline_csv <path> to enable performance regression checking")
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -580,6 +627,15 @@ Basic Usage:
 
   # Run only L3 cache tests
   python run_perf_tests.py --perf_binary ./build/gemm_perf --simulator_dir ~/xe4_simulator --output_dir ./results --test_all --test_type L3
+
+Performance Comparison:
+  # Run all tests and compare against baseline
+  python run_perf_tests.py --perf_binary ./build/gemm_perf --simulator_dir ~/xe4_simulator --output_dir ./results \
+    --test_all --baseline_csv ./baseline/perf_test_results.csv
+
+  # Run tests with baseline comparison disabled
+  python run_perf_tests.py --perf_binary ./build/gemm_perf --simulator_dir ~/xe4_simulator --output_dir ./results \
+    --test_all --baseline_csv ./baseline.csv --disable_compare_perf
 
 Development & Debugging:
   # Keep JSON files for manual analysis
@@ -680,6 +736,26 @@ Prerequisites:
                 to use with the -t option."""
     )
 
+    parser.add_argument(
+        '--baseline_csv',
+        metavar='PATH',
+        help="""Path to baseline CSV file for performance comparison.
+                After running all tests, the results will be compared against
+                this baseline to detect performance regressions. The baseline
+                CSV should have the same format as the generated perf_test_results.csv.
+                If regressions exceed 10%% threshold, the script will exit with code 1.
+                A regression report will be written to ../../../output/regression.csv"""
+    )
+
+    parser.add_argument(
+        '--disable_compare_perf',
+        action='store_true',
+        help="""Disable performance comparison even if --baseline_csv is provided.
+                Use this flag when you want to run tests with a baseline path specified
+                but skip the actual comparison step. Useful for testing or when you only
+                want to generate the CSV without regression checking."""
+    )
+
     args = parser.parse_args()
 
     # Validate arguments
@@ -687,7 +763,14 @@ Prerequisites:
         # For listing tests, we only need the gemm_perf binary
         try:
             # Create a minimal runner just for listing tests
-            runner = PerfTestRunner(args.perf_binary, None, None, args.keep_json)
+            runner = PerfTestRunner(
+                args.perf_binary, 
+                None, 
+                None, 
+                args.keep_json,
+                baseline_csv=None,
+                disable_compare_perf=False
+            )
             runner.get_test_list(list_only=True)
             return
         except Exception as e:
@@ -720,7 +803,14 @@ Prerequisites:
         sys.exit(1)
 
     try:
-        runner = PerfTestRunner(args.perf_binary, args.simulator_dir, args.output_dir, args.keep_json)
+        runner = PerfTestRunner(
+            args.perf_binary, 
+            args.simulator_dir, 
+            args.output_dir, 
+            args.keep_json,
+            baseline_csv=args.baseline_csv,
+            disable_compare_perf=args.disable_compare_perf
+        )
 
         if args.single_test:
             runner.run_single_specific_test(args.single_test)
