@@ -16,14 +16,14 @@ namespace detail {
 
 template <typename T, class... Ts, size_t... I>
 sycl::vec_t<T, sizeof...(Ts)>
-to_vec_impl(cute::tuple<Ts...> const& t, std::index_sequence<I...>) {
+to_vec_impl(tuple<Ts...> const& t, std::index_sequence<I...>) {
     return sycl::vec_t<T, sizeof...(Ts)>{ static_cast<T>(get<I>(t))... };
 }
 
 }
 
 template <typename T, class... Ts>
-auto to_vec(cute::tuple<Ts...> const& t) {
+auto to_vec(tuple<Ts...> const& t) {
     return detail::to_vec_impl<T>(t, std::index_sequence_for<Ts...>{});
 }
 
@@ -40,8 +40,13 @@ namespace detail {
  * This instruction can only be issued by one elected work-item in a subgroup.
  */
 
+// Cache control hints for async_tensor_copy / prefetch / reduce instructions.
+// These map to PISA asm suffixes like ".L2c.L3uc", ".L2wb.L3wb", etc.
+// The naming convention is: L2<policy>_L3<policy> where:
+//   uc = uncached, c = cached, wb = write-back
 enum CacheCtrl{
-  L2uc_L3uc = 0,
+  None=0,
+  L2uc_L3uc,
   L2uc_L3c, L2uc_L3wb,
   L2c_L3uc, L2wb_L3uc,
   L2c_L3c, L2wb_L3wb
@@ -66,6 +71,16 @@ template <> struct cachectrl<cute::detail::CacheCtrl::L2c_L3uc> {
   static constexpr fixstr::fixed_string value {".l2c.L3uc"};};
 template <> struct cachectrl<cute::detail::CacheCtrl::L2wb_L3uc> {
   static constexpr fixstr::fixed_string value {".l2wb.L3uc"};};
+template <> struct cachectrl<cute::detail::CacheCtrl::L2uc_L3uc> {
+  static constexpr fixstr::fixed_string value {".L2uc.L3uc"};};
+template <> struct cachectrl<cute::detail::CacheCtrl::L2uc_L3c> {
+  static constexpr fixstr::fixed_string value {".L2uc.L3c"};};
+template <> struct cachectrl<cute::detail::CacheCtrl::L2uc_L3wb> {
+  static constexpr fixstr::fixed_string value {".L2uc.L3wb"};};
+template <> struct cachectrl<cute::detail::CacheCtrl::L2c_L3c> {
+  static constexpr fixstr::fixed_string value {".L2c.L3c"};};
+template <> struct cachectrl<cute::detail::CacheCtrl::L2wb_L3wb> {
+  static constexpr fixstr::fixed_string value {".L2wb.L3wb"};};
 
 template <cute::detail::FillMethod> struct padfill;
 template <> struct padfill<cute::detail::FillMethod::Zero> {
@@ -118,6 +133,123 @@ struct AsyncTensorSLM2Global {
     asm volatile (
       ("async_tensor_copy.global.shared_workgroup."+_s<N>+"d."+_s<BitWidth>+"b"+_cc<CacheType>+".abarrier [%0], %1, [%2], [%3], %4;\n")
       ::"r"(GmemPtr), "r"(Mat), "r"(pAbar), "r"(pTDesc), "r"(coord));
+#endif
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// AsyncTensorGlobalPrefetch — Issues async_tensor_prefetch.Nd for L2 cache warming.
+///
+/// Fire-and-forget: no barrier, no SLM destination. The prefetch instruction hints the
+/// memory subsystem to bring the described tensor tile into the specified cache level(s).
+/// Used by XE4_ADMA_PREFETCH::copy() → dispatched from Copy_Traits<XE4_ADMA_PREFETCH>.
+///
+/// Template params:
+///   DataType  — element type (determines bit-width suffix, e.g. ".16b" for half)
+///   CacheType — cache control hint (typically L2c_L3uc for prefetch-into-L2)
+///
+/// Instruction format:
+///   async_tensor_prefetch.<N>d.<BitWidth>b.<CacheCtrl>.global [gmem_ptr], [tdesc], coord;
+////////////////////////////////////////////////////////////////////////////////////////////////////
+template <typename DataType, CacheCtrl CacheType>
+struct AsyncTensorGlobalPrefetch {
+  template <size_t N> static inline void Copy(
+      DataType const* GmemPtr, TensorPayload* pTDesc,
+      sycl::vec_t<int32_t, N> const& coord
+  ) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    constexpr unsigned int BitWidth =sizeof_bits_v<DataType>;
+    static_assert(cmp_values<N, 1,2,3,4,5>());
+    static_assert(cmp_values<sizeof(DataType) * 8, 8, 16, 32, 64>());
+    asm volatile (
+      ("async_tensor_prefetch." + _s<N>+"d." + _s<BitWidth> + "b"
+       +_cc<CacheType> + ".global [%0], [%1], %2;\n")
+      ::"r"(GmemPtr), "r"(pTDesc), "r"(coord));
+#endif
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// AsyncTensorReduce — Issues async_tensor_fred/ired for SLM → gmem atomic reduction.
+///
+/// Dispatched by XE4_ADMA_STORE_REDUCE::copy() (via Copy_Traits → ADMA_STORE_Unpack).
+/// Atomically reduces SLM data into global memory at the tensor-descriptor coordinates.
+///
+/// Specialized on RedType:
+///   FloatType → async_tensor_fred (floating-point reduction)
+///   IntType   → async_tensor_ired (integer reduction)
+///
+/// Template params on Copy:
+///   CacheType — Must be L2wb_L3wb or L2uc_L3wb (HW constraint for reduce instructions)
+///   Rop       — Reduction operation (Add, Min, Max, Smin, Smax, etc.)
+///   BarType   — Completion mechanism:
+///               Abarrier:  includes abar_ptr operand (arrival barrier)
+///               Groupsync: omits abar_ptr, uses workgroup sync instead
+///   T         — Element data type (determines asm data-type suffix via _mdtype)
+///   N         — Tensor dimensionality (1d–5d)
+///
+/// Instruction format (FloatType, Abarrier):
+///   async_tensor_fred.global.shared_workgroup.2d.add.hf.L2wb.L3wb.abarrier [gmem], mat, [abar], [tdesc], coord;
+/// Instruction format (IntType, Groupsync):
+///   async_tensor_ired.global.shared_workgroup.2d.add.32b.L2wb.L3wb.groupsync [gmem], mat, [tdesc], coord;
+////////////////////////////////////////////////////////////////////////////////////////////////////
+template <RedType RDType>
+struct AsyncTensorReduce;
+
+// FloatType specialization: generates async_tensor_fred instructions
+template <>
+struct AsyncTensorReduce<RedType::FloatType> {
+  template <CacheCtrl CacheType, RedOp Rop, BarrierType BarType, typename T, size_t N>
+  static inline void Copy(
+      MatrixDescriptor Mat, T const* GmemPtr, uint64_t* pAbar, TensorPayload* pTDesc,
+      sycl::vec_t<int32_t, N> const& coord
+  ) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    static_assert(cmp_values<N, 1,2,3,4,5>());
+    static_assert(CacheType == L2wb_L3wb || CacheType == L2uc_L3wb);
+
+    if constexpr (BarType == BarrierType::Abarrier) {
+      asm volatile (
+        ("async_tensor_fred.global.shared_workgroup." + _s<N> + "d"
+         + _red_algo<Rop> + _mdtype<T> + _cc<CacheType>
+         + ".abarrier [%0], %1, [%2], [%3], %4;\n")
+        ::"r"(GmemPtr), "r"(Mat), "r"(pAbar), "r"(pTDesc), "r"(coord));
+    } else {
+      asm volatile (
+        ("async_tensor_fred.global.shared_workgroup." + _s<N> + "d"
+         + _red_algo<Rop> + _mdtype<T> + _cc<CacheType>
+         + ".groupsync [%0], %1, [%2], %3;\n")
+        ::"r"(GmemPtr), "r"(Mat), "r"(pTDesc), "r"(coord));
+    }
+#endif
+  }
+};
+
+// IntType specialization: generates async_tensor_ired instructions
+template <>
+struct AsyncTensorReduce<RedType::IntType> {
+  template <CacheCtrl CacheType, RedOp Rop, BarrierType BarType, typename T, size_t N>
+  static inline void Copy(
+      MatrixDescriptor Mat, T const* GmemPtr, uint64_t* pAbar, TensorPayload* pTDesc,
+      sycl::vec_t<int32_t, N> const& coord
+  ) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    static_assert(cmp_values<N, 1,2,3,4,5>());
+    static_assert(CacheType == L2wb_L3wb || CacheType == L2uc_L3wb);
+
+    if constexpr (BarType == BarrierType::Abarrier) {
+      asm volatile (
+        ("async_tensor_ired.global.shared_workgroup." + _s<N> + "d"
+         + _red_algo<Rop> + _mdtype<T> + _cc<CacheType>
+         + ".abarrier [%0], %1, [%2], [%3], %4;\n")
+        ::"r"(GmemPtr), "r"(Mat), "r"(pAbar), "r"(pTDesc), "r"(coord));
+    } else {
+      asm volatile (
+        ("async_tensor_ired.global.shared_workgroup." + _s<N> + "d"
+         + _red_algo<Rop> + _mdtype<T> + _cc<CacheType>
+         + ".groupsync [%0], %1, [%2], %3;\n")
+        ::"r"(GmemPtr), "r"(Mat), "r"(pTDesc), "r"(coord));
+    }
 #endif
   }
 };

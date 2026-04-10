@@ -81,24 +81,27 @@ enum class tred_round_mode {
   mode_rna
 };
 
-//For Matrix Reduction
-enum class MredOp{
+// Reduction operation enum — used by both matrix reduction (AMMA mred) and
+// async tensor reduction (ADMA fred/ired) instructions.
+// Renamed from MredOp to RedOp to reflect its broader usage; backward-compat
+// aliases MredOp and mred_algo are kept so existing AMMA code compiles unchanged.
+enum class RedOp{
   None,
   Add,
   Min,
   Max,
-  Smin,
-  Smax,
-  Umin,
-  Umax,
-  And,
-  Or,
-  Xor,
+  Smin,       // Signed min (integer only)
+  Smax,       // Signed max (integer only)
+  Umin,       // Unsigned min (integer only)
+  Umax,       // Unsigned max (integer only)
+  And,        // Bitwise AND (integer only)
+  Or,         // Bitwise OR  (integer only)
+  Xor,        // Bitwise XOR (integer only)
   Incwrap,
   Decwrap
 };
-using mred_algo=MredOp;
-
+using MredOp = RedOp;      // Backward compat: existing AMMA matrix-reduction code uses MredOp
+using mred_algo=MredOp;    // Backward compat: asm string templates use mred_algo
 
 template <mred_algo> struct mat_red_algo;
 template <> struct mat_red_algo<mred_algo::None> { static constexpr fixstr::fixed_string value {""};};
@@ -115,15 +118,27 @@ template <> struct mat_red_algo<mred_algo::Xor> { static constexpr fixstr::fixed
 template <> struct mat_red_algo<mred_algo::Incwrap> { static constexpr fixstr::fixed_string value {".incwrap"};};
 template <> struct mat_red_algo<mred_algo::Decwrap> { static constexpr fixstr::fixed_string value {".decwrap"};};
 template <mred_algo ralgo> constexpr auto _mred_algo = mat_red_algo<ralgo>::value;
+// _red_algo: alias for _mred_algo, used by AsyncTensorReduce asm strings
+// (same asm reduction-algorithm suffixes apply to both AMMA mred and ADMA fred/ired).
+template <mred_algo ralgo> constexpr auto _red_algo = mat_red_algo<ralgo>::value;
 
+// md_type: Maps C++ types to PISA asm data-type suffixes for async_tensor_fred/ired.
+// Float types use ".hf" / ".bf" / ".f" / ".df"; integer types use bit-width notation ".32b" / ".64b".
+// These suffixes appear in the reduction asm instruction, e.g.:
+//   async_tensor_fred.global.shared_workgroup.2d.add.hf.L2wb.L3wb.abarrier ...
 template <typename> struct md_type;
 template <> struct md_type<cutlass::tfloat32_t> {static constexpr fixstr::fixed_string value {".f"};};
 template <> struct md_type<float> {static constexpr fixstr::fixed_string value {".f"};};
+template <> struct md_type<double> {static constexpr fixstr::fixed_string value {".df"};};
 template <> struct md_type<sycl::half> {static constexpr fixstr::fixed_string value {".hf"};};
 template <> struct md_type<cutlass::half_t> {static constexpr fixstr::fixed_string value {".hf"};};
 template <> struct md_type<sycl::ext::oneapi::bfloat16> {
   static constexpr fixstr::fixed_string value {".bf"};
 };
+// Integer types: async_tensor_ired uses bit-width suffixes instead of type names
+template <> struct md_type<int> {static constexpr fixstr::fixed_string value {".32b"};};
+template <> struct md_type<uint32_t> {static constexpr fixstr::fixed_string value {".32b"};};
+template <> struct md_type<long> {static constexpr fixstr::fixed_string value {".64b"};};
 template <typename T> constexpr auto _mdtype = md_type<T>::value;
 
 enum class morder {
@@ -230,6 +245,25 @@ template <> struct rd_type<sycl::ext::oneapi::bfloat16> {
   static constexpr fixstr::fixed_string value {".16b.fp"};
 };
 
+// RedType: Determines the asm instruction prefix for async tensor reductions.
+//   FloatType → "fred" (floating-point reduction: half, bf16, float, double)
+//   IntType   → "ired" (integer reduction: int32, uint32, int64)
+// See AsyncTensorReduce in async_tensor_copy.hpp where this selects the instruction variant.
+enum class RedType {
+  none=0,
+  IntType,
+  FloatType
+};
+
+// BarrierType: Selects the completion notification mechanism for async tensor reduce.
+//   Abarrier  → ".abarrier" — uses arrival barrier (recommended for ADMA pipelines)
+//   Groupsync → ".groupsync" — uses workgroup-level synchronization
+enum class BarrierType {
+  none=0,
+  Abarrier,
+  Groupsync
+};
+
 template <int N> constexpr auto _s = fixed_s<N>::value;
 template <typename T> constexpr auto _t = fixed_type<T>::value;
 template <typename T> constexpr auto _p = pisa_type<T>::value;
@@ -241,5 +275,14 @@ template <bool dsat> constexpr auto _sat = tensor_red_dsat<dsat>::value;
 template <bool acc> constexpr auto _acc = tensor_red_acc<acc>::value;
 template <bool mxnd> constexpr auto _mxnd = tensor_exp_mxnd<mxnd>::value;
 template <bool xch> constexpr auto _xch = tensor_exp_xch<xch>::value;
+
+// Compile-time variadic value comparison using fold expression.
+// Returns true if `value` matches any of `vals...`.
+// Used by XE4_ADMA_RedBase to static_assert that the reduction op and bit-width
+// are in the set of hardware-supported combinations for fred/ired instructions.
+template<int value, int... vals>
+constexpr bool cmp_values() {
+  return ((value == vals) || ...);
+}
 
 }

@@ -40,6 +40,8 @@ add_custom_target(
   cutlass_test_unit_cute_xe4_ldsm_adma_uaov
   cutlass_test_unit_cute_xe4_ldsm_red
   cutlass_test_unit_cute_xe4_eu_slm_copy
+  cutlass_test_unit_cute_xe4_adma_prefetch
+  cutlass_test_unit_cute_xe4_adma_reduce
 )
 
 add_custom_target(
@@ -54,6 +56,8 @@ add_custom_target(
   test_unit_cute_xe4_ldsm_adma_aov
   test_unit_cute_xe4_ldsm_adma_uaov
   test_unit_cute_xe4_ldsm_red
+  test_unit_cute_xe4_adma_prefetch
+  test_unit_cute_xe4_adma_reduce
 )
 
 cutlass_test_unit_add_executable(
@@ -99,3 +103,16 @@ cutlass_test_unit_add_executable(
   cutlass_test_unit_cute_xe4_eu_slm_copy
   slm_copy_test.cpp
 )
+# ADMA prefetch unit tests — validates async_tensor_prefetch + load roundtrip
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_adma_prefetch
+  adma_prefetch.cpp
+)
+# ADMA store-reduce unit tests — validates async_tensor_fred/ired (SLM → gmem reduction)
+# Note: These tests require real hardware; TBX simulator does not support
+# send.dma.tensor.reduce_l2g instruction variant.
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_adma_reduce
+  adma_reduce.cpp
+)
+

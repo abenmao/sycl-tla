@@ -1201,4 +1201,19 @@ make_tma_atom_B(CopyOp                  const& copy_op,
 #endif // !defined(__CUDACC_RTC__)
 
 } // end namespace cute
+
+// Include ADMA copy traits AFTER all TMA infrastructure is fully defined.
+// This placement is critical to break a circular dependency:
+//
+//   copy_traits_xe4_tma.hpp  defines: AuxTmaParams, construct_tma_gbasis, fill_tma_gmem_shape_stride
+//   copy_traits_xe4_adma.hpp needs:   all of the above (for make_adma_copy_desc, make_adma_copy_atom)
+//   prefetch.hpp             needs:   Copy_Traits (from copy_traits.hpp, already included)
+//   copy_traits_xe4_adma.hpp includes: copy_traits_xe4_tma.hpp (for AuxTmaParams)
+//
+// If we included copy_traits_xe4_adma.hpp at the top of this file or inside the namespace,
+// the #pragma once guard would skip the second inclusion, leaving AuxTmaParams undefined.
+// By placing the include here (after the closing brace of namespace cute), all TMA
+// infrastructure is guaranteed to be available when copy_traits_xe4_adma.hpp is parsed.
+#include <cute/atom/copy_traits_xe4_adma.hpp>
+
 #endif

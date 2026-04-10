@@ -28,12 +28,6 @@ enum LDSMMode {
   UnorderedArrOfVectors
 };
 
-// Recursive case: compare against first, then the rest
-template<int value, int... vals>
-constexpr bool cmp_values() {
-  return ((value == vals) || ...);
-}
-
 enum MatrixType {
   Type1=0,
   Type2=1,
@@ -166,17 +160,11 @@ struct XE4_LDSTMatrixBase {
   XE4_LDSTMatrixBase() {}
 };
 
-enum RedType {
-  None,
-  IntType,
-  FloatType
-};
-
 template <typename T, cute::MredOp Rop, class SLayout, LDSMMode Mode, uint32_t Vlen, cute::Vecdir Vdir,
 	  uint32_t Alen=0, cute::Arrdir Adir=cute::Arrdir::none>
 struct XE4_MatrixRedBase : XE4_LDSTMatrixBase<T, SLayout, Mode, Vlen, Vdir, Alen, Adir> {
 
-  static constexpr RedType rtype = (std::is_same_v<T, int> ||
+  static constexpr RedType rdtype = (std::is_same_v<T, int> ||
                                     std::is_same_v<T, uint32_t> ||
                                     std::is_same_v<T, uint16_t>)
 	                         ? RedType::IntType
@@ -186,7 +174,7 @@ struct XE4_MatrixRedBase : XE4_LDSTMatrixBase<T, SLayout, Mode, Vlen, Vdir, Alen
                                       std::is_same_v<T, cutlass::half_t> ||
                                       std::is_same_v<T, sycl::half>)
 				 ? RedType::FloatType
-				 : RedType::None);
+				 : RedType::none);
 
   using Super = XE4_LDSTMatrixBase<T, SLayout, Mode, Vlen, Vdir, Alen, Adir>;
   static constexpr cute::MredOp RedOp = Rop;
@@ -206,16 +194,16 @@ struct XE4_MatrixRedBase : XE4_LDSTMatrixBase<T, SLayout, Mode, Vlen, Vdir, Alen
   static constexpr inline bool check_constraints() {
     // Only three modes supported for reduction ops
     static_assert(cmp_values<Mode, Scalar, Vector, ArrayOfVectors>());
-    static_assert(rtype != RedType::None, "DataTypes should be Int or float types of 16 or 32 bits");
+    static_assert(rdtype != RedType::none, "DataTypes should be Int or float types of 16 or 32 bits");
     static_assert(Vlen >= 0 && Vlen <= 32);
     static_assert(Super::BitWidth == 16 || Super::BitWidth == 32);
     if constexpr (Rop == MredOp::Incwrap || Rop == MredOp::Decwrap) {
-      static_assert(Super::BitWidth==32 && rtype == RedType::IntType);
+      static_assert(Super::BitWidth==32 && rdtype == RedType::IntType);
     }
-    if constexpr (rtype == RedType::FloatType) {
+    if constexpr (rdtype == RedType::FloatType) {
       static_assert((Rop == MredOp::Add || Rop == MredOp::Min || Rop == MredOp::Max));
     }
-    if constexpr (rtype == RedType::IntType) {
+    if constexpr (rdtype == RedType::IntType) {
       static_assert(!(Rop == MredOp::Min || Rop == MredOp::Max));
     }
     check_red_mode_contraints();

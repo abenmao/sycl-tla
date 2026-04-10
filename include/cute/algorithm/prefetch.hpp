@@ -109,6 +109,90 @@ prefetch(Copy_Atom<Copy_Traits<CopyOp, CT_Args...>, CopyType> const& atom,
   }
 }
 
+// Prefetch with TiledCopy — delegates to Copy_Atom overload.
+// TiledCopy inherits from Copy_Atom, so we static_cast down to dispatch
+// through the Copy_Atom prefetch overload above (which uses CopyOp::PREFETCH typedef).
+template <class CopyAtom, class LayoutTV, class TilerMN,
+          class GEngine, class GLayout>
+CUTE_HOST_DEVICE
+void
+prefetch(TiledCopy<CopyAtom, LayoutTV, TilerMN> const& tiled_copy,
+         Tensor<GEngine, GLayout>                const& src)
+{
+  return prefetch(static_cast<CopyAtom const&>(tiled_copy), src);
+}
+
+#if (SYCL_INTEL_TARGET == 40)
+// Forward declarations — full definitions live in cute/arch/copy_xe4_adma.hpp.
+// We forward-declare here instead of #include-ing the header to avoid a circular
+// dependency: copy_traits_xe4_tma.hpp -> prefetch.hpp -> copy_traits_xe4_adma.hpp
+// -> copy_traits_xe4_tma.hpp (would be skipped by #pragma once, leaving AuxTmaParams
+// undefined).  The full include is placed at the end of copy_traits_xe4_tma.hpp instead.
+struct XE4_ADMA_LOAD;
+struct XE4_ADMA_LOAD_MULTICAST;
+struct XE4_ADMA_PREFETCH;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// XE4 ADMA prefetch overloads — Copy_Traits-level (pre-.with() traits objects)
+///
+/// These overloads accept bare Copy_Traits<XE4_ADMA_LOAD, ...> or
+/// Copy_Traits<XE4_ADMA_LOAD_MULTICAST, ...> (the non-executable builder traits that hold
+/// the tensor descriptor).  They are needed because the generic Copy_Atom-level overload
+/// (line ~97) requires a fully-formed Copy_Atom, but callers like cute::prefetch(tiled_copy, src)
+/// may need to extract prefetch from the raw load traits.
+///
+/// Dispatch path:
+///   1. Construct Copy_Traits<XE4_ADMA_PREFETCH> from the load traits via converting constructor
+///      (reuses tensorDesc_, aux_params_, and tdesc_ptr_ from the load atom)
+///   2. Create a dummy dst tensor (nullptr smem ptr) — prefetch has no SLM target
+///   3. Call copy(pf_traits, src, dst), which dispatches to
+///      Copy_Traits<XE4_ADMA_PREFETCH>::copy_unpack -> XE4_ADMA_PREFETCH::copy()
+///      -> async_tensor_prefetch.Nd... (fire-and-forget, no barrier)
+///
+/// Note: The generic Copy_Atom overload at line ~97 handles XE4 atoms that arrive as
+/// Copy_Atom<Copy_Traits<XE4_ADMA_LOAD,...>, T> via the CopyOp::PREFETCH typedef.
+/// These Copy_Traits-level overloads handle the case where bare traits are passed directly.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Overload for Copy_Traits<XE4_ADMA_LOAD> (pre-.with() builder traits)
+template <class... CT_Args,
+          class SrcEngine, class SrcLayout>
+CUTE_HOST_DEVICE
+void
+prefetch(Copy_Traits<XE4_ADMA_LOAD, CT_Args...> const& traits,
+         Tensor<SrcEngine, SrcLayout>             const& src)
+{
+  // Build prefetch traits from load traits via converting constructor.
+  // This reuses the load atom's tensor descriptor (same gmem shape/stride/base address).
+  using Prefetch_Traits = Copy_Traits<XE4_ADMA_PREFETCH, CT_Args...>;
+  Prefetch_Traits pf_traits{traits};
+
+  // Prefetch is fire-and-forget: no barrier, no SLM destination.
+  // The dummy dst tensor satisfies the copy() signature but is never dereferenced.
+  using SrcType = typename SrcEngine::value_type;
+  Tensor dst = make_tensor(make_smem_ptr<SrcType>(nullptr), shape(src));
+  copy(pf_traits, src, dst);
+}
+
+// Overload for Copy_Traits<XE4_ADMA_LOAD_MULTICAST> (pre-.with() builder traits)
+template <class... CT_Args,
+          class SrcEngine, class SrcLayout>
+CUTE_HOST_DEVICE
+void
+prefetch(Copy_Traits<XE4_ADMA_LOAD_MULTICAST, CT_Args...> const& traits,
+         Tensor<SrcEngine, SrcLayout>                      const& src)
+{
+  // Same pattern as the XE4_ADMA_LOAD overload above.
+  using Prefetch_Traits = Copy_Traits<XE4_ADMA_PREFETCH, CT_Args...>;
+  Prefetch_Traits pf_traits{traits};
+
+  using SrcType = typename SrcEngine::value_type;
+  Tensor dst = make_tensor(make_smem_ptr<SrcType>(nullptr), shape(src));
+  copy(pf_traits, src, dst);
+}
+
+#endif // #if (SYCL_INTEL_TARGET == 40)
+
 #if defined(CUTE_COPY_ATOM_TMA_SM90_ENABLED)
 template <class... CT_Args,
           class SrcEngine, class SrcLayout>

@@ -13,6 +13,20 @@
 
 namespace cute {
 
+// Type trait to detect XE4_ADMA_STORE_REDUCE (and its _OP marker variant).
+// Used in make_adma_atom_A/B_xe4 to handle STORE_REDUCE in the multicast lambda
+// (STORE_REDUCE never multicasts, so it always returns Int<1>{}).
+// The _OP specialization is added below near XE4_ADMA_STORE_REDUCE_OP.
+template <typename T>
+struct is_xe4_adma_store_reduce : cute::false_type {};
+
+template <typename T, RedOp Rop, BarrierType BType>
+struct is_xe4_adma_store_reduce<XE4_ADMA_STORE_REDUCE<T, Rop, BType>>
+  : cute::true_type {};
+
+template <typename T>
+inline constexpr bool is_xe4_adma_store_reduce_v = is_xe4_adma_store_reduce<T>::value;
+
 template <class CopyOp, class... Args>
 struct ADMA_LOAD_Unpack
 {
@@ -336,6 +350,191 @@ struct Copy_Traits<XE4_ADMA_STORE_OP, T, NumBitsPerADMA>
   TensorDescriptor<T> const*
   get_tma_descriptor() const {
     return reinterpret_cast<TensorDescriptor<T> const*>(get<1>(opargs_));
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// PREFETCH — Directly Executable Traits (no .with() needed)
+///
+/// Unlike LOAD/STORE traits which follow the two-phase pattern:
+///   non-executable builder → .with(abar) → executable _OP traits
+/// PREFETCH traits are directly executable because prefetch is fire-and-forget:
+///   - No barrier (no .with() needed)
+///   - No SLM destination (dst tensor in copy_unpack is ignored)
+///   - No completion signal — the instruction just hints the cache
+///
+/// Key design: copy_unpack is defined inline (not deleted + _OP indirection).
+/// This means `copy(prefetch_traits, src, dst)` works immediately.
+///
+/// Converting constructor: Enables constructing prefetch traits from any other ADMA traits
+/// (LOAD, LOAD_MULTICAST, etc.) by copying tensorDesc_, aux_params_, and tdesc_ptr_.
+/// This is the mechanism that makes cute::prefetch(load_atom, src) work — it constructs
+/// Copy_Traits<XE4_ADMA_PREFETCH> from Copy_Traits<XE4_ADMA_LOAD> at the call site.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <typename T, class NumBitsPerADMA, class AuxParams_>
+struct Copy_Traits<XE4_ADMA_PREFETCH, T, NumBitsPerADMA, AuxParams_>
+{
+  using ThrID     = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  using DstLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  using RefLayout = SrcLayout;
+
+  TensorDescriptor<T> tensorDesc_;
+  using AuxParams = AuxParams_;
+  AuxParams aux_params_;
+  mutable uint64_t* tdesc_ptr_ { nullptr };
+
+  // Default constructor
+  Copy_Traits() = default;
+  Copy_Traits(TensorDescriptor<T> const& td, AuxParams const& ap)
+    : tensorDesc_(td), aux_params_(ap) {}
+
+  // Converting constructor: creates prefetch traits from any other ADMA traits.
+  // Required by cute::prefetch() in prefetch.hpp which constructs
+  // Copy_Traits<XE4_ADMA_PREFETCH, ...> from Copy_Traits<XE4_ADMA_LOAD, ...>.
+  // Copies the tensor descriptor (same gmem shape/stride/base address) and
+  // the device-side tdesc_ptr_ so that the prefetch uses the same HW descriptor.
+  template <class OtherCopyOp, class OtherT, class OtherBits, class OtherAux>
+  Copy_Traits(Copy_Traits<OtherCopyOp, OtherT, OtherBits, OtherAux> const& other)
+    : tensorDesc_(other.tensorDesc_), aux_params_(other.aux_params_),
+      tdesc_ptr_(other.tdesc_ptr_) {}
+
+  CUTE_DEVICE void
+  set_tensor_desc(uint64_t* tensor_desc) const {
+    dupTensorPayload(tensor_desc, (uint64_t *)&tensorDesc_.payload);
+    tdesc_ptr_ = tensor_desc;
+  }
+
+  CUTE_HOST_DEVICE constexpr
+  TensorDescriptor<T>* get_tensor_desc() const {
+    return reinterpret_cast<TensorDescriptor<T>*>(tdesc_ptr_);
+  }
+
+  template <class GShape>
+  CUTE_HOST_DEVICE constexpr
+  auto get_tma_tensor(GShape const& g_shape) const {
+    static_assert(is_congruent<decltype(g_shape), decltype(aux_params_.g_stride_)>::value);
+    return make_coord_tensor(make_layout(g_shape, aux_params_.g_stride_));
+  }
+
+  // DIRECTLY EXECUTABLE — no .with() needed, no barrier for prefetch.
+  // The dst tensor is ignored (prefetch has no SLM destination).
+  // Dispatches to XE4_ADMA_PREFETCH::copy() → AsyncTensorGlobalPrefetch.
+  template <class TS, class SLayout,
+            class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits        const& traits,
+              Tensor<TS,SLayout> const& src,
+              Tensor<TD,DLayout>      & dst)
+  {
+    auto src_coord = to_vec<int32_t>(flatten_to_tuple(src.data().coord_));
+    XE4_ADMA_PREFETCH::copy(traits.tdesc_ptr_, traits.tensorDesc_.g_pointer, src_coord);
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// STORE_REDUCE — Two-Phase Traits (non-executable → .with(abar) → executable)
+///
+/// Follows the same pattern as XE4_ADMA_LOAD / XE4_ADMA_STORE:
+///   1. Non-executable builder traits hold the tensor descriptor and aux params.
+///      Calling copy() on these is a deleted function (compile error).
+///   2. .with(abar_ptr) returns executable _OP traits that hold the flattened opargs tuple.
+///      These inherit ADMA_STORE_Unpack to implement copy_unpack.
+///
+/// The _OP marker type inherits from STORE_REDUCE so that CopyOp::copy() dispatches
+/// correctly through the same virtual-ish mechanism (CRTP via ADMA_STORE_Unpack).
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Executable marker type — inherits STORE_REDUCE so CopyOp::copy() resolves correctly.
+// ADMA_STORE_Unpack<_OP> calls detail::CallCOPY<_OP>{} which invokes _OP::copy()
+// (inherited from STORE_REDUCE), dispatching to AsyncTensorReduce.
+template <typename T, RedOp Rop, BarrierType BType>
+struct XE4_ADMA_STORE_REDUCE_OP : XE4_ADMA_STORE_REDUCE<T, Rop, BType> {};
+
+// Extend type trait to also match the _OP variant (used in make_adma_atom_A/B_xe4 multicast lambda)
+template <typename T, RedOp Rop, BarrierType BType>
+struct is_xe4_adma_store_reduce<XE4_ADMA_STORE_REDUCE_OP<T, Rop, BType>>
+  : cute::true_type {};
+
+// Non-executable builder traits: holds tensor descriptor + aux params.
+// .with(abar_ptr) packs (tdesc, gmem, mat_desc, abar, 0) into the executable _OP traits.
+template <typename T, RedOp Rop, BarrierType BType,
+          class NumBitsPerADMA, class AuxParams_>
+struct Copy_Traits<XE4_ADMA_STORE_REDUCE<T, Rop, BType>, T, NumBitsPerADMA, AuxParams_>
+{
+  using ThrID     = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  using DstLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  using RefLayout = SrcLayout;
+
+  TensorDescriptor<T> tensorDesc_;
+  using AuxParams = AuxParams_;
+  AuxParams aux_params_;
+  mutable uint64_t* tdesc_ptr_ { nullptr };
+
+  CUTE_DEVICE void
+  set_tensor_desc(uint64_t* tensor_desc) const {
+    dupTensorPayload(tensor_desc, (uint64_t *)&tensorDesc_.payload);
+    tdesc_ptr_ = tensor_desc;
+  }
+
+  CUTE_HOST_DEVICE constexpr
+  TensorDescriptor<T>* get_tensor_desc() const {
+    return reinterpret_cast<TensorDescriptor<T>*>(tdesc_ptr_);
+  }
+
+  template <class GShape>
+  CUTE_HOST_DEVICE constexpr
+  auto get_tma_tensor(GShape const& g_shape) const {
+    static_assert(is_congruent<decltype(g_shape), decltype(aux_params_.g_stride_)>::value);
+    return make_coord_tensor(make_layout(g_shape, aux_params_.g_stride_));
+  }
+
+  CUTE_HOST_DEVICE constexpr
+  Copy_Traits<XE4_ADMA_STORE_REDUCE_OP<T, Rop, BType>, T, NumBitsPerADMA>
+  with(uint64_t* abar_ptr) const {
+    return {tdesc_ptr_, tensorDesc_.g_pointer, tensorDesc_.matrix_desc, abar_ptr};
+  }
+
+  // Not directly executable — must call .with(abar) first
+  template <class TS, class SLayout,
+            class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits        const& traits,
+              Tensor<TS,SLayout> const& src,
+              Tensor<TD,DLayout>      & dst) = delete;
+};
+
+// Executable traits — reuses ADMA_STORE_Unpack (store direction: src=smem, dst=gmem coord).
+// ADMA_STORE_Unpack::copy_unpack explodes the 4-element opargs_ tuple + (slm_ptr, coord)
+// from the src/dst tensors, then calls XE4_ADMA_STORE_REDUCE_OP::copy() with all 6 args.
+template <typename T, RedOp Rop, BarrierType BType,
+          class NumBitsPerADMA>
+struct Copy_Traits<XE4_ADMA_STORE_REDUCE_OP<T, Rop, BType>, T, NumBitsPerADMA>
+  : ADMA_STORE_Unpack<XE4_ADMA_STORE_REDUCE_OP<T, Rop, BType>, T, NumBitsPerADMA>
+{
+  using ThrID     = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  using DstLayout = Layout<Shape<_1,NumBitsPerADMA>>;
+  using RefLayout = SrcLayout;
+
+  // 5-element opargs matching unified 7-arg CopyOp (Unpack adds slm_ptr + coord)
+  tuple<
+  uint64_t*,
+  T const*,
+  uint32_t,
+  uint64_t*
+  > const opargs_;
+
+  CUTE_HOST_DEVICE
+  Copy_Traits(uint64_t* desc, T const* adrs, uint32_t mdesc, uint64_t* mbar)
+    : opargs_(desc, adrs, mdesc, mbar) {}
+
+  CUTE_HOST_DEVICE constexpr
+  TensorDescriptor<T> const*
+  get_tma_descriptor() const {
+    return reinterpret_cast<TensorDescriptor<T> const*>(get<0>(opargs_));
   }
 };
 
@@ -772,6 +971,12 @@ make_adma_atom_A_xe4(
       return size<2>(cluster_shape);
     else if constexpr (is_same_v<CopyOp, XE4_ADMA_LOAD>)
       return Int<1>{};
+    else if constexpr (is_same_v<CopyOp, XE4_ADMA_STORE>)
+      return Int<1>{};
+    else if constexpr (is_xe4_adma_store_reduce_v<CopyOp>)
+      return Int<1>{};
+    else if constexpr (is_same_v<CopyOp, XE4_ADMA_PREFETCH>)
+      return Int<1>{};
     else
       static_assert(dependent_false<CopyOp>, "Unsupported CopyOp");
   }();
@@ -844,6 +1049,14 @@ make_adma_atom_B_xe4(
       return size<1>(cluster_shape);
     else if constexpr (is_same_v<CopyOp, XE4_ADMA_LOAD>)
       return Int<1>{};
+    else if constexpr (is_same_v<CopyOp, XE4_ADMA_STORE>)
+      return Int<1>{};
+    else if constexpr (is_xe4_adma_store_reduce_v<CopyOp>)
+      return Int<1>{};
+    else if constexpr (is_same_v<CopyOp, XE4_ADMA_PREFETCH>)
+      return Int<1>{};
+    else
+      static_assert(dependent_false<CopyOp>, "Unsupported CopyOp");
   }();
 
   using AmmaType = conditional_t<is_same<void, InternalType>::value, typename GEngine::value_type, InternalType>;
@@ -880,6 +1093,50 @@ make_adma_copy(CopyOp                 const& copy_op,
                                                 gtensor, slayout,
                                                 cta_t_tile, cta_v_tile);
   }
+}
+
+// Convenience functions for creating ADMA prefetch atoms for A and B operands.
+// These delegate to make_adma_atom_A/B_xe4 with XE4_ADMA_PREFETCH as the CopyOp,
+// producing a directly-executable Copy_Atom<Copy_Traits<XE4_ADMA_PREFETCH, ...>>.
+// Usage: auto pf_atom_a = make_adma_prefetch_atom_A_xe4(gA, slayout, tiler, mma, cluster);
+//        copy(pf_atom_a, tAgA(_,stage), dummy_dst);  // fire-and-forget
+
+template <class InternalType = void,
+          class GEngine, class GLayout,
+          class SLayout,
+          class MMA_Tiler,
+          class... Args,
+          class ClusterShapeVMNK>
+CUTE_HOST
+auto
+make_adma_prefetch_atom_A_xe4(
+    Tensor<GEngine, GLayout> const& gtensor,
+    SLayout                  const& slayout,
+    MMA_Tiler                const& mma_tiler,
+    TiledMMA<Args...>        const& mma,
+    ClusterShapeVMNK         const& cluster_shape)
+{
+  return make_adma_atom_A_xe4<InternalType>(
+      XE4_ADMA_PREFETCH{}, gtensor, slayout, mma_tiler, mma, cluster_shape);
+}
+
+template <class InternalType = void,
+          class GEngine, class GLayout,
+          class SLayout,
+          class MMA_Tiler,
+          class... Args,
+          class ClusterShapeVMNK>
+CUTE_HOST
+auto
+make_adma_prefetch_atom_B_xe4(
+    Tensor<GEngine, GLayout> const& gtensor,
+    SLayout                  const& slayout,
+    MMA_Tiler                const& mma_tiler,
+    TiledMMA<Args...>        const& mma,
+    ClusterShapeVMNK         const& cluster_shape)
+{
+  return make_adma_atom_B_xe4<InternalType>(
+      XE4_ADMA_PREFETCH{}, gtensor, slayout, mma_tiler, mma, cluster_shape);
 }
 
 }
