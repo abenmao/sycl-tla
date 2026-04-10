@@ -28,7 +28,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 if(CUTLASS_ENABLE_SYCL)
-  if (NOT SYCL_INTEL_TARGET EQUAL 40)
+  if(NOT SYCL_TARGET_INTEL_GPU_JGS)
     cutlass_test_unit_add_executable(
       cutlass_test_unit_gemm_device_tensorop_xe
       xe_gemm_bf16_bf16_bf16_tensor_op_bf16.cpp

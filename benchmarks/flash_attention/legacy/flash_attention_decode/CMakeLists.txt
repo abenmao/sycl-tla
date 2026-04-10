@@ -64,8 +64,7 @@ foreach(name IN LISTS LIB_LIST)
   target_include_directories(${name} PRIVATE ${CUTLASS_APPLICATIONS_DIR})
   target_link_libraries(${name} PRIVATE CUTLASS cutlass_tools_util_includes benchmark::benchmark)
   add_onemkl_to_target(TARGET ${name})
-  # Add only SYCL include directories, not the full SYCL flags (to avoid duplication)
-  add_sycl_include_directories_to_target(${name})
+  add_sycl_to_target(TARGET ${name})
 endforeach()
 
 cutlass_benchmark_add_executable(

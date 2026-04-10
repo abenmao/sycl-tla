@@ -31,8 +31,8 @@ if (CUTLASS_ENABLE_SYCL)
   add_subdirectory(core)
   add_subdirectory(layout)
   add_subdirectory(msvc_compilation)
-  
-  if(NOT SYCL_INTEL_TARGET EQUAL 40)
+
+  if(NOT SYCL_TARGET_INTEL_GPU_JGS)
     add_subdirectory(intel_xe)
   else()
     add_subdirectory(xe4)

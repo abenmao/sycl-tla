@@ -32,12 +32,11 @@ cutlass_example_add_executable(
 )
 
 target_include_directories(xe4_fmha4_fwd PRIVATE ${INCLUDE_DIRS})
-target_compile_options(xe4_fmha4_fwd PUBLIC -fsycl-targets=spir64_gen)
-target_link_options(xe4_fmha4_fwd PUBLIC -fsycl-targets=spir64_gen)
+target_compile_options(xe4_fmha4_fwd PUBLIC -fsycl-targets=intel_gpu_jgs)
+target_link_options(xe4_fmha4_fwd PUBLIC -fsycl-targets=intel_gpu_jgs)
 
 target_link_options(
   xe4_fmha4_fwd
   PUBLIC
-  -Xs "-device jgs-a0 \
-  -options -ze-intel-xe-features=+set-abarrier-arrive-lmc,+disable-misched,+total-grf-num-96,+null-dst"
+  -Xs "-options -ze-intel-xe-features=+set-abarrier-arrive-lmc,+disable-misched,+total-grf-num-96,+null-dst"
 )

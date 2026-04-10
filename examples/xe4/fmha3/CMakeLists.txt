@@ -33,14 +33,13 @@ function(xe4_add_fmha_example TARGET SOURCE)
   )
 
   target_include_directories(${TARGET} PRIVATE ${INCLUDE_DIRS})
-  target_compile_options(${TARGET} PUBLIC -fsycl-targets=spir64_gen)
-  target_link_options(${TARGET} PUBLIC -fsycl-targets=spir64_gen)
+  target_compile_options(${TARGET} PUBLIC -fsycl-targets=intel_gpu_jgs)
+  target_link_options(${TARGET} PUBLIC -fsycl-targets=intel_gpu_jgs)
 
   target_link_options(
     ${TARGET}
     PUBLIC
-    -Xs "-device jgs-a0 \
-    -options -ze-intel-xe-features=+set-abarrier-arrive-lmc,+disable-misched,+total-grf-num-96,+null-dst"
+    -Xs "-options -ze-intel-xe-features=+set-abarrier-arrive-lmc,+disable-misched,+total-grf-num-96,+null-dst"
   )
 endfunction()
 

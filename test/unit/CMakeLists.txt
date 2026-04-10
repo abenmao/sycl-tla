@@ -53,7 +53,6 @@ target_link_libraries(
   )
 
 if(CUTLASS_ENABLE_SYCL)
-  add_sycl_include_directories_to_target(cutlass_test_unit_infra)
   add_sycl_to_target(TARGET cutlass_test_unit_infra)
 endif()
 
@@ -196,7 +195,7 @@ if (CUTLASS_ENABLE_SYCL)
     gemm
   )
   # Enable Intel hardware specific tests
-  if(SYCL_INTEL_TARGET EQUAL 40)
+  if(SYCL_TARGET_INTEL_GPU_JGS)
     add_subdirectory(flash_attention_v3)
   else()
     list(APPEND SUBDIRS flash_attention)
