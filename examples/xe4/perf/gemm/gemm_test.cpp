@@ -83,6 +83,84 @@ struct GEMM_RUNTIME_CONFIG {
 // Global parameter list for GEMM operations
 std::deque<TestParamInfo> GemmOpParamsList;
 
+// ==================== Template Dispatch Helpers ====================
+// Map runtime string parameters to compile-time template types using
+// generic lambdas. Each dispatcher calls a lambda with type/enum tags
+// that carry compile-time information.
+//
+// Key design:
+//   - Layout is dispatched independently (additive: 2-4 branches).
+//   - dtype + activation + operation are dispatched as a single flat
+//     list of exactly 8 valid tuples (not a Cartesian product), matching
+//     the old macro DISPATCH_ALL_TYPE_CONFIGS. This keeps instantiation
+//     count identical to the macro approach: 8 type configs × 2 layouts
+//     = 16 executeGemm instantiations.
+
+// Carries a type as a value (works for void, unlike direct instantiation)
+template <typename T>
+struct type_tag { using type = T; };
+
+// Carries an enum value as a type (alias for std::integral_constant)
+template <auto V>
+using enum_tag = std::integral_constant<decltype(V), V>;
+
+// Dispatch layout combination (A, B, C) from runtime strings to compile-time types.
+template <typename Fn>
+bool dispatchLayout(const std::string& la, const std::string& lb,
+                    const std::string& lc, Fn&& fn) {
+    using RM = cutlass::layout::RowMajor;
+    using CM = cutlass::layout::ColumnMajor;
+    if (la == "RowMajor"    && lb == "RowMajor"    && lc == "RowMajor") return fn(type_tag<RM>{}, type_tag<RM>{}, type_tag<RM>{});
+    if (la == "RowMajor"    && lb == "ColumnMajor" && lc == "RowMajor") return fn(type_tag<RM>{}, type_tag<CM>{}, type_tag<RM>{});
+    // if (la == "ColumnMajor" && lb == "RowMajor"    && lc == "RowMajor") return fn(type_tag<CM>{}, type_tag<RM>{}, type_tag<RM>{});
+    // if (la == "ColumnMajor" && lb == "ColumnMajor" && lc == "RowMajor") return fn(type_tag<CM>{}, type_tag<CM>{}, type_tag<RM>{});
+    return false;
+}
+
+// Dispatch (dtype_a, dtype_b, dtype_c, dtype_d, acc, activation, operation) as
+// a flat list of exactly 8 valid combinations. This avoids the combinatorial
+// explosion that separate dispatchers would create.
+template <typename Fn>
+bool dispatchTypeConfig(const std::string& da, const std::string& db,
+                        const std::string& dc, const std::string& dd,
+                        const std::string& acc, const std::string& act,
+                        const std::string& op, Fn&& fn) {
+    // fp16 fp16 fp16 fp16 float + SiLu/Mul
+    if (da=="fp16" && db=="fp16" && dc=="fp16" && dd=="fp16" && acc=="float" && act=="SiLu" && op=="Mul")
+        return fn(type_tag<fp16>{}, type_tag<fp16>{}, type_tag<fp16>{}, type_tag<fp16>{}, type_tag<float>{},
+                  enum_tag<ActivationType::SiLu>{}, enum_tag<OperationCType::Mul>{});
+    // fp16 fp16 fp16 fp16 float + None/Add
+    if (da=="fp16" && db=="fp16" && dc=="fp16" && dd=="fp16" && acc=="float" && act=="None" && op=="Add")
+        return fn(type_tag<fp16>{}, type_tag<fp16>{}, type_tag<fp16>{}, type_tag<fp16>{}, type_tag<float>{},
+                  enum_tag<ActivationType::None>{}, enum_tag<OperationCType::Add>{});
+    // fp16 fp16 fp16 fp16 float + None/None
+    if (da=="fp16" && db=="fp16" && dc=="fp16" && dd=="fp16" && acc=="float" && act=="None" && op=="None")
+        return fn(type_tag<fp16>{}, type_tag<fp16>{}, type_tag<fp16>{}, type_tag<fp16>{}, type_tag<float>{},
+                  enum_tag<ActivationType::None>{}, enum_tag<OperationCType::None>{});
+    // fp16 fp16 void fp16 float + None/BiasAdd
+    if (da=="fp16" && db=="fp16" && dc=="void" && dd=="fp16" && acc=="float" && act=="None" && op=="BiasAdd")
+        return fn(type_tag<fp16>{}, type_tag<fp16>{}, type_tag<void>{}, type_tag<fp16>{}, type_tag<float>{},
+                  enum_tag<ActivationType::None>{}, enum_tag<OperationCType::BiasAdd>{});
+    // fp16 fp16 void fp16 float + None/None
+    if (da=="fp16" && db=="fp16" && dc=="void" && dd=="fp16" && acc=="float" && act=="None" && op=="None")
+        return fn(type_tag<fp16>{}, type_tag<fp16>{}, type_tag<void>{}, type_tag<fp16>{}, type_tag<float>{},
+                  enum_tag<ActivationType::None>{}, enum_tag<OperationCType::None>{});
+    // bf16 bf16 bf16 bf16 float + SiLu/Mul
+    if (da=="bf16" && db=="bf16" && dc=="bf16" && dd=="bf16" && acc=="float" && act=="SiLu" && op=="Mul")
+        return fn(type_tag<bf16>{}, type_tag<bf16>{}, type_tag<bf16>{}, type_tag<bf16>{}, type_tag<float>{},
+                  enum_tag<ActivationType::SiLu>{}, enum_tag<OperationCType::Mul>{});
+    // bf16 bf16 bf16 bf16 float + None/Mul
+    if (da=="bf16" && db=="bf16" && dc=="bf16" && dd=="bf16" && acc=="float" && act=="None" && op=="Mul")
+        return fn(type_tag<bf16>{}, type_tag<bf16>{}, type_tag<bf16>{}, type_tag<bf16>{}, type_tag<float>{},
+                  enum_tag<ActivationType::None>{}, enum_tag<OperationCType::Mul>{});
+    // bf16 bf16 bf16 bf16 float + None/None
+    if (da=="bf16" && db=="bf16" && dc=="bf16" && dd=="bf16" && acc=="float" && act=="None" && op=="None")
+        return fn(type_tag<bf16>{}, type_tag<bf16>{}, type_tag<bf16>{}, type_tag<bf16>{}, type_tag<float>{},
+                  enum_tag<ActivationType::None>{}, enum_tag<OperationCType::None>{});
+    return false;
+}
+
+
 /*
  * GEMM Operator Test Fixture
  */
@@ -152,171 +230,48 @@ public:
             return;
         }
 
+        // Skip ColumnMajor layout_a (JIRA: JSW-1222)
+        if (params->layout_a == "ColumnMajor") {
+            GTEST_SKIP() << "ColumnMajor is giving compilation error. JIRA: JSW-1222";
+            return;
+        }
+
         // Timing measurement
         auto start = std::chrono::high_resolution_clock::now();
-        // Dispatch based on parameters - organized by layout combinations
-        if (params->layout_a == "RowMajor" && params->layout_b == "RowMajor" && params->layout_c == "RowMajor") {
-            if (params->dtype_a == "fp16" && params->dtype_b == "fp16" && params->dtype_c == "fp16" && params->dtype_d == "fp16" && params->dtype_acc == "float") {
-                if (params->activation == "SiLu" && params->operation_c == "Mul") {
-                    executeGemm<fp16, fp16, fp16, fp16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
-                                ActivationType::SiLu, OperationCType::Mul>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else if (params->activation == "None" && params->operation_c == "Add") {
-                    executeGemm<fp16, fp16, fp16, fp16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
-                                ActivationType::None, OperationCType::Add>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else if (params->activation == "None" && params->operation_c == "None") {
-                    executeGemm<fp16, fp16, fp16, fp16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
-                                ActivationType::None, OperationCType::None>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else {
-                    printUnsupportedCombination(params, "RowMajor-RowMajor-RowMajor");
-                    FAIL() << "This combination is not supported";
-                }
-            } else if (params->dtype_a == "fp16" && params->dtype_b == "fp16" && params->dtype_c == "void" && params->dtype_d == "fp16" && params->dtype_acc == "float") {
-                if (params->activation == "None" && params->operation_c == "BiasAdd") {
-                    executeGemm<fp16, fp16, void, fp16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
-                                ActivationType::None, OperationCType::BiasAdd>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else if (params->activation == "None" && params->operation_c == "None") {
-                    executeGemm<fp16, fp16, void, fp16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
-                                ActivationType::None, OperationCType::None>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else {
-                    printUnsupportedCombination(params, "RowMajor-RowMajor-RowMajor");
-                    FAIL()
-                    << "This combination is not supported";
-                }
-            } else if(params->dtype_a == "bf16" && params->dtype_b == "bf16" && params->dtype_c == "bf16" && params->dtype_d == "bf16" && params->dtype_acc == "float"){
-                if (params->activation == "SiLu" && params->operation_c == "Mul") {
-                    executeGemm<bf16, bf16, bf16, bf16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
-                                ActivationType::SiLu, OperationCType::Mul>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else if (params->activation == "None" && params->operation_c == "Mul") {
-                    executeGemm<bf16, bf16, bf16, bf16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
-                                ActivationType::None, OperationCType::Mul>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else if (params->activation == "None" && params->operation_c == "None") {
-                    executeGemm<bf16, bf16, bf16, bf16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::RowMajor, cutlass::layout::RowMajor,
-                                ActivationType::None, OperationCType::None>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else {
-                    printUnsupportedCombination(params, "RowMajor-RowMajor-RowMajor");
-                    FAIL() << "This combination is not supported";
-                }
-            } else {
-                printUnsupportedCombination(params, "RowMajor-RowMajor-RowMajor");
-                FAIL() << "This combination is not supported";
-            }
-        } else if (params->layout_a == "RowMajor" && params->layout_b == "ColumnMajor" && params->layout_c == "RowMajor") {
-            if (params->dtype_a == "fp16" && params->dtype_b == "fp16" && params->dtype_c == "fp16" && params->dtype_d == "fp16" && params->dtype_acc == "float") {
-                if (params->activation == "SiLu" && params->operation_c == "Mul") {
-                    executeGemm<fp16, fp16, fp16, fp16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
-                                ActivationType::SiLu, OperationCType::Mul>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else if (params->activation == "None" && params->operation_c == "Add") {
-                    executeGemm<fp16, fp16, fp16, fp16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
-                                ActivationType::None, OperationCType::Add>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else if (params->activation == "None" && params->operation_c == "None") {
-                    executeGemm<fp16, fp16, fp16, fp16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
-                                ActivationType::None, OperationCType::None>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else {
-                    printUnsupportedCombination(params, "RowMajor-ColumnMajor-RowMajor");
-                    FAIL() << "This combination is not supported";
-                }
-            } else if (params->dtype_a == "fp16" && params->dtype_b == "fp16" && params->dtype_c == "void" && params->dtype_d == "fp16" && params->dtype_acc == "float") {
-                if (params->activation == "None" && params->operation_c == "BiasAdd") {
-                    executeGemm<fp16, fp16, void, fp16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
-                                ActivationType::None, OperationCType::BiasAdd>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else if (params->activation == "None" && params->operation_c == "None") {
-                    executeGemm<fp16, fp16, void, fp16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
-                                ActivationType::None, OperationCType::None>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else {
-                    printUnsupportedCombination(params, "RowMajor-ColumnMajor-RowMajor");
-                    FAIL()
-                        << "This combination is not supported";
-                }
-            } else if(params->dtype_a == "bf16" && params->dtype_b == "bf16" && params->dtype_c == "bf16" && params->dtype_d == "bf16" && params->dtype_acc == "float"){
-                if (params->activation == "SiLu" && params->operation_c == "Mul") {
-                    executeGemm<bf16, bf16, bf16, bf16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
-                                ActivationType::SiLu, OperationCType::Mul>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else if (params->activation == "None" && params->operation_c == "Mul") {
-                    executeGemm<bf16, bf16, bf16, bf16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
-                                ActivationType::None, OperationCType::Mul>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else if (params->activation == "None" && params->operation_c == "None") {
-                    executeGemm<bf16, bf16, bf16, bf16, float,
-                                cutlass::layout::RowMajor, cutlass::layout::ColumnMajor, cutlass::layout::RowMajor,
-                                ActivationType::None, OperationCType::None>(
-                        params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
-                        params->cta_num_m, params->cta_num_n,
-                        params->cluster_m, params->cluster_n, params->cluster_k, params->is_persistent);
-                } else {
-                    printUnsupportedCombination(params, "RowMajor-ColumnMajor-RowMajor");
-                    FAIL() << "This combination is not supported";
-                }
-            } else {
-                printUnsupportedCombination(params, "RowMajor-ColumnMajor-RowMajor");
-                FAIL() << "This combination is not supported";
-            }
-        } else if (params->layout_a == "ColumnMajor" && params->layout_b == "RowMajor" && params->layout_c == "RowMajor") {
-            GTEST_SKIP() << "ColumnMajor is giving compilation error. JIRA: JSW-1222";
-        } else if (params->layout_a == "ColumnMajor" && params->layout_b == "ColumnMajor" && params->layout_c == "RowMajor") {
-            GTEST_SKIP() << "ColumnMajor is giving compilation error. JIRA: JSW-1222";
-        } else {
-            std::cout << "Unsupported layout combination:\n";
+
+        // Template-based dispatch: layout -> type config -> executeGemm
+        bool dispatched = dispatchLayout(
+            params->layout_a, params->layout_b, params->layout_c,
+            [&](auto la_tag, auto lb_tag, auto lc_tag) {
+                return dispatchTypeConfig(
+                    params->dtype_a, params->dtype_b, params->dtype_c,
+                    params->dtype_d, params->dtype_acc,
+                    params->activation, params->operation_c,
+                    [&](auto ta, auto tb, auto tc, auto td, auto tacc, auto act_tag, auto op_tag) {
+                        using TA   = typename decltype(ta)::type;
+                        using TB   = typename decltype(tb)::type;
+                        using TC   = typename decltype(tc)::type;
+                        using TD   = typename decltype(td)::type;
+                        using TAcc = typename decltype(tacc)::type;
+                        using LA   = typename decltype(la_tag)::type;
+                        using LB   = typename decltype(lb_tag)::type;
+                        using LC   = typename decltype(lc_tag)::type;
+                        constexpr auto act_v = decltype(act_tag)::value;
+                        constexpr auto op_v  = decltype(op_tag)::value;
+
+                        executeGemm<TA, TB, TC, TD, TAcc, LA, LB, LC, act_v, op_v>(
+                            params->cta_tile_m, params->cta_tile_n, params->cta_tile_k,
+                            params->cta_num_m, params->cta_num_n,
+                            params->cluster_m, params->cluster_n, params->cluster_k,
+                            params->is_persistent);
+                        return true;
+                    });
+            });
+
+        if (!dispatched) {
             printUnsupportedCombination(params);
-            FAIL() << "This combination is not supported on XE4 hardware";
+            FAIL() << "This combination is not supported";
+            return;
         }
 
         auto end = std::chrono::high_resolution_clock::now();
