@@ -9,7 +9,6 @@ endif()
 add_xe4_test(gemm_perf gemm/gemm_test.cpp)
 add_xe4_test(xe4_gemm_cluster_perf gemm_cluster/gemm_cluster_test.cpp)
 
-
 # Include directories for headers
 target_include_directories(gemm_perf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -43,4 +42,23 @@ target_link_options(gemm_perf PUBLIC
 target_link_options(xe4_gemm_cluster_perf PUBLIC
     -Xsycl-target-backend=spir64_gen
     -device\ jgs-a0
+)
+
+# FMHA3 source directory — kernel/ and collective/ headers are reused from here
+set(FMHA3_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../fmha3)
+
+# fmha_perf: Flash Attention perf tests using kernel/collective from fmha3
+cutlass_example_add_executable(fmha_perf flash_attention/fmha_test.cpp)
+target_include_directories(fmha_perf PRIVATE ${INCLUDE_DIRS})
+target_compile_options(fmha_perf PUBLIC -fsycl-targets=intel_gpu_jgs)
+target_link_options(fmha_perf PUBLIC -fsycl-targets=intel_gpu_jgs)
+target_link_options(fmha_perf PUBLIC
+    -Xs "-options -ze-intel-xe-features=+set-abarrier-arrive-lmc,+disable-misched,+total-grf-num-96,+null-dst"
+)
+target_link_libraries(fmha_perf PRIVATE gtest gtest_main)
+target_include_directories(fmha_perf PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/flash_attention
+    ${CMAKE_CURRENT_SOURCE_DIR}/testFixture
+    ${FMHA3_DIR}
 )
