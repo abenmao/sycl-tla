@@ -221,6 +221,10 @@ public:
 
   static_assert(sizeof_bits_v<NonVoidElementScaleA> == 8 && sizeof_bits_v<NonVoidElementScaleB> == 8);
 
+  // 2D block load requires surface width to be 4-byte aligned.
+  // M and N must be multiples of ScaleAlignElems; callers are responsible for ensuring alignment.
+  static constexpr int ScaleAlignElems = cute::ceil_div(4, (int)(sizeof_bits_v<NonVoidElementScaleA> / 8));
+
   // Host side kernel arguments
   struct Arguments {
     ElementA const* ptr_A;
@@ -260,6 +264,10 @@ public:
         make_tensor(make_gmem_ptr(static_cast<ElementB const *>(args.ptr_B)), make_layout(make_shape(N, K, L), args.dB));
 
     auto scale_k = cute::ceil_div(K, GroupK);
+    // M/N must be multiples of ScaleAlignElems; can_implement() checks this at runtime.
+    // These assertions guard against misuse in debug builds.
+    CUTLASS_ASSERT(M % ScaleAlignElems == 0 && "M must be a multiple of ScaleAlignElems for 2D block-load of scale factors");
+    CUTLASS_ASSERT(N % ScaleAlignElems == 0 && "N must be a multiple of ScaleAlignElems for 2D block-load of scale factors");
     auto mScaleA = make_tensor(make_gmem_ptr(static_cast<ElementScaleA const *>(args.ptr_SA)),
                                make_layout(make_shape(M, scale_k, L), args.dSA));
     auto mScaleB = make_tensor(make_gmem_ptr(static_cast<ElementScaleB const *>(args.ptr_SB)),
@@ -286,6 +294,12 @@ public:
         CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Intel Xe blockscaled MMA only supports GroupSize=32 for e2m1 inputs.\n");
         implementable = false;
       }
+    }
+
+    // 2D block load requires surface width to be 4-byte aligned.
+    if (M % ScaleAlignElems != 0 || N % ScaleAlignElems != 0) {
+      CUTLASS_TRACE_HOST("  CAN IMPLEMENT: M and N must be multiples of ScaleAlignElems for 2D block-load of scale factors.\n");
+      implementable = false;
     }
 
     constexpr int min_aligned_elements_A = copy_alignment_bits / sizeof_bits<ElementA>::value;
