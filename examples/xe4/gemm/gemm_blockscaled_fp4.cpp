@@ -34,8 +34,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // Config template for FP4 block-scaled GEMM.
-// Fixed: ElementA/B = float_e2m1_t, ElementAccumulator = float, TileShape = 128x256x768.
-// Varying: ElementSF, SFVecSize, ElementD.
+// Fixed: ElementA/B = float_e2m1_t, ElementAccumulator = float, TileShape = 128x256xTileK.
+// Varying: ElementSF, SFVecSize, ElementD, TileK.
 //
 // Name format: {sf_type}_k{vecsize}_{output_dtype}
 //   e.g. ue4m3_k16_fp32, ue5m3_k32_bf16
@@ -97,6 +97,20 @@ DECL_FP4_CONFIG(cutlass::float_ue8m0_t, 32, sycl::ext::oneapi::bfloat16,     ue8
 #undef DECL_FP4_CONFIG
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
+// TileK=128 configs: VS=32, TileK=128 -> sf_bK_actual=4
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+#define DECL_FP4_K128_CONFIG(SF, VS, D, name_)               \
+  inline constexpr char name_[] = #name_;                     \
+  using cfg_##name_ = BS_FP4_Config<SF, VS, D, 128, name_>
+
+DECL_FP4_K128_CONFIG(cutlass::float_ue8m0_t, 32, float,                           ue8m0_k32_fp32_t128);
+DECL_FP4_K128_CONFIG(cutlass::float_ue8m0_t, 32, sycl::half,                      ue8m0_k32_fp16_t128);
+DECL_FP4_K128_CONFIG(cutlass::float_ue8m0_t, 32, sycl::ext::oneapi::bfloat16,     ue8m0_k32_bf16_t128);
+
+#undef DECL_FP4_K128_CONFIG
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 // Usage and entry point
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -107,17 +121,18 @@ std::ostream& print_usage(std::ostream& out) {
       << "  --m=<int>                   Override M dimension (per-config default if not set)\n"
       << "  --n=<int>                   Override N dimension\n"
       << "  --k=<int>                   Override K dimension\n"
-      << "  --config=<name>[,<name>]    Run specific configs (comma-separated); omit to run all 15\n\n"
-      << "Available configs ({sf_type}_k{vecsize}_{output_dtype}):\n"
+      << "  --config=<name>[,<name>]    Run specific configs (comma-separated); omit to run all\n\n"
+      << "Standard configs (TileK=768, {sf_type}_k{vecsize}_{output_dtype}):\n"
       << "  ue4m3_k16_{fp32,fp16,bf16}\n"
       << "  ue5m3_k{16,32}_{fp32,fp16,bf16}\n"
       << "  ue8m0_k{16,32}_{fp32,fp16,bf16}\n\n"
+      << "TileK=128 configs (VS=32, sf_bK_actual=4):\n"
+      << "  ue8m0_k32_{fp32,fp16,bf16}_t128\n\n"
       << "Examples:\n"
-      << "  ./xe4_gemm_blockscaled_fp4                                         # all 15 configs\n"
-      << "  ./xe4_gemm_blockscaled_fp4 --m=256 --n=512 --k=3072                # all configs, custom shape\n"
-      << "  ./xe4_gemm_blockscaled_fp4 --config=ue4m3_k16_fp32                 # one config\n"
-      << "  ./xe4_gemm_blockscaled_fp4 --config=ue4m3_k16_fp32,ue5m3_k32_bf16  # two configs\n"
-      << "  ./xe4_gemm_blockscaled_fp4 --config=ue4m3_k16_fp32 --m=256         # one config, custom shape\n";
+      << "  ./xe4_gemm_blockscaled_fp4                                              # all configs\n"
+      << "  ./xe4_gemm_blockscaled_fp4 --config=ue4m3_k16_fp32                     # one config\n"
+      << "  ./xe4_gemm_blockscaled_fp4 --config=ue5m3_k32_fp32_t128               # one TileK=128 config\n"
+      << "  ./xe4_gemm_blockscaled_fp4 --config=ue5m3_k32_fp32_t128 --k=1024      # fixed K\n";
   return out;
 }
 
@@ -129,11 +144,20 @@ int main(int argc, char **argv) {
   }
 
   sycl::queue q;
-  return run_configs<
+
+  // Standard configs (TileK=768)
+  bool pass = run_configs<
       cfg_ue4m3_k16_fp32, cfg_ue4m3_k16_fp16, cfg_ue4m3_k16_bf16,
       cfg_ue5m3_k16_fp32, cfg_ue5m3_k16_fp16, cfg_ue5m3_k16_bf16,
       cfg_ue5m3_k32_fp32, cfg_ue5m3_k32_fp16, cfg_ue5m3_k32_bf16,
       cfg_ue8m0_k16_fp32, cfg_ue8m0_k16_fp16, cfg_ue8m0_k16_bf16,
       cfg_ue8m0_k32_fp32, cfg_ue8m0_k32_fp16, cfg_ue8m0_k32_bf16
-  >(Options::configs, q) ? 0 : 1;
+  >(Options::configs, q);
+
+  // TileK=128 configs (VS=32 -> sf_bK_actual=4).
+  pass &= run_configs<
+      cfg_ue8m0_k32_fp32_t128, cfg_ue8m0_k32_fp16_t128, cfg_ue8m0_k32_bf16_t128
+  >(Options::configs, q);
+
+  return pass ? 0 : 1;
 }

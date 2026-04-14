@@ -205,22 +205,32 @@ struct CollectiveMma<
   static constexpr int bM = size<0>(TileShape{});
   static constexpr int bN = size<1>(TileShape{});
   static constexpr int bK = size<2>(TileShape{});
-  static constexpr int sf_bK = bK / SFVecSize;     // SF factors per tile along K
+  static constexpr int sf_bK_actual = bK / SFVecSize;            // actual SF K-extent per tile
+  // The cm_8x32B Type3 SF descriptor requires >= 8 rows per stage.
+  // Pad to 8 when sf_bK_actual < 8 so the descriptor window stays within allocated SMEM.
+  // ADMA still transfers only sf_bK_actual rows (SfElemsPerPipe); the extra rows are
+  // allocated but never written — they sit in padding that the MMA hardware ignores.
+  static constexpr int sf_bK = cute::max(sf_bK_actual, 8);        // padded K-extent per stage
 
-  // Physical SF elements per pipeline stage
-  static constexpr int SfElemsPerPipeA = bM * sf_bK;
-  static constexpr int SfElemsPerPipeB = bN * sf_bK;
-  static constexpr int SmemSizeSFA = SfElemsPerPipeA * DispatchPolicy::Stages;
-  static constexpr int SmemSizeSFB = SfElemsPerPipeB * DispatchPolicy::Stages;
+  // Physical SF elements per pipeline stage (actual ADMA transfer, unpadded)
+  static constexpr int SfElemsPerPipeA = bM * sf_bK_actual;
+  static constexpr int SfElemsPerPipeB = bN * sf_bK_actual;
+  // Per-stage SMEM allocation uses the padded extent so the descriptor window
+  // never overlaps the next stage's data.
+  static constexpr int SmemSizeSingleBufferSFA = bM * sf_bK;
+  static constexpr int SmemSizeSingleBufferSFB = bN * sf_bK;
+  static constexpr int SmemSizeSFA = SmemSizeSingleBufferSFA * DispatchPolicy::Stages;
+  static constexpr int SmemSizeSFB = SmemSizeSingleBufferSFB * DispatchPolicy::Stages;
 
-  // SF SMEM layouts: deduced atom + PIPE dimension appended.
-  // Rank-4: ((mnBlock, kBlock), _1, (blk_MN, blk_K), PIPE)
+  // SF SMEM layouts: rank-4 ((mnBlock, kBlock), _1, (blk_MN, blk_K), PIPE).
+  // Pipe stride = padded per-stage size (SmemSizeSingleBufferSFA/B) so the AMMA cm_8x32B
+  // descriptor window for stage N does not overlap stage N+1's allocation.
   using SmemLayoutSFA = decltype(make_layout(
       append(shape(SmemLayoutAtomSFA{}),  Int<DispatchPolicy::Stages>{}),
-      append(stride(SmemLayoutAtomSFA{}), size(filter_zeros(SmemLayoutAtomSFA{})))));
+      append(stride(SmemLayoutAtomSFA{}), Int<SmemSizeSingleBufferSFA>{})));
   using SmemLayoutSFB = decltype(make_layout(
       append(shape(SmemLayoutAtomSFB{}),  Int<DispatchPolicy::Stages>{}),
-      append(stride(SmemLayoutAtomSFB{}), size(filter_zeros(SmemLayoutAtomSFB{})))));
+      append(stride(SmemLayoutAtomSFB{}), Int<SmemSizeSingleBufferSFB>{})));
 
   // Shared Storage
   // smem_A, smem_B, smem_Acc for data; smem_SFA, smem_SFB for scale factors.
@@ -352,7 +362,7 @@ struct CollectiveMma<
         make_tensor(static_cast<ElementSFA const*>(nullptr),
                     Xe4BlkScaledCfg::tile_atom_to_shape_SFA(
                         make_shape(int32_t(0), int32_t(0), int32_t(0)))),
-        SmemLayoutSFA{}(_, _, _, cute::Int<0>{}),
+        SmemLayoutAtomSFA{},
         TileShape{},
         TiledMma{},
         ClusterLayout_VMNK{})
@@ -363,7 +373,7 @@ struct CollectiveMma<
         make_tensor(static_cast<ElementSFB const*>(nullptr),
                     Xe4BlkScaledCfg::tile_atom_to_shape_SFB(
                         make_shape(int32_t(0), int32_t(0), int32_t(0)))),
-        SmemLayoutSFB{}(_, _, _, cute::Int<0>{}),
+        SmemLayoutAtomSFB{},
         TileShape{},
         TiledMma{},
         ClusterLayout_VMNK{})
@@ -425,11 +435,11 @@ struct CollectiveMma<
         TiledMma{},
         cluster_layout_vmnk);
 
-    // SF ADMA atoms — reuse make_adma_atom_A/B_xe4 with SF SMEM layout slices
+    // SF ADMA atoms — reuse make_adma_atom_A/B_xe4 with unpadded SF SMEM atom layout
     auto adma_load_sfa = make_adma_atom_A_xe4(
         GmemTiledCopySFA{},
         tensor_sfa,
-        SmemLayoutSFA{}(_, _, _, cute::Int<0>{}),
+        SmemLayoutAtomSFA{},
         TileShape{},
         TiledMma{},
         cluster_layout_vmnk);
@@ -437,7 +447,7 @@ struct CollectiveMma<
     auto adma_load_sfb = make_adma_atom_B_xe4(
         GmemTiledCopySFB{},
         tensor_sfb,
-        SmemLayoutSFB{}(_, _, _, cute::Int<0>{}),
+        SmemLayoutAtomSFB{},
         TileShape{},
         TiledMma{},
         cluster_layout_vmnk);

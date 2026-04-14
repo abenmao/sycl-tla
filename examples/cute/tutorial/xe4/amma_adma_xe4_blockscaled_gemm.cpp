@@ -233,8 +233,8 @@ int main(int argc, char** argv)
     return 1;
   }
 
-  // ---- Validate input datatype: must be NVFP4, NVFP4+, MXFP4, or MXFP8 ----
-  if (input_type != "NVFP4"  && input_type != "NVFP4+" && input_type != "MXFP4" && input_type != "MXFP8") {
+  // ---- Validate input datatype ----
+  if (input_type != "NVFP4" && input_type != "NVFP4+" && input_type != "MXFP4" && input_type != "MXFP8") {
     std::cerr << "Error: input_type must be one of: NVFP4, NVFP4+, MXFP4, MXFP8. Got: "
               << input_type << std::endl;
     print_usage(argv[0]);

@@ -35,12 +35,12 @@
 //
 // Config template for FP8 block-scaled GEMM.
 // Fixed: ElementA/B = float_e4m3_t, ElementSF = float_ue8m0_t, SFVecSize = 32,
-//        ElementAccumulator = float, TileShape = 128x256x256.
-// Varying: ElementD (fp32, fp16, bf16).
+//        ElementAccumulator = float, TileShape = 128x256xTileK.
+// Varying: ElementD (fp32, fp16, bf16), TileK.
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <class ElementSF_, int SFVecSize_, class ElementD_, const char* Name_>
+template <class ElementSF_, int SFVecSize_, class ElementD_, int TileK_, const char* Name_>
 struct BS_FP8_Config {
   using ElementA  = cutlass::float_e4m3_t;
   using ElementB  = cutlass::float_e4m3_t;
@@ -56,7 +56,7 @@ struct BS_FP8_Config {
   // K=4096 = 16*TileK (TileK=256): K/TileK=16 = 4x PipelineStages, exercises pipeline steady-state.
   static constexpr cute::array<int, 4> ProblemShape_MNKL = {512, 1024, 4096, 1};
 
-  using CtaTileShape_MNK  = Shape<_128, _256, _256>;
+  using CtaTileShape_MNK  = Shape<_128, _256, cute::Int<TileK_>>;
   using ClusterShape_MNK  = Shape<_1, _1, _1>;
   static constexpr int PipelineStages = 4;
 
@@ -69,13 +69,26 @@ struct BS_FP8_Config {
 
 #define DECL_FP8_CONFIG(SF, VS, D, name_)      \
   inline constexpr char name_[] = #name_;       \
-  using cfg_##name_ = BS_FP8_Config<SF, VS, D, name_>
+  using cfg_##name_ = BS_FP8_Config<SF, VS, D, 256, name_>
 
 DECL_FP8_CONFIG(cutlass::float_ue8m0_t, 32, float,                           ue8m0_k32_fp32);
 DECL_FP8_CONFIG(cutlass::float_ue8m0_t, 32, sycl::half,                      ue8m0_k32_fp16);
 DECL_FP8_CONFIG(cutlass::float_ue8m0_t, 32, sycl::ext::oneapi::bfloat16,     ue8m0_k32_bf16);
 
 #undef DECL_FP8_CONFIG
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// TileK=128 configs: VS=32, TileK=128 -> sf_bK_actual=4
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+#define DECL_FP8_K128_CONFIG(SF, VS, D, name_)               \
+  inline constexpr char name_[] = #name_;                     \
+  using cfg_##name_ = BS_FP8_Config<SF, VS, D, 128, name_>
+
+DECL_FP8_K128_CONFIG(cutlass::float_ue8m0_t, 32, float,                           ue8m0_k32_fp32_t128);
+DECL_FP8_K128_CONFIG(cutlass::float_ue8m0_t, 32, sycl::half,                      ue8m0_k32_fp16_t128);
+
+#undef DECL_FP8_K128_CONFIG
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Test runner
@@ -88,15 +101,16 @@ std::ostream& print_usage(std::ostream& out) {
       << "  --m=<int>                   Override M dimension (per-config default if not set)\n"
       << "  --n=<int>                   Override N dimension\n"
       << "  --k=<int>                   Override K dimension\n"
-      << "  --config=<name>[,<name>]    Run specific configs (comma-separated); omit to run all 3\n\n"
-      << "Available configs ({sf_type}_k{vecsize}_{output_dtype}):\n"
+      << "  --config=<name>[,<name>]    Run specific configs (comma-separated); omit to run all\n\n"
+      << "Standard configs (TileK=256):\n"
       << "  ue8m0_k32_{fp32,fp16,bf16}\n\n"
+      << "TileK=128 configs (VS=32, sf_bK_actual=4):\n"
+      << "  ue8m0_k32_{fp32,fp16}_t128\n\n"
       << "Examples:\n"
-      << "  ./xe4_gemm_blockscaled_fp8                                         # all 3 configs\n"
-      << "  ./xe4_gemm_blockscaled_fp8 --m=256 --n=512 --k=1024                # all configs, custom shape\n"
-      << "  ./xe4_gemm_blockscaled_fp8 --config=ue8m0_k32_fp32                 # one config\n"
-      << "  ./xe4_gemm_blockscaled_fp8 --config=ue8m0_k32_fp32,ue8m0_k32_bf16  # two configs\n"
-      << "  ./xe4_gemm_blockscaled_fp8 --config=ue8m0_k32_fp32 --m=256         # config + custom shape\n";
+      << "  ./xe4_gemm_blockscaled_fp8                                              # all configs\n"
+      << "  ./xe4_gemm_blockscaled_fp8 --config=ue8m0_k32_fp32                     # one config\n"
+      << "  ./xe4_gemm_blockscaled_fp8 --config=ue8m0_k32_fp32_t128               # one TileK=128 config\n"
+      << "  ./xe4_gemm_blockscaled_fp8 --config=ue8m0_k32_fp32_t128 --k=1024      # fixed K\n";
   return out;
 }
 
@@ -108,7 +122,16 @@ int main(int argc, char **argv) {
   }
 
   sycl::queue q;
-  return run_configs<
+
+  // Standard configs (TileK=256)
+  bool pass = run_configs<
       cfg_ue8m0_k32_fp32, cfg_ue8m0_k32_fp16, cfg_ue8m0_k32_bf16
-  >(Options::configs, q) ? 0 : 1;
+  >(Options::configs, q);
+
+  // TileK=128 configs (VS=32 -> sf_bK_actual=4).
+  pass &= run_configs<
+      cfg_ue8m0_k32_fp32_t128, cfg_ue8m0_k32_fp16_t128
+  >(Options::configs, q);
+
+  return pass ? 0 : 1;
 }

@@ -121,16 +121,19 @@ auto make_data_smem_tensor(Storage& storage, Layout layout) {
 //
 // BlockScaledSharedStorage: SMEM buffers for A, B, C, SFA, SFB
 //
-// Parameterized on element types and layout/size info.
-// All aligned >= 512 bytes per HW spec for block-scaled AMMA consumption.
-//
-// NOTE: For sub-byte types (e.g. float_e2m1_t, 4-bit), sizeof(T) == 1 byte
-// because the C++ storage type is uint8_t. cute::array<T,N> allocates N*sizeof(T)
-// bytes, so using cosize_v directly would over-allocate by 2×. Instead, we store
-// the packed byte count using ceiling division: (cosize * sizeof_bits<T> + 7) / 8
-// to guarantee enough bytes even for odd sub-byte element counts.
+// SF allocation uses pipe_stride * num_stages (not cosize) to include
+// padding room for the last pipeline stage's cm_8x32B overflow.
+// When sf_bK_actual < 8, the padded pipe stride is larger than the atom's
+// non-zero extent, so cosize alone would miss the last stage's padding gap.
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Padded SF SMEM allocation: pipe_stride * pipe_count.
+// SF layouts are rank-4: (atom_modes..., pipe). The pipe dimension (index 3)
+// has stride = SmemSizeSingleBuffer and size = PipelineStages.
+template <class SmemLayoutSF>
+inline constexpr int padded_sf_smem_v =
+    decltype(cute::stride<3>(SmemLayoutSF{}) * cute::size<3>(SmemLayoutSF{}))::value;
 
 template <class ElementA_,  class ElementB_,  class ElementC_,  class ElementSF_, class ElementAcc_,
           class SmemLayoutA,  class SmemLayoutB,  class SmemLayoutC,
@@ -165,8 +168,8 @@ struct BlockScaledSharedStorage<ElementA_, ElementB_, ElementC_, ElementSF_, Ele
   cute::array_aligned<ElementC_,  cute::cosize_v<SmemLayoutC>,   SmemAlignment> smem_D;
 
   // Scale factor buffers
-  cute::array_aligned<ElementSF_, cute::cosize_v<SmemLayoutSFA>, SmemAlignment> smem_SFA;
-  cute::array_aligned<ElementSF_, cute::cosize_v<SmemLayoutSFB>, SmemAlignment> smem_SFB;
+  cute::array_aligned<ElementSF_, padded_sf_smem_v<SmemLayoutSFA>, SmemAlignment> smem_SFA;
+  cute::array_aligned<ElementSF_, padded_sf_smem_v<SmemLayoutSFB>, SmemAlignment> smem_SFB;
 };
 
 // Specialization when ElementC == ElementAcc (e.g. both FP32):
@@ -191,8 +194,8 @@ struct BlockScaledSharedStorage<ElementA_, ElementB_, ElementC_, ElementSF_, Ele
   cute::array_aligned<ElementAcc_,  cute::cosize_v<SmemLayoutC>,   SmemAlignment> smem_C;
 
   // Scale factor buffers
-  cute::array_aligned<ElementSF_, cute::cosize_v<SmemLayoutSFA>, SmemAlignment> smem_SFA;
-  cute::array_aligned<ElementSF_, cute::cosize_v<SmemLayoutSFB>, SmemAlignment> smem_SFB;
+  cute::array_aligned<ElementSF_, padded_sf_smem_v<SmemLayoutSFA>, SmemAlignment> smem_SFA;
+  cute::array_aligned<ElementSF_, padded_sf_smem_v<SmemLayoutSFB>, SmemAlignment> smem_SFB;
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -315,10 +318,9 @@ gemm_device_blockscaled(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape ti
   auto mB   = adma_load_b.get_tma_tensor(make_shape(N, K));
   auto mC   = adma_store_c.get_tma_tensor(make_shape(M, N));
 
-  // SF ADMA tensors use hierarchical shape matching tile_atom_to_shape.
-  // The ADMA atom receives the hierarchical SF GMEM tensor directly (SM100 pattern),
-  // producing a hierarchical g_stride_. get_tma_tensor must use a congruent
-  // hierarchical shape: ((1, MN), (SFVecSize, K/SFVecSize)).
+  // SF GMEM tensors use a hierarchical shape matching tile_atom_to_shape.
+  // The ADMA atom receives the hierarchical SF GMEM tensor, producing a hierarchical
+  // g_stride_. get_tma_tensor must use a congruent shape: ((1, MN), (SFVecSize, K/SFVecSize)).
   constexpr int SFVecSizeK = SFVecSize;
   auto mSFA = adma_load_sfa.get_tma_tensor(
       make_shape(make_shape(Int<1>{}, M), make_shape(Int<SFVecSizeK>{}, K / SFVecSizeK)));
@@ -340,22 +342,14 @@ gemm_device_blockscaled(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape ti
   Tensor gSFA = local_tile(mSFA, cta_tiler, cta_coord, Step<_1,  X, _1>{});   // (bM_hier, bK_hier, k_tiles)
   Tensor gSFB = local_tile(mSFB, cta_tiler, cta_coord, Step< X, _1, _1>{});   // (bN_hier, bK_hier, k_tiles)
 
-  // ---- Partition for ADMA copy ----
-  // A and B data: sA/sB are flat 3-mode (BLK_MN, BLK_K, PIPE)
-  // group_modes<0,2> groups (BLK_MN, BLK_K) into DATA, keeps PIPE as iteration mode
+  // Partition for ADMA copy
   auto [tAgA, tAsA] = tma_partition(adma_load_a,
                                     group_modes<0,2>(sA), group_modes<0,2>(gA));
   auto [tBgB, tBsB] = tma_partition(adma_load_b,
                                     group_modes<0,2>(sB), group_modes<0,2>(gB));
 
-  // SFA and SFB scale factors (SM100 pattern: hierarchical layouts).
-  // The SF ADMA atoms use the same thrfrg_A/B fragmentation as data, with
-  // hierarchical SF SMEM layouts whose logical size (including stride-0 broadcast
-  // modes) matches the data tile size.
-  // group_modes<0,3> groups the first 3 modes of the 4-mode SF SMEM layout
-  // (sf_block, _1, blk) into one DATA mode, keeping PIPE as iteration mode.
-  // group_modes<0,2> groups the first 2 modes of gSFA/gSFB (bMN_hier, bK_hier)
-  // into one DATA mode, keeping k_tiles as iteration mode.
+  // SF ADMA uses hierarchical rank-4 SMEM layouts with stride-0 broadcast modes.
+  // group_modes<0,3> groups (sf_block, _1, blk) into DATA, keeping PIPE as the iteration mode.
   auto [tSFAgSFA, tSFAsSFA] = tma_partition(adma_load_sfa,
                                             group_modes<0,3>(sSFA), group_modes<0,2>(gSFA));
   auto [tSFBgSFB, tSFBsSFB] = tma_partition(adma_load_sfb,
@@ -366,13 +360,16 @@ gemm_device_blockscaled(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape ti
   int  K_TILE_MAX = size<1>(tAgA);       // Total number of K tiles
   int  k_tile = 0;
 
-  // ADMA transaction bytes per pipeline stage (data + scale factors)
-  // Use sizeof_bits_v for sub-byte types (float_e2m1_t = 4 bits).
-  constexpr int dma_bytes_A   = (cosize(SmemLayoutA{}) * sizeof_bits_v<ElementA> / 8) / decltype(K_PIPE_MAX)::value;
-  constexpr int dma_bytes_B   = (cosize(SmemLayoutB{}) * sizeof_bits_v<ElementB> / 8) / decltype(K_PIPE_MAX)::value;
-  constexpr int dma_bytes_C   = cosize(SmemLayoutC{}) * sizeof(ElementC);
-  constexpr int dma_bytes_SFA = (cosize(SmemLayoutSFA{}) * sizeof_bits_v<ElementSF> / 8) / decltype(K_PIPE_MAX)::value;
-  constexpr int dma_bytes_SFB = (cosize(SmemLayoutSFB{}) * sizeof_bits_v<ElementSF> / 8) / decltype(K_PIPE_MAX)::value;
+  // ADMA transaction bytes per pipeline stage. SF barrier bytes use the actual ADMA
+  // transfer size (bMN * bK/SFVecSize), not the padded SmemLayout cosize. When
+  // sf_bK_actual < 8, the padded layout has gaps between pipeline stages that are
+  // not part of the DMA transfer.
+  constexpr int dma_bytes_A        = (cosize(SmemLayoutA{}) * sizeof_bits_v<ElementA> / 8) / decltype(K_PIPE_MAX)::value;
+  constexpr int dma_bytes_B        = (cosize(SmemLayoutB{}) * sizeof_bits_v<ElementB> / 8) / decltype(K_PIPE_MAX)::value;
+  constexpr int dma_bytes_C        = cosize(SmemLayoutC{}) * sizeof(ElementC);
+  constexpr int dma_sf_bK_actual   = size<2>(CtaTiler{}) / SFVecSize;
+  constexpr int dma_bytes_SFA      = size<0>(CtaTiler{}) * dma_sf_bK_actual * static_cast<int>(sizeof(ElementSF));
+  constexpr int dma_bytes_SFB      = size<1>(CtaTiler{}) * dma_sf_bK_actual * static_cast<int>(sizeof(ElementSF));
 
   uint32_t elect_one_thr = cute::elect_one_sync();
   uint32_t warp_idx      = get_sg_id();
@@ -402,7 +399,6 @@ gemm_device_blockscaled(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape ti
   xe4_syncthreads();
 
   int store_c_phase_bit = 0;
-  uint32_t dummy_mask = 0;
 
   // ---- Partition for MMA ----
   TiledMma mma{};
@@ -724,22 +720,29 @@ gemm_tn_blockscaled(int m, int n, int k,
     Step<_2, _1>{}));
 
   // ---- SMEM layouts for scale factors ----
-  // Deduced from TiledMma and TileShape_MNK to match hardware's SF consumption pattern.
-  // The layout is structured as ((mnBlock, kBlock), _1, (blk_MN, blk_K)) to align with
-  // type-3 Matrix Descriptor requirements for block-scaled AMMA.
+  // Rank-4 layout ((mnBlock, kBlock), _1, (blk_MN, blk_K)) deduced from TiledMma
+  // and TileShape_MNK to match the cm_8x32B Type3 matrix descriptor requirements.
   TiledMma tiled_mma_inst{};
   auto xe4_sfA_layout_atom = BlkScaledConfig::deduce_smem_layoutSFA(tiled_mma_inst, TileShape_MNK{});
   auto xe4_sfB_layout_atom = BlkScaledConfig::deduce_smem_layoutSFB(tiled_mma_inst, TileShape_MNK{});
 
-  // Add pipeline stages to SF SMEM layouts
+  // SF padding for cm_8x32B core-matrix alignment.
+  // The ADMA 2D-block-copy writes in cm_8x32B units (8 rows minimum).
+  // When sf_bK_actual < 8, overflow rows land in the next pipeline stage's SF region.
+  // Padding the pipe stride to sf_bK = max(sf_bK_actual, 8) isolates each stage.
+  static constexpr int sf_bK_actual = get<2>(TileShape_MNK{}) / SFVecSize;
+  static constexpr int sf_bK = (sf_bK_actual < 8) ? 8 : sf_bK_actual;
+  static constexpr int SmemSizeSingleBufferSFA = get<0>(TileShape_MNK{}) * sf_bK;
+  static constexpr int SmemSizeSingleBufferSFB = get<1>(TileShape_MNK{}) * sf_bK;
+
   using SmemLayoutSFA = decltype(make_layout(
     append(shape(decltype(xe4_sfA_layout_atom){}), bP),
-    append(stride(decltype(xe4_sfA_layout_atom){}), size(filter_zeros(decltype(xe4_sfA_layout_atom){})))
+    append(stride(decltype(xe4_sfA_layout_atom){}), Int<SmemSizeSingleBufferSFA>{})
   ));
 
   using SmemLayoutSFB = decltype(make_layout(
     append(shape(decltype(xe4_sfB_layout_atom){}), bP),
-    append(stride(decltype(xe4_sfB_layout_atom){}), size(filter_zeros(decltype(xe4_sfB_layout_atom){})))
+    append(stride(decltype(xe4_sfB_layout_atom){}), Int<SmemSizeSingleBufferSFB>{})
   ));
 
   SmemLayoutA   sA{};
@@ -787,14 +790,17 @@ gemm_tn_blockscaled(int m, int n, int k,
   // Reuses make_adma_atom_A/B_xe4 directly — the stride-0 broadcast modes in the
   // hierarchical SF SMEM layout are detected at compile time, automatically producing
   // Type3 matrix descriptors instead of Type1/Type2.
+  // Pass the unpadded atom layout (not the padded stage-0 slice) so that
+  // make_adma_atom_*_xe4 constructs the ADMA descriptor for the actual
+  // SF tile size and not the padded allocation.
   auto adma_load_sfa = make_adma_atom_A_xe4(
     GmemTiledCopySF{}, mSFA,
-    SmemLayoutSFA{}(_, _, _, cute::Int<0>{}),
+    decltype(xe4_sfA_layout_atom){},
     TileShape_MNK{}, TiledMma{}, cluster_layout_vmnk);
 
   auto adma_load_sfb = make_adma_atom_B_xe4(
     GmemTiledCopySF{}, mSFB,
-    SmemLayoutSFB{}(_, _, _, cute::Int<0>{}),
+    decltype(xe4_sfB_layout_atom){},
     TileShape_MNK{}, TiledMma{}, cluster_layout_vmnk);
 
   // ---- Launch configuration ----

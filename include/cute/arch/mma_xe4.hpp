@@ -125,11 +125,10 @@ bs_op_selector()
   constexpr uint32_t N_MIN = 64;
   constexpr uint32_t N_MAX = 512;
 
-  // K_MIN accounts for both the element-type hardware minimum and the
-  // cm_8x32B SF descriptor constraint: K_sf = K/VS >= 8  →  K >= 8*VS.
-  constexpr uint32_t K_MIN = cute::max(
-      cute::max(getMinMmaK<ElementA>(), getMinMmaK<ElementB>()),
-      static_cast<uint32_t>(8 * VS));
+  // K_MIN: element-type hardware minimum only.
+  // The cm_8x32B SF descriptor 8-row minimum (K/VS >= 8) is satisfied by
+  // SMEM padding in the collective — it is no longer a K-tile compile-time constraint.
+  constexpr uint32_t K_MIN = cute::max(getMinMmaK<ElementA>(), getMinMmaK<ElementB>());
   constexpr uint32_t K_MAX = cute::min(getMaxMmaK<ElementA>(), getMaxMmaK<ElementB>());
 
   constexpr uint32_t Tile_M = size<0>(TileShape_MNK{});
@@ -146,7 +145,7 @@ bs_op_selector()
   // is currently set to 64 to satisfy the alignment requirement.
   static_assert(M >= M_MIN, "MMA_M must be >= 64 as Type3 matrix_stride needs to be 64-elem aligned");
   static_assert(N >= N_MIN, "MMA_N must be >= 64 as Type3 matrix_stride needs to be 64-elem aligned");
-  static_assert(K >= K_MIN, "MMA_K must be >= K_MIN (element type minimum and 8*VS SF descriptor constraint).");
+  static_assert(K >= K_MIN, "MMA_K must be >= K_MIN (element type hardware minimum).");
   static_assert(K % VS == 0, "MMA_K must be a multiple of the scale factor vector size (VS).");
 
   // Currently only single-CTA variant implemented for block-scaled
