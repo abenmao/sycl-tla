@@ -38,6 +38,7 @@ struct ADMA_LOAD_Unpack
               Tensor<TD,DLayout>                & dst)
   {
     // static_assert(is_smem<TD>::value, "XE4_ADMA_LOAD requires the destination be shared memory.");
+    constexpr int M = tuple_size<decltype(traits.opargs_)>::value;
 
     auto as_xe4_coord = [](auto const& t) {
       return to_vec<int32_t>(flatten_to_tuple(t));
@@ -45,8 +46,9 @@ struct ADMA_LOAD_Unpack
     auto src_coord = as_xe4_coord(src.data().coord_);
     auto dst_ptr = cute::raw_pointer_cast(dst.data());
     return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
-                                traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
-                                make_tuple(dst_ptr, src_coord), seq<0, 1>{});
+                                traits.opargs_, make_range<0, M -2>{},
+                                make_tuple(dst_ptr, src_coord), seq<0, 1>{},
+                                traits.opargs_, make_range<M-2, M>{});
   }
 };
 
@@ -61,6 +63,7 @@ struct ADMA_STORE_Unpack
               Tensor<TD,DLayout>                & dst)
   {
     // static_assert(is_smem<TS>::value, "XE4_ADMA_STORE requires the source be shared memory.");
+    constexpr int M = tuple_size<decltype(traits.opargs_)>::value;
 
     auto as_xe4_coord = [](auto const& t) {
       return to_vec<int32_t>(flatten_to_tuple(t));
@@ -68,8 +71,9 @@ struct ADMA_STORE_Unpack
     auto dst_coord = as_xe4_coord(dst.data().coord_);
     auto src_ptr = cute::raw_pointer_cast(src.data());
     return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
-                                traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
-                                make_tuple(src_ptr, dst_coord), seq<0, 1>{});
+                                traits.opargs_, make_range<0, M-1>{},
+                                make_tuple(src_ptr, dst_coord), seq<0, 1>{},
+                                traits.opargs_, make_range<M-1, M>{});
   }
 };
 
@@ -118,9 +122,12 @@ struct Copy_Traits<XE4_ADMA_LOAD, T, NumBitsPerADMA, AuxParams_>
         tensorDesc_.matrix_desc, static_cast<Args&&>(args)...);
   }
 
+  template <detail::CacheCtrl CC = detail::CacheCtrl::L2c_L3uc,
+            detail::FillMethod FM = detail::FillMethod::Zero>
   CUTE_HOST_DEVICE constexpr
-  Copy_Traits<XE4_ADMA_LOAD_OP, T, NumBitsPerADMA>
-  with(uint64_t* abar_ptr, [[maybe_unused]] uint32_t const& multicast_mask = 0) const {
+  Copy_Traits<XE4_ADMA_LOAD_OP, T, NumBitsPerADMA, detail::CacheHint<CC>, detail::FillMode<FM>>
+  with(uint64_t* abar_ptr, [[maybe_unused]] uint32_t const& multicast_mask = 0,
+       detail::CacheHint<CC> = {}, detail::FillMode<FM> = {}) const {
     return {tdesc_ptr_, tensorDesc_.g_pointer, tensorDesc_.matrix_desc, abar_ptr};
   }
 
@@ -133,9 +140,9 @@ struct Copy_Traits<XE4_ADMA_LOAD, T, NumBitsPerADMA, AuxParams_>
               Tensor<TD,DLayout>      & dst) = delete;
 };
 
-template <typename T, class NumBitsPerADMA>
-struct Copy_Traits<XE4_ADMA_LOAD_OP, T, NumBitsPerADMA>
-  : ADMA_LOAD_Unpack<XE4_ADMA_LOAD_OP, T, NumBitsPerADMA>
+template <typename T, class NumBitsPerADMA, detail::CacheCtrl CC, detail::FillMethod FM>
+struct Copy_Traits<XE4_ADMA_LOAD_OP, T, NumBitsPerADMA, detail::CacheHint<CC>, detail::FillMode<FM>>
+  : ADMA_LOAD_Unpack<XE4_ADMA_LOAD_OP, T, NumBitsPerADMA, detail::CacheHint<CC>, detail::FillMode<FM>>
 {
   using ThrID     = Layout<_1>;
   // Map from (src-thr,src-val) to bit
@@ -145,17 +152,19 @@ struct Copy_Traits<XE4_ADMA_LOAD_OP, T, NumBitsPerADMA>
   // Reference map from (thr,val) to bit
   using RefLayout = SrcLayout;
 
-  // XE4_ADMA_LOAD arguments
+  // XE4_ADMA_LOAD arguments with CacheHint and FillMode
   tuple<
   uint64_t*,
   T const*,
   uint32_t,
-  uint64_t*
+  uint64_t*,
+  detail::CacheHint<CC>,
+  detail::FillMode<FM>
   > const opargs_;
 
   CUTE_HOST_DEVICE
   Copy_Traits(uint64_t * desc, T const* adrs, uint32_t mdesc, uint64_t* mbar)
-    : opargs_(desc, adrs, mdesc, mbar) {}
+    : opargs_(desc, adrs, mdesc, mbar, {}, {}) {}
 
   CUTE_HOST_DEVICE constexpr
   TensorDescriptor<T> const*
@@ -209,9 +218,12 @@ struct Copy_Traits<XE4_ADMA_LOAD_MULTICAST, T, NumBitsPerADMA, AuxParams_>
         tensorDesc_.matrix_desc, static_cast<Args&&>(args)...);
   }
 
+  template <detail::CacheCtrl CC = detail::CacheCtrl::L2c_L3uc,
+            detail::FillMethod FM = detail::FillMethod::Zero>
   CUTE_HOST_DEVICE constexpr
-  Copy_Traits<XE4_ADMA_LOAD_MULTICAST_OP, T, NumBitsPerADMA>
-  with(uint64_t* abar_ptr, [[maybe_unused]] uint32_t const& multicast_mask = 0) const {
+  Copy_Traits<XE4_ADMA_LOAD_MULTICAST_OP, T, NumBitsPerADMA, detail::CacheHint<CC>, detail::FillMode<FM>>
+  with(uint64_t* abar_ptr, uint32_t const& multicast_mask = 0,
+       detail::CacheHint<CC> = {}, detail::FillMode<FM> = {}) const {
     return {tdesc_ptr_, tensorDesc_.g_pointer, tensorDesc_.matrix_desc, abar_ptr, multicast_mask};
   }
 
@@ -224,10 +236,9 @@ struct Copy_Traits<XE4_ADMA_LOAD_MULTICAST, T, NumBitsPerADMA, AuxParams_>
               Tensor<TD,DLayout>      & dst) = delete;
 };
 
-// The executable version
-template <typename T, class NumBitsPerADMA>
-struct Copy_Traits<XE4_ADMA_LOAD_MULTICAST_OP, T, NumBitsPerADMA>
-  : ADMA_LOAD_Unpack<XE4_ADMA_LOAD_MULTICAST_OP, T, NumBitsPerADMA>
+template <typename T, class NumBitsPerADMA, detail::CacheCtrl CC, detail::FillMethod FM>
+struct Copy_Traits<XE4_ADMA_LOAD_MULTICAST_OP, T, NumBitsPerADMA, detail::CacheHint<CC>, detail::FillMode<FM>>
+  : ADMA_LOAD_Unpack<XE4_ADMA_LOAD_MULTICAST_OP, T, NumBitsPerADMA, detail::CacheHint<CC>, detail::FillMode<FM>>
 {
   using ThrID     = Layout<_1>;
   // Map from (src-thr,src-val) to bit
@@ -237,18 +248,20 @@ struct Copy_Traits<XE4_ADMA_LOAD_MULTICAST_OP, T, NumBitsPerADMA>
   // Reference map from (thr,val) to bit
   using RefLayout = SrcLayout;
 
-  // XE4_ADMA_LOAD_MULTICAST arguments
+  // XE4_ADMA_LOAD_MULTICAST arguments with CacheHint and FillMode
   tuple<
   uint64_t*,
   T const*,
   uint32_t,
   uint64_t*,
-  uint32_t
+  uint32_t,
+  detail::CacheHint<CC>,
+  detail::FillMode<FM>
   > const opargs_;
 
   CUTE_HOST_DEVICE
   Copy_Traits(uint64_t * desc, T const* adrs, uint32_t mdesc, uint64_t* mbar, uint32_t mask)
-    : opargs_(desc, adrs, mdesc, mbar, mask) {}
+    : opargs_(desc, adrs, mdesc, mbar, mask, {}, {}) {}
 
   CUTE_HOST_DEVICE constexpr
   TensorDescriptor<T> const*
@@ -302,9 +315,10 @@ struct Copy_Traits<XE4_ADMA_STORE, T, NumBitsPerADMA, AuxParams_>
         tensorDesc_.matrix_desc, static_cast<Args&&>(args)...);
   }
 
+  template <detail::CacheCtrl CC = detail::CacheCtrl::L2wb_L3uc>
   CUTE_HOST_DEVICE constexpr
-  Copy_Traits<XE4_ADMA_STORE_OP, T, NumBitsPerADMA>
-  with(uint64_t* abar_ptr) const {
+  Copy_Traits<XE4_ADMA_STORE_OP, T, NumBitsPerADMA, detail::CacheHint<CC>>
+  with(uint64_t* abar_ptr, detail::CacheHint<CC> = {}) const {
     // Store writes to global memory (gmem_ptr first per store(gmem_ptr, desc, ...) convention).
     // TensorDescriptor::g_pointer is const T* for shared load/store descriptor representation,
     // but STORE always targets writable memory, so the cast is safe here.
@@ -321,9 +335,9 @@ struct Copy_Traits<XE4_ADMA_STORE, T, NumBitsPerADMA, AuxParams_>
 };
 
 // The executable version
-template <typename T, class NumBitsPerADMA>
-struct Copy_Traits<XE4_ADMA_STORE_OP, T, NumBitsPerADMA>
-  : ADMA_STORE_Unpack<XE4_ADMA_STORE_OP, T, NumBitsPerADMA>
+template <typename T, class NumBitsPerADMA, detail::CacheCtrl CC>
+struct Copy_Traits<XE4_ADMA_STORE_OP, T, NumBitsPerADMA, detail::CacheHint<CC>>
+  : ADMA_STORE_Unpack<XE4_ADMA_STORE_OP, T, NumBitsPerADMA, detail::CacheHint<CC>>
 {
   using ThrID     = Layout<_1>;
   // Map from (src-thr,src-val) to bit
@@ -333,18 +347,18 @@ struct Copy_Traits<XE4_ADMA_STORE_OP, T, NumBitsPerADMA>
   // Reference map from (thr,val) to bit
   using RefLayout = SrcLayout;
 
-  // XE4_ADMA_STORE arguments: (address, desc, matrix_desc, mbar)
-  // address is non-const and comes first: store(gmem_ptr, desc, ...) convention
+  // XE4_ADMA_STORE arguments with CacheHint
   tuple<
   T*,
   uint64_t*,
   uint32_t,
-  uint64_t*
+  uint64_t*,
+  detail::CacheHint<CC>
   > const opargs_;
 
   CUTE_HOST_DEVICE
   Copy_Traits(T* adrs, uint64_t* desc, uint32_t mdesc, uint64_t* mbar)
-    : opargs_(adrs, desc, mdesc, mbar) {}
+    : opargs_(adrs, desc, mdesc, mbar, {}) {}
 
   CUTE_HOST_DEVICE constexpr
   TensorDescriptor<T> const*

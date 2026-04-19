@@ -22,18 +22,22 @@ struct XE4_ADMA_LOAD
   // See prefetch.hpp line ~100: `using Prefetch_Traits = Copy_Traits<typename CopyOp::PREFETCH, ...>`
   using PREFETCH = XE4_ADMA_PREFETCH;
 
-  template <typename DataType, size_t Dim>
+  template <typename DataType, size_t Dim,
+            detail::CacheCtrl CC = detail::CacheCtrl::L2c_L3uc,
+            detail::FillMethod FM = detail::FillMethod::Zero>
   CUTE_HOST_DEVICE static void
   copy(
       uint64_t* tdesc_ptr, DataType const* gmem_ptr, const uint32_t mat_desc,
-      uint64_t *abar_ptr, DataType* slm_ptr, const sycl::vec_t<int, Dim>& coord
+      uint64_t *abar_ptr, DataType* slm_ptr, const sycl::vec_t<int, Dim>& coord,
+      detail::CacheHint<CC> = {}, detail::FillMode<FM> = {}
   ) {
     MatrixDescriptor mat_desc_(mat_desc);
     mat_desc_.StartAddress = static_cast<uint32_t>(
         reinterpret_cast<uint64_t>(slm_space_cast(slm_ptr))) >> 9;
 
     detail::AsyncTensorGlobal2SLM<DataType>::
-    Copy(mat_desc_, gmem_ptr, abar_ptr, reinterpret_cast<TensorPayload *>(tdesc_ptr), coord);
+    Copy(mat_desc_, gmem_ptr, abar_ptr, reinterpret_cast<TensorPayload *>(tdesc_ptr), coord,
+         detail::CacheHint<CC>{}, detail::FillMode<FM>{});
   }
 };
 
@@ -44,11 +48,13 @@ struct XE4_ADMA_LOAD
 
 struct XE4_ADMA_STORE
 {
-  template <typename DataType, size_t Dim>
+  template <typename DataType, size_t Dim,
+            detail::CacheCtrl CC = detail::CacheCtrl::L2wb_L3uc>
   CUTE_HOST_DEVICE static void
   copy(
       DataType* gmem_ptr, uint64_t* tdesc_ptr, const uint32_t mat_desc,
-      uint64_t* abar_ptr, DataType* slm_ptr, const sycl::vec_t<int, Dim>& coord
+      uint64_t* abar_ptr, DataType* slm_ptr, const sycl::vec_t<int, Dim>& coord,
+      detail::CacheHint<CC> = {}
   ) {
     MatrixDescriptor mat_desc_(mat_desc);
     mat_desc_.StartAddress = static_cast<uint32_t>(
@@ -56,7 +62,8 @@ struct XE4_ADMA_STORE
 
     // Use sizeof_bits in near future
     detail::AsyncTensorSLM2Global<sizeof(DataType) * 8>::
-      Copy(gmem_ptr, mat_desc_, abar_ptr, reinterpret_cast<TensorPayload *>(tdesc_ptr), coord);
+      Copy(gmem_ptr, mat_desc_, abar_ptr, reinterpret_cast<TensorPayload *>(tdesc_ptr), coord,
+           detail::CacheHint<CC>{});
   }
 };
 
@@ -70,19 +77,23 @@ struct XE4_ADMA_LOAD_MULTICAST
   // Same PREFETCH typedef as XE4_ADMA_LOAD — multicast loads can also derive prefetch.
   using PREFETCH = XE4_ADMA_PREFETCH;
 
-  template<typename DataType, size_t Dim>
+  template<typename DataType, size_t Dim,
+           detail::CacheCtrl CC = detail::CacheCtrl::L2c_L3uc,
+           detail::FillMethod FM = detail::FillMethod::Zero>
   CUTE_HOST_DEVICE static void
   copy(
       uint64_t* tdesc_ptr, DataType const* gmem_ptr, const uint32_t mat_desc,
       uint64_t* abar_ptr, uint32_t multicast_mask, DataType* slm_ptr,
-      const sycl::vec_t<int, Dim>& coord
+      const sycl::vec_t<int, Dim>& coord,
+      detail::CacheHint<CC> = {}, detail::FillMode<FM> = {}
   ) {
     MatrixDescriptor mat_desc_ (mat_desc);
     mat_desc_.StartAddress = static_cast<uint32_t>(
         reinterpret_cast<uint64_t>(slm_space_cast(slm_ptr))) >> 9;
 
     detail::AsyncTensorGlobal2SLM<DataType>::
-      Copy(mat_desc_, gmem_ptr, abar_ptr, reinterpret_cast<TensorPayload *>(tdesc_ptr), coord, multicast_mask);
+      Copy(mat_desc_, gmem_ptr, abar_ptr, reinterpret_cast<TensorPayload *>(tdesc_ptr), coord, multicast_mask,
+           detail::CacheHint<CC>{}, detail::FillMode<FM>{});
   }
 };
 
@@ -190,8 +201,8 @@ struct XE4_ADMA_PREFETCH
 /// Atomically reduces SLM data into global memory using the specified reduction operation.
 /// Inherits from XE4_ADMA_RedBase<T, Rop> which validates (T, Rop) at compile time.
 ///
-/// Follows the same 7-arg copy() signature as XE4_ADMA_STORE (unified with ADMA_STORE_Unpack):
-///   (tdesc_ptr, gmem_ptr, mat_desc, abar_ptr, reserved, slm_ptr, coord)
+/// Follows the same copy() signature order as XE4_ADMA_STORE (unified with ADMA_STORE_Unpack):
+///   (tdesc_ptr, gmem_ptr, mat_desc, slm_ptr, coord, abar_ptr)
 /// This allows it to reuse ADMA_STORE_Unpack for argument explosion in Copy_Traits.
 ///
 /// Template params:
@@ -209,7 +220,7 @@ struct XE4_ADMA_STORE_REDUCE : public XE4_ADMA_RedBase<T, Rop>
   CUTE_HOST_DEVICE static void
   copy(
       uint64_t* tdesc_ptr, T const* gmem_ptr, const uint32_t mat_desc,
-      uint64_t *abar_ptr, T* slm_ptr, const sycl::vec_t<int, Dim>& coord
+      T* slm_ptr, const sycl::vec_t<int, Dim>& coord, uint64_t *abar_ptr
   ) {
     // Patch the matrix descriptor's StartAddress with the SLM base address.
     // SLM addresses are shifted right by 9 bits per the hardware spec.
