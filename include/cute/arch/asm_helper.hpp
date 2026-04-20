@@ -22,6 +22,8 @@ template <> struct fixed_s<384> { static constexpr fixstr::fixed_string value {"
 template <> struct fixed_s<512> { static constexpr fixstr::fixed_string value {"512"};};
 template <> struct fixed_s<640> { static constexpr fixstr::fixed_string value {"640"};};
 template <> struct fixed_s<768> { static constexpr fixstr::fixed_string value {"768"};};
+template <> struct fixed_s<1024> { static constexpr fixstr::fixed_string value {"1024"};};
+template <> struct fixed_s<2048> { static constexpr fixstr::fixed_string value {"2048"};};
 
 // Type name enumeration
 template <typename> struct fixed_type;
@@ -288,5 +290,50 @@ template<int value, int... vals>
 constexpr bool cmp_values() {
   return ((value == vals) || ...);
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Compile-Time String Helpers for Inline Assembly Generation
+///
+/// These helpers enable compile-time construction of inline assembly strings using template
+/// parameters, allowing a single template to generate instructions for multiple data types
+/// and row sizes.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Data bit-width encoding for asm instructions (4b, 8b, 16b, 32b, 64b)
+template <int BitWidth> struct DataBitsStr;
+template <> struct DataBitsStr<4>  { static constexpr fixstr::fixed_string value {"4b"}; };
+template <> struct DataBitsStr<6>  { static constexpr fixstr::fixed_string value {"6b"}; };
+template <> struct DataBitsStr<8>  { static constexpr fixstr::fixed_string value {"8b"}; };
+template <> struct DataBitsStr<16> { static constexpr fixstr::fixed_string value {"16b"}; };
+template <> struct DataBitsStr<32> { static constexpr fixstr::fixed_string value {"32b"}; };
+template <> struct DataBitsStr<64> { static constexpr fixstr::fixed_string value {"64b"}; };
+template <int BitWidth> constexpr auto _bw = DataBitsStr<BitWidth>::value;
+
+// Data type encoding for asm instructions (.int, .uint, .fp, or .bf)
+// Based solely on DataType, independent of FillMethod
+template <typename DataType, typename = void> struct DataTypeStr;
+
+// Signed integer types: use .int
+template <typename DataType>
+struct DataTypeStr<DataType, std::enable_if_t<std::is_signed_v<DataType> && std::is_integral_v<DataType>>> {
+  static constexpr fixstr::fixed_string value {".int"};
+};
+
+// Unsigned integer types: use .uint
+template <typename DataType>
+struct DataTypeStr<DataType, std::enable_if_t<std::is_unsigned_v<DataType> && std::is_integral_v<DataType>>> {
+  static constexpr fixstr::fixed_string value {".uint"};
+};
+
+// Floating-point types: use .fp
+template <> struct DataTypeStr<sycl::half> { static constexpr fixstr::fixed_string value {".fp"}; };
+template <> struct DataTypeStr<float> { static constexpr fixstr::fixed_string value {".fp"}; };
+template <> struct DataTypeStr<cutlass::float_e2m1_t> { static constexpr fixstr::fixed_string value {".fp"}; };
+
+// bfloat16: use .bf
+template <> struct DataTypeStr<sycl::ext::oneapi::bfloat16> { static constexpr fixstr::fixed_string value {".bf"}; };
+
+template <typename DataType>
+constexpr auto _dt = DataTypeStr<DataType>::value;
 
 }

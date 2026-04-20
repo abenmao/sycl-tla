@@ -68,6 +68,13 @@ target_link_options(${ADMA_CLUSTER_LINEAR_REMOTE_COPY_TARGET} PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)
 
+set(ADMA_ROW_COPY_TARGET xe4_adma_row_copy)
+add_xe4_test(${ADMA_ROW_COPY_TARGET} adma_row_copy_xe4.cpp)
+target_include_directories(${ADMA_ROW_COPY_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(${ADMA_ROW_COPY_TARGET} PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)
+
 ######################## EU_COPY_TARGET ########################################
 # Check if the environment variable is specified
 if(NOT DEFINED ENV{CUTLASS_DIR})

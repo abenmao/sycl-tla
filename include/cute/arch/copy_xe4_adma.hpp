@@ -3,6 +3,7 @@
 #include "async_tensor_copy.hpp"
 #include "async_linear_copy.hpp"
 #include "async_linear_reduce.hpp"
+#include "async_row_copy.hpp"
 
 namespace cute {
 
@@ -14,7 +15,101 @@ namespace cute {
 struct XE4_ADMA_PREFETCH;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-/// XE4_ADMA_LINEAR_LOAD: Initiates a async linear copy from global memory to shared memory
+/// AddressingMode: Enum for ADMA row copy addressing modes
+/// - A64:  64-bit absolute address
+/// - A32S: 32-bit pointer + signed 32-bit offset
+/// - A32U: 32-bit pointer + unsigned 32-bit offset
+////////////////////////////////////////////////////////////////////////////////////////////////////
+enum class AddressingMode {
+  A64,   // .a64 mode (uint64_t)
+  A32S,  // .a32s mode (int32_t)
+  A32U   // .a32u mode (uint32_t)
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Helper: Validate RowSize is a supported power-of-2 in [16, 2048]
+////////////////////////////////////////////////////////////////////////////////////////////////////
+template <uint32_t RowSize>
+inline constexpr bool is_valid_row_size_v =
+    (RowSize == 16 || RowSize == 32 || RowSize == 64 || RowSize == 128 ||
+     RowSize == 256 || RowSize == 512 || RowSize == 1024 || RowSize == 2048);
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Helper: Offset type selector based on addressing mode
+////////////////////////////////////////////////////////////////////////////////////////////////////
+template <AddressingMode Mode>
+using OffsetType = std::conditional_t<Mode == AddressingMode::A64, uint64_t,
+                   std::conditional_t<Mode == AddressingMode::A32S, int32_t, uint32_t>>;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// AsyncRowCopySelector: Unified interface for row copy operations
+////////////////////////////////////////////////////////////////////////////////////////////////////
+namespace detail {
+
+template <AddressingMode Mode, uint32_t RowSize>
+struct AsyncRowCopySelector {
+  // Load variant (G2S)
+  template <typename DataType,
+            detail::CacheCtrl CC, detail::FillMethod FM>
+  CUTE_HOST_DEVICE static void load(
+      DataType* slm_ptr, DataType* gmem_ptr, OffsetType<Mode> offset,
+      uint32_t size, uint64_t const* abar_ptr) {
+    if constexpr (Mode == AddressingMode::A64) {
+      detail::AsyncRowCopyGlobal2SLM_A64<RowSize>::template Copy<DataType>(
+          slm_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
+    } else if constexpr (Mode == AddressingMode::A32S) {
+      detail::AsyncRowCopyGlobal2SLM_A32S<RowSize>::template Copy<DataType>(
+          slm_ptr, gmem_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
+    } else {  // A32U
+      detail::AsyncRowCopyGlobal2SLM_A32U<RowSize>::template Copy<DataType>(
+          slm_ptr, gmem_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
+    }
+  }
+
+  // Load multicast variant (G2S with multicast)
+  template <typename DataType,
+            detail::CacheCtrl CC, detail::FillMethod FM>
+  CUTE_HOST_DEVICE static void load_multicast(
+      DataType* slm_ptr, DataType* gmem_ptr, OffsetType<Mode> offset,
+      uint32_t size, uint64_t const* abar_ptr, uint32_t wg_mask) {
+    if constexpr (Mode == AddressingMode::A64) {
+      detail::AsyncRowCopyGlobal2SLM_A64<RowSize>::template Copy<DataType>(
+          slm_ptr, offset, size, abar_ptr, wg_mask, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
+    } else if constexpr (Mode == AddressingMode::A32S) {
+      detail::AsyncRowCopyGlobal2SLM_A32S<RowSize>::template Copy<DataType>(
+          slm_ptr, gmem_ptr, offset, size, abar_ptr, wg_mask, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
+    } else {  // A32U
+      detail::AsyncRowCopyGlobal2SLM_A32U<RowSize>::template Copy<DataType>(
+          slm_ptr, gmem_ptr, offset, size, abar_ptr, wg_mask, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
+    }
+  }
+
+  // Store variant (S2G)
+  template <typename DataType,
+            detail::CacheCtrl CC>
+  CUTE_HOST_DEVICE static void store(
+      DataType* slm_ptr, DataType* gmem_ptr, OffsetType<Mode> offset,
+      uint32_t size, uint64_t const* abar_ptr) {
+    if constexpr (Mode == AddressingMode::A64) {
+      // A64: Copy(gmem_addr, slm_ptr, size, abar_ptr)
+      detail::AsyncRowCopySLM2Global_A64<RowSize>::template Copy<DataType>(
+          offset, slm_ptr, size, abar_ptr, detail::CacheHint<CC>{});
+    } else if constexpr (Mode == AddressingMode::A32S) {
+      // A32S: Copy(gmem_ptr, slm_ptr, offset, size, abar_ptr)
+      detail::AsyncRowCopySLM2Global_A32S<RowSize>::template Copy<DataType>(
+          gmem_ptr, slm_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{});
+    } else {  // A32U
+      // A32U: Copy(gmem_ptr, slm_ptr, offset, size, abar_ptr)
+      detail::AsyncRowCopySLM2Global_A32U<RowSize>::template Copy<DataType>(
+          gmem_ptr, slm_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{});
+    }
+  }
+};
+
+}  // namespace detail
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Helper: Address mode selector for Load operations
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <BarrierType BType = BarrierType::Abarrier>
@@ -88,6 +183,65 @@ struct XE4_ADMA_LINEAR_PREFETCH
   CUTE_HOST_DEVICE static void
   copy(void* gmem_ptr, uint32_t copy_size) {
     detail::AsyncLinearCopyPrefetchFromGlobal::Prefetch(gmem_ptr, copy_size);
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// XE4_ADMA_ROW_COPY_LINEAR_LOAD: Async row copy G2S (non-multicast)
+/// RowSize is a compile-time power-of-2 in [16, 2048] selecting the hardware instruction variant.
+/// size is the runtime byte count (size <= RowSize; hardware pads the remainder via FillMethod).
+////////////////////////////////////////////////////////////////////////////////////////////////////
+struct XE4_ADMA_ROW_COPY_LINEAR_LOAD {
+  template <AddressingMode Mode, uint32_t RowSize, typename DataType,
+            detail::CacheCtrl CC = detail::CacheCtrl::L2c_L3uc,
+            detail::FillMethod FM = detail::FillMethod::Zero>
+  CUTE_HOST_DEVICE static void
+  copy(DataType* slm_ptr, DataType* gmem_ptr, OffsetType<Mode> offset,
+       uint32_t size, uint64_t *abar_ptr,
+       detail::CacheHint<CC> = {}, detail::FillMode<FM> = {}) {
+    static_assert(is_valid_row_size_v<RowSize>,
+                  "RowSize must be a power of 2 in [16, 2048]");
+    detail::AsyncRowCopySelector<Mode, RowSize>::template load<DataType, CC, FM>(
+        slm_ptr, gmem_ptr, offset, size, abar_ptr);
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// XE4_ADMA_ROW_COPY_LINEAR_LOAD_MULTICAST: Async row copy G2S with cluster multicast
+/// RowSize is a compile-time power-of-2 in [16, 2048] selecting the hardware instruction variant.
+/// size is the runtime byte count (size <= RowSize; hardware pads the remainder via FillMethod).
+////////////////////////////////////////////////////////////////////////////////////////////////////
+struct XE4_ADMA_ROW_COPY_LINEAR_LOAD_MULTICAST {
+  template <AddressingMode Mode, uint32_t RowSize, typename DataType,
+            detail::CacheCtrl CC = detail::CacheCtrl::L2c_L3uc,
+            detail::FillMethod FM = detail::FillMethod::Zero>
+  CUTE_HOST_DEVICE static void
+  copy(DataType* slm_ptr, DataType* gmem_ptr, OffsetType<Mode> offset,
+       uint32_t size, uint64_t *abar_ptr, uint32_t wg_mask,
+       detail::CacheHint<CC> = {}, detail::FillMode<FM> = {}) {
+    static_assert(is_valid_row_size_v<RowSize>,
+                  "RowSize must be a power of 2 in [16, 2048]");
+    detail::AsyncRowCopySelector<Mode, RowSize>::template load_multicast<DataType, CC, FM>(
+        slm_ptr, gmem_ptr, offset, size, abar_ptr, wg_mask);
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// XE4_ADMA_ROW_COPY_LINEAR_STORE: Async row copy S2G
+/// RowSize is a compile-time power-of-2 in [16, 2048] selecting the hardware instruction variant.
+/// size is the runtime byte count (size <= RowSize).
+////////////////////////////////////////////////////////////////////////////////////////////////////
+struct XE4_ADMA_ROW_COPY_LINEAR_STORE {
+  template <AddressingMode Mode, uint32_t RowSize, typename DataType,
+            detail::CacheCtrl CC = detail::CacheCtrl::L2wb_L3uc>
+  CUTE_HOST_DEVICE static void
+  copy(DataType* slm_ptr, DataType* gmem_ptr, OffsetType<Mode> offset,
+       uint32_t size, uint64_t *abar_ptr,
+       detail::CacheHint<CC> = {}) {
+    static_assert(is_valid_row_size_v<RowSize>,
+                  "RowSize must be a power of 2 in [16, 2048]");
+    detail::AsyncRowCopySelector<Mode, RowSize>::template store<DataType, CC>(
+        slm_ptr, gmem_ptr, offset, size, abar_ptr);
   }
 };
 
