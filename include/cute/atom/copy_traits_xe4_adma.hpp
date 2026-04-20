@@ -27,6 +27,87 @@ struct is_xe4_adma_store_reduce<XE4_ADMA_STORE_REDUCE<T, Rop, BType>>
 template <typename T>
 inline constexpr bool is_xe4_adma_store_reduce_v = is_xe4_adma_store_reduce<T>::value;
 
+template <class CopySizeInBytes, class... OpArgs>
+struct Copy_Traits<XE4_ADMA_LINEAR_LOAD, CopySizeInBytes, OpArgs...>
+{
+  static_assert(int32_t(CopySizeInBytes::value) % 16 == 0,
+                "ADMA Linear Load requires copy size in Bytes to be aligned to 16B.");
+
+  using ThrID = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1,decltype(CopySizeInBytes{} * C<8>{})>>;
+  using DstLayout = Layout<Shape<_1,decltype(CopySizeInBytes{} * C<8>{})>>;
+  using RefLayout = SrcLayout;
+
+  // XE4_ADMA_LINEAR_LOAD arguments
+  // 0: uint64_t* abar_ptr
+  cute::tuple<OpArgs...> load_abar_;
+
+  // Record the memory barrier for the instruction
+  CUTE_HOST_DEVICE constexpr
+  Copy_Traits<XE4_ADMA_LINEAR_LOAD, CopySizeInBytes, uint64_t*>
+  with(uint64_t* abar_ptr) const {
+    return {abar_ptr};
+  }
+
+  template <class TS, class SLayout,
+            class TD, class DLayout>
+  friend CUTE_HOST_DEVICE constexpr void
+  copy_unpack(Copy_Traits        const& traits,
+              Tensor<TS,SLayout> const& src,
+              Tensor<TD,DLayout>      & dst)
+  {
+    static_assert(is_same<cute::tuple<OpArgs...>, cute::tuple<uint64_t*>>::value,
+                  "Extra arguments not set. Set .with() before use.");
+    static_assert(is_gmem<TS>::value, "Expected gmem src for XE4_ADMA_LINEAR_LOAD");
+    static_assert(is_smem<TD>::value, "Expected smem dst for XE4_ADMA_LINEAR_LOAD");
+    XE4_ADMA_LINEAR_LOAD::copy(raw_pointer_cast(dst.data()),
+                               const_cast<void*>(static_cast<const void*>(raw_pointer_cast(src.data()))),
+                               int32_t(CopySizeInBytes::value), get<0>(traits.load_abar_));
+  }
+};
+
+template <class CopySizeInBytes, class... OpArgs>
+struct Copy_Traits<XE4_ADMA_LINEAR_STORE, CopySizeInBytes, OpArgs...>
+{
+  static_assert(int32_t(CopySizeInBytes::value) % 16 == 0,
+                "ADMA Linear Store requires copy size in Bytes to be aligned to 16B.");
+
+  using ThrID = Layout<_1>;
+  // Map from (src-thr,src-val) to bit
+  using SrcLayout = Layout<Shape<_1,decltype(CopySizeInBytes{} * C<8>{})>>;
+  // Map from (dst-thr,dst-val) to bit
+  using DstLayout = Layout<Shape<_1,decltype(CopySizeInBytes{} * C<8>{})>>;
+  // Reference map from (thr,val) to bit
+  using RefLayout = SrcLayout;
+
+  // XE4_ADMA_LINEAR_STORE arguments
+  // 0: uint64_t* abar_ptr
+  cute::tuple<OpArgs...> store_abar_;
+
+  // Record the memory barrier for the instruction
+  CUTE_HOST_DEVICE constexpr
+  Copy_Traits<XE4_ADMA_LINEAR_STORE, CopySizeInBytes, uint64_t*>
+  with(uint64_t* abar_ptr) const {
+    return {abar_ptr};
+  }
+
+  template <class TS, class SLayout,
+            class TD, class DLayout>
+  friend CUTE_HOST_DEVICE constexpr void
+  copy_unpack(Copy_Traits        const& traits,
+              Tensor<TS,SLayout> const& src,
+              Tensor<TD,DLayout>      & dst)
+  {
+    static_assert(is_same<cute::tuple<OpArgs...>, cute::tuple<uint64_t*>>::value,
+                  "Extra arguments not set. Set .with() before use.");
+    static_assert(is_smem<TS>::value, "Expected smem src for XE4_ADMA_LINEAR_STORE");
+    static_assert(is_gmem<TD>::value, "Expected gmem dst for XE4_ADMA_LINEAR_STORE");
+    XE4_ADMA_LINEAR_STORE::copy(raw_pointer_cast(dst.data()),
+                               const_cast<void*>(static_cast<const void*>(raw_pointer_cast(src.data()))),
+                               int32_t(CopySizeInBytes::value), get<0>(traits.store_abar_));
+  }
+};
+
 template <class CopyOp, class... Args>
 struct ADMA_LOAD_Unpack
 {

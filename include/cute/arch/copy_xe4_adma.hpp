@@ -1,6 +1,7 @@
 #pragma once
 
 #include "async_tensor_copy.hpp"
+#include "async_linear_copy.hpp"
 
 namespace cute {
 
@@ -10,6 +11,30 @@ namespace cute {
 // the generic cute::prefetch(Copy_Atom<...>) overload in prefetch.hpp
 // to derive prefetch traits from any load atom via CopyOp::PREFETCH.
 struct XE4_ADMA_PREFETCH;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// XE4_ADMA_LINEAR_LOAD: Initiates a async linear copy from global memory to shared memory
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct XE4_ADMA_LINEAR_LOAD
+{  
+  CUTE_HOST_DEVICE static void
+  copy(void* slm_ptr, void* gmem_ptr, uint32_t copy_size, uint64_t *abar_ptr) {
+    detail::AsyncLinearGlobal2SLM::Copy(slm_ptr, gmem_ptr, copy_size, abar_ptr);
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// XE4_ADMA_LINEAR_STORE: Initiates a async linear copy from shared memory to global memory
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct XE4_ADMA_LINEAR_STORE
+{
+  CUTE_HOST_DEVICE static void
+  copy(void* gmem_ptr, void* slm_ptr, uint32_t copy_size, uint64_t *abar_ptr) {
+    detail::AsyncLinearSLM2Global::Copy(gmem_ptr, slm_ptr, copy_size, abar_ptr);
+  }
+};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 /// ASYNC_TENSOR_LOAD: Initiates a async tensor copy from global memory to shared memory
