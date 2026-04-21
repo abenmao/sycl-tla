@@ -109,18 +109,21 @@ if(CUTLASS_ENABLE_SYCL)
         cutlass_test_unit_gemm_device_unified_tests
       )
 
-  add_custom_target(
-    test_unit_gemm_device
-    DEPENDS
-    test_unit_gemm_device_tensorop_xe
-    test_unit_gemm_device_tensorop_cooperative_xe
-    test_unit_gemm_device_tensorop_epilogue_fusion_xe
-    test_unit_gemm_device_mixed_input_tensorop_xe
-    test_unit_gemm_device_tensorop_xe_group_gemm
-    test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
-  )
+    add_custom_target(
+      test_unit_gemm_device
+      DEPENDS
+      test_unit_gemm_device_tensorop_xe
+      test_unit_gemm_device_tensorop_cooperative_xe
+      test_unit_gemm_device_tensorop_epilogue_fusion_xe
+      test_unit_gemm_device_mixed_input_tensorop_xe
+      test_unit_gemm_device_tensorop_xe_group_gemm
+      test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
+    )
   else()
+    add_subdirectory(xe4)
     add_custom_target(cutlass_test_unit_gemm_device)
     add_custom_target(test_unit_gemm_device)
+    add_dependencies(cutlass_test_unit_gemm_device cutlass_test_unit_gemm_blocked_scale)
+    add_dependencies(test_unit_gemm_device cutlass_test_unit_gemm_blocked_scale)
   endif()
 endif()

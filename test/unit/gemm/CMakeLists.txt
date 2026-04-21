@@ -64,12 +64,8 @@ else()
     DEPENDS
     test_unit_gemm_device
   )
-
-  if(SYCL_INTEL_TARGET EQUAL 40)
-    add_subdirectory(device/xe4)
-    add_dependencies(cutlass_test_unit_gemm cutlass_test_unit_gemm_blocked_scale)
-  endif()
-  if(SYCL_INTEL_TARGET EQUAL 40)
+  
+  if(SYCL_TARGET_INTEL_GPU_JGS)
     add_subdirectory(scheduler)
     add_dependencies(cutlass_test_unit_gemm cutlass_test_unit_gemm_scheduler_xe4_device)
     add_dependencies(test_unit_gemm test_unit_gemm_scheduler_xe4_device)

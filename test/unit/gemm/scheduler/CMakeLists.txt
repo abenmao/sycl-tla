@@ -27,7 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 # Xe4 device tests for CLC dynamic scheduling (advance_to_next_work / fetch_next_work)
-if(SYCL_INTEL_TARGET EQUAL 40)
+if(SYCL_TARGET_INTEL_GPU_JGS)
   cutlass_test_unit_add_executable(
     cutlass_test_unit_gemm_scheduler_xe4_device
     xe4_tile_scheduler_device.cpp

@@ -28,7 +28,7 @@
 set(TEST_EXES "")
 set(TEST_RUNS "")
 
-if(SYCL_INTEL_TARGET EQUAL 40)
+if(SYCL_TARGET_INTEL_GPU_JGS)
 
   cutlass_test_unit_add_executable(
     cutlass_test_unit_gemm_blocked_scale
