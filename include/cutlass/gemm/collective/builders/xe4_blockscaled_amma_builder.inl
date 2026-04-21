@@ -53,6 +53,16 @@ struct block_scale_traits<cute::tuple<T, SF, cute::Int<VS>>> {
   using data_type = T;
   using sf_type   = SF;
   static constexpr int SfVectorSize = VS;
+  static constexpr bool EnableCooperativeSF = false;
+};
+
+// 4-element tuple: carries EnableCooperativeSF flag as 4th element (Int<0> or Int<1>).
+template <class T, class SF, int VS, int CoopSF>
+struct block_scale_traits<cute::tuple<T, SF, cute::Int<VS>, cute::Int<CoopSF>>> {
+  using data_type = T;
+  using sf_type   = SF;
+  static constexpr int SfVectorSize = VS;
+  static constexpr bool EnableCooperativeSF = (CoopSF != 0);
 };
 
 } // namespace detail
@@ -124,6 +134,9 @@ struct CollectiveBuilder<
   static constexpr auto majorB = cutlass::gemm::detail::is_mn_major_B<GmemLayoutBTag>()
       ? cute::AMMA::Major::MN : cute::AMMA::Major::K;
 
+  // Extract EnableCooperativeSF from the element tuple traits (default false).
+  static constexpr bool EnableCooperativeSF = TraitsA::EnableCooperativeSF;
+
   // Select the block-scaled MMA atom via bs_op_selector and wrap in TiledMma
   // ElementAccumulator is cute::tuple<AccumType, OutputType> by convention.
   using TiledMma = decltype(cute::make_tiled_mma(
@@ -134,7 +147,7 @@ struct CollectiveBuilder<
       ElementSF,
       SFVecSize,
       decltype(cute::product_each(TileShape_MNK{})),
-      ClusterShape_MNK, majorA, majorB>()
+      ClusterShape_MNK, majorA, majorB, EnableCooperativeSF>()
   ));
 
   // Configure dispatch policy

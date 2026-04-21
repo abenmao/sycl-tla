@@ -62,6 +62,7 @@ struct Options {
   static inline std::optional<int> m, n, k, l;
   static inline std::vector<std::string> configs;
   static inline bool help = false;
+  static inline std::optional<bool> coop_sf;
 
   static void parse(int argc, char** argv) {
     cutlass::CommandLine cmd(argc, const_cast<char const**>(argv));
@@ -71,6 +72,11 @@ struct Options {
     if (cmd.check_cmd_line_flag("n")) { cmd.get_cmd_line_argument("n", val); n = val; }
     if (cmd.check_cmd_line_flag("k")) { cmd.get_cmd_line_argument("k", val); k = val; }
     if (cmd.check_cmd_line_flag("l")) { cmd.get_cmd_line_argument("l", val); l = val; }
+    if (cmd.check_cmd_line_flag("coop_sf")) {
+      int csf = 0;
+      cmd.get_cmd_line_argument("coop_sf", csf);
+      coop_sf = (csf != 0);
+    }
     std::string config_str;
     cmd.get_cmd_line_argument("config", config_str);
     if (!config_str.empty()) {
@@ -91,6 +97,43 @@ struct Options {
     if (l) s[3] = *l;
     return s;
   }
+};
+
+// Wrapper that overrides a Config's EnableCooperativeSF at compile time.
+// Used to dispatch --coop_sf runtime flag to the correct template instantiation.
+// When cooperative SF is enabled, also overrides CtaTileShape_MNK with a larger TileK
+// to satisfy the cm_8x32B constraint (VS=16 → TileK=256, VS=32 → TileK=512).
+template <typename BaseConfig, bool CoopSFOverride>
+struct ConfigWithCoopSF : BaseConfig {
+  static constexpr bool EnableCooperativeSF = CoopSFOverride;
+};
+
+template <typename BaseConfig>
+struct ConfigWithCoopSF<BaseConfig, true> : BaseConfig {
+  static constexpr bool EnableCooperativeSF = true;
+  static constexpr int CoopTileK = (BaseConfig::SFVecSize == 16) ? 256 : 512;
+  using CtaTileShape_MNK = Shape<_128, _256, cute::Int<CoopTileK>>;
+
+  // Validate that the cooperative TileK satisfies the cm_8x32B constraint.
+  // After ADMA box truncation by max(ClusterM, ClusterN), each CTA's SF K-dimension
+  // must be a multiple of 8 rows. The hardware's cm_8x32B core-matrix always writes
+  // 8 rows per unit; if a CTA's SF row count is not a multiple of 8 (e.g. 12), the
+  // last core-matrix write overflows into a peer CTA's SF region within the same
+  // pipeline stage, causing intra-stage data corruption that padding cannot fix
+  // (padding only prevents inter-stage overflow between pipeline stages).
+  static constexpr int MaxClusterDim_ =
+      (static_cast<int>(cute::size<0>(typename BaseConfig::ClusterShape_MNK{})) >
+       static_cast<int>(cute::size<1>(typename BaseConfig::ClusterShape_MNK{})))
+      ? static_cast<int>(cute::size<0>(typename BaseConfig::ClusterShape_MNK{}))
+      : static_cast<int>(cute::size<1>(typename BaseConfig::ClusterShape_MNK{}));
+  static_assert((CoopTileK / BaseConfig::SFVecSize / MaxClusterDim_ >= 8) &&
+      (CoopTileK / BaseConfig::SFVecSize / MaxClusterDim_) % 8 == 0,
+      "Cooperative SF loading requires (CoopTileK / SFVecSize / max(ClusterM, ClusterN)) to be "
+      "a multiple of 8 (>= 8). The ADMA 2D-block-copy writes in cm_8x32B core-matrix units "
+      "(8 rows). If the per-CTA SF row count is not a multiple of 8 (e.g. 12), the last "
+      "core-matrix write overflows into a peer CTA's SF region within the same pipeline "
+      "stage, causing intra-stage collision that padding cannot fix. "
+      "Increase CoopTileK or reduce cluster dimensions.");
 };
 
 // Shared memory info utility for block-scaled mainloop (extends the regular version with SF buffers).
@@ -165,8 +208,11 @@ bool run_gemm_blockscaled(sycl::queue& q)
   static constexpr int SFVecSize = Config::SFVecSize;
 
   // ElementTupleA/B bundle data + SF types for CollectiveBuilder.
-  using ElementTupleA = cute::tuple<ElementA, ElementSF, cute::Int<SFVecSize>>;
-  using ElementTupleB = cute::tuple<ElementB, ElementSF, cute::Int<SFVecSize>>;
+  // The 4th element encodes EnableCooperativeSF (0=disabled, 1=enabled) so it
+  // reaches the mainloop collective without changing the dispatch policy.
+  static constexpr bool CoopSF = Config::EnableCooperativeSF;
+  using ElementTupleA = cute::tuple<ElementA, ElementSF, cute::Int<SFVecSize>, cute::Int<CoopSF ? 1 : 0>>;
+  using ElementTupleB = cute::tuple<ElementB, ElementSF, cute::Int<SFVecSize>, cute::Int<CoopSF ? 1 : 0>>;
 
   // Layouts
   using LayoutA = typename Config::LayoutA;
@@ -320,13 +366,17 @@ bool run_gemm_blockscaled(sycl::queue& q)
   auto stride_D = cutlass::make_cute_packed_stride(StrideD{}, select<0,1,3>(problem_shape_mnkl));
 
   // --- Cluster / grid setup ---
-  auto [cluster_size_y, cluster_size_x, cluster_size_z] = ClusterShape{};
+  // ClusterShape = Shape<M, N, K>; structured binding yields (M, N, K).
+  // SYCL range is (dim0=z, dim1=y, dim2=x) and launch_kernel_on_cluster converts via
+  // dim3(range[2], range[1], range[0]) = dim3(x=M, y=N, z=K) to match the grid's dim3(M, N, L).
+  auto [cluster_size_x, cluster_size_y, cluster_size_z] = ClusterShape{};
   sycl::range<3> cluster_size(cluster_size_z, cluster_size_y, cluster_size_x);
 
   // --- Print info ---
   print("ProblemShape_MNKL: "); print(problem_shape_mnkl); print("\n");
   print("TileShape_MNK: ");     print(TileShape{});        print("\n");
   std::cout << "SFVecSize: " << SFVecSize << "\n";
+  std::cout << "Coop SF load: " << (Config::EnableCooperativeSF ? "enabled" : "disabled") << "\n";
 
   auto smem_info = get_shared_memory_info_blockscaled<GemmKernel>();
   std::cout << smem_info << std::endl;
@@ -410,6 +460,30 @@ bool run_if_selected(const std::vector<std::string>& configs, sycl::queue& q) {
       std::find(configs.begin(), configs.end(), Config::Name) == configs.end())
     return true;  // skipped
   std::cout << "\n=== Running config: " << Config::Name << " ===\n";
+  // If --coop_sf was specified on the command line, override the config's default,
+  // but only for cluster configs (cluster size > 1). Non-cluster configs ignore it.
+  constexpr int cluster_size = cute::size(typename Config::ClusterShape_MNK{});
+  if constexpr (cluster_size > 1) {
+    if (Options::coop_sf.has_value()) {
+      if (*Options::coop_sf) {
+        // MXFP8 (float_e4m3_t) cannot use cooperative SF — max atom K=256 is
+        // insufficient for VS=32 after cluster truncation. Print warning and skip.
+        if constexpr (std::is_same_v<typename Config::ElementA, cutlass::float_e4m3_t>) {
+          std::cerr << "Warning: --coop_sf=1 is not supported for MXFP8 config '"
+                    << Config::Name << "' (max atom K=256). Skipping.\n";
+          return true;
+        } else {
+          // Cooperative SF: ConfigWithCoopSF<Config, true> overrides TileK to
+          // 256 (VS=16) or 512 (VS=32), satisfying the cm_8x32B minimum after
+          // ADMA box truncation by cluster.
+          using CoopConfig = ConfigWithCoopSF<Config, true>;
+          return run_gemm_blockscaled<CoopConfig>(q);
+        }
+      } else {
+        return run_gemm_blockscaled<ConfigWithCoopSF<Config, false>>(q);
+      }
+    }
+  }
   return run_gemm_blockscaled<Config>(q);
 }
 

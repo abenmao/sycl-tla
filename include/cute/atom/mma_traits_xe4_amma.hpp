@@ -532,13 +532,25 @@ struct MMA_Traits<
         XE4_AMMA_FP4FP8_D<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
         {ctrl, sf_a, sf_b, args...};
     } else if constexpr (Method == AMMA::Tracking::AB) {
-      return MMA_Traits<
-        XE4_AMMA_FP4FP8_AB<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
-        {ctrl, sf_a, sf_b, args...};
+      if constexpr (sizeof...(args) > 2) {
+        return MMA_Traits<
+          XE4_AMMA_FP4FP8_AB_CLUSTER<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+          {ctrl, sf_a, sf_b, args...};
+      } else {
+        return MMA_Traits<
+          XE4_AMMA_FP4FP8_AB<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+          {ctrl, sf_a, sf_b, args...};
+      }
     } else if constexpr (Method == AMMA::Tracking::DAB) {
-      return MMA_Traits<
-        XE4_AMMA_FP4FP8_DAB<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
-        {ctrl, sf_a, sf_b, args...};
+      if constexpr (sizeof...(args) > 3) {
+        return MMA_Traits<
+          XE4_AMMA_FP4FP8_DAB_CLUSTER<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+          {ctrl, sf_a, sf_b, args...};
+      } else {
+        return MMA_Traits<
+          XE4_AMMA_FP4FP8_DAB<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+          {ctrl, sf_a, sf_b, args...};
+      }
     } else {
       static_assert(dependent_false<AMMA::TrackMethod<Method>>,
           "Unknown abarrier tracking pattern");
@@ -715,6 +727,156 @@ struct MMA_Traits<
     XE4_AMMA_FP4FP8_DAB<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
       traits.ctrl_, desc_d, desc_a, desc_b, desc_c, traits.sf_a_, traits.sf_b_,
       traits.d_barrier_, traits.a_barrier_, traits.b_barrier_
+    );
+  }
+};
+
+// ----- Block-scaled AMMA: AB-tracking, cluster (multicast masks) -----
+template <class d_type, class a_type, class b_type, class c_type, class sf_type,
+         int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
+struct MMA_Traits<
+  XE4_AMMA_FP4FP8_AB_CLUSTER<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+{
+  using ValTypeD = d_type;
+  using ValTypeA = a_type;
+  using ValTypeB = b_type;
+  using ValTypeC = c_type;
+  using ValTypeSF = sf_type;
+
+  using FrgTypeA   = AMMA::smem_desc<a_major, true>;
+  using FrgTypeB   = AMMA::smem_desc<b_major>;
+  using FrgTypeC   = AMMA::smem_desc<a_major>;
+  using FrgTypeSFA = AMMA::smem_sf_desc;
+  using FrgTypeSFB = AMMA::smem_sf_desc;
+
+  using Shape_MNK = Shape<Int<M>, Int<N>, Int<K>>;
+  using ThrID = Layout<_1>;
+  using ALayout = Layout<Shape <_1,Shape <Int<M>,Int<K>>>,
+                         Stride<_0,Stride<    _1,Int<M>>>>;
+  using BLayout = Layout<Shape <_1,Shape <Int<N>,Int<K>>>,
+                         Stride<_0,Stride<    _1,Int<N>>>>;
+  using CLayout = Layout<Shape <_1,Shape <Int<M>,Int<N>>>,
+                         Stride<_0,Stride<    _1,Int<M>>>>;
+
+  MMAControl ctrl_ {};
+  uint32_t sf_a_ {};
+  uint32_t sf_b_ {};
+  uint64_t* a_barrier_;
+  uint64_t* b_barrier_;
+  uint32_t a_mask_;
+  uint32_t b_mask_;
+
+  template <class TD, class DLayout,
+            class TA, class ALayout,
+            class TB, class BLayout,
+            class TC, class CLayout>
+  CUTE_HOST_DEVICE constexpr friend
+  void
+  mma_unpack(MMA_Traits          const& traits,
+             Tensor<TD, DLayout>      & D,
+             Tensor<TA, ALayout> const& A,
+             Tensor<TB, BLayout> const& B,
+             Tensor<TC, CLayout> const& C)
+  {
+    auto desc_d = D[0];
+    auto desc_a = A[0];
+    auto desc_b = B[0];
+    auto desc_c = C[0];
+
+    XE4_AMMA_FP4FP8_AB_CLUSTER<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
+      traits.ctrl_, desc_d, desc_a, desc_b, desc_c, traits.sf_a_, traits.sf_b_,
+      traits.a_barrier_, traits.b_barrier_,
+      traits.a_mask_, traits.b_mask_
+    );
+  }
+
+  template <AMMA::Tracking Method, typename ... Args>
+  CUTE_HOST_DEVICE constexpr static
+  auto
+  with(AMMA::TrackMethod<Method> method, MMAControl ctrl,
+       uint32_t sf_a, uint32_t sf_b, Args... args) {
+    return with(d_type{}, method, ctrl, sf_a, sf_b, args...);
+  }
+
+  template <typename T, AMMA::Tracking Method, typename ... Args>
+  CUTE_HOST_DEVICE constexpr static
+  auto
+  with(T, AMMA::TrackMethod<Method>, MMAControl ctrl,
+       uint32_t sf_a, uint32_t sf_b, Args... args) {
+    if constexpr (Method == AMMA::Tracking::AB) {
+      return MMA_Traits<
+        XE4_AMMA_FP4FP8_AB_CLUSTER<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+        {ctrl, sf_a, sf_b, args...};
+    } else if constexpr (Method == AMMA::Tracking::DAB) {
+      return MMA_Traits<
+        XE4_AMMA_FP4FP8_DAB_CLUSTER<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+        {ctrl, sf_a, sf_b, args...};
+    } else {
+      static_assert(dependent_false<AMMA::TrackMethod<Method>>,
+          "Unknown abarrier tracking pattern");
+    }
+
+    CUTE_GCC_UNREACHABLE;
+  }
+};
+
+// ----- Block-scaled AMMA: DAB-tracking, cluster (multicast masks) -----
+template <class d_type, class a_type, class b_type, class c_type, class sf_type,
+         int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
+struct MMA_Traits<
+  XE4_AMMA_FP4FP8_DAB_CLUSTER<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+{
+  using ValTypeD = d_type;
+  using ValTypeA = a_type;
+  using ValTypeB = b_type;
+  using ValTypeC = c_type;
+  using ValTypeSF = sf_type;
+
+  using FrgTypeA   = AMMA::smem_desc<a_major, true>;
+  using FrgTypeB   = AMMA::smem_desc<b_major>;
+  using FrgTypeC   = AMMA::smem_desc<a_major>;
+  using FrgTypeSFA = AMMA::smem_sf_desc;
+  using FrgTypeSFB = AMMA::smem_sf_desc;
+
+  using Shape_MNK = Shape<Int<M>, Int<N>, Int<K>>;
+  using ThrID = Layout<_1>;
+  using ALayout = Layout<Shape <_1,Shape <Int<M>,Int<K>>>,
+                         Stride<_0,Stride<    _1,Int<M>>>>;
+  using BLayout = Layout<Shape <_1,Shape <Int<N>,Int<K>>>,
+                         Stride<_0,Stride<    _1,Int<N>>>>;
+  using CLayout = Layout<Shape <_1,Shape <Int<M>,Int<N>>>,
+                         Stride<_0,Stride<    _1,Int<M>>>>;
+
+  MMAControl ctrl_ {};
+  uint32_t sf_a_ {};
+  uint32_t sf_b_ {};
+  uint64_t* d_barrier_;
+  uint64_t* a_barrier_;
+  uint64_t* b_barrier_;
+  uint32_t a_mask_;
+  uint32_t b_mask_;
+
+  template <class TD, class DLayout,
+            class TA, class ALayout,
+            class TB, class BLayout,
+            class TC, class CLayout>
+  CUTE_HOST_DEVICE constexpr friend
+  void
+  mma_unpack(MMA_Traits          const& traits,
+             Tensor<TD, DLayout>      & D,
+             Tensor<TA, ALayout> const& A,
+             Tensor<TB, BLayout> const& B,
+             Tensor<TC, CLayout> const& C)
+  {
+    auto desc_d = D[0];
+    auto desc_a = A[0];
+    auto desc_b = B[0];
+    auto desc_c = C[0];
+
+    XE4_AMMA_FP4FP8_DAB_CLUSTER<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
+      traits.ctrl_, desc_d, desc_a, desc_b, desc_c, traits.sf_a_, traits.sf_b_,
+      traits.d_barrier_, traits.a_barrier_, traits.b_barrier_,
+      traits.a_mask_, traits.b_mask_
     );
   }
 };

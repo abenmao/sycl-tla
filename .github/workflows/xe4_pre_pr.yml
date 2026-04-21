@@ -121,6 +121,18 @@ jobs:
           ninja xe4_amma_adma
           ./examples/cute/tutorial/xe4/xe4_amma_adma
           echo "--------------------------------------"
+          echo "Running Xe4 CuTe AMMA+DMA GEMM Cluster Tutorial Workload"
+          ninja xe4_amma_adma_cluster
+          ./examples/cute/tutorial/xe4/xe4_amma_adma_cluster
+          echo "--------------------------------------"
+          echo "Running Xe4 CuTe AMMA+DMA Blockscale GEMM Tutorial Workload"
+          ninja xe4_amma_adma_blockscaled_gemm
+          ./examples/cute/tutorial/xe4/xe4_amma_adma_blockscaled_gemm
+          echo "--------------------------------------"
+          echo "Running Xe4 CuTe AMMA+DMA Blockscale GEMM Cluster Tutorial Workload"
+          ninja xe4_amma_adma_blockscaled_gemm_cluster
+          ./examples/cute/tutorial/xe4/xe4_amma_adma_blockscaled_gemm_cluster
+          echo "--------------------------------------"
           echo "Running Xe4 CuTe FMHA3 Workload"
           ninja xe4_fmha_fwd
           ./examples/xe4/fmha3/xe4_fmha_fwd

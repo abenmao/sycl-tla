@@ -127,6 +127,43 @@ struct CollectiveMma<
   using ElementSFA = cute::remove_cvref_t<decltype(get<1>(ElementTupleA{}))>;
   static constexpr int SFVecSize = decltype(get<2>(ElementTupleA{}))::value;
 
+  // Enable cooperative SF loading (from 4th tuple element if present, default false).
+  // When true, SF tiles are loaded cooperatively across the cluster (each CTA loads 1/N-th),
+  // using the real cluster layout. When false, each CTA independently loads the full SF tile.
+  static constexpr bool EnableCooperativeSF = []() constexpr {
+    if constexpr (cute::tuple_size<ElementTupleA>::value > 3) {
+      return decltype(get<3>(ElementTupleA{}))::value != 0;
+    } else {
+      return false;
+    }
+  }();
+
+  // Cooperative SF loading requires that after ADMA box truncation by num_multicast,
+  // each CTA's per-tile K_sf dimension is a multiple of 8 (the cm_8x32B row count).
+  // Without this, the hardware's 8-row core-matrix write causes intra-stage collision
+  // where one CTA's overflow clobbers another CTA's valid SF data. For example, with
+  // k_sf=12 per CTA, the second 8-row write (rows 8-15) overflows 4 rows into the
+  // peer CTA's SF region within the same pipeline stage.
+  // Requirements:
+  //   1. (TileK / SFVecSize) must be divisible by max(ClusterM, ClusterN) so that
+  //      each CTA gets an equal share of SF rows (avoids silent truncation by integer division).
+  //   2. The resulting per-CTA K_sf must be >= 8 and a multiple of 8.
+  static constexpr int MaxClusterDim_ =
+      (static_cast<int>(size<0>(ClusterShape{})) > static_cast<int>(size<1>(ClusterShape{})))
+      ? static_cast<int>(size<0>(ClusterShape{})) : static_cast<int>(size<1>(ClusterShape{}));
+  static constexpr int TileK_sf_ = static_cast<int>(size<2>(TileShape{})) / SFVecSize;
+  static_assert(!EnableCooperativeSF ||
+      (TileK_sf_ % MaxClusterDim_ == 0 &&
+       (TileK_sf_ / MaxClusterDim_ >= 8) &&
+       (TileK_sf_ / MaxClusterDim_) % 8 == 0),
+      "Cooperative SF loading requires (TileK / SFVecSize) to be divisible by "
+      "max(ClusterM, ClusterN), and the per-CTA K_sf to be a multiple of 8 "
+      "(cm_8x32B core-matrix alignment after ADMA box truncation by cluster).");
+  // FP8 (max atom K=256, VS=32) can never satisfy this with any cluster > 1,
+  // so cooperative SF is unsupported for MXFP8.
+  static_assert(!EnableCooperativeSF || !std::is_same_v<ElementA, cutlass::float_e4m3_t>,
+      "Cooperative SF loading is not supported for MXFP8 (max atom K=256 < required for VS=32 cluster).");
+
   using ElementB   = cute::remove_cvref_t<decltype(get<0>(ElementTupleB{}))>;
   using ElementSFB = cute::remove_cvref_t<decltype(get<1>(ElementTupleB{}))>;
 
@@ -174,12 +211,7 @@ struct CollectiveMma<
 
   static_assert(DispatchPolicy::Stages >= 2, "Specialization requires Stages set to value 2 or more.");
 
-  // NOTE: This specialization assumes ClusterShape (1,1,1) — single workgroup, no multicast.
-  // TODO :
-  // When adding cluster support, update: constructor, load_init (tma_partition 5-arg form),
-  // load (mcast_mask_a/b), and mma (cluster_expect_tx).
-  static_assert(cute::size(ClusterShape{}) == 1,
-      "Only ClusterShape (1,1,1) is supported. See NOTE above for multi-CTA checklist.");
+  static constexpr bool IsDynamicCluster = not cute::is_static_v<ClusterShape>;
 
   // Data SMEM layouts — hierarchical via UMMA::tile_to_mma_shape (matching regular mainloop).
   // Produces rank-4: ((MMA_TILE_M,MMA_TILE_K),MMA_M,MMA_K,PIPE)
@@ -205,26 +237,25 @@ struct CollectiveMma<
   static constexpr int bM = size<0>(TileShape{});
   static constexpr int bN = size<1>(TileShape{});
   static constexpr int bK = size<2>(TileShape{});
-  static constexpr int sf_bK_actual = bK / SFVecSize;            // actual SF K-extent per tile
-  // The cm_8x32B Type3 SF descriptor requires >= 8 rows per stage.
-  // Pad to 8 when sf_bK_actual < 8 so the descriptor window stays within allocated SMEM.
-  // ADMA still transfers only sf_bK_actual rows (SfElemsPerPipe); the extra rows are
-  // allocated but never written — they sit in padding that the MMA hardware ignores.
-  static constexpr int sf_bK = cute::max(sf_bK_actual, 8);        // padded K-extent per stage
+  static constexpr int sf_bK_actual = bK / SFVecSize;       // SF dim along K per tile as per actual bK
+  static constexpr int sf_bK = cute::max(sf_bK_actual, 8);  // SF dim along K per tile in SLM allocation (padded to 8 to respect core-matrix tile shape).
 
-  // Physical SF elements per pipeline stage (actual ADMA transfer, unpadded)
+  // Physical SF elements per pipeline stage
   static constexpr int SfElemsPerPipeA = bM * sf_bK_actual;
   static constexpr int SfElemsPerPipeB = bN * sf_bK_actual;
-  // Per-stage SMEM allocation uses the padded extent so the descriptor window
-  // never overlaps the next stage's data.
   static constexpr int SmemSizeSingleBufferSFA = bM * sf_bK;
   static constexpr int SmemSizeSingleBufferSFB = bN * sf_bK;
   static constexpr int SmemSizeSFA = SmemSizeSingleBufferSFA * DispatchPolicy::Stages;
   static constexpr int SmemSizeSFB = SmemSizeSingleBufferSFB * DispatchPolicy::Stages;
 
-  // SF SMEM layouts: rank-4 ((mnBlock, kBlock), _1, (blk_MN, blk_K), PIPE).
-  // Pipe stride = padded per-stage size (SmemSizeSingleBufferSFA/B) so the AMMA cm_8x32B
-  // descriptor window for stage N does not overlap stage N+1's allocation.
+  // SF SMEM layouts: deduced atom + PIPE dimension appended.
+  // Rank-4: ((mnBlock, kBlock), _1, (blk_MN, blk_K), PIPE)
+  //
+  // Pipe stride uses the PADDED single-buffer size (SmemSizeSingleBufferSFA/B = bMN * sf_bK)
+  // instead of the actual atom size (bMN * sf_bK_actual).  This ensures that when the ADMA
+  // multicast's cm_8x32B core-matrix reads 8 rows but sf_bK_actual < 8, the overflow rows
+  // land in the zero-initialized padding gap rather than the next pipeline stage's SF data.
+  // When sf_bK_actual >= 8, sf_bK == sf_bK_actual and the stride is unchanged.
   using SmemLayoutSFA = decltype(make_layout(
       append(shape(SmemLayoutAtomSFA{}),  Int<DispatchPolicy::Stages>{}),
       append(stride(SmemLayoutAtomSFA{}), Int<SmemSizeSingleBufferSFA>{})));
@@ -261,7 +292,24 @@ struct CollectiveMma<
   constexpr static uint32_t SlmBytesB = sizeof(TensorStorage::smem_B) / DispatchPolicy::Stages;
   constexpr static uint32_t SlmBytesSFA = SfElemsPerPipeA * static_cast<uint32_t>(sizeof(ElementSFA));
   constexpr static uint32_t SlmBytesSFB = SfElemsPerPipeB * static_cast<uint32_t>(sizeof(ElementSFB));
-  constexpr static uint32_t TmaTransactionBytes = SlmBytesA + SlmBytesB + SlmBytesSFA + SlmBytesSFB;
+
+  // SF over-delivery accounting depends on EnableCooperativeSF:
+  //
+  // Non-cooperative (default): each CTA multicasts the FULL SF tile to all peers.
+  //   SFA multicasts to N_c CTAs → (N_c - 1) extra copies arrive at each SLM.
+  //   SFB multicasts to M_c CTAs → (M_c - 1) extra copies arrive at each SLM.
+  //
+  // Cooperative: each CTA loads 1/N-th of the SF tile and multicasts that portion.
+  //   At each SLM the N_c portions reassemble into exactly SlmBytesSFA/SFB —
+  //   no redundant copies, so over-delivery is zero.
+  //
+  // This is folded into TmaTransactionBytes so producer_acquire atomically sets
+  // the correct expected byte count, avoiding a race with peer multicast delivery.
+  constexpr static uint32_t SfOverDeliveryBytes = EnableCooperativeSF ? 0 :
+      (size<1>(ClusterShape{}) - 1) * SlmBytesSFA +
+      (size<0>(ClusterShape{}) - 1) * SlmBytesSFB;
+  constexpr static uint32_t TmaTransactionBytes =
+      SlmBytesA + SlmBytesB + SlmBytesSFA + SlmBytesSFB + SfOverDeliveryBytes;
 
   // LoadParams
   template<
@@ -351,21 +399,26 @@ struct CollectiveMma<
         ClusterLayout_VMNK{})
       );
 
-    // SF ADMA atoms reuse make_adma_atom_A/B_xe4 — the stride-0 broadcast modes
-    // in the hierarchical SF SMEM layout are detected at compile time, automatically
-    // producing Type3 matrix descriptors instead of Type1/Type2.
-    // The SF GMEM tensor must use the hierarchical layout from tile_atom_to_shape_SFA/B
-    // so that compose(mma_tiler_mk) in construct_tma_gbasis works correctly with bK.
+    // SF ADMA atoms: select cluster layout based on EnableCooperativeSF.
+    // When cooperative SF loading is ENABLED, SF ADMA atoms use the real cluster
+    // layout so each CTA loads 1/N-th of the SF tile (same as SM100).
+    // When DISABLED (default), SF ADMA atoms use trivial (1,1,1) cluster layout
+    // (num_multicast=1). Each CTA independently loads the full SF tile; the
+    // multicast mask in .with() still delivers SF data to peer SLMs.
+    using TrivialClusterLayout_VMNK = decltype(tiled_divide(
+        make_layout(Shape<_1, _1, _1>{}), make_tile(typename TiledMma::AtomThrID{})));
+    using SF_ClusterLayout_VMNK = cute::conditional_t<EnableCooperativeSF,
+        ClusterLayout_VMNK, TrivialClusterLayout_VMNK>;
     using Xe4BlkScaledCfg = cutlass::detail::Xe4BlockScaledConfig<SFVecSize>;
     using ADMA_SFA = decltype(make_adma_atom_A_xe4(
         GmemTiledCopySFA{},
         make_tensor(static_cast<ElementSFA const*>(nullptr),
                     Xe4BlkScaledCfg::tile_atom_to_shape_SFA(
                         make_shape(int32_t(0), int32_t(0), int32_t(0)))),
-        SmemLayoutAtomSFA{},
+        SmemLayoutSFA{}(_, _, _, cute::Int<0>{}),
         TileShape{},
         TiledMma{},
-        ClusterLayout_VMNK{})
+        SF_ClusterLayout_VMNK{})
       );
 
     using ADMA_SFB = decltype(make_adma_atom_B_xe4(
@@ -373,10 +426,10 @@ struct CollectiveMma<
         make_tensor(static_cast<ElementSFB const*>(nullptr),
                     Xe4BlkScaledCfg::tile_atom_to_shape_SFB(
                         make_shape(int32_t(0), int32_t(0), int32_t(0)))),
-        SmemLayoutAtomSFB{},
+        SmemLayoutSFB{}(_, _, _, cute::Int<0>{}),
         TileShape{},
         TiledMma{},
-        ClusterLayout_VMNK{})
+        SF_ClusterLayout_VMNK{})
       );
 
     ADMA_A   adma_load_a;
@@ -385,14 +438,80 @@ struct CollectiveMma<
     ADMA_SFB adma_load_sfb;
   };
 
+  CUTLASS_HOST_DEVICE
+  static constexpr auto
+  compute_raster_order() {
+    constexpr int cluster_size_m = size<0>(ClusterShape{});
+    constexpr int cluster_size_n = size<1>(ClusterShape{});
+    constexpr uint32_t mcast_size_a = SlmBytesA / cluster_size_n;
+    constexpr uint32_t mcast_size_b = SlmBytesB / cluster_size_m;
+    constexpr bool greater_mcast_size_a = mcast_size_a > mcast_size_b;
+
+    using RasterOrder = cutlass::gemm::kernel::detail::RasterOrder;
+    return greater_mcast_size_a ? RasterOrder::AlongM : RasterOrder::AlongN;
+  }
+
+  CUTLASS_DEVICE void
+  initialize_mcast_masks() {
+    using RasterOrder = cutlass::gemm::kernel::detail::RasterOrder;
+
+    constexpr auto raster_order = compute_raster_order();
+    // cluster_layout_mn maps (N_pos, M_pos) to a hardware-consistent block rank.
+    // Hardware linearization for SYCL range (K, N, M): hw_id = N_pos * M_size + M_pos.
+    // Both raster orders use the same stride to match hardware WG linear IDs,
+    // which also matches CuTe's default column-major layout for cta_layout_mnk.
+    auto cluster_layout_mn = make_layout(select<0,1>(ClusterShape{}),
+                                         make_stride(get<0>(ClusterShape{}), _1{}));
+
+    uint32_t cluster_wgid_x = get_cluster_wgid<0>();
+    uint32_t cluster_wgid_y = get_cluster_wgid<1>();
+    block_rank_in_cluster_ = cluster_layout_mn(make_coord(cluster_wgid_y, cluster_wgid_x));
+
+    auto [cluster_size_m, cluster_size_n, _] = ClusterShape{};
+    uint32_t cluster_mask_a = 0;
+    uint32_t cluster_mask_b = 0;
+    uint32_t coop_set_id_a = cluster_wgid_y;
+    uint32_t coop_set_id_b = cluster_wgid_x;
+
+    uint32_t coop_num_a = cluster_size_n;
+    uint32_t coop_num_b = cluster_size_m;
+
+    if (raster_order == RasterOrder::AlongM) {
+      // Hardware WG linear IDs: hw_id = n * M + m (SYCL range(K, N, M) linearizes M-fast).
+      // coop_set_id_a = n (N position), coop_set_id_b = m (M position).
+      // mask_b: all WGs sharing same N column → M consecutive bits at n * M.
+      cluster_mask_b = ((1u << coop_num_b) - 1) << (coop_set_id_a * coop_num_b);
+      // mask_a: all WGs sharing same M row → bits at {m + i*M | i=0..N-1}.
+      uint32_t cluster_mask_a_base = 1u << coop_set_id_b;
+      #pragma unroll
+      for (uint32_t i = 0; i < coop_num_a; i++) {
+        cluster_mask_a |= cluster_mask_a_base << (i * coop_num_b);
+      }
+    } else {
+      cluster_wgid_x = block_rank_in_cluster_ % coop_num_b;
+      cluster_wgid_y = block_rank_in_cluster_ / coop_num_b;
+      coop_set_id_a = cluster_wgid_x;
+      coop_set_id_b = cluster_wgid_y;
+
+      cluster_mask_b = ((1u << coop_num_b) - 1) << (coop_set_id_b * coop_num_b);
+      uint32_t cluster_mask_a_base = 1u << coop_set_id_a;
+      #pragma unroll
+      for (uint32_t i = 0; i < coop_num_a; i++) {
+        cluster_mask_a |= cluster_mask_a_base << (i * coop_num_b);
+      }
+    }
+
+    coop_set_ids_ = make_tuple(coop_set_id_a, coop_set_id_b);
+    cluster_masks_ = make_tuple(cluster_mask_a, cluster_mask_b);
+  }
+
   CUTLASS_DEVICE
-  CollectiveMma(Params const& params, [[maybe_unused]] ClusterShape cluster_shape) {
+  CollectiveMma(Params const& params, ClusterShape cluster_shape) : cluster_shape_(cluster_shape) {
+    initialize_mcast_masks();
     observed_adma_load_a_   = &params.adma_load_a;
     observed_adma_load_b_   = &params.adma_load_b;
     observed_adma_load_sfa_ = &params.adma_load_sfa;
     observed_adma_load_sfb_ = &params.adma_load_sfb;
-    // Single-CTA cluster (1,1,1): cooperative set IDs are trivially (0,0)
-    coop_set_ids_ = make_tuple(uint32_t(0), uint32_t(0));
   }
 
   // to_underlying_arguments — build ADMA atoms for data + SF from host arguments
@@ -435,22 +554,31 @@ struct CollectiveMma<
         TiledMma{},
         cluster_layout_vmnk);
 
-    // SF ADMA atoms — reuse make_adma_atom_A/B_xe4 with unpadded SF SMEM atom layout
+    // SF ADMA atoms: cooperative uses real cluster layout, otherwise trivial.
+    auto sf_cluster_vmnk = [&]() {
+      if constexpr (EnableCooperativeSF) {
+        return cluster_layout_vmnk;
+      } else {
+        return tiled_divide(
+            make_layout(Shape<_1, _1, _1>{}), make_tile(typename TiledMma::AtomThrID{}));
+      }
+    }();
+
     auto adma_load_sfa = make_adma_atom_A_xe4(
         GmemTiledCopySFA{},
         tensor_sfa,
-        SmemLayoutAtomSFA{},
+        SmemLayoutSFA{}(_, _, _, cute::Int<0>{}),
         TileShape{},
         TiledMma{},
-        cluster_layout_vmnk);
+        sf_cluster_vmnk);
 
     auto adma_load_sfb = make_adma_atom_B_xe4(
         GmemTiledCopySFB{},
         tensor_sfb,
-        SmemLayoutAtomSFB{},
+        SmemLayoutSFB{}(_, _, _, cute::Int<0>{}),
         TileShape{},
         TiledMma{},
-        cluster_layout_vmnk);
+        sf_cluster_vmnk);
 
     return {adma_load_a, adma_load_b, adma_load_sfa, adma_load_sfb};
   }
@@ -495,13 +623,27 @@ struct CollectiveMma<
     auto sA = make_tensor(make_smem_ptr(recast_ptr<ElementA>(shared_tensors.smem_A.data())), SmemLayoutA{});
     auto sB = make_tensor(make_smem_ptr(recast_ptr<ElementB>(shared_tensors.smem_B.data())), SmemLayoutB{});
 
-    // 3-arg tma_partition (single-CTA, no cluster cooperation)
-    // group_modes<0,3> groups the first 3 modes (MMA tile structure) leaving PIPE ungrouped
-    auto [tAgA, tAsA] = tma_partition(*observed_adma_load_a_,
-                                      group_modes<0,3>(sA), group_modes<0,2>(gA));
+    // Partition for this CTA
+    ThrMMA cta_mma = TiledMma{}.get_slice(0);
 
+    Tensor tCgA = cta_mma.partition_A(gA);          // (MMA, MMA_M, MMA_K, m, k, l)
+    Tensor tCgB = cta_mma.partition_B(gB);          // (MMA, MMA_N, MMA_K, n, k, l)
+
+    // Define the CTA-in-cluster Layout and Coord
+    Layout cta_layout_mnk  = make_layout(cluster_shape_);
+    Layout cta_layout_vmnk = tiled_divide(cta_layout_mnk, make_tile(typename TiledMma::AtomThrID{}));
+    auto cta_coord_vmnk  = cta_layout_vmnk.get_flat_coord(block_rank_in_cluster_);
+
+    // 5-arg tma_partition: cluster-aware partitioning with CTA coord and layout
+    // Project the cta_layout for tma_a along the n-modes
+    auto [tAgA, tAsA] = tma_partition(*observed_adma_load_a_,
+                                      get<2>(cta_coord_vmnk), make_layout(size<2>(cta_layout_vmnk)),
+                                      group_modes<0,3>(sA), group_modes<0,3>(tCgA));
+
+    // Project the cta_layout for tma_b along the m-modes
     auto [tBgB, tBsB] = tma_partition(*observed_adma_load_b_,
-                                      group_modes<0,3>(sB), group_modes<0,2>(gB));
+                                      get<1>(cta_coord_vmnk), make_layout(size<1>(cta_layout_vmnk)),
+                                      group_modes<0,3>(sB), group_modes<0,3>(tCgB));
 
     // --- SF tensors ---
     // Hierarchical GMEM tensor views from SF ADMA atoms, matching tile_atom_to_shape.
@@ -522,13 +664,32 @@ struct CollectiveMma<
     Tensor sSFA = make_tensor(make_smem_ptr(shared_tensors.smem_SFA.begin()), SmemLayoutSFA{});
     Tensor sSFB = make_tensor(make_smem_ptr(shared_tensors.smem_SFB.begin()), SmemLayoutSFB{});
 
-    // tma_partition: group_modes<0,3> on rank-4 SF SMEM groups first 3 modes into DATA,
-    // keeping PIPE as iteration mode; group_modes<0,2> on gSFA/gSFB groups (bMN_hier, bK_hier)
-    // into DATA, keeping k_tiles as iteration mode.
-    auto [tSFAgSFA, tSFAsSFA] = tma_partition(*observed_adma_load_sfa_,
-                                              group_modes<0,3>(sSFA), group_modes<0,2>(gSFA));
-    auto [tSFBgSFB, tSFBsSFB] = tma_partition(*observed_adma_load_sfb_,
-                                              group_modes<0,3>(sSFB), group_modes<0,2>(gSFB));
+    // SF partitions: cooperative or non-cooperative based on EnableCooperativeSF.
+    auto [tSFAgSFA, tSFAsSFA] = [&]() {
+      if constexpr (EnableCooperativeSF) {
+        // Cooperative: SFA projects along N-modes (same as data A).
+        // The ADMA box is truncated by num_multicast so each CTA loads 1/N-th of the SF tile.
+        return tma_partition(*observed_adma_load_sfa_,
+                             get<2>(cta_coord_vmnk), make_layout(size<2>(cta_layout_vmnk)),
+                             group_modes<0,3>(sSFA), group_modes<0,2>(gSFA));
+      } else {
+        // Non-cooperative: each CTA independently loads the full SF tile.
+        return tma_partition(*observed_adma_load_sfa_,
+                             group_modes<0,3>(sSFA), group_modes<0,2>(gSFA));
+      }
+    }();
+    auto [tSFBgSFB, tSFBsSFB] = [&]() {
+      if constexpr (EnableCooperativeSF) {
+        // Cooperative: SFB projects along M-modes (same as data B).
+        return tma_partition(*observed_adma_load_sfb_,
+                             get<1>(cta_coord_vmnk), make_layout(size<1>(cta_layout_vmnk)),
+                             group_modes<0,3>(sSFB), group_modes<0,2>(gSFB));
+      } else {
+        // Non-cooperative: each CTA independently loads the full SF tile.
+        return tma_partition(*observed_adma_load_sfb_,
+                             group_modes<0,3>(sSFB), group_modes<0,2>(gSFB));
+      }
+    }();
 
     LoadParams load_params {
       shape<3>(gA),                                        // k_tiles (for scheduler)
@@ -584,11 +745,14 @@ struct CollectiveMma<
   load(Params const& mainloop_params, MainloopPipeline mainloop_pipeline, MainloopPipelineState& slm_pipe_write,
     LoadParams const& load_inputs, TileCoordMNKL const& cta_coord_mnkl, KTileIterator k_tile_iter, int k_tile_count) {
 
-    constexpr uint32_t mcast_mask_a = 1;   // single-CTA (see ClusterShape assert)
-    constexpr uint32_t mcast_mask_b = 1;
+    auto [mcast_mask_a, mcast_mask_b] = cluster_masks_;
     auto [m_coord, n_coord, k_coord, l_coord] = cta_coord_mnkl;
     auto [unused_k_tiles, tAgA_full, tBgB_full, tAsA, tBsB,
           tSFAgSFA_full, tSFBgSFB_full, tSFAsSFA, tSFBsSFB] = load_inputs;
+
+    // SF loads use cooperative multicast masks (SFA→mcast_mask_a, SFB→mcast_mask_b)
+    // so SF data is present in ALL cluster SLMs for block-scaled cluster MMA.
+    // The over-delivery bytes are already folded into TmaTransactionBytes.
 
     // Slice out the work coord from partitioned tensors.
     Tensor tAgA = tAgA_full(_, m_coord, _, l_coord);
@@ -611,7 +775,7 @@ struct CollectiveMma<
       copy(observed_adma_load_a_->with(abar_prod, mcast_mask_a), tAgA(_,*k_tile_iter), tAsA(_,write_stage));
       copy(observed_adma_load_b_->with(abar_prod, mcast_mask_b), tBgB(_,*k_tile_iter), tBsB(_,write_stage));
 
-      // SF loads — SFA multicasts like A (along N-CTAs), SFB like B (along M-CTAs)
+      // SF loads — use cooperative masks so SF is available in all peer SLMs
       copy(observed_adma_load_sfa_->with(abar_prod, mcast_mask_a), tSFAgSFA(_,*k_tile_iter), tSFAsSFA(_,write_stage));
       copy(observed_adma_load_sfb_->with(abar_prod, mcast_mask_b), tSFBgSFB(_,*k_tile_iter), tSFBsSFB(_,write_stage));
 
@@ -637,7 +801,7 @@ struct CollectiveMma<
     auto tCsC = thread_mma.partition_fragment_C(tensor_c);        // (MMA,MMA_M,MMA_N)
 
     auto wg_expect_tx = size<1>(tCsAcc) * size<2>(tCsAcc) * size<2>(tCsA);
-    auto cluster_expect_tx = wg_expect_tx * (size<0>(ClusterShape{}) + size<1>(ClusterShape{}));
+    auto cluster_expect_tx = wg_expect_tx * (size<0>(cluster_shape_) + size<1>(cluster_shape_));
 
     // Block-scaled MMA control register:
     //   NullC=1 for first iteration — bypass C read (D = A*B).
@@ -672,8 +836,9 @@ struct CollectiveMma<
               tiled_mma.with(
                 AMMA::TrackMethod<AMMA::Tracking::DAB>{},
                 mma_ctrl,
-                tCsSFA(0, 0, 0, read_stage), tCsSFB(0, 0, 0, read_stage),
-                abar_cons_d, abar_cons, abar_cons),
+                tCsSFA(0, 0, k_block, read_stage), tCsSFB(0, 0, k_block, read_stage),
+                abar_cons_d, abar_cons, abar_cons,
+                get<0>(cluster_masks_), get<1>(cluster_masks_)),
               tCsC(_,_,_,write_stage),
               tCsA(_,_,k_block,read_stage),
               tCsB(_,_,k_block,read_stage), tCsAcc);
@@ -687,8 +852,9 @@ struct CollectiveMma<
                 ElementAccumulator{},
                 AMMA::TrackMethod<AMMA::Tracking::AB>{},
                 mma_ctrl,
-                tCsSFA(0, 0, 0, read_stage), tCsSFB(0, 0, 0, read_stage),
-                abar_cons, abar_cons),
+                tCsSFA(0, 0, k_block, read_stage), tCsSFB(0, 0, k_block, read_stage),
+                abar_cons, abar_cons,
+                get<0>(cluster_masks_), get<1>(cluster_masks_)),
               tCsA(_,_,k_block,read_stage),
               tCsB(_,_,k_block,read_stage), tCsAcc);
         }
@@ -709,6 +875,11 @@ public:
   typename Params::ADMA_B   const* observed_adma_load_b_{nullptr};
   typename Params::ADMA_SFA const* observed_adma_load_sfa_{nullptr};
   typename Params::ADMA_SFB const* observed_adma_load_sfb_{nullptr};
+
+  ClusterShape cluster_shape_;
+  uint32_t block_rank_in_cluster_;
+
+  cute::tuple<uint32_t, uint32_t> cluster_masks_;
   cute::tuple<uint32_t, uint32_t> coop_set_ids_;
 };
 

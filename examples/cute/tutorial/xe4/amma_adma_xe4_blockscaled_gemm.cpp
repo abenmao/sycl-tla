@@ -42,9 +42,9 @@
 //   argv[3]  : K          (default: 2048)
 //   argv[4]  : transA     (default: 'T')
 //   argv[5]  : transB     (default: 'N')
-//   argv[6]  : SFVecSize  (default: 16, valid: 16 or 32)
-//   argv[7]  : input_type (default: "NVFP4", valid: NVFP4/NVFP4+/MXFP4/MXFP8)
-//   argv[8]  : output_type(default: "FP32",  valid: FP32/FP16/BF16)
+//   argv[6]  : input_type (default: "NVFP4", valid: NVFP4/NVFP4+/MXFP4/MXFP8/ALL)
+//   argv[7]  : SFVecSize  (default: 16, valid: 16 or 32; ignored when input_type=ALL)
+//   argv[8]  : output_type(default: "FP32",  valid: FP32/FP16/BF16; ignored when input_type=ALL)
 //
 // Element type mapping:
 //   NVFP4  : A/B = float_e2m1_t (4-bit), SF = float_ue4m3_t, BlockScaleType = 5
@@ -180,15 +180,97 @@ int run_gemm_config(const std::string& output_type,
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Run all valid {input_type, SFVecSize, output_type} combos in a single process.
+// This keeps the SYCL runtime/simulator alive across all configs.
+int run_all_configs(int m, int n, int k, char transA, char transB)
+{
+  using namespace cutlass;
+
+  struct ConfigDesc {
+    const char* input_type;
+    int sfvec;
+    const char* output_type;
+  };
+
+  // All valid combos: 4 input types x valid SFVecSizes x 3 output types = 21 configs
+  const ConfigDesc configs[] = {
+    // NVFP4: SFVecSize=16 only
+    {"NVFP4", 16, "FP32"}, {"NVFP4", 16, "FP16"}, {"NVFP4", 16, "BF16"},
+    // NVFP4+: SFVecSize=16 and 32
+    {"NVFP4+", 16, "FP32"}, {"NVFP4+", 16, "FP16"}, {"NVFP4+", 16, "BF16"},
+    {"NVFP4+", 32, "FP32"}, {"NVFP4+", 32, "FP16"}, {"NVFP4+", 32, "BF16"},
+    // MXFP4: SFVecSize=16 and 32
+    {"MXFP4", 16, "FP32"}, {"MXFP4", 16, "FP16"}, {"MXFP4", 16, "BF16"},
+    {"MXFP4", 32, "FP32"}, {"MXFP4", 32, "FP16"}, {"MXFP4", 32, "BF16"},
+    // MXFP8: SFVecSize=32 only
+    {"MXFP8", 32, "FP32"}, {"MXFP8", 32, "FP16"}, {"MXFP8", 32, "BF16"},
+  };
+
+  int total = 0, passed = 0, failed = 0;
+  for (const auto& cfg : configs) {
+    ++total;
+    std::string it(cfg.input_type);
+    std::string ot(cfg.output_type);
+
+    std::cout << "\n======================================================================"
+              << "\n[" << total << "] " << it << " SFVecSize=" << cfg.sfvec << " output=" << ot
+              << "  M=" << m << " N=" << n << " K=" << k
+              << " transA=" << transA << " transB=" << transB
+              << "\n======================================================================\n";
+
+    int rc = 1;
+    try {
+      if (it == "NVFP4") {
+        rc = run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue4m3_t,
+                             16, BlockScaleTypeMap<float_ue4m3_t, 16>::value,
+                             128, 256, 128>(ot, m, n, k, transA, transB);
+      } else if (it == "NVFP4+" && cfg.sfvec == 16) {
+        rc = run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue5m3_t,
+                             16, BlockScaleTypeMap<float_ue5m3_t, 16>::value,
+                             128, 256, 128>(ot, m, n, k, transA, transB);
+      } else if (it == "NVFP4+" && cfg.sfvec == 32) {
+        rc = run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue5m3_t,
+                             32, BlockScaleTypeMap<float_ue5m3_t, 32>::value,
+                             128, 256, 256>(ot, m, n, k, transA, transB);
+      } else if (it == "MXFP4" && cfg.sfvec == 16) {
+        rc = run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue8m0_t,
+                             16, BlockScaleTypeMap<float_ue8m0_t, 16>::value,
+                             128, 256, 128>(ot, m, n, k, transA, transB);
+      } else if (it == "MXFP4" && cfg.sfvec == 32) {
+        rc = run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue8m0_t,
+                             32, BlockScaleTypeMap<float_ue8m0_t, 32>::value,
+                             128, 256, 256>(ot, m, n, k, transA, transB);
+      } else if (it == "MXFP8") {
+        rc = run_gemm_config<float_e4m3_t, float_e4m3_t, float_ue8m0_t,
+                             32, BlockScaleTypeMap<float_ue8m0_t, 32>::value,
+                             128, 256, 256>(ot, m, n, k, transA, transB);
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "EXCEPTION: " << e.what() << std::endl;
+      rc = 1;
+    }
+
+    if (rc == 0) { ++passed; std::cout << ">>> PASSED\n"; }
+    else         { ++failed; std::cout << ">>> FAILED\n"; }
+  }
+
+  std::cout << "\n======================================================================"
+            << "\nSUMMARY: " << passed << "/" << total << " passed, " << failed << " failed"
+            << "\n======================================================================\n";
+  return failed;
+}
+
 void print_usage(const char* prog) {
   std::cout << "Usage: " << prog
-            << " [M] [N] [K] [transA] [transB] [SFVecSize] [input_type]"
+            << " [M] [N] [K] [transA] [transB] [input_type] [SFVecSize]"
             << " [output_type] \n"
             << "\n"
             << "  M, N, K       : Problem dimensions (default: 512 1024 2048)\n"
             << "  transA/transB : Transpose flags, 'T' or 'N' (default: T N)\n"
+            << "  input_type    : NVFP4, NVFP4+, MXFP4, MXFP8, ALL (default: NVFP4)\n"
+            << "                  ALL runs all 18 valid combos in a single process\n"
+            << "                  (remaining args ignored when ALL is specified)\n"
             << "  SFVecSize     : Scale factor block size, 16 or 32 (default: 16)\n"
-            << "  input_type    : NVFP4, NVFP4+, MXFP4, MXFP8 (default: NVFP4)\n"
             << "  output_type   : FP32, FP16, BF16 (default: FP32)\n"
             << "\n"
             << "  BlockScaleType (auto-selected from input_type + SFVecSize):\n"
@@ -196,6 +278,16 @@ void print_usage(const char* prog) {
             << "    NVFP4+             + SFVecSize=16 -> ue5m3k16 (type 3) / ue5m3k32 (type 2)\n"
             << "    MXFP4              + SFVecSize=16 -> ue8m0k16 (type 1) / ue8m0k32 (type 0)\n"
             << "    MXFP4/MXFP8        + SFVecSize=32 -> ue8m0k32 (type 0)\n"
+            << "\n"
+            << "Examples:\n"
+            << "  # Single config: NVFP4+ with SFVecSize=16, FP16 output\n"
+            << "  " << prog << " 512 512 512 T N NVFP4+ 16 FP16\n"
+            << "\n"
+            << "  # Single config: MXFP8 with SFVecSize=32, FP32 output\n"
+            << "  " << prog << " 512 512 512 T N MXFP8 32 FP32\n"
+            << "\n"
+            << "  # Run ALL 18 valid configs in a single process (keeps simulator alive):\n"
+            << "  " << prog << " 512 512 512 T N ALL\n"
             << std::endl;
 }
 
@@ -217,11 +309,25 @@ int main(int argc, char** argv)
   char transB = 'N';
   if (argc >= 6) sscanf(argv[5], "%c", &transB);
 
-  int SFVecSize = 16;
-  if (argc >= 7) sscanf(argv[6], "%d", &SFVecSize);
-
   std::string input_type = "NVFP4";
-  if (argc >= 8) input_type = argv[7];
+  if (argc >= 7) input_type = argv[6];
+
+  // ---- Validate input datatype ----
+  if (input_type != "NVFP4" && input_type != "NVFP4+" && input_type != "MXFP4" && input_type != "MXFP8" && input_type != "ALL") {
+    std::cerr << "Error: input_type must be one of: NVFP4, NVFP4+, MXFP4, MXFP8, ALL. Got: "
+              << input_type << std::endl;
+    print_usage(argv[0]);
+    return 1;
+  }
+
+  // ---- ALL mode: run all 18 valid configs in a single process ----
+  // When ALL is specified, remaining args (SFVecSize, output_type) are ignored.
+  if (input_type == "ALL") {
+    return run_all_configs(m, n, k, transA, transB);
+  }
+
+  int SFVecSize = 16;
+  if (argc >= 8) sscanf(argv[7], "%d", &SFVecSize);
 
   std::string output_type = "FP32";
   if (argc >= 9) output_type = argv[8];
@@ -229,14 +335,6 @@ int main(int argc, char** argv)
   // ---- Validate SFVecSize: must be 16 or 32 ----
   if (SFVecSize != 16 && SFVecSize != 32) {
     std::cerr << "Error: SFVecSize must be 16 or 32. Got: " << SFVecSize << std::endl;
-    print_usage(argv[0]);
-    return 1;
-  }
-
-  // ---- Validate input datatype ----
-  if (input_type != "NVFP4" && input_type != "NVFP4+" && input_type != "MXFP4" && input_type != "MXFP8") {
-    std::cerr << "Error: input_type must be one of: NVFP4, NVFP4+, MXFP4, MXFP8. Got: "
-              << input_type << std::endl;
     print_usage(argv[0]);
     return 1;
   }
@@ -264,7 +362,6 @@ int main(int argc, char** argv)
     print_usage(argv[0]);
     return 1;
   }
-
 
   // ---- Print configuration summary ----
   std::cout << "=== Block-Scaled GEMM Configuration ===" << std::endl;

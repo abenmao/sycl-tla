@@ -110,7 +110,8 @@ template <
   class TileShape_MNK,
   class ClusterShape_MNK,
   AMMA::Major MajorA,
-  AMMA::Major MajorB
+  AMMA::Major MajorB,
+  bool EnableCooperativeSF = false
 >
 CUTE_HOST_DEVICE constexpr
 auto
@@ -125,9 +126,9 @@ bs_op_selector()
   constexpr uint32_t N_MIN = 64;
   constexpr uint32_t N_MAX = 512;
 
-  // K_MIN: element-type hardware minimum only.
-  // The cm_8x32B SF descriptor 8-row minimum (K/VS >= 8) is satisfied by
-  // SMEM padding in the collective — it is no longer a K-tile compile-time constraint.
+  // K_MIN accounts for the element-type hardware minimum.
+  // The cm_8x32B core-matrix constraint (K_sf >= 8) is handled by padding sf_bK
+  // in the collective mainloop, not by inflating K_MIN here.
   constexpr uint32_t K_MIN = cute::max(getMinMmaK<ElementA>(), getMinMmaK<ElementB>());
   constexpr uint32_t K_MAX = cute::min(getMaxMmaK<ElementA>(), getMaxMmaK<ElementB>());
 
@@ -137,7 +138,13 @@ bs_op_selector()
 
   constexpr uint32_t M = cute::gcd(Tile_M, M_MAX);
   constexpr uint32_t N = cute::gcd(Tile_N, N_MAX);
-  constexpr uint32_t K = cute::gcd(Tile_K, K_MAX);
+
+  // For cooperative SF loading with VS=32, use Tile_K directly (when it fits) so the
+  // atom K is large enough for ADMA box truncation (each CTA's K_sf >= 8 after split).
+  // Without cooperative SF, padding handles the cm_8x32B constraint, so gcd is fine.
+  constexpr bool is_cluster = size(ClusterShape_MNK{}) > 1;
+  constexpr uint32_t K = (is_cluster && EnableCooperativeSF && VS == 32 && Tile_K <= K_MAX)
+      ? Tile_K : cute::gcd(Tile_K, K_MAX);
 
   // According to the whitepaper, M_MIN/N_MIN was originally set to 32, but when using
   // block scaling, we encounter the error: "failed on (matrix_stride_in_elems % 64 == 0
@@ -148,13 +155,13 @@ bs_op_selector()
   static_assert(K >= K_MIN, "MMA_K must be >= K_MIN (element type hardware minimum).");
   static_assert(K % VS == 0, "MMA_K must be a multiple of the scale factor vector size (VS).");
 
-  // Currently only single-CTA variant implemented for block-scaled
-  // TODO: Add cluster support when XE4_AMMA_FP4FP8_CLUSTER is implemented
-  static_assert(size(ClusterShape_MNK{}) == 1, 
-    "Block-scaled cluster operations not yet implemented for XE4.");
-
-  return XE4_AMMA_FP4FP8<
-    ElementD, ElementA, ElementB, ElementC, ElementSF, M, N, K, VS, MajorA, MajorB>();
+  if constexpr (size(ClusterShape_MNK{}) == 1) {
+    return XE4_AMMA_FP4FP8<
+      ElementD, ElementA, ElementB, ElementC, ElementSF, M, N, K, VS, MajorA, MajorB>();
+  } else {
+    return XE4_AMMA_FP4FP8_AB_CLUSTER<
+      ElementD, ElementA, ElementB, ElementC, ElementSF, M, N, K, VS, MajorA, MajorB>();
+  }
 
   CUTE_GCC_UNREACHABLE;
 }

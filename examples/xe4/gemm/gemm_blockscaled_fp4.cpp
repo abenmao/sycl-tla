@@ -34,8 +34,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // Config template for FP4 block-scaled GEMM.
-// Fixed: ElementA/B = float_e2m1_t, ElementAccumulator = float, TileShape = 128x256xTileK.
-// Varying: ElementSF, SFVecSize, ElementD, TileK.
+// Fixed: ElementA/B = float_e2m1_t, ElementAccumulator = float
+// Varying: TileShape = 128x256x64 (padding will be enabled) / 128x256x768 (padding will be disabled), ElementSF, SFVecSize, ElementD.
 //
 // Name format: {sf_type}_k{vecsize}_{output_dtype}
 //   e.g. ue4m3_k16_fp32, ue5m3_k32_bf16
@@ -55,12 +55,59 @@ struct BS_FP4_Config {
   using LayoutA = cutlass::layout::RowMajor;
   using LayoutB = cutlass::layout::RowMajor;
 
-  // K=6144 = 8*TileK (TileK=768): K/TileK=8 = 2x PipelineStages, exercises pipeline steady-state.
-  static constexpr cute::array<int, 4> ProblemShape_MNKL = {512, 1024, 6144, 1};
+  // K=1024 = 16*TileK (TileK=64): K/TileK=16 = 16x PipelineStages, exercises pipeline steady-state.
+  static constexpr cute::array<int, 4> ProblemShape_MNKL = {512, 512, 1024, 1};
 
   using CtaTileShape_MNK  = Shape<_128, _256, cute::Int<TileK_>>;
   using ClusterShape_MNK  = Shape<_1, _1, _1>;
   static constexpr int PipelineStages = 4;
+  static constexpr bool EnableCooperativeSF = false;
+
+  static constexpr const char* Name = Name_;
+};
+
+// Cluster variant: parameterized cluster shape.
+// Non-cooperative (default): TileK=64 — padding handles the cm_8x32B constraint.
+// Cooperative (--coop_sf=1): ConfigWithCoopSF<Config, true> overrides TileK to
+//   256 (VS=16) or 512 (VS=32), ensuring each CTA's ADMA box satisfies cm_8x32B.
+template <class ElementSF_, int SFVecSize_, class ElementD_, int TileK_, int ClusterM_, int ClusterN_, const char* Name_>
+struct BS_FP4_Cluster_Config {
+  using ElementA  = cutlass::float_e2m1_t;
+  using ElementB  = cutlass::float_e2m1_t;
+  using ElementSF = ElementSF_;
+  static constexpr int SFVecSize = SFVecSize_;
+
+  using ElementD = ElementD_;
+  using ElementAccumulator = float;
+
+  using LayoutA = cutlass::layout::RowMajor;
+  using LayoutB = cutlass::layout::RowMajor;
+
+  static constexpr cute::array<int, 4> ProblemShape_MNKL = {512, 512, 1024, 1};
+
+  using CtaTileShape_MNK  = Shape<_128, _256, cute::Int<TileK_>>;
+  using ClusterShape_MNK  = Shape<cute::Int<ClusterM_>, cute::Int<ClusterN_>, _1>;
+  static constexpr int PipelineStages = 4;
+  static constexpr bool EnableCooperativeSF = false;
+
+  // Cooperative SF constraint: (TileK / SFVecSize / max(ClusterM, ClusterN)) must be
+  // a multiple of 8. The ADMA 2D-block-copy uses cm_8x32B core-matrix units (8 rows
+  // per write). With cooperative loading, each CTA's ADMA box covers only
+  // (TileK / SFVecSize / max(ClusterM, ClusterN)) SF rows. If this is not a multiple
+  // of 8 (e.g. 12), the last 8-row core-matrix write overflows into a peer CTA's SF
+  // region within the same pipeline stage, causing intra-stage data corruption that
+  // padding cannot fix. This assert guards the config struct directly; ConfigWithCoopSF
+  // in gemm_blockscaled.hpp re-validates when cooperative SF is actually enabled.
+  static constexpr int MaxClusterDim_ = (ClusterM_ > ClusterN_) ? ClusterM_ : ClusterN_;
+  static_assert(!EnableCooperativeSF ||
+      ((TileK_ / SFVecSize_ / MaxClusterDim_ >= 8) &&
+       (TileK_ / SFVecSize_ / MaxClusterDim_) % 8 == 0),
+      "Cooperative SF loading requires (TileK / SFVecSize / max(ClusterM, ClusterN)) to be "
+      "a multiple of 8 (>= 8). The ADMA 2D-block-copy writes in cm_8x32B core-matrix units "
+      "(8 rows). If the per-CTA SF row count is not a multiple of 8 (e.g. 12), the last "
+      "core-matrix write overflows into a peer CTA's SF region within the same pipeline "
+      "stage, causing intra-stage collision that padding cannot fix. "
+      "VS=16 needs TileK>=256, VS=32 needs TileK>=512.");
 
   static constexpr const char* Name = Name_;
 };
@@ -72,7 +119,7 @@ struct BS_FP4_Config {
 
 #define DECL_FP4_CONFIG(SF, VS, D, name_)                    \
   inline constexpr char name_[] = #name_;                     \
-  using cfg_##name_ = BS_FP4_Config<SF, VS, D, 768, name_>
+  using cfg_##name_ = BS_FP4_Config<SF, VS, D, 64, name_>
 
 DECL_FP4_CONFIG(cutlass::float_ue4m3_t, 16, float,                           ue4m3_k16_fp32);
 DECL_FP4_CONFIG(cutlass::float_ue4m3_t, 16, sycl::half,                      ue4m3_k16_fp16);
@@ -96,19 +143,86 @@ DECL_FP4_CONFIG(cutlass::float_ue8m0_t, 32, sycl::ext::oneapi::bfloat16,     ue8
 
 #undef DECL_FP4_CONFIG
 
-///////////////////////////////////////////////////////////////////////////////////////////////////
-// TileK=128 configs: VS=32, TileK=128 -> sf_bK_actual=4
-///////////////////////////////////////////////////////////////////////////////////////////////////
+// Cluster configs for three cluster shapes: <1,2,1>, <2,1,1>, <2,2,1>
+// Naming: {sf_type}_k{vecsize}_{output_dtype}_cluster_{MxN}
+//
+// Non-cooperative (default): TileK=64 — padding handles the cm_8x32B constraint.
+// Cooperative (--coop_sf=1): CoopConfigType in the struct provides TileK=256 for
+//   VS=16, TileK=512 for VS=32 — ensures each CTA's ADMA box satisfies cm_8x32B.
 
-#define DECL_FP4_K128_CONFIG(SF, VS, D, name_)               \
-  inline constexpr char name_[] = #name_;                     \
-  using cfg_##name_ = BS_FP4_Config<SF, VS, D, 128, name_>
+#define DECL_FP4_CLUSTER_CONFIG_K16(SF, D, CM, CN, name_)            \
+  inline constexpr char name_[] = #name_;                             \
+  using cfg_##name_ = BS_FP4_Cluster_Config<SF, 16, D, 64, CM, CN, name_>
 
-DECL_FP4_K128_CONFIG(cutlass::float_ue8m0_t, 32, float,                           ue8m0_k32_fp32_t128);
-DECL_FP4_K128_CONFIG(cutlass::float_ue8m0_t, 32, sycl::half,                      ue8m0_k32_fp16_t128);
-DECL_FP4_K128_CONFIG(cutlass::float_ue8m0_t, 32, sycl::ext::oneapi::bfloat16,     ue8m0_k32_bf16_t128);
+#define DECL_FP4_CLUSTER_CONFIG_K32(SF, D, CM, CN, name_)            \
+  inline constexpr char name_[] = #name_;                             \
+  using cfg_##name_ = BS_FP4_Cluster_Config<SF, 32, D, 64, CM, CN, name_>
 
-#undef DECL_FP4_K128_CONFIG
+// ClusterShape<1,2,1>
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue4m3_t, float,                           1, 2, ue4m3_k16_fp32_cluster_1x2);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue4m3_t, sycl::half,                      1, 2, ue4m3_k16_fp16_cluster_1x2);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue4m3_t, sycl::ext::oneapi::bfloat16,     1, 2, ue4m3_k16_bf16_cluster_1x2);
+
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue5m3_t, float,                           1, 2, ue5m3_k16_fp32_cluster_1x2);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue5m3_t, sycl::half,                      1, 2, ue5m3_k16_fp16_cluster_1x2);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue5m3_t, sycl::ext::oneapi::bfloat16,     1, 2, ue5m3_k16_bf16_cluster_1x2);
+
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue5m3_t, float,                           1, 2, ue5m3_k32_fp32_cluster_1x2);
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue5m3_t, sycl::half,                      1, 2, ue5m3_k32_fp16_cluster_1x2);
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue5m3_t, sycl::ext::oneapi::bfloat16,     1, 2, ue5m3_k32_bf16_cluster_1x2);
+
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue8m0_t, float,                           1, 2, ue8m0_k16_fp32_cluster_1x2);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue8m0_t, sycl::half,                      1, 2, ue8m0_k16_fp16_cluster_1x2);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue8m0_t, sycl::ext::oneapi::bfloat16,     1, 2, ue8m0_k16_bf16_cluster_1x2);
+
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue8m0_t, float,                           1, 2, ue8m0_k32_fp32_cluster_1x2);
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue8m0_t, sycl::half,                      1, 2, ue8m0_k32_fp16_cluster_1x2);
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue8m0_t, sycl::ext::oneapi::bfloat16,     1, 2, ue8m0_k32_bf16_cluster_1x2);
+
+// ClusterShape<2,1,1>
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue4m3_t, float,                           2, 1, ue4m3_k16_fp32_cluster_2x1);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue4m3_t, sycl::half,                      2, 1, ue4m3_k16_fp16_cluster_2x1);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue4m3_t, sycl::ext::oneapi::bfloat16,     2, 1, ue4m3_k16_bf16_cluster_2x1);
+
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue5m3_t, float,                           2, 1, ue5m3_k16_fp32_cluster_2x1);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue5m3_t, sycl::half,                      2, 1, ue5m3_k16_fp16_cluster_2x1);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue5m3_t, sycl::ext::oneapi::bfloat16,     2, 1, ue5m3_k16_bf16_cluster_2x1);
+
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue5m3_t, float,                           2, 1, ue5m3_k32_fp32_cluster_2x1);
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue5m3_t, sycl::half,                      2, 1, ue5m3_k32_fp16_cluster_2x1);
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue5m3_t, sycl::ext::oneapi::bfloat16,     2, 1, ue5m3_k32_bf16_cluster_2x1);
+
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue8m0_t, float,                           2, 1, ue8m0_k16_fp32_cluster_2x1);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue8m0_t, sycl::half,                      2, 1, ue8m0_k16_fp16_cluster_2x1);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue8m0_t, sycl::ext::oneapi::bfloat16,     2, 1, ue8m0_k16_bf16_cluster_2x1);
+
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue8m0_t, float,                           2, 1, ue8m0_k32_fp32_cluster_2x1);
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue8m0_t, sycl::half,                      2, 1, ue8m0_k32_fp16_cluster_2x1);
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue8m0_t, sycl::ext::oneapi::bfloat16,     2, 1, ue8m0_k32_bf16_cluster_2x1);
+
+// ClusterShape<2,2,1>
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue4m3_t, float,                           2, 2, ue4m3_k16_fp32_cluster_2x2);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue4m3_t, sycl::half,                      2, 2, ue4m3_k16_fp16_cluster_2x2);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue4m3_t, sycl::ext::oneapi::bfloat16,     2, 2, ue4m3_k16_bf16_cluster_2x2);
+
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue5m3_t, float,                           2, 2, ue5m3_k16_fp32_cluster_2x2);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue5m3_t, sycl::half,                      2, 2, ue5m3_k16_fp16_cluster_2x2);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue5m3_t, sycl::ext::oneapi::bfloat16,     2, 2, ue5m3_k16_bf16_cluster_2x2);
+
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue5m3_t, float,                           2, 2, ue5m3_k32_fp32_cluster_2x2);
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue5m3_t, sycl::half,                      2, 2, ue5m3_k32_fp16_cluster_2x2);
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue5m3_t, sycl::ext::oneapi::bfloat16,     2, 2, ue5m3_k32_bf16_cluster_2x2);
+
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue8m0_t, float,                           2, 2, ue8m0_k16_fp32_cluster_2x2);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue8m0_t, sycl::half,                      2, 2, ue8m0_k16_fp16_cluster_2x2);
+DECL_FP4_CLUSTER_CONFIG_K16(cutlass::float_ue8m0_t, sycl::ext::oneapi::bfloat16,     2, 2, ue8m0_k16_bf16_cluster_2x2);
+
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue8m0_t, float,                           2, 2, ue8m0_k32_fp32_cluster_2x2);
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue8m0_t, sycl::half,                      2, 2, ue8m0_k32_fp16_cluster_2x2);
+DECL_FP4_CLUSTER_CONFIG_K32(cutlass::float_ue8m0_t, sycl::ext::oneapi::bfloat16,     2, 2, ue8m0_k32_bf16_cluster_2x2);
+
+#undef DECL_FP4_CLUSTER_CONFIG_K16
+#undef DECL_FP4_CLUSTER_CONFIG_K32
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Usage and entry point
@@ -121,18 +235,21 @@ std::ostream& print_usage(std::ostream& out) {
       << "  --m=<int>                   Override M dimension (per-config default if not set)\n"
       << "  --n=<int>                   Override N dimension\n"
       << "  --k=<int>                   Override K dimension\n"
-      << "  --config=<name>[,<name>]    Run specific configs (comma-separated); omit to run all\n\n"
-      << "Standard configs (TileK=768, {sf_type}_k{vecsize}_{output_dtype}):\n"
+      << "  --coop_sf=<0|1>             Override cooperative SF loading (0=disabled, 1=enabled), only applicable if cluster size > 1\n"
+      << "  --config=<name>[,<name>]    Run specific configs (comma-separated); omit to run all 60\n\n"
+      << "Available configs ({sf_type}_k{vecsize}_{output_dtype}[_cluster_{MxN}]):\n"
       << "  ue4m3_k16_{fp32,fp16,bf16}\n"
       << "  ue5m3_k{16,32}_{fp32,fp16,bf16}\n"
-      << "  ue8m0_k{16,32}_{fp32,fp16,bf16}\n\n"
-      << "TileK=128 configs (VS=32, sf_bK_actual=4):\n"
-      << "  ue8m0_k32_{fp32,fp16,bf16}_t128\n\n"
+      << "  ue8m0_k{16,32}_{fp32,fp16,bf16}\n"
+      << "  *_cluster_1x2   (ClusterShape<1,2,1>)\n"
+      << "  *_cluster_2x1   (ClusterShape<2,1,1>)\n"
+      << "  *_cluster_2x2   (ClusterShape<2,2,1>)\n\n"
       << "Examples:\n"
-      << "  ./xe4_gemm_blockscaled_fp4                                              # all configs\n"
-      << "  ./xe4_gemm_blockscaled_fp4 --config=ue4m3_k16_fp32                     # one config\n"
-      << "  ./xe4_gemm_blockscaled_fp4 --config=ue5m3_k32_fp32_t128               # one TileK=128 config\n"
-      << "  ./xe4_gemm_blockscaled_fp4 --config=ue5m3_k32_fp32_t128 --k=1024      # fixed K\n";
+      << "  ./xe4_gemm_blockscaled_fp4                                         # all 15 configs\n"
+      << "  ./xe4_gemm_blockscaled_fp4 --m=256 --n=512 --k=3072                # all configs, custom shape\n"
+      << "  ./xe4_gemm_blockscaled_fp4 --config=ue4m3_k16_fp32                 # one config\n"
+      << "  ./xe4_gemm_blockscaled_fp4 --config=ue4m3_k16_fp32,ue5m3_k32_bf16  # two configs\n"
+      << "  ./xe4_gemm_blockscaled_fp4 --config=ue4m3_k16_fp32 --m=256         # one config, custom shape\n";
   return out;
 }
 
@@ -144,20 +261,29 @@ int main(int argc, char **argv) {
   }
 
   sycl::queue q;
-
-  // Standard configs (TileK=768)
-  bool pass = run_configs<
+  return run_configs<
       cfg_ue4m3_k16_fp32, cfg_ue4m3_k16_fp16, cfg_ue4m3_k16_bf16,
       cfg_ue5m3_k16_fp32, cfg_ue5m3_k16_fp16, cfg_ue5m3_k16_bf16,
       cfg_ue5m3_k32_fp32, cfg_ue5m3_k32_fp16, cfg_ue5m3_k32_bf16,
       cfg_ue8m0_k16_fp32, cfg_ue8m0_k16_fp16, cfg_ue8m0_k16_bf16,
-      cfg_ue8m0_k32_fp32, cfg_ue8m0_k32_fp16, cfg_ue8m0_k32_bf16
-  >(Options::configs, q);
-
-  // TileK=128 configs (VS=32 -> sf_bK_actual=4).
-  pass &= run_configs<
-      cfg_ue8m0_k32_fp32_t128, cfg_ue8m0_k32_fp16_t128, cfg_ue8m0_k32_bf16_t128
-  >(Options::configs, q);
-
-  return pass ? 0 : 1;
+      cfg_ue8m0_k32_fp32, cfg_ue8m0_k32_fp16, cfg_ue8m0_k32_bf16,
+      // ClusterShape<1,2,1>
+      cfg_ue4m3_k16_fp32_cluster_1x2, cfg_ue4m3_k16_fp16_cluster_1x2, cfg_ue4m3_k16_bf16_cluster_1x2,
+      cfg_ue5m3_k16_fp32_cluster_1x2, cfg_ue5m3_k16_fp16_cluster_1x2, cfg_ue5m3_k16_bf16_cluster_1x2,
+      cfg_ue5m3_k32_fp32_cluster_1x2, cfg_ue5m3_k32_fp16_cluster_1x2, cfg_ue5m3_k32_bf16_cluster_1x2,
+      cfg_ue8m0_k16_fp32_cluster_1x2, cfg_ue8m0_k16_fp16_cluster_1x2, cfg_ue8m0_k16_bf16_cluster_1x2,
+      cfg_ue8m0_k32_fp32_cluster_1x2, cfg_ue8m0_k32_fp16_cluster_1x2, cfg_ue8m0_k32_bf16_cluster_1x2,
+      // ClusterShape<2,1,1>
+      cfg_ue4m3_k16_fp32_cluster_2x1, cfg_ue4m3_k16_fp16_cluster_2x1, cfg_ue4m3_k16_bf16_cluster_2x1,
+      cfg_ue5m3_k16_fp32_cluster_2x1, cfg_ue5m3_k16_fp16_cluster_2x1, cfg_ue5m3_k16_bf16_cluster_2x1,
+      cfg_ue5m3_k32_fp32_cluster_2x1, cfg_ue5m3_k32_fp16_cluster_2x1, cfg_ue5m3_k32_bf16_cluster_2x1,
+      cfg_ue8m0_k16_fp32_cluster_2x1, cfg_ue8m0_k16_fp16_cluster_2x1, cfg_ue8m0_k16_bf16_cluster_2x1,
+      cfg_ue8m0_k32_fp32_cluster_2x1, cfg_ue8m0_k32_fp16_cluster_2x1, cfg_ue8m0_k32_bf16_cluster_2x1,
+      // ClusterShape<2,2,1>
+      cfg_ue4m3_k16_fp32_cluster_2x2, cfg_ue4m3_k16_fp16_cluster_2x2, cfg_ue4m3_k16_bf16_cluster_2x2,
+      cfg_ue5m3_k16_fp32_cluster_2x2, cfg_ue5m3_k16_fp16_cluster_2x2, cfg_ue5m3_k16_bf16_cluster_2x2,
+      cfg_ue5m3_k32_fp32_cluster_2x2, cfg_ue5m3_k32_fp16_cluster_2x2, cfg_ue5m3_k32_bf16_cluster_2x2,
+      cfg_ue8m0_k16_fp32_cluster_2x2, cfg_ue8m0_k16_fp16_cluster_2x2, cfg_ue8m0_k16_bf16_cluster_2x2,
+      cfg_ue8m0_k32_fp32_cluster_2x2, cfg_ue8m0_k32_fp16_cluster_2x2, cfg_ue8m0_k32_bf16_cluster_2x2
+  >(Options::configs, q) ? 0 : 1;
 }

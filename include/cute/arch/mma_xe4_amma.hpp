@@ -364,6 +364,76 @@ struct XE4_AMMA_FP4FP8_DAB {
   }
 };
 
+// Block-scaled AMMA, barrier tracking: A and B, cluster version (multicast masks)
+template <class d_type, class a_type, class b_type, class c_type, class sf_type,
+         int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
+struct XE4_AMMA_FP4FP8_AB_CLUSTER {
+  using DRegisters   = void;
+  using ARegisters   = void;
+  using BRegisters   = void;
+  using CRegisters   = void;
+  using SFARegisters = uint32_t[1];
+  using SFBRegisters = uint32_t[1];
+
+  static constexpr int SFVectorSize = VS;
+
+  CUTE_HOST_DEVICE static void fma(
+      MMAControl const& ctrl,
+      uint32_t const& desc_d,   uint32_t const& desc_a,
+      uint32_t const& desc_b,   uint32_t const& desc_c,
+      uint32_t const& desc_sfa, uint32_t const& desc_sfb,
+      uint64_t* abar_a, uint64_t* abar_b,
+      uint32_t a_mask, uint32_t b_mask)
+  {
+#if defined(__SYCL_DEVICE_ONLY__)
+    if ( cute::elect_one_sync() ) {
+        asm volatile (
+          ("async_gmma.m"+_s<M>+"n"+_s<N>+"k"+_s<K>+"."+_t<d_type>+"_"+_t<a_type>+"_"+_t<b_type>+"_"+_t<c_type>+".ascale.bscale"+_am<a_major>+_bk<b_major>+".atmm.btmm %0, %1, %2, %3, %4, %5, %6, [%7], %9, [%8], %10;\n")
+          ::"r"(ctrl), "r"(desc_d), "r"(desc_a), "r"(desc_b), "r"(desc_c),
+          "r"(desc_sfa), "r"(desc_sfb), "r"(abar_a), "r"(abar_b), "r"(a_mask), "r"(b_mask));
+    }
+#else
+    (void)ctrl; (void)desc_d; (void)desc_a; (void)desc_b; (void)desc_c;
+    (void)desc_sfa; (void)desc_sfb; (void)abar_a; (void)abar_b; (void)a_mask; (void)b_mask;
+#endif
+  }
+};
+
+// Block-scaled AMMA, barrier tracking: D, A, and B, cluster version (multicast masks)
+template <class d_type, class a_type, class b_type, class c_type, class sf_type,
+         int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
+struct XE4_AMMA_FP4FP8_DAB_CLUSTER {
+  using DRegisters   = void;
+  using ARegisters   = void;
+  using BRegisters   = void;
+  using CRegisters   = void;
+  using SFARegisters = uint32_t[1];
+  using SFBRegisters = uint32_t[1];
+
+  static constexpr int SFVectorSize = VS;
+
+  CUTE_HOST_DEVICE static void fma(
+      MMAControl const& ctrl,
+      uint32_t const& desc_d,   uint32_t const& desc_a,
+      uint32_t const& desc_b,   uint32_t const& desc_c,
+      uint32_t const& desc_sfa, uint32_t const& desc_sfb,
+      uint64_t* abar_d, uint64_t* abar_a, uint64_t* abar_b,
+      uint32_t a_mask, uint32_t b_mask)
+  {
+#if defined(__SYCL_DEVICE_ONLY__)
+    if ( cute::elect_one_sync() ) {
+        asm volatile (
+          ("async_gmma.m"+_s<M>+"n"+_s<N>+"k"+_s<K>+"."+_t<d_type>+"_"+_t<a_type>+"_"+_t<b_type>+"_"+_t<c_type>+".ascale.bscale"+_am<a_major>+_bk<b_major>+".dtm.atmm.btmm %0, %1, %2, %3, %4, %5, %6, [%7], [%8], %10, [%9], %11;\n")
+          ::"r"(ctrl), "r"(desc_d), "r"(desc_a), "r"(desc_b), "r"(desc_c),
+          "r"(desc_sfa), "r"(desc_sfb), "r"(abar_d), "r"(abar_a), "r"(abar_b), "r"(a_mask), "r"(b_mask));
+    }
+#else
+    (void)ctrl; (void)desc_d; (void)desc_a; (void)desc_b; (void)desc_c;
+    (void)desc_sfa; (void)desc_sfb; (void)abar_d; (void)abar_a; (void)abar_b; (void)a_mask; (void)b_mask;
+#endif
+  }
+};
+
 // Block-scaled AMMA, no barrier tracking
 template <class d_type, class a_type, class b_type, class c_type, class sf_type,
          int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
