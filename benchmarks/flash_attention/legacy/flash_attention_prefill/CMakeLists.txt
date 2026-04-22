@@ -38,6 +38,10 @@ cutlass_benchmark_add_suite(cutlass_benchmarks_flash_attention_prefill_legacy
 
 if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
   set(PREFILL_LEGACY_CONFIG_ARGS CONFIG_FILE_CRI)
+elseif(("intel_gpu_bmg_g21" IN_LIST DPCPP_SYCL_TARGET_LIST) OR
+       ("intel_gpu_bmg_g31" IN_LIST DPCPP_SYCL_TARGET_LIST) OR
+       ("bmg" IN_LIST DPCPP_SYCL_TARGET_LIST))
+  set(PREFILL_LEGACY_CONFIG_ARGS CONFIG_FILE_BMG)
 else()
   set(PREFILL_LEGACY_CONFIG_ARGS CONFIG_FILE_PVC CONFIG_FILE_BMG)
 endif()

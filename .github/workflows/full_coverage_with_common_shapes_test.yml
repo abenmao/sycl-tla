@@ -347,9 +347,12 @@ jobs:
         run: |
           cd ${BUILD_DIR:-build}
           if [ "${{ matrix.gpu }}" = "BMG" ]; then
-            ctest -R cbenchmarks -E "pvc|intel_default|intel_pytorch" --output-on-failure
+            ctest -R cbenchmarks -E "flash_attention" --output-on-failure
+          elif [ "${{ matrix.gpu }}" = "PVC" ]; then
+            ctest -R cbenchmarks -E "fp8|config_file_bmg_prefill_bf16|prefill_legacy_xe_config_file_pvc" --output-on-failure
           else
-            ctest -R cbenchmarks -E "fp8|prefill_xe_config_file_prefill_bf16|prefill_legacy_xe_config_file_pvc" --output-on-failure
+            # CRI uses MACRO to control build process so we don't need to specifically exclude benchmarks here.
+            ctest -R cbenchmarks --output-on-failure
           fi
 
       # ---- Cleanup remote build artifacts ----

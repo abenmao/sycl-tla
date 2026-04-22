@@ -30,9 +30,11 @@
 # Pass these configuration files for the CI
 
 if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
-  set(CONFIG_FILE_INTEL_SMALL --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_small_gemm.in)
+  set(CONFIG_FILE_CRI_SMALL --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_small_gemm.in)
+  set(GEMM_CONFIG_ARGS CONFIG_FILE_CRI_SMALL)
 else()
-  set(CONFIG_FILE_INTEL_SMALL --config_file=${CUTLASS_DIR}/benchmarks/device/bmg/input_files/input_small_gemm.in)
+  set(CONFIG_FILE_BMG_SMALL --config_file=${CUTLASS_DIR}/benchmarks/device/bmg/input_files/input_small_gemm.in)
+  set(GEMM_CONFIG_ARGS CONFIG_FILE_BMG_SMALL)
 endif()
 
 set(CONFIG_FILE_CUDA --config_file=${CUTLASS_DIR}/benchmarks/device/ampere/input_files/input_gemm.in)
@@ -48,7 +50,7 @@ cutlass_benchmark_add_executable(
     main.cpp
     SUITE cutlass_benchmarks_gemm
     TEST_COMMAND_OPTIONS
-    CONFIG_FILE_INTEL_SMALL
+    ${GEMM_CONFIG_ARGS}
 )
 
 else()

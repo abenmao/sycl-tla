@@ -323,7 +323,14 @@ jobs:
         shell: bash
         run: |
           cd ${BUILD_DIR}
-          ctest -R cbenchmarks -E "pvc|intel_default|intel_pytorch" --output-on-failure
+          if [ "${{ matrix.gpu }}" = "BMG" ]; then
+            ctest -R cbenchmarks -E "flash_attention" --output-on-failure
+          elif [ "${{ matrix.gpu }}" = "PVC" ]; then
+            ctest -R cbenchmarks -E "fp8|config_file_bmg_prefill_bf16|prefill_legacy_xe_config_file_pvc" --output-on-failure
+          else
+            # CRI uses MACRO to control build process so we don't need to specifically exclude benchmarks here.
+            ctest -R cbenchmarks --output-on-failure
+          fi
 
       # Cleanup remote build artifacts (only needed for remote builds):
       #   Local:  rm -rf /tmp/cutlass-build-* (no-op if local fallback was used)
