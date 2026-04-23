@@ -52,9 +52,23 @@
 using namespace cute;
 using namespace sycl;
 
+// Type-name helpers used in config names and banners.
+template <class T> constexpr const char* type_name() {
+  if constexpr (std::is_same_v<T, cutlass::float_e2m1_t>)       return "fp4";
+  if constexpr (std::is_same_v<T, cutlass::float_e4m3_t>)       return "fp8";
+  if constexpr (std::is_same_v<T, float>)                        return "fp32";
+  if constexpr (std::is_same_v<T, sycl::half>)                   return "fp16";
+  if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) return "bf16";
+  return "unknown";
+}
+template <class T> constexpr const char* sf_tag() {
+  if constexpr (std::is_same_v<T, cutlass::float_ue4m3_t>) return "ue4m3";
+  if constexpr (std::is_same_v<T, cutlass::float_ue5m3_t>) return "ue5m3";
+  return "ue8m0";
+}
+
 // Runtime override for problem shape via command line: --m=<int> --n=<int> --k=<int> [--l=<int>]
 // Dimensions not specified on the command line retain the per-config default.
-// Select config via --config.
 //
 // Note: print_usage() is intentionally omitted — each executable defines its own
 // to list program-specific configs and examples.
@@ -62,31 +76,13 @@ struct Options {
   static inline std::optional<int> m, n, k, l;
   static inline std::vector<std::string> configs;
   static inline bool help = false;
+  static inline bool run_all = false;
   static inline std::optional<bool> coop_sf;
 
-  static void parse(int argc, char** argv) {
-    cutlass::CommandLine cmd(argc, const_cast<char const**>(argv));
-    help = cmd.check_cmd_line_flag("help");
-    int val;
-    if (cmd.check_cmd_line_flag("m")) { cmd.get_cmd_line_argument("m", val); m = val; }
-    if (cmd.check_cmd_line_flag("n")) { cmd.get_cmd_line_argument("n", val); n = val; }
-    if (cmd.check_cmd_line_flag("k")) { cmd.get_cmd_line_argument("k", val); k = val; }
-    if (cmd.check_cmd_line_flag("l")) { cmd.get_cmd_line_argument("l", val); l = val; }
-    if (cmd.check_cmd_line_flag("coop_sf")) {
-      int csf = 0;
-      cmd.get_cmd_line_argument("coop_sf", csf);
-      coop_sf = (csf != 0);
-    }
-    std::string config_str;
-    cmd.get_cmd_line_argument("config", config_str);
-    if (!config_str.empty()) {
-      std::istringstream iss(config_str);
-      std::string token;
-      while (std::getline(iss, token, ',')) {
-        if (!token.empty()) configs.push_back(token);
-      }
-    }
-  }
+  // Defined in the .cpp file — parses general flags
+  // (--help, --run-all, --m/--n/--k/--l, --coop_sf) and blockscaled operand shorthand
+  // (--A/--sfA/--blockA, --B/--sfB/--blockB, --D).
+  static void parse(int argc, char** argv);
 
   template <typename Config>
   static cute::array<int, 4> get_problem_shape() {
@@ -111,7 +107,7 @@ struct ConfigWithCoopSF : BaseConfig {
 template <typename BaseConfig>
 struct ConfigWithCoopSF<BaseConfig, true> : BaseConfig {
   static constexpr bool EnableCooperativeSF = true;
-  static constexpr int CoopTileK = (BaseConfig::SFVecSize == 16) ? 256 : 512;
+  static constexpr int CoopTileK = (BaseConfig::SFVecSizeA == 16) ? 256 : 512;
   using CtaTileShape_MNK = Shape<_128, _256, cute::Int<CoopTileK>>;
 
   // Validate that the cooperative TileK satisfies the cm_8x32B constraint.
@@ -126,8 +122,8 @@ struct ConfigWithCoopSF<BaseConfig, true> : BaseConfig {
        static_cast<int>(cute::size<1>(typename BaseConfig::ClusterShape_MNK{})))
       ? static_cast<int>(cute::size<0>(typename BaseConfig::ClusterShape_MNK{}))
       : static_cast<int>(cute::size<1>(typename BaseConfig::ClusterShape_MNK{}));
-  static_assert((CoopTileK / BaseConfig::SFVecSize / MaxClusterDim_ >= 8) &&
-      (CoopTileK / BaseConfig::SFVecSize / MaxClusterDim_) % 8 == 0,
+  static_assert((CoopTileK / BaseConfig::SFVecSizeA / MaxClusterDim_ >= 8) &&
+      (CoopTileK / BaseConfig::SFVecSizeA / MaxClusterDim_) % 8 == 0,
       "Cooperative SF loading requires (CoopTileK / SFVecSize / max(ClusterM, ClusterN)) to be "
       "a multiple of 8 (>= 8). The ADMA 2D-block-copy writes in cm_8x32B core-matrix units "
       "(8 rows). If the per-CTA SF row count is not a multiple of 8 (e.g. 12), the last "
@@ -201,40 +197,29 @@ std::string get_shared_memory_info_blockscaled() {
 template<typename Config>
 bool run_gemm_blockscaled(sycl::queue& q)
 {
-  // Block-scaled data types: sub-byte or byte data + scale factors
-  using ElementA  = typename Config::ElementA;
-  using ElementB  = typename Config::ElementB;
-  using ElementSF = typename Config::ElementSF;
-  static constexpr int SFVecSize = Config::SFVecSize;
-
-  // ElementTupleA/B bundle data + SF types for CollectiveBuilder.
-  // The 4th element encodes EnableCooperativeSF (0=disabled, 1=enabled) so it
-  // reaches the mainloop collective without changing the dispatch policy.
-  static constexpr bool CoopSF = Config::EnableCooperativeSF;
-  using ElementTupleA = cute::tuple<ElementA, ElementSF, cute::Int<SFVecSize>, cute::Int<CoopSF ? 1 : 0>>;
-  using ElementTupleB = cute::tuple<ElementB, ElementSF, cute::Int<SFVecSize>, cute::Int<CoopSF ? 1 : 0>>;
-
-  // Layouts
-  using LayoutA = typename Config::LayoutA;
-  using LayoutB = typename Config::LayoutB;
-  using LayoutC = cutlass::layout::RowMajor;
-  constexpr int AlignmentA = 512;
-  constexpr int AlignmentB = 512;
-  constexpr int AlignmentC = 512;
-
-  // Accumulator / output types
-  using ElementD = typename Config::ElementD;
+  using ElementA          = typename Config::ElementA;
+  using ElementB          = typename Config::ElementB;
+  using ElementSFA        = typename Config::ElementSFA;
+  using ElementSFB        = typename Config::ElementSFB;
+  using ElementD          = typename Config::ElementD;
   using ElementAccumulator = typename Config::ElementAccumulator;
+  using LayoutA           = typename Config::LayoutA;
+  using LayoutB           = typename Config::LayoutB;
+  using LayoutC           = cutlass::layout::RowMajor;
+  using TileShape         = typename Config::CtaTileShape_MNK;
+  using ClusterShape      = typename Config::ClusterShape_MNK;
+  static constexpr int SFVecSizeA = Config::SFVecSizeA;
+  static constexpr int SFVecSizeB = Config::SFVecSizeB;
+  constexpr int AlignmentA = 512, AlignmentB = 512, AlignmentC = 512;
 
-  // Kernel shape config
-  using ArchTag      = cutlass::arch::Xe4;
+  static constexpr bool CoopSF = Config::EnableCooperativeSF;
+  using ElementTupleA = cute::tuple<ElementA, ElementSFA, cute::Int<SFVecSizeA>, cute::Int<CoopSF ? 1 : 0>>;
+  using ElementTupleB = cute::tuple<ElementB, ElementSFB, cute::Int<SFVecSizeB>, cute::Int<CoopSF ? 1 : 0>>;
+
+  using ArchTag       = cutlass::arch::Xe4;
   using OperatorClass = cutlass::arch::OpClassBlockScaledTensorOp;
-  using TileShape    = typename Config::CtaTileShape_MNK;
-  using ClusterShape = typename Config::ClusterShape_MNK;
 
-  // --- Build Epilogue (reuses existing Xe4 epilogue collective, not added by this PR) ---
-  // Identity epilogue: D = Acc, no fusion, void = no source C.
-  // TODO: Test with a real epilogue (e.g., bias, activation) to validate end-to-end fusion.
+  // Identity epilogue: D = Acc, no source C.
   using EpilogueScheduleType = cutlass::epilogue::collective::EpilogueScheduleAuto;
   using EpilogueOperation = cutlass::epilogue::fusion::EltAct<
       cutlass::epilogue::thread::Identity, ElementD, ElementD>;
@@ -258,7 +243,7 @@ bool run_gemm_blockscaled(sycl::queue& q)
       cute::tuple<ElementAccumulator, ElementD>,
       TileShape, ClusterShape,
       cutlass::gemm::collective::StageCount<Config::PipelineStages>,
-      cutlass::gemm::KernelTmaWarpSpecializedXe4<3, 1>  // required by template; builder hardcodes these internally
+      cutlass::gemm::KernelTmaWarpSpecializedXe4<3, 1>
     >::CollectiveOp;
 
   using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
@@ -270,212 +255,152 @@ bool run_gemm_blockscaled(sycl::queue& q)
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
 
-  // Warp counts — fixed by shared infrastructure (kernel + epilogue builders)
-  // NumEpilogueWarps: set by Xe4 epilogue builder (xe4_builder.inl), controls SMEM->GMEM store throughput.
-  // NumControlWarps:  set by Xe4 kernel (xe4_gemm_dma_warpspecialized.hpp), one per role:
-  //                   MMA(0), Sched(1), MainloopLoad(2), EpilogueLoad(3).
-  static constexpr int NumTotalWarps    = GemmKernel::MaxThreadsPerBlock / cutlass::NumThreadsPerWarp;
-  static constexpr int NumEpilogueWarps = CollectiveEpilogue::DispatchPolicy::NumEpilogueWarps;
-  static constexpr int NumControlWarps  = NumTotalWarps - NumEpilogueWarps;
-
   using StrideA = typename GemmKernel::StrideA;
   using StrideB = typename GemmKernel::StrideB;
   using StrideC = typename GemmKernel::StrideC;
   using StrideD = typename GemmKernel::StrideD;
 
-  /////////////////////////////////////////////////////////////////////////////////////////////////
-  /// Setup and evaluation
-  /////////////////////////////////////////////////////////////////////////////////////////////////
-
-  auto dev = q.get_device();
-  std::cout << "Running block-scaled GEMM on " << dev.get_info<info::device::name>() << "\n";
+  std::cout << "Running on " << q.get_device().get_info<info::device::name>() << "\n";
 
   auto problem_shape_mnkl = typename GemmKernel::ProblemShape {};
   cute::fill_int_tuple_from(problem_shape_mnkl, Options::get_problem_shape<Config>());
-
   auto [mat_m, mat_n, mat_k, mat_l] = problem_shape_mnkl;
 
-  // Validation of unsupported configurations passed via cmd
-  if (mat_l != 1) {
-    std::cerr << "Error: batched GEMM (L=" << mat_l << ") is not supported by block-scaled collectives.\n";
-    return false;
-  }
+  // Runtime constraint checks
   constexpr int TileK = cute::size<2>(TileShape{});
-  if (mat_k % TileK != 0) {
-    std::cerr << "Error: K=" << mat_k << " is not a multiple of TileK=" << TileK << ".\n";
-    return false;
-  }
-  if (mat_k % SFVecSize != 0) {
-    std::cerr << "Error: K=" << mat_k << " is not a multiple of SFVecSize=" << SFVecSize << ".\n";
-    return false;
-  }
+  if (mat_l != 1) { std::cerr << "Error: batched GEMM (L=" << mat_l << ") not supported.\n"; return false; }
+  if (mat_k % TileK    != 0) { std::cerr << "Error: K=" << mat_k << " not multiple of TileK=" << TileK << ".\n"; return false; }
+  if (mat_k % SFVecSizeA != 0) { std::cerr << "Error: K not multiple of SFVecSizeA=" << SFVecSizeA << ".\n"; return false; }
+  if (mat_k % SFVecSizeB != 0) { std::cerr << "Error: K not multiple of SFVecSizeB=" << SFVecSizeB << ".\n"; return false; }
 
-  // Data tensor sizes (element counts)
+  // Sizes
   uint32_t sizeA = size(select<0,2,3>(problem_shape_mnkl));
   uint32_t sizeB = size(select<1,2,3>(problem_shape_mnkl));
+  uint32_t sizeD = size(select<0,1,3>(problem_shape_mnkl));
+  int sf_kA = mat_k / SFVecSizeA, sf_kB = mat_k / SFVecSizeB;
+  uint32_t sizeSFA = mat_m * sf_kA * mat_l;
+  uint32_t sizeSFB = mat_n * sf_kB * mat_l;
 
-  // SF tensor sizes: one SF per SFVecSize K-elements — MN-major layout
-  // SFA: (M, K/SFVecSize, L),  SFB: (N, K/SFVecSize, L)
-  int sf_k = mat_k / SFVecSize;
-  uint32_t sizeSFA = mat_m * sf_k * mat_l;
-  uint32_t sizeSFB = mat_n * sf_k * mat_l;
-
-  // --- Allocate data tensors ---
-  // For sub-byte types (e.g. FP4), malloc_shared allocates 1 byte per element;
-  // after filling, subbyte_pack packs two values per byte.
-  auto A_s = sycl::malloc_shared<ElementA>(sizeA, q);
-  auto B_s = sycl::malloc_shared<ElementB>(sizeB, q);
-
+  // Allocate and fill A/B (keep unpacked copies for validation)
+  auto A_s   = sycl::malloc_shared<ElementA>(sizeA, q);
+  auto B_s   = sycl::malloc_shared<ElementB>(sizeB, q);
+  auto A_ref = sycl::malloc_shared<ElementA>(sizeA, q);
+  auto B_ref = sycl::malloc_shared<ElementB>(sizeB, q);
   auto A_ten = make_tensor(make_gmem_ptr(A_s), make_layout(make_shape(mat_m, mat_k)));
   auto B_ten = make_tensor(make_gmem_ptr(B_s), make_layout(make_shape(mat_n, mat_k)));
-
   constexpr uint64_t seed_base = 42;
   random_fill_data(A_ten, seed_base + 2022);
   random_fill_data(B_ten, seed_base + 2021);
-
-  // Keep copies for host-side validation (before sub-byte packing, if applicable)
-  auto A_ref = sycl::malloc_shared<ElementA>(sizeA, q);
-  auto B_ref = sycl::malloc_shared<ElementB>(sizeB, q);
   std::memcpy(A_ref, A_s, sizeA * sizeof(ElementA));
   std::memcpy(B_ref, B_s, sizeB * sizeof(ElementB));
+  if constexpr (cute::sizeof_bits_v<ElementA> < 8) subbyte_pack(A_ten);
+  if constexpr (cute::sizeof_bits_v<ElementB> < 8) subbyte_pack(B_ten);
 
-  // Pack sub-byte elements (e.g., two 4-bit values per byte for FP4)
-  if constexpr (cute::sizeof_bits_v<ElementA> < 8) {
-    subbyte_pack(A_ten);
-    subbyte_pack(B_ten);
+  // Scale factor allocation:
+  // - MX operands (fp4/fp8): random values for actual block-scaling
+  // - Plain operands (bf16/fp16): fill with 1.0 (hardware identity value in UE8M0)
+  constexpr bool is_mx_a = std::is_same_v<ElementA, cutlass::float_e2m1_t> ||
+                            std::is_same_v<ElementA, cutlass::float_e4m3_t>;
+  constexpr bool is_mx_b = std::is_same_v<ElementB, cutlass::float_e2m1_t> ||
+                            std::is_same_v<ElementB, cutlass::float_e4m3_t>;
+  
+  ElementSFA* SFA_s = sycl::malloc_shared<ElementSFA>(sizeSFA, q);
+  auto SFA_ten = make_tensor(make_gmem_ptr(SFA_s), make_layout(make_shape(mat_m, sf_kA)));
+  if constexpr (is_mx_a) {
+    random_fill_sf(SFA_ten, seed_base + 2024);
+  } else {
+    for (int i = 0; i < size(SFA_ten); ++i) SFA_ten(i) = ElementSFA(1.0f);  // identity
+  }
+  
+  ElementSFB* SFB_s = sycl::malloc_shared<ElementSFB>(sizeSFB, q);
+  auto SFB_ten = make_tensor(make_gmem_ptr(SFB_s), make_layout(make_shape(mat_n, sf_kB)));
+  if constexpr (is_mx_b) {
+    random_fill_sf(SFB_ten, seed_base + 2025);
+  } else {
+    for (int i = 0; i < size(SFB_ten); ++i) SFB_ten(i) = ElementSFB(1.0f);  // identity
   }
 
-  // --- Allocate scale factor tensors ---
-  auto SFA_s = sycl::malloc_shared<ElementSF>(sizeSFA, q);
-  auto SFB_s = sycl::malloc_shared<ElementSF>(sizeSFB, q);
-
-  auto SFA_ten = make_tensor(make_gmem_ptr(SFA_s), make_layout(make_shape(mat_m, sf_k)));
-  auto SFB_ten = make_tensor(make_gmem_ptr(SFB_s), make_layout(make_shape(mat_n, sf_k)));
-  random_fill_sf(SFA_ten, seed_base + 2024);
-  random_fill_sf(SFB_ten, seed_base + 2025);
-
-  // --- Allocate output tensor ---
-  uint32_t sizeD = size(select<0,1,3>(problem_shape_mnkl));
+  // Allocate output
   auto D_s = sycl::malloc_shared<ElementD>(sizeD, q);
   std::fill_n(D_s, sizeD, ElementD(0));
 
-  // --- Strides ---
   auto stride_A = cutlass::make_cute_packed_stride(StrideA{}, select<0,2,3>(problem_shape_mnkl));
   auto stride_B = cutlass::make_cute_packed_stride(StrideB{}, select<1,2,3>(problem_shape_mnkl));
   auto stride_C = cutlass::make_cute_packed_stride(StrideC{}, select<0,1,3>(problem_shape_mnkl));
   auto stride_D = cutlass::make_cute_packed_stride(StrideD{}, select<0,1,3>(problem_shape_mnkl));
 
-  // --- Cluster / grid setup ---
-  // ClusterShape = Shape<M, N, K>; structured binding yields (M, N, K).
-  // SYCL range is (dim0=z, dim1=y, dim2=x) and launch_kernel_on_cluster converts via
-  // dim3(range[2], range[1], range[0]) = dim3(x=M, y=N, z=K) to match the grid's dim3(M, N, L).
   auto [cluster_size_x, cluster_size_y, cluster_size_z] = ClusterShape{};
   sycl::range<3> cluster_size(cluster_size_z, cluster_size_y, cluster_size_x);
 
-  // --- Print info ---
   print("ProblemShape_MNKL: "); print(problem_shape_mnkl); print("\n");
   print("TileShape_MNK: ");     print(TileShape{});        print("\n");
-  std::cout << "SFVecSize: " << SFVecSize << "\n";
+  std::cout << get_shared_memory_info_blockscaled<GemmKernel>();
   std::cout << "Coop SF load: " << (Config::EnableCooperativeSF ? "enabled" : "disabled") << "\n";
 
-  auto smem_info = get_shared_memory_info_blockscaled<GemmKernel>();
-  std::cout << smem_info << std::endl;
-
-  // --- Assemble kernel arguments ---
   auto args = typename Gemm::GemmKernel::Arguments {
     problem_shape_mnkl,
     { A_s, stride_A, B_s, stride_B, SFA_s, SFB_s },
     { typename CollectiveEpilogue::FusionCallbacks::Arguments{}, nullptr, stride_C, D_s, stride_D }
   };
 
-  // --- Convert to device params and launch ---
-  int device_id = 0;
-  int sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(device_id);
-  cutlass::KernelHardwareInfo kernel_hw_info{device_id, sm_count, 0};
-
+  int sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
   GemmKernel kernel;
-  auto params = kernel.to_underlying_arguments(args, kernel_hw_info, nullptr);
+  auto params = kernel.to_underlying_arguments(args, {0, sm_count, 0}, nullptr);
+  dim3 grid = GemmKernel::get_grid_shape(params);
+  dim3 block = GemmKernel::get_block_shape();
+  cutlass::SyclClusterLaunchParams launch_params = {
+    range<3>(grid.z, grid.y, grid.x), range<3>(block.z, block.y, block.x), cluster_size, 0, q};
+  cutlass::launch_kernel_on_cluster(launch_params, kernel, params).wait();
 
-  dim3 const grid = GemmKernel::get_grid_shape(params);
-  dim3 const block = GemmKernel::get_block_shape();
-  range<3> group_range(grid.z, grid.y, grid.x);
-  range<3> local_range(block.z, block.y, block.x);
-
-  int smem_size = 0;
-  cutlass::SyclClusterLaunchParams launch_params = {group_range, local_range, cluster_size, smem_size, q};
-
-  cutlass::launch_kernel_on_cluster(
-    launch_params,
-    kernel,
-    params
-  ).wait();
-
-  // --- Validate against block-scaled reference ---
-  constexpr auto layout_a = std::is_same_v<LayoutA, cutlass::layout::RowMajor>
-      ? mem_layout::row_major : mem_layout::col_major;
-  constexpr auto layout_b = std::is_same_v<LayoutB, cutlass::layout::RowMajor>
-      ? mem_layout::row_major : mem_layout::col_major;
-
+  // Validate
+  constexpr auto layout_a = std::is_same_v<LayoutA, cutlass::layout::RowMajor> ? mem_layout::row_major : mem_layout::col_major;
+  constexpr auto layout_b = std::is_same_v<LayoutB, cutlass::layout::RowMajor> ? mem_layout::row_major : mem_layout::col_major;
   for (int mat_i = 0; mat_i < mat_l; ++mat_i) {
-    ElementA*  ptr_A   = A_ref + mat_i * mat_m * mat_k;
-    ElementB*  ptr_B   = B_ref + mat_i * mat_n * mat_k;
-    ElementD*  ptr_D   = D_s   + mat_i * mat_m * mat_n;
-    ElementSF* ptr_SFA = SFA_s + mat_i * mat_m * sf_k;
-    ElementSF* ptr_SFB = SFB_s + mat_i * mat_n * sf_k;
-
-    uint32_t err_cnt = validate_mxfp_gemm_result<ElementA, ElementB, ElementD, ElementSF, float>(
-      ptr_A, ptr_B, ptr_D,
+    ElementSFA* sfa_batch = SFA_s + mat_i * mat_m * sf_kA;
+    ElementSFB* sfb_batch = SFB_s + mat_i * mat_n * sf_kB;
+    uint32_t err_cnt = validate_mxfp_gemm_result<ElementA, ElementB, ElementD, ElementSFA, ElementSFB, float>(
+      A_ref + mat_i * mat_m * mat_k, B_ref + mat_i * mat_n * mat_k, D_s + mat_i * mat_m * mat_n,
       mat_m, mat_n, mat_k,
-      true, true,                   // a_scaling, b_scaling
-      ptr_SFA, ptr_SFB,
-      layout_a,
-      layout_b,
-      false,                        // negative_axb
-      tolerance<ElementD>{},
-      SFVecSize);
-
+      is_mx_a, is_mx_b, sfa_batch, sfb_batch,
+      layout_a, layout_b, false, tolerance<ElementD>{}, SFVecSizeA, SFVecSizeB);
     if (err_cnt > 0) {
-      std::cerr << "Test FAILED at batch " << mat_i << ", error count: " << err_cnt << std::endl;
+      std::cerr << "FAILED at batch " << mat_i << ", errors: " << err_cnt << "\n";
       return false;
     }
   }
+  std::cout << "Passed.\n";
 
-  std::cout << "Ran successfully." << std::endl;
-
-  // --- Cleanup ---
-  sycl::free(A_s, q);
-  sycl::free(B_s, q);
-  sycl::free(A_ref, q);
-  sycl::free(B_ref, q);
+  sycl::free(A_s, q); sycl::free(B_s, q); sycl::free(A_ref, q); sycl::free(B_ref, q);
   sycl::free(SFA_s, q);
   sycl::free(SFB_s, q);
   sycl::free(D_s, q);
-
   return true;
 }
 
 template <typename Config>
 bool run_if_selected(const std::vector<std::string>& configs, sycl::queue& q) {
+  if (configs.empty() && !Config::run_by_default && !Options::run_all) return true;
   if (!configs.empty() &&
-      std::find(configs.begin(), configs.end(), Config::Name) == configs.end())
-    return true;  // skipped
-  std::cout << "\n=== Running config: " << Config::Name << " ===\n";
+      std::find(configs.begin(), configs.end(), Config::Name) == configs.end()) return true;
+  std::cout << "\n=== A="    << type_name<typename Config::ElementA>()
+            << "  sfA="      << sf_tag<typename Config::ElementSFA>()
+            << "  blockA="   << Config::SFVecSizeA
+            << "  |  B="     << type_name<typename Config::ElementB>()
+            << "  sfB="      << sf_tag<typename Config::ElementSFB>()
+            << "  blockB="   << Config::SFVecSizeB
+            << "  |  D="     << type_name<typename Config::ElementD>()
+            << " ===\n";
   // If --coop_sf was specified on the command line, override the config's default,
   // but only for cluster configs (cluster size > 1). Non-cluster configs ignore it.
   constexpr int cluster_size = cute::size(typename Config::ClusterShape_MNK{});
   if constexpr (cluster_size > 1) {
     if (Options::coop_sf.has_value()) {
       if (*Options::coop_sf) {
-        // MXFP8 (float_e4m3_t) cannot use cooperative SF — max atom K=256 is
-        // insufficient for VS=32 after cluster truncation. Print warning and skip.
         if constexpr (std::is_same_v<typename Config::ElementA, cutlass::float_e4m3_t>) {
           std::cerr << "Warning: --coop_sf=1 is not supported for MXFP8 config '"
                     << Config::Name << "' (max atom K=256). Skipping.\n";
           return true;
         } else {
-          // Cooperative SF: ConfigWithCoopSF<Config, true> overrides TileK to
-          // 256 (VS=16) or 512 (VS=32), satisfying the cm_8x32B minimum after
-          // ADMA box truncation by cluster.
           using CoopConfig = ConfigWithCoopSF<Config, true>;
           return run_gemm_blockscaled<CoopConfig>(q);
         }
@@ -487,7 +412,6 @@ bool run_if_selected(const std::vector<std::string>& configs, sycl::queue& q) {
   return run_gemm_blockscaled<Config>(q);
 }
 
-// Warn about any --config names that don't match a known Config type.
 template <typename... Configs>
 void warn_unknown_configs(const std::vector<std::string>& user_configs) {
   if (user_configs.empty()) return;
@@ -497,8 +421,6 @@ void warn_unknown_configs(const std::vector<std::string>& user_configs) {
       std::cerr << "Warning: unknown config '" << c << "' (run --help for available configs)\n";
 }
 
-// Run all configs, then warn on unknown names. Returns false if any config failed.
-// Usage: return run_configs<C1, C2, ...>(Options::configs, q) ? 0 : 1;
 template <typename... Configs>
 bool run_configs(const std::vector<std::string>& user_configs, sycl::queue& q) {
   bool pass = (run_if_selected<Configs>(user_configs, q) & ...);

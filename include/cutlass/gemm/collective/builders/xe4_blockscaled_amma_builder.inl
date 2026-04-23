@@ -110,23 +110,29 @@ struct CollectiveBuilder<
   static constexpr int SFVecSizeA = TraitsA::SfVectorSize;
   static constexpr int SFVecSizeB = TraitsB::SfVectorSize;
 
-  static_assert(cute::is_same_v<ElementSFA, ElementSFB>,
-    "Block-scaled GEMM requires the same scale factor type for A and B.");
-  static_assert(SFVecSizeA == SFVecSizeB,
-    "Block-scaled GEMM requires the same SF vector size for A and B.");
-  static_assert(cute::is_same_v<ElementA, ElementB>,
-    "Mixed data-type support for block-scaled GEMM is not available yet.");
+  // When both operands are MX types (fp4/fp8), SF type and VS must match.
+  // When one side is a plain dtype carrying an identity SF, this constraint does not apply.
+  static constexpr bool is_mx_a = cute::is_same_v<ElementA, cutlass::float_e2m1_t> ||
+                                   cute::is_same_v<ElementA, cutlass::float_e4m3_t>;
+  static constexpr bool is_mx_b = cute::is_same_v<ElementB, cutlass::float_e2m1_t> ||
+                                   cute::is_same_v<ElementB, cutlass::float_e4m3_t>;
+  static_assert(!is_mx_a || !is_mx_b || cute::is_same_v<ElementSFA, ElementSFB>,
+    "ElementSFA and ElementSFB must match when both operands are MX types.");
+  static_assert(!is_mx_a || !is_mx_b || SFVecSizeA == SFVecSizeB,
+    "SFVecSizeA and SFVecSizeB must match when both operands are MX types.");
 
-  using ElementSF = ElementSFA;
-  static constexpr int SFVecSize = SFVecSizeA;
-
-  static_assert(cute::size<2>(TileShape_MNK{}) % SFVecSize == 0,
-    "TileK must be a multiple of SFVecSize for block-scaled GEMM.");
+  static_assert(cute::size<2>(TileShape_MNK{}) % SFVecSizeA == 0,
+    "TileK must be a multiple of SFVecSizeA for block-scaled GEMM.");
+  static_assert(cute::size<2>(TileShape_MNK{}) % SFVecSizeB == 0,
+    "TileK must be a multiple of SFVecSizeB for block-scaled GEMM.");
 
   // FP8 data (e4m3) only supports ue8m0+32; all 5 SF/VS combos are valid for FP4 (e2m1).
   static_assert(!cute::is_same_v<ElementA, cutlass::float_e4m3_t> ||
-                (cute::is_same_v<ElementSF, cutlass::float_ue8m0_t> && SFVecSize == 32),
-    "FP8 (e4m3) data only supports ue8m0+VS=32 scale factors.");
+                (cute::is_same_v<ElementSFA, cutlass::float_ue8m0_t> && SFVecSizeA == 32),
+    "FP8 (e4m3) data on A only supports ue8m0+VS=32 scale factors.");
+  static_assert(!cute::is_same_v<ElementB, cutlass::float_e4m3_t> ||
+                (cute::is_same_v<ElementSFB, cutlass::float_ue8m0_t> && SFVecSizeB == 32),
+    "FP8 (e4m3) data on B only supports ue8m0+VS=32 scale factors.");
 
   // Determine major mode for A and B
   static constexpr auto majorA = cutlass::gemm::detail::is_mn_major_A<GmemLayoutATag>()
@@ -144,8 +150,8 @@ struct CollectiveBuilder<
       typename cute::tuple_element<1, ElementAccumulator>::type,   // ElementD
       ElementA, ElementB,
       typename cute::tuple_element<0, ElementAccumulator>::type,   // ElementC
-      ElementSF,
-      SFVecSize,
+      ElementSFA, ElementSFB,
+      SFVecSizeA, SFVecSizeB,
       decltype(cute::product_each(TileShape_MNK{})),
       ClusterShape_MNK, majorA, majorB, EnableCooperativeSF>()
   ));
@@ -204,10 +210,11 @@ struct CollectiveBuilder<
     >;
 
   // SMEM layouts for SF tensors via Xe4BlockScaledConfig from xe4_blockscaled_layout.hpp
-  using Xe4BlkScaledConfig = cutlass::detail::Xe4BlockScaledConfig<SFVecSize>;
+  using Xe4BlkScaledConfigA = cutlass::detail::Xe4BlockScaledConfig<SFVecSizeA>;
+  using Xe4BlkScaledConfigB = cutlass::detail::Xe4BlockScaledConfig<SFVecSizeB>;
 
-  using SmemLayoutAtomSFA = decltype(Xe4BlkScaledConfig::deduce_smem_layoutSFA(TiledMma{}, TileShape_MNK{}));
-  using SmemLayoutAtomSFB = decltype(Xe4BlkScaledConfig::deduce_smem_layoutSFB(TiledMma{}, TileShape_MNK{}));
+  using SmemLayoutAtomSFA = decltype(Xe4BlkScaledConfigA::deduce_smem_layoutSFA(TiledMma{}, TileShape_MNK{}));
+  using SmemLayoutAtomSFB = decltype(Xe4BlkScaledConfigB::deduce_smem_layoutSFB(TiledMma{}, TileShape_MNK{}));
 
   // Bundle data + SF SMEM layouts as Pair types for the mainloop
   using SmemLayoutAtomPairA = decltype(cute::make_tuple(SmemLayoutAtomA{}, SmemLayoutAtomSFA{}));
@@ -218,8 +225,8 @@ struct CollectiveBuilder<
   using StrideB = cutlass::gemm::TagToStrideB_t<GmemLayoutBTag>;
 
   // SF global memory layouts deduced from Xe4BlockScaledConfig
-  using LayoutSFA = decltype(Xe4BlkScaledConfig::deduce_layoutSFA());
-  using LayoutSFB = decltype(Xe4BlkScaledConfig::deduce_layoutSFB());
+  using LayoutSFA = decltype(Xe4BlkScaledConfigA::deduce_layoutSFA());
+  using LayoutSFB = decltype(Xe4BlkScaledConfigB::deduce_layoutSFB());
 
   // Bundle data stride + SF layout as Pair types
   using StridePairA = decltype(cute::make_tuple(StrideA{}, LayoutSFA{}));

@@ -39,15 +39,15 @@ target_link_options(xe4_gemm_cluster PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)
 
-add_xe4_test(xe4_gemm_blockscaled_fp4 gemm_blockscaled_fp4.cpp)
-target_include_directories(xe4_gemm_blockscaled_fp4 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_options(xe4_gemm_blockscaled_fp4 PUBLIC
+add_xe4_test(xe4_gemm_blockscaled gemm_blockscaled.cpp)
+target_include_directories(xe4_gemm_blockscaled PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(xe4_gemm_blockscaled PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)
 
-add_xe4_test(xe4_gemm_blockscaled_fp8 gemm_blockscaled_fp8.cpp)
-target_include_directories(xe4_gemm_blockscaled_fp8 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_options(xe4_gemm_blockscaled_fp8 PUBLIC
+add_xe4_test(xe4_gemm_blockscaled_cluster gemm_blockscaled_cluster.cpp)
+target_include_directories(xe4_gemm_blockscaled_cluster PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(xe4_gemm_blockscaled_cluster PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)
 

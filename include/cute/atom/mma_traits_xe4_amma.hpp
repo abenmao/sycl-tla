@@ -457,32 +457,38 @@ struct MMA_Traits<
 //   - with() method that accepts SF descriptors
 // ===============================================================================
 
+// Common type members and layout definitions shared by all block-scaled traits.
+// Captured via a macro to avoid repetition across the four tracking variants.
+#define CUTE_AMMA_BS_TRAIT_COMMON_TYPES(d, a, b, c, sfa, sfb)   \
+  using ValTypeD = d;                                            \
+  using ValTypeA = a;                                            \
+  using ValTypeB = b;                                            \
+  using ValTypeC = c;                                            \
+  using ValTypeSFA = sfa;                                        \
+  using ValTypeSFB = sfb;                                        \
+  using FrgTypeA   = AMMA::smem_desc<a_major, true>;             \
+  using FrgTypeB   = AMMA::smem_desc<b_major>;                   \
+  using FrgTypeC   = AMMA::smem_desc<a_major>;                   \
+  using FrgTypeSFA = AMMA::smem_sf_desc;                         \
+  using FrgTypeSFB = AMMA::smem_sf_desc;                         \
+  using Shape_MNK = Shape<Int<M>, Int<N>, Int<K>>;               \
+  using ThrID = Layout<_1>;                                      \
+  using ALayout = Layout<Shape <_1,Shape <Int<M>,Int<K>>>,       \
+                         Stride<_0,Stride<    _1,Int<M>>>>;      \
+  using BLayout = Layout<Shape <_1,Shape <Int<N>,Int<K>>>,       \
+                         Stride<_0,Stride<    _1,Int<N>>>>;      \
+  using CLayout = Layout<Shape <_1,Shape <Int<M>,Int<N>>>,       \
+                         Stride<_0,Stride<    _1,Int<M>>>>;
+
 // ----- Block-scaled AMMA: No barrier tracking -----
-template <class d_type, class a_type, class b_type, class c_type, class sf_type,
-         int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
+template <class d_type, class a_type, class b_type, class c_type,
+         class sf_a_type, class sf_b_type,
+         int M, int N, int K, int VSA, int VSB, AMMA::Major a_major, AMMA::Major b_major,
+         AMMA::BlockScaleMode Mode>
 struct MMA_Traits<
-  XE4_AMMA_FP4FP8<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+  XE4_AMMA_BlockScaled<d_type, a_type, b_type, c_type, sf_a_type, sf_b_type, M, N, K, VSA, VSB, a_major, b_major, Mode>>
 {
-  using ValTypeD = d_type;
-  using ValTypeA = a_type;
-  using ValTypeB = b_type;
-  using ValTypeC = c_type;
-  using ValTypeSF = sf_type;
-
-  using FrgTypeA   = AMMA::smem_desc<a_major, true>;
-  using FrgTypeB   = AMMA::smem_desc<b_major>;
-  using FrgTypeC   = AMMA::smem_desc<a_major>;
-  using FrgTypeSFA = AMMA::smem_sf_desc;
-  using FrgTypeSFB = AMMA::smem_sf_desc;
-
-  using Shape_MNK = Shape<Int<M>, Int<N>, Int<K>>;
-  using ThrID = Layout<_1>;
-  using ALayout = Layout<Shape <_1,Shape <Int<M>,Int<K>>>,
-                         Stride<_0,Stride<    _1,Int<M>>>>;
-  using BLayout = Layout<Shape <_1,Shape <Int<N>,Int<K>>>,
-                         Stride<_0,Stride<    _1,Int<N>>>>;
-  using CLayout = Layout<Shape <_1,Shape <Int<M>,Int<N>>>,
-                         Stride<_0,Stride<    _1,Int<M>>>>;
+  CUTE_AMMA_BS_TRAIT_COMMON_TYPES(d_type, a_type, b_type, c_type, sf_a_type, sf_b_type)
 
   MMAControl ctrl_ {};
   uint32_t sf_a_ {};
@@ -500,13 +506,9 @@ struct MMA_Traits<
              Tensor<TB, BLayout> const& B,
              Tensor<TC, CLayout> const& C)
   {
-    auto desc_d = D[0];
-    auto desc_a = A[0];
-    auto desc_b = B[0];
-    auto desc_c = C[0];
-
-    XE4_AMMA_FP4FP8<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
-      traits.ctrl_, desc_d, desc_a, desc_b, desc_c, traits.sf_a_, traits.sf_b_
+    XE4_AMMA_BlockScaled<d_type, a_type, b_type, c_type, sf_a_type, sf_b_type,
+                M, N, K, VSA, VSB, a_major, b_major, Mode>::fma(
+      traits.ctrl_, D[0], A[0], B[0], C[0], traits.sf_a_, traits.sf_b_
     );
   }
 
@@ -525,67 +527,50 @@ struct MMA_Traits<
        uint32_t sf_a, uint32_t sf_b, Args... args) {
     if constexpr (Method == AMMA::Tracking::None) {
       return MMA_Traits<
-        XE4_AMMA_FP4FP8<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+        XE4_AMMA_BlockScaled<T, a_type, b_type, c_type, sf_a_type, sf_b_type, M, N, K, VSA, VSB, a_major, b_major, Mode>>
         {ctrl, sf_a, sf_b};
     } else if constexpr (Method == AMMA::Tracking::D) {
       return MMA_Traits<
-        XE4_AMMA_FP4FP8_D<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+        XE4_AMMA_BlockScaled_D<T, a_type, b_type, c_type, sf_a_type, sf_b_type, M, N, K, VSA, VSB, a_major, b_major, Mode>>
         {ctrl, sf_a, sf_b, args...};
     } else if constexpr (Method == AMMA::Tracking::AB) {
       if constexpr (sizeof...(args) > 2) {
         return MMA_Traits<
-          XE4_AMMA_FP4FP8_AB_CLUSTER<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+          XE4_AMMA_BlockScaled_AB_CLUSTER<T, a_type, b_type, c_type, sf_a_type, sf_b_type, M, N, K, VSA, VSB, a_major, b_major, Mode>>
           {ctrl, sf_a, sf_b, args...};
       } else {
         return MMA_Traits<
-          XE4_AMMA_FP4FP8_AB<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+          XE4_AMMA_BlockScaled_AB<T, a_type, b_type, c_type, sf_a_type, sf_b_type, M, N, K, VSA, VSB, a_major, b_major, Mode>>
           {ctrl, sf_a, sf_b, args...};
       }
     } else if constexpr (Method == AMMA::Tracking::DAB) {
       if constexpr (sizeof...(args) > 3) {
         return MMA_Traits<
-          XE4_AMMA_FP4FP8_DAB_CLUSTER<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+          XE4_AMMA_BlockScaled_DAB_CLUSTER<T, a_type, b_type, c_type, sf_a_type, sf_b_type, M, N, K, VSA, VSB, a_major, b_major, Mode>>
           {ctrl, sf_a, sf_b, args...};
       } else {
         return MMA_Traits<
-          XE4_AMMA_FP4FP8_DAB<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+          XE4_AMMA_BlockScaled_DAB<T, a_type, b_type, c_type, sf_a_type, sf_b_type, M, N, K, VSA, VSB, a_major, b_major, Mode>>
           {ctrl, sf_a, sf_b, args...};
       }
     } else {
       static_assert(dependent_false<AMMA::TrackMethod<Method>>,
-          "Unknown abarrier tracking pattern");
+          "Unknown barrier tracking pattern");
     }
 
     CUTE_GCC_UNREACHABLE;
   }
 };
 
-// ----- Block-scaled AMMA: D-tracking -----
-template <class d_type, class a_type, class b_type, class c_type, class sf_type,
-         int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
+// ----- Block-scaled AMMA: D-barrier tracking -----
+template <class d_type, class a_type, class b_type, class c_type,
+         class sf_a_type, class sf_b_type,
+         int M, int N, int K, int VSA, int VSB, AMMA::Major a_major, AMMA::Major b_major,
+         AMMA::BlockScaleMode Mode>
 struct MMA_Traits<
-  XE4_AMMA_FP4FP8_D<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+  XE4_AMMA_BlockScaled_D<d_type, a_type, b_type, c_type, sf_a_type, sf_b_type, M, N, K, VSA, VSB, a_major, b_major, Mode>>
 {
-  using ValTypeD = d_type;
-  using ValTypeA = a_type;
-  using ValTypeB = b_type;
-  using ValTypeC = c_type;
-  using ValTypeSF = sf_type;
-
-  using FrgTypeA   = AMMA::smem_desc<a_major, true>;
-  using FrgTypeB   = AMMA::smem_desc<b_major>;
-  using FrgTypeC   = AMMA::smem_desc<a_major>;
-  using FrgTypeSFA = AMMA::smem_sf_desc;
-  using FrgTypeSFB = AMMA::smem_sf_desc;
-
-  using Shape_MNK = Shape<Int<M>, Int<N>, Int<K>>;
-  using ThrID = Layout<_1>;
-  using ALayout = Layout<Shape <_1,Shape <Int<M>,Int<K>>>,
-                         Stride<_0,Stride<    _1,Int<M>>>>;
-  using BLayout = Layout<Shape <_1,Shape <Int<N>,Int<K>>>,
-                         Stride<_0,Stride<    _1,Int<N>>>>;
-  using CLayout = Layout<Shape <_1,Shape <Int<M>,Int<N>>>,
-                         Stride<_0,Stride<    _1,Int<M>>>>;
+  CUTE_AMMA_BS_TRAIT_COMMON_TYPES(d_type, a_type, b_type, c_type, sf_a_type, sf_b_type)
 
   MMAControl ctrl_ {};
   uint32_t sf_a_ {};
@@ -604,44 +589,23 @@ struct MMA_Traits<
              Tensor<TB, BLayout> const& B,
              Tensor<TC, CLayout> const& C)
   {
-    auto desc_d = D[0];
-    auto desc_a = A[0];
-    auto desc_b = B[0];
-    auto desc_c = C[0];
-
-    XE4_AMMA_FP4FP8_D<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
-      traits.ctrl_, desc_d, desc_a, desc_b, desc_c, traits.sf_a_, traits.sf_b_,
+    XE4_AMMA_BlockScaled_D<d_type, a_type, b_type, c_type, sf_a_type, sf_b_type,
+                  M, N, K, VSA, VSB, a_major, b_major, Mode>::fma(
+      traits.ctrl_, D[0], A[0], B[0], C[0], traits.sf_a_, traits.sf_b_,
       traits.d_barrier_
     );
   }
 };
 
-// ----- Block-scaled AMMA: AB-tracking -----
-template <class d_type, class a_type, class b_type, class c_type, class sf_type,
-         int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
+// ----- Block-scaled AMMA: A+B-barrier tracking -----
+template <class d_type, class a_type, class b_type, class c_type,
+         class sf_a_type, class sf_b_type,
+         int M, int N, int K, int VSA, int VSB, AMMA::Major a_major, AMMA::Major b_major,
+         AMMA::BlockScaleMode Mode>
 struct MMA_Traits<
-  XE4_AMMA_FP4FP8_AB<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+  XE4_AMMA_BlockScaled_AB<d_type, a_type, b_type, c_type, sf_a_type, sf_b_type, M, N, K, VSA, VSB, a_major, b_major, Mode>>
 {
-  using ValTypeD = d_type;
-  using ValTypeA = a_type;
-  using ValTypeB = b_type;
-  using ValTypeC = c_type;
-  using ValTypeSF = sf_type;
-
-  using FrgTypeA   = AMMA::smem_desc<a_major, true>;
-  using FrgTypeB   = AMMA::smem_desc<b_major>;
-  using FrgTypeC   = AMMA::smem_desc<a_major>;
-  using FrgTypeSFA = AMMA::smem_sf_desc;
-  using FrgTypeSFB = AMMA::smem_sf_desc;
-
-  using Shape_MNK = Shape<Int<M>, Int<N>, Int<K>>;
-  using ThrID = Layout<_1>;
-  using ALayout = Layout<Shape <_1,Shape <Int<M>,Int<K>>>,
-                         Stride<_0,Stride<    _1,Int<M>>>>;
-  using BLayout = Layout<Shape <_1,Shape <Int<N>,Int<K>>>,
-                         Stride<_0,Stride<    _1,Int<N>>>>;
-  using CLayout = Layout<Shape <_1,Shape <Int<M>,Int<N>>>,
-                         Stride<_0,Stride<    _1,Int<M>>>>;
+  CUTE_AMMA_BS_TRAIT_COMMON_TYPES(d_type, a_type, b_type, c_type, sf_a_type, sf_b_type)
 
   MMAControl ctrl_ {};
   uint32_t sf_a_ {};
@@ -661,44 +625,23 @@ struct MMA_Traits<
              Tensor<TB, BLayout> const& B,
              Tensor<TC, CLayout> const& C)
   {
-    auto desc_d = D[0];
-    auto desc_a = A[0];
-    auto desc_b = B[0];
-    auto desc_c = C[0];
-
-    XE4_AMMA_FP4FP8_AB<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
-      traits.ctrl_, desc_d, desc_a, desc_b, desc_c, traits.sf_a_, traits.sf_b_,
+    XE4_AMMA_BlockScaled_AB<d_type, a_type, b_type, c_type, sf_a_type, sf_b_type,
+                   M, N, K, VSA, VSB, a_major, b_major, Mode>::fma(
+      traits.ctrl_, D[0], A[0], B[0], C[0], traits.sf_a_, traits.sf_b_,
       traits.a_barrier_, traits.b_barrier_
     );
   }
 };
 
-// ----- Block-scaled AMMA: DAB-tracking -----
-template <class d_type, class a_type, class b_type, class c_type, class sf_type,
-         int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
+// ----- Block-scaled AMMA: D+A+B-barrier tracking -----
+template <class d_type, class a_type, class b_type, class c_type,
+         class sf_a_type, class sf_b_type,
+         int M, int N, int K, int VSA, int VSB, AMMA::Major a_major, AMMA::Major b_major,
+         AMMA::BlockScaleMode Mode>
 struct MMA_Traits<
-  XE4_AMMA_FP4FP8_DAB<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+  XE4_AMMA_BlockScaled_DAB<d_type, a_type, b_type, c_type, sf_a_type, sf_b_type, M, N, K, VSA, VSB, a_major, b_major, Mode>>
 {
-  using ValTypeD = d_type;
-  using ValTypeA = a_type;
-  using ValTypeB = b_type;
-  using ValTypeC = c_type;
-  using ValTypeSF = sf_type;
-
-  using FrgTypeA   = AMMA::smem_desc<a_major, true>;
-  using FrgTypeB   = AMMA::smem_desc<b_major>;
-  using FrgTypeC   = AMMA::smem_desc<a_major>;
-  using FrgTypeSFA = AMMA::smem_sf_desc;
-  using FrgTypeSFB = AMMA::smem_sf_desc;
-
-  using Shape_MNK = Shape<Int<M>, Int<N>, Int<K>>;
-  using ThrID = Layout<_1>;
-  using ALayout = Layout<Shape <_1,Shape <Int<M>,Int<K>>>,
-                         Stride<_0,Stride<    _1,Int<M>>>>;
-  using BLayout = Layout<Shape <_1,Shape <Int<N>,Int<K>>>,
-                         Stride<_0,Stride<    _1,Int<N>>>>;
-  using CLayout = Layout<Shape <_1,Shape <Int<M>,Int<N>>>,
-                         Stride<_0,Stride<    _1,Int<M>>>>;
+  CUTE_AMMA_BS_TRAIT_COMMON_TYPES(d_type, a_type, b_type, c_type, sf_a_type, sf_b_type)
 
   MMAControl ctrl_ {};
   uint32_t sf_a_ {};
@@ -719,44 +662,23 @@ struct MMA_Traits<
              Tensor<TB, BLayout> const& B,
              Tensor<TC, CLayout> const& C)
   {
-    auto desc_d = D[0];
-    auto desc_a = A[0];
-    auto desc_b = B[0];
-    auto desc_c = C[0];
-
-    XE4_AMMA_FP4FP8_DAB<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
-      traits.ctrl_, desc_d, desc_a, desc_b, desc_c, traits.sf_a_, traits.sf_b_,
+    XE4_AMMA_BlockScaled_DAB<d_type, a_type, b_type, c_type, sf_a_type, sf_b_type,
+                    M, N, K, VSA, VSB, a_major, b_major, Mode>::fma(
+      traits.ctrl_, D[0], A[0], B[0], C[0], traits.sf_a_, traits.sf_b_,
       traits.d_barrier_, traits.a_barrier_, traits.b_barrier_
     );
   }
 };
 
-// ----- Block-scaled AMMA: AB-tracking, cluster (multicast masks) -----
-template <class d_type, class a_type, class b_type, class c_type, class sf_type,
-         int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
+// ----- Block-scaled AMMA: A+B-barrier tracking, cluster (multicast masks) -----
+template <class d_type, class a_type, class b_type, class c_type,
+         class sf_a_type, class sf_b_type,
+         int M, int N, int K, int VSA, int VSB, AMMA::Major a_major, AMMA::Major b_major,
+         AMMA::BlockScaleMode Mode>
 struct MMA_Traits<
-  XE4_AMMA_FP4FP8_AB_CLUSTER<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+  XE4_AMMA_BlockScaled_AB_CLUSTER<d_type, a_type, b_type, c_type, sf_a_type, sf_b_type, M, N, K, VSA, VSB, a_major, b_major, Mode>>
 {
-  using ValTypeD = d_type;
-  using ValTypeA = a_type;
-  using ValTypeB = b_type;
-  using ValTypeC = c_type;
-  using ValTypeSF = sf_type;
-
-  using FrgTypeA   = AMMA::smem_desc<a_major, true>;
-  using FrgTypeB   = AMMA::smem_desc<b_major>;
-  using FrgTypeC   = AMMA::smem_desc<a_major>;
-  using FrgTypeSFA = AMMA::smem_sf_desc;
-  using FrgTypeSFB = AMMA::smem_sf_desc;
-
-  using Shape_MNK = Shape<Int<M>, Int<N>, Int<K>>;
-  using ThrID = Layout<_1>;
-  using ALayout = Layout<Shape <_1,Shape <Int<M>,Int<K>>>,
-                         Stride<_0,Stride<    _1,Int<M>>>>;
-  using BLayout = Layout<Shape <_1,Shape <Int<N>,Int<K>>>,
-                         Stride<_0,Stride<    _1,Int<N>>>>;
-  using CLayout = Layout<Shape <_1,Shape <Int<M>,Int<N>>>,
-                         Stride<_0,Stride<    _1,Int<M>>>>;
+  CUTE_AMMA_BS_TRAIT_COMMON_TYPES(d_type, a_type, b_type, c_type, sf_a_type, sf_b_type)
 
   MMAControl ctrl_ {};
   uint32_t sf_a_ {};
@@ -778,13 +700,9 @@ struct MMA_Traits<
              Tensor<TB, BLayout> const& B,
              Tensor<TC, CLayout> const& C)
   {
-    auto desc_d = D[0];
-    auto desc_a = A[0];
-    auto desc_b = B[0];
-    auto desc_c = C[0];
-
-    XE4_AMMA_FP4FP8_AB_CLUSTER<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
-      traits.ctrl_, desc_d, desc_a, desc_b, desc_c, traits.sf_a_, traits.sf_b_,
+    XE4_AMMA_BlockScaled_AB_CLUSTER<d_type, a_type, b_type, c_type, sf_a_type, sf_b_type,
+                   M, N, K, VSA, VSB, a_major, b_major, Mode>::fma(
+      traits.ctrl_, D[0], A[0], B[0], C[0], traits.sf_a_, traits.sf_b_,
       traits.a_barrier_, traits.b_barrier_,
       traits.a_mask_, traits.b_mask_
     );
@@ -805,11 +723,11 @@ struct MMA_Traits<
        uint32_t sf_a, uint32_t sf_b, Args... args) {
     if constexpr (Method == AMMA::Tracking::AB) {
       return MMA_Traits<
-        XE4_AMMA_FP4FP8_AB_CLUSTER<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+        XE4_AMMA_BlockScaled_AB_CLUSTER<T, a_type, b_type, c_type, sf_a_type, sf_b_type, M, N, K, VSA, VSB, a_major, b_major, Mode>>
         {ctrl, sf_a, sf_b, args...};
     } else if constexpr (Method == AMMA::Tracking::DAB) {
       return MMA_Traits<
-        XE4_AMMA_FP4FP8_DAB_CLUSTER<T, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+        XE4_AMMA_BlockScaled_DAB_CLUSTER<T, a_type, b_type, c_type, sf_a_type, sf_b_type, M, N, K, VSA, VSB, a_major, b_major, Mode>>
         {ctrl, sf_a, sf_b, args...};
     } else {
       static_assert(dependent_false<AMMA::TrackMethod<Method>>,
@@ -820,32 +738,15 @@ struct MMA_Traits<
   }
 };
 
-// ----- Block-scaled AMMA: DAB-tracking, cluster (multicast masks) -----
-template <class d_type, class a_type, class b_type, class c_type, class sf_type,
-         int M, int N, int K, int VS, AMMA::Major a_major, AMMA::Major b_major>
+// ----- Block-scaled AMMA: D+A+B-barrier tracking, cluster (multicast masks) -----
+template <class d_type, class a_type, class b_type, class c_type,
+         class sf_a_type, class sf_b_type,
+         int M, int N, int K, int VSA, int VSB, AMMA::Major a_major, AMMA::Major b_major,
+         AMMA::BlockScaleMode Mode>
 struct MMA_Traits<
-  XE4_AMMA_FP4FP8_DAB_CLUSTER<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>>
+  XE4_AMMA_BlockScaled_DAB_CLUSTER<d_type, a_type, b_type, c_type, sf_a_type, sf_b_type, M, N, K, VSA, VSB, a_major, b_major, Mode>>
 {
-  using ValTypeD = d_type;
-  using ValTypeA = a_type;
-  using ValTypeB = b_type;
-  using ValTypeC = c_type;
-  using ValTypeSF = sf_type;
-
-  using FrgTypeA   = AMMA::smem_desc<a_major, true>;
-  using FrgTypeB   = AMMA::smem_desc<b_major>;
-  using FrgTypeC   = AMMA::smem_desc<a_major>;
-  using FrgTypeSFA = AMMA::smem_sf_desc;
-  using FrgTypeSFB = AMMA::smem_sf_desc;
-
-  using Shape_MNK = Shape<Int<M>, Int<N>, Int<K>>;
-  using ThrID = Layout<_1>;
-  using ALayout = Layout<Shape <_1,Shape <Int<M>,Int<K>>>,
-                         Stride<_0,Stride<    _1,Int<M>>>>;
-  using BLayout = Layout<Shape <_1,Shape <Int<N>,Int<K>>>,
-                         Stride<_0,Stride<    _1,Int<N>>>>;
-  using CLayout = Layout<Shape <_1,Shape <Int<M>,Int<N>>>,
-                         Stride<_0,Stride<    _1,Int<M>>>>;
+  CUTE_AMMA_BS_TRAIT_COMMON_TYPES(d_type, a_type, b_type, c_type, sf_a_type, sf_b_type)
 
   MMAControl ctrl_ {};
   uint32_t sf_a_ {};
@@ -868,17 +769,15 @@ struct MMA_Traits<
              Tensor<TB, BLayout> const& B,
              Tensor<TC, CLayout> const& C)
   {
-    auto desc_d = D[0];
-    auto desc_a = A[0];
-    auto desc_b = B[0];
-    auto desc_c = C[0];
-
-    XE4_AMMA_FP4FP8_DAB_CLUSTER<d_type, a_type, b_type, c_type, sf_type, M, N, K, VS, a_major, b_major>::fma(
-      traits.ctrl_, desc_d, desc_a, desc_b, desc_c, traits.sf_a_, traits.sf_b_,
+    XE4_AMMA_BlockScaled_DAB_CLUSTER<d_type, a_type, b_type, c_type, sf_a_type, sf_b_type,
+                    M, N, K, VSA, VSB, a_major, b_major, Mode>::fma(
+      traits.ctrl_, D[0], A[0], B[0], C[0], traits.sf_a_, traits.sf_b_,
       traits.d_barrier_, traits.a_barrier_, traits.b_barrier_,
       traits.a_mask_, traits.b_mask_
     );
   }
 };
+
+#undef CUTE_AMMA_BS_TRAIT_COMMON_TYPES
 
 } // namespace cute

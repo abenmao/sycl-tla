@@ -554,6 +554,29 @@ int validate_mxfp_gemm_result(dtype_a *A, dtype_b *B, dtype_c *C, uint32_t matri
   return check_and_log(C, gold_c.data(), matrix_m, matrix_n, tol);
 }
 
+// Per-side SF variant: separate dtype_meta_a/b and scale_ele_num_a/b.
+// Use this when SF types or VS differ across operands (e.g. one side carries identity SF).
+template <typename dtype_a, typename dtype_b, typename dtype_c,
+          typename dtype_meta_a, typename dtype_meta_b, typename dtype_acc = float>
+int validate_mxfp_gemm_result(dtype_a *A, dtype_b *B, dtype_c *C, uint32_t matrix_m, uint32_t matrix_n,
+                              uint32_t matrix_k, bool a_scaling, bool b_scaling,
+                              dtype_meta_a *a_meta, dtype_meta_b *b_meta,
+                              mem_layout layout_a, mem_layout layout_b,
+                              bool negative_axb, tolerance<dtype_c> tol,
+                              uint32_t scale_ele_num_a, uint32_t scale_ele_num_b) {
+  const size_t m = matrix_m, k = matrix_k, n = matrix_n;
+  std::vector<dtype_acc> upcast_a(m * k);
+  std::vector<dtype_acc> upcast_b(n * k);
+  upcast_mxfp_mat_a(A, a_meta, m, k, layout_a, a_scaling, upcast_a.data(), scale_ele_num_a);
+  upcast_mxfp_mat_b(B, b_meta, k, n, layout_b, b_scaling, upcast_b.data(), scale_ele_num_b);
+  dtype_acc alpha = negative_axb ? dtype_acc(-1) : dtype_acc(1);
+  std::vector<dtype_acc> gold_acc(m * n, 0);
+  get_gemm_gold<dtype_acc, dtype_acc, dtype_acc>(m, k, n, layout_a, layout_b,
+                                                 upcast_a.data(), upcast_b.data(), gold_acc.data(), alpha);
+  std::vector<dtype_c> gold_c(gold_acc.data(), gold_acc.data() + m * n);
+  return check_and_log(C, gold_c.data(), matrix_m, matrix_n, tol);
+}
+
 constexpr uint32_t get_sparsity_ratio(sparsity_repr_t sparsity_repr) {
   switch (sparsity_repr) {
     case sparsity_repr_t::A4xB2: return 2;

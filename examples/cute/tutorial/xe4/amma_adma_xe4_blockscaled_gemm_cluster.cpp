@@ -159,8 +159,10 @@ struct GenericBlockScaledClusterConfig {
       ElementA_,                            // a_type
       ElementB_,                            // b_type
       ElementAcc,                            // c_type
-      ElementSF_,                           // sf_type
-      SFVecSize_,                           // VS: scale factor
+      ElementSF_,                           // sf_a_type
+      ElementSF_,                           // sf_b_type (same as A for symmetric configs)
+      SFVecSize_,                           // VSA: scale factor vector size
+      SFVecSize_,                           // VSB: scale factor vector size (same as A)
       TileShape_MNK,                       // Tile shape — selector computes MMA dims via gcd
       ClusterShape_MNK,                    // Cluster shape
       MajorA, MajorB,                      // A and B layout majors

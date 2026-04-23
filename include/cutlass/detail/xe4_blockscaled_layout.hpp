@@ -39,6 +39,7 @@
 
 #include "cute/int_tuple.hpp"
 #include "cute/atom/mma_traits_xe4.hpp"
+#include "cute/arch/xe4_util.hpp"
 
 namespace cutlass::detail {
 
@@ -61,9 +62,12 @@ struct Xe4BlockScaledBasicChunk {
 
 template<int SFVecSize_>
 struct Xe4BlockScaledConfig {
-  // We are creating the SFA and SFB tensors' layouts in the collective since they always have the same layout.
-  // MN-major order (as enforced by Xe4BlockScaledBasicChunk)
+  // SF tensor layouts for block-scaled GEMM (MN-major, per Xe4BlockScaledBasicChunk).
   static constexpr int SFVecSize = SFVecSize_;
+
+  // Type3 SF descriptor window height, derived from the hardware core-matrix geometry.
+  static constexpr auto SfCoreMatrixSize = get_core_matrix_size<slm_matrix_type::type3, uint8_t>();
+  static constexpr int SfDescMinRows = get_height<SfCoreMatrixSize>();
   using Xe4BlkScaledChunk = Xe4BlockScaledBasicChunk<SFVecSize>;
   using Blk_MN = typename Xe4BlkScaledChunk::Blk_MN;
   using Blk_SF = typename Xe4BlkScaledChunk::Blk_SF;
@@ -121,8 +125,7 @@ struct Xe4BlockScaledConfig {
 
     constexpr int MMA_NSF = size<2>(typename TiledMma::Shape_MNK{}) / SFVecSize;
     constexpr int M = size<0>(typename TiledMma::Shape_MNK{});
-    // A single indivisible block holds the scale factors associated with the MMA tile rows/columns.
-    // The block granularity is controlled by Blk_MN and Blk_SF (currently both set to 1 for Xe4).
+    // SF block granularity (both 1 for Xe4: one SF element per MN position).
     using Blk_MN    = typename Xe4BlkScaledChunk::Blk_MN;
     using Blk_SF    = typename Xe4BlkScaledChunk::Blk_SF;
     using Blk_Elems = decltype(Blk_MN{} * Blk_SF{});
@@ -144,7 +147,9 @@ struct Xe4BlockScaledConfig {
     using blk_Shape1 = Int<size<0>(TileShape_MNK{})/M>;
     using blk_Shape2 = Int<size<2>(TileShape_MNK{})/size<2>(typename TiledMma::Shape_MNK{})>;
     using blk_Stride1 =  Int<MMA_M /Blk_MN{} * Blk_Elems{} * MMA_NSF>;
-    using blk_Stride2 =  Int<blk_Stride1{} / blk_Shape1{}>;
+    // Pad k-block stride so each descriptor's 8-row read window stays within its own k-block.
+    using blk_Stride2_natural = Int<blk_Stride1{} / blk_Shape1{}>;
+    using blk_Stride2 = Int<cute::max(int(blk_Stride2_natural{}), SfDescMinRows * MMA_MBlk)>;
 
     constexpr auto blk_Stride1_or_0 = [=] {
       if constexpr (blk_Shape1{} == 1) return _0{};
@@ -164,8 +169,7 @@ struct Xe4BlockScaledConfig {
 
     constexpr int MMA_NSF = size<2>(typename TiledMma::Shape_MNK{}) / SFVecSize;
     constexpr int N = size<1>(typename TiledMma::Shape_MNK{});
-    // Blk_MN and Blk_SF describe the logical block of matrix elements covered by one set of scale factors.
-    // For Xe4, Xe4BlockScaledBasicChunk defines Blk_MN = 1 and Blk_SF = 1, so each element has its own scale factor.
+    // SF block granularity (both 1 for Xe4: one SF element per MN position).
     using Blk_MN    = typename Xe4BlkScaledChunk::Blk_MN;
     using Blk_SF    = typename Xe4BlkScaledChunk::Blk_SF;
     using Blk_Elems = decltype(Blk_MN{} * Blk_SF{});
@@ -187,7 +191,9 @@ struct Xe4BlockScaledConfig {
     using blk_Shape1 = Int<size<1>(TileShape_MNK{})/N>;
     using blk_Shape2 = Int<size<2>(TileShape_MNK{})/size<2>(typename TiledMma::Shape_MNK{})>;
     using blk_Stride1 =  Int<MMA_N / Blk_MN{} * Blk_Elems{} * MMA_NSF>;
-    using blk_Stride2 =  Int<blk_Stride1{} / blk_Shape1{}>;
+    // Pad k-block stride so each descriptor's 8-row read window stays within its own k-block.
+    using blk_Stride2_natural = Int<blk_Stride1{} / blk_Shape1{}>;
+    using blk_Stride2 = Int<cute::max(int(blk_Stride2_natural{}), SfDescMinRows * MMA_NBlk)>;
 
     constexpr auto blk_Stride1_or_0 = [=] {
       if constexpr (blk_Shape1{} == 1) return _0{};

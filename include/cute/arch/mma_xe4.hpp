@@ -105,8 +105,10 @@ template <
   class ElementA,
   class ElementB,
   class ElementC,
-  class ElementSF,    // Scale factor type
-  int VS,             // Vector size (16 or 32)
+  class ElementSFA,   // Scale factor type for A
+  class ElementSFB,   // Scale factor type for B
+  int VSA,            // SF vector size for A (16 or 32)
+  int VSB,            // SF vector size for B (16 or 32)
   class TileShape_MNK,
   class ClusterShape_MNK,
   AMMA::Major MajorA,
@@ -119,7 +121,8 @@ bs_op_selector()
 {
   static_assert(is_static<TileShape_MNK>::value, "TileShape_MNK must be static.");
   static_assert(rank(TileShape_MNK{}) == 3, "TileShape_MNK must be rank 3.");
-  static_assert(VS == 16 || VS == 32, "Vector size must be 16 or 32.");
+  static_assert(VSA == 16 || VSA == 32, "SF vector size A must be 16 or 32.");
+  static_assert(VSB == 16 || VSB == 32, "SF vector size B must be 16 or 32.");
 
   constexpr uint32_t M_MIN = 64;
   constexpr uint32_t M_MAX = 256;
@@ -143,7 +146,7 @@ bs_op_selector()
   // atom K is large enough for ADMA box truncation (each CTA's K_sf >= 8 after split).
   // Without cooperative SF, padding handles the cm_8x32B constraint, so gcd is fine.
   constexpr bool is_cluster = size(ClusterShape_MNK{}) > 1;
-  constexpr uint32_t K = (is_cluster && EnableCooperativeSF && VS == 32 && Tile_K <= K_MAX)
+  constexpr uint32_t K = (is_cluster && EnableCooperativeSF && cute::max(VSA, VSB) == 32 && Tile_K <= K_MAX)
       ? Tile_K : cute::gcd(Tile_K, K_MAX);
 
   // According to the whitepaper, M_MIN/N_MIN was originally set to 32, but when using
@@ -153,14 +156,28 @@ bs_op_selector()
   static_assert(M >= M_MIN, "MMA_M must be >= 64 as Type3 matrix_stride needs to be 64-elem aligned");
   static_assert(N >= N_MIN, "MMA_N must be >= 64 as Type3 matrix_stride needs to be 64-elem aligned");
   static_assert(K >= K_MIN, "MMA_K must be >= K_MIN (element type hardware minimum).");
-  static_assert(K % VS == 0, "MMA_K must be a multiple of the scale factor vector size (VS).");
+  static_assert(K % VSA == 0, "MMA_K must be a multiple of the A scale factor vector size (VSA).");
+  static_assert(K % VSB == 0, "MMA_K must be a multiple of the B scale factor vector size (VSB).");
+
+  // Determine which sides carry an MX scale.  Only fp4 (e2m1) and fp8 (e4m3)
+  // are MX types; bf16/fp16 operands are plain and must not get .bscale/.ascale.
+  constexpr bool mx_a = cute::is_same_v<ElementA, cutlass::float_e2m1_t> ||
+                        cute::is_same_v<ElementA, cutlass::float_e4m3_t>;
+  constexpr bool mx_b = cute::is_same_v<ElementB, cutlass::float_e2m1_t> ||
+                        cute::is_same_v<ElementB, cutlass::float_e4m3_t>;
+  static_assert(mx_a || mx_b,
+    "At least one of ElementA or ElementB must be an MX type (fp4/fp8) for block-scaled GEMM.");
+
+  constexpr auto mode = mx_a && mx_b ? AMMA::BlockScaleMode::Both
+                      : mx_a         ? AMMA::BlockScaleMode::AOnly
+                                     : AMMA::BlockScaleMode::BOnly;
 
   if constexpr (size(ClusterShape_MNK{}) == 1) {
-    return XE4_AMMA_FP4FP8<
-      ElementD, ElementA, ElementB, ElementC, ElementSF, M, N, K, VS, MajorA, MajorB>();
+    return XE4_AMMA_BlockScaled<
+      ElementD, ElementA, ElementB, ElementC, ElementSFA, ElementSFB, M, N, K, VSA, VSB, MajorA, MajorB, mode>();
   } else {
-    return XE4_AMMA_FP4FP8_AB_CLUSTER<
-      ElementD, ElementA, ElementB, ElementC, ElementSF, M, N, K, VS, MajorA, MajorB>();
+    return XE4_AMMA_BlockScaled_AB_CLUSTER<
+      ElementD, ElementA, ElementB, ElementC, ElementSFA, ElementSFB, M, N, K, VSA, VSB, MajorA, MajorB, mode>();
   }
 
   CUTE_GCC_UNREACHABLE;

@@ -108,10 +108,12 @@ jobs:
           ./examples/xe4/gemm/xe4_gemm_cluster_dynamic
           echo "--------------------------------------"
           echo "Running Xe4 GEMM Block-Scaled FP4/FP8 Workload"
-          ninja xe4_gemm_blockscaled_fp4
-          ./examples/xe4/gemm/xe4_gemm_blockscaled_fp4
-          ninja xe4_gemm_blockscaled_fp8
-          ./examples/xe4/gemm/xe4_gemm_blockscaled_fp8
+          ninja xe4_gemm_blockscaled
+          ./examples/xe4/gemm/xe4_gemm_blockscaled
+          echo "--------------------------------------"
+          echo "Running Xe4 GEMM Block-Scaled Cluster Workload"
+          ninja xe4_gemm_blockscaled_cluster
+          ./examples/xe4/gemm/xe4_gemm_blockscaled_cluster
           echo "--------------------------------------"
           echo "Running Xe4 CuTe AMMA w/o DMA GEMM Tutorial Workload"
           ninja xe4_amma
