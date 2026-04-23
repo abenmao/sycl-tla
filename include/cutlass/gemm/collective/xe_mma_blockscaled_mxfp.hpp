@@ -182,6 +182,8 @@ public:
   static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize;
 
   using MmaAtomShape = typename TiledMma::AtomShape_MNK;
+  static constexpr int ATOM_M = get<0>(MmaAtomShape{});
+  static constexpr int ATOM_N = get<1>(MmaAtomShape{});
 
   static constexpr int BLK_M = get<0>(WorkgroupTileShape{});
   static constexpr int BLK_N = get<1>(WorkgroupTileShape{});
@@ -264,10 +266,6 @@ public:
         make_tensor(make_gmem_ptr(static_cast<ElementB const *>(args.ptr_B)), make_layout(make_shape(N, K, L), args.dB));
 
     auto scale_k = cute::ceil_div(K, GroupK);
-    // M/N must be multiples of ScaleAlignElems; can_implement() checks this at runtime.
-    // These assertions guard against misuse in debug builds.
-    CUTLASS_ASSERT(M % ScaleAlignElems == 0 && "M must be a multiple of ScaleAlignElems for 2D block-load of scale factors");
-    CUTLASS_ASSERT(N % ScaleAlignElems == 0 && "N must be a multiple of ScaleAlignElems for 2D block-load of scale factors");
     auto mScaleA = make_tensor(make_gmem_ptr(static_cast<ElementScaleA const *>(args.ptr_SA)),
                                make_layout(make_shape(M, scale_k, L), args.dSA));
     auto mScaleB = make_tensor(make_gmem_ptr(static_cast<ElementScaleB const *>(args.ptr_SB)),
@@ -296,12 +294,6 @@ public:
       }
     }
 
-    // 2D block load requires surface width to be 4-byte aligned.
-    if (M % ScaleAlignElems != 0 || N % ScaleAlignElems != 0) {
-      CUTLASS_TRACE_HOST("  CAN IMPLEMENT: M and N must be multiples of ScaleAlignElems for 2D block-load of scale factors.\n");
-      implementable = false;
-    }
-
     constexpr int min_aligned_elements_A = copy_alignment_bits / sizeof_bits<ElementA>::value;
     implementable &= cutlass::detail::check_alignment<min_aligned_elements_A>(cute::make_shape(M,K,L), args.dA);
     constexpr int min_aligned_elements_B = copy_alignment_bits / sizeof_bits<ElementB>::value;
@@ -316,6 +308,16 @@ public:
 
     if (!implementable) {
       CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Problem Size doesn't meet the minimum alignment requirements for XE 2D copy.\n");
+    }
+
+    // 2D block load requires M/N to be multiples of ScaleAlignElems (4 for 8-bit scales).
+    // For unaligned M/N, use the tuple-based MXFP block-scaled scalar scale-load variant instead.
+    if (M % ScaleAlignElems != 0 || N % ScaleAlignElems != 0) {
+      CUTLASS_TRACE_HOST("  CAN IMPLEMENT: M/N not aligned for 2D block load of scale factors. "
+                         "Use the tuple-based MXFP BlockScaled scalar scale-load variant "
+                         "(e.g. MainloopIntelXeXMX16BlockScaledImpl<..., tuple<_1, _1, Int<32>>>) "
+                         "for arbitrary M/N.\n");
+      implementable = false;
     }
 
     return implementable;
@@ -389,6 +391,9 @@ public:
     const int n_coord = n_idx * BLK_N + (get_sub_group_id() % SG_NUMS_N) * SG_N;
     const int l_coord = l_idx;
 
+    const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K_start));
+    constexpr int k_reload_factor = cute::max(GroupK / BLK_K, 1);
+
     auto [tiled_copy_scaleA, copy_iter_scaleA, fragment_scaleA] = make_scaled_copy<GmemTiledCopyScaleA, NonVoidElementScaleA,
                                               SG_M, SG_K, GroupK>(mainloop.mAscale, m_coord, l_coord, k_tile_count);
     auto [tiled_copy_scaleB, copy_iter_scaleB, fragment_scaleB] = make_scaled_copy<GmemTiledCopyScaleB, NonVoidElementScaleB,
@@ -402,39 +407,9 @@ public:
     auto [tiled_prefetch_scaleB, prefetch_iter_scaleB] = make_scaled_prefetch<decltype(tiled_copy_scaleB),
                                                            SG_N, SG_K, GroupK>(tiled_copy_scaleB, n_coord, l_coord, k_tile_count);
 
-#define PRINT(x) print(#x ": "); print(x); print("\n");
-
-#if CUTLASS_ENABLE_DEBUG_PRINTS
-#define PRINT(x) print(#x ": "); print(x); print("\n");
-    if (cute::thread(LOG_THREAD, LOG_GROUP)) {
-      print("======================= A: \n");
-      PRINT(tAgA);
-
-      PRINT(tCrA);
-      PRINT(tArA);
-      PRINT(copy_a);
-      PRINT(fragment_scaleA);
-
-      print("======================= B: \n");
-      PRINT(tBgB);
-
-      PRINT(tCrB);
-      PRINT(tBrB);
-      PRINT(copy_b);
-      PRINT(fragment_scaleB);
-      }
-#undef PRINT
-  #endif
-
     using scaleA_vec_t = intel::vector_t<ElementScaleA, decltype(size(fragment_scaleA))::value>;
     using scaleB_vec_t = intel::vector_t<ElementScaleB, decltype(size(fragment_scaleB))::value>;
 
-    const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K_start));
-
-
-    constexpr int k_reload_factor = cute::max(GroupK / BLK_K, 1);
-
-    // pre-prefetch
     int prefetch_k = k_start_idx;
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
@@ -444,9 +419,6 @@ public:
         prefetch(tiled_prefetch_scaleB, prefetch_iter_scaleB(_, _, _, prefetch_k / k_reload_factor));
     }
 
-    //
-    // Mainloop
-    //
     for (int k_tile = k_start_idx; k_tile < k_tile_count + k_start_idx; k_tile++, prefetch_k++) {
       copy(copy_a, tAgA(_,_,_,k_tile), tArA);
       copy(copy_b, tBgB(_,_,_,k_tile), tBrB);

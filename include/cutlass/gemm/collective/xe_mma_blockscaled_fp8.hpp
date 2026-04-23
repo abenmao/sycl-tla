@@ -176,11 +176,15 @@ public:
   static constexpr int SG_K = ceil_div(BLK_K, SG_NUMS_K);
   using SubgroupTileShape = Shape<C<SG_M>, C<SG_N>, C<SG_K>>;
 
-  static_assert(SG_N <= GroupN,
-    "SG_N must not exceed GroupN — each subgroup must fall within a single scale B N-block.");
-
-  static_assert(GroupK >= BLK_K && GroupK % BLK_K == 0,
-    "GroupK must be a multiple of BLK_K so that scale boundaries align with tile boundaries.");
+  // Compile-time path selection for scale loading strategy
+  // Scale-B is indexed by N scale blocks (extent ceil(N / GroupN)).
+  // Per-lane loading is valid only for true per-element N scaling.
+  static constexpr bool kPerLaneScaleB = (GroupN == 1);
+  static_assert(kPerLaneScaleB || SG_N <= GroupN,
+                "Broadcast scale-B path requires each subgroup N tile to remain within a single "
+                "GroupN block; use GroupN == 1 for per-lane scale-B loading or ensure SG_N <= GroupN.");
+  // Use fine-grain K-scale loading whenever GroupK boundaries can fall within a BLK_K tile.
+  static constexpr bool kFineGrainScaleK = (GroupK < BLK_K) || ((GroupK % BLK_K) != 0);
 
   // Accumulator iterations
   static constexpr int M_ITERS = SG_M / ATOM_M;
@@ -343,8 +347,12 @@ public:
     const int M_extent = get<0>(mainloop.mAscale.shape());
     const int N_scale_extent = get<0>(mainloop.mBscale.shape());
 
-    // Scale B index: clamp to valid range for partial N-tiles
-    const int n_scale_coord = cute::min(n_coord / GroupN, N_scale_extent - 1);
+    // Scale B index for broadcast path (GroupN >= ATOM_N)
+    [[maybe_unused]] const int n_scale_coord = [&]() {
+      if constexpr (kPerLaneScaleB) { return 0; }
+      else { return cute::min(n_coord / GroupN, N_scale_extent - 1); }
+    }();
+    [[maybe_unused]] const int lane_id = thread_idx % SubgroupSize;
 
     const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K_start));
 
@@ -373,36 +381,92 @@ public:
     int prev_k_scale_idx = -1;
 
     for (int k_tile = k_start_idx; k_tile < k_tile_end; k_tile++, prefetch_k++) {
-      // Reload scale fragments when entering a new scale K-block
-      const int k_scale_idx = (k_tile * BLK_K) / GroupK;
-      if (k_scale_idx != prev_k_scale_idx) {
-        prev_k_scale_idx = k_scale_idx;
 
-        const float scale_b_val = static_cast<float>(
-            mainloop.mBscale(n_scale_coord, k_scale_idx, l_coord));
-
+      if constexpr (kPerLaneScaleB) {
+        // Scalar fallback path for GroupN=1: always reload scales per ki.
+        // This keeps GroupSize=32 and GroupSize=64 fallback kernels on the same
+        // loading skeleton while still computing the correct scale group index.
         CUTLASS_PRAGMA_UNROLL
-        for (int mi = 0; mi < M_ITERS; mi++) {
+        for (int ki = 0; ki < GEMM_K_ITERS; ++ki) {
+          const int k_scale_idx = (k_tile * BLK_K + ki * MMA_K) / GroupK;
           CUTLASS_PRAGMA_UNROLL
-          for (int v = 0; v < ATOM_M; v++) {
-            const int m_abs = m_coord + mi * ATOM_M + v;
-            const ElementScaleA sa = (m_abs < M_extent)
-                ? mainloop.mAscale(m_abs, k_scale_idx, l_coord)
-                : ElementScaleA(0.0f);
+          for (int mi = 0; mi < M_ITERS; mi++) {
             CUTLASS_PRAGMA_UNROLL
-            for (int ki = 0; ki < GEMM_K_ITERS; ++ki) {
-              tScaleA(v, mi, ki) = sa;
+            for (int v = 0; v < ATOM_M; v++) {
+              const int m_abs = m_coord + mi * ATOM_M + v;
+              tScaleA(v, mi, ki) = (m_abs < M_extent)
+                  ? mainloop.mAscale(m_abs, k_scale_idx, l_coord)
+                  : ElementScaleA(0);
+            }
+          }
+          CUTLASS_PRAGMA_UNROLL
+          for (int ni = 0; ni < N_ITERS; ni++) {
+            const int n_abs = n_coord + ni * ATOM_N + lane_id;
+            const auto sb = (n_abs < N_scale_extent)
+                ? mainloop.mBscale(n_abs, k_scale_idx, l_coord)
+                : ElementScaleB(0);
+            CUTLASS_PRAGMA_UNROLL
+            for (int v = 0; v < SCALE_B_V; v++) {
+              tScaleB(v, ni, ki) = sb;
             }
           }
         }
-
+      } else if constexpr (kFineGrainScaleK) {
+        // Per-ki scale loading: different ki values may map to different scale groups
         CUTLASS_PRAGMA_UNROLL
-        for (int ni = 0; ni < N_ITERS; ni++) {
+        for (int ki = 0; ki < GEMM_K_ITERS; ++ki) {
+          const int k_scale_idx = (k_tile * BLK_K + ki * MMA_K) / GroupK;
           CUTLASS_PRAGMA_UNROLL
-          for (int v = 0; v < SCALE_B_V; v++) {
+          for (int mi = 0; mi < M_ITERS; mi++) {
             CUTLASS_PRAGMA_UNROLL
-            for (int ki = 0; ki < GEMM_K_ITERS; ++ki) {
+            for (int v = 0; v < ATOM_M; v++) {
+              const int m_abs = m_coord + mi * ATOM_M + v;
+              tScaleA(v, mi, ki) = (m_abs < M_extent)
+                  ? mainloop.mAscale(m_abs, k_scale_idx, l_coord)
+                  : ElementScaleA(0);
+            }
+          }
+          const float scale_b_val = static_cast<float>(
+              mainloop.mBscale(n_scale_coord, k_scale_idx, l_coord));
+          CUTLASS_PRAGMA_UNROLL
+          for (int ni = 0; ni < N_ITERS; ni++) {
+            CUTLASS_PRAGMA_UNROLL
+            for (int v = 0; v < SCALE_B_V; v++) {
               tScaleB(v, ni, ki) = ElementScaleB(scale_b_val);
+            }
+          }
+        }
+      } else {
+        // Per-k_tile scale loading: scale group doesn't change within a tile
+        const int k_scale_idx = (k_tile * BLK_K) / GroupK;
+        if (k_scale_idx != prev_k_scale_idx) {
+          prev_k_scale_idx = k_scale_idx;
+
+          CUTLASS_PRAGMA_UNROLL
+          for (int mi = 0; mi < M_ITERS; mi++) {
+            CUTLASS_PRAGMA_UNROLL
+            for (int v = 0; v < ATOM_M; v++) {
+              const int m_abs = m_coord + mi * ATOM_M + v;
+              const ElementScaleA sa = (m_abs < M_extent)
+                  ? mainloop.mAscale(m_abs, k_scale_idx, l_coord)
+                  : ElementScaleA(0);
+              CUTLASS_PRAGMA_UNROLL
+              for (int ki = 0; ki < GEMM_K_ITERS; ++ki) {
+                tScaleA(v, mi, ki) = sa;
+              }
+            }
+          }
+
+          const float scale_b_val = static_cast<float>(
+              mainloop.mBscale(n_scale_coord, k_scale_idx, l_coord));
+          CUTLASS_PRAGMA_UNROLL
+          for (int ni = 0; ni < N_ITERS; ni++) {
+            CUTLASS_PRAGMA_UNROLL
+            for (int v = 0; v < SCALE_B_V; v++) {
+              CUTLASS_PRAGMA_UNROLL
+              for (int ki = 0; ki < GEMM_K_ITERS; ++ki) {
+                tScaleB(v, ni, ki) = ElementScaleB(scale_b_val);
+              }
             }
           }
         }

@@ -365,8 +365,9 @@ struct ExampleRunner {
       // compare_reference
       passed &= cutlass::reference::device::BlockCompareRelativelyEqual(
         block_ref_D.at(i).get(), block_D.at(i).get(), block_D.at(i).size(), epsilon, non_zero_floor); 
-      if (!passed)
+      if (!passed) {
         break;
+      }
     }
 
     return passed;
@@ -382,8 +383,13 @@ struct ExampleRunner {
     const float min_dequant_val = 0.5f;
     const float scale_max = max_dequant_val / elt_max_f;
     const float scale_min = min_dequant_val / elt_max_f;
+#if defined(CUTLASS_TEST_FOR_CRI)
+    cutlass::reference::device::BlockFillRandomUniformCopyFromHost(
+        block.get(), block.size(), seed, Element(scale_max), Element(scale_min));
+#else
     cutlass::reference::device::BlockFillRandomUniform(
         block.get(), block.size(), seed, Element(scale_max), Element(scale_min));
+#endif
     return true;
   }
 
