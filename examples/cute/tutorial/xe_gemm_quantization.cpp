@@ -66,7 +66,8 @@ gemm_device(ATensor   const& A,         // (M,K)
             CTensor        & C,         // (M,N)
             QTensor        & Q,         // (M,N)
             STensor        & S,         // (M, N/BlockSize)
-            TiledMMA const & mma)
+            TiledMMA const & mma,
+            int              verify)
 {
   // -----
   // Setup
@@ -181,7 +182,10 @@ gemm_device(ATensor   const& A,         // (M,K)
     barrier_wait(barrier_scope);
   }
 
-  copy(copy_c, tCrC, tCgC);
+  if (verify != 0) {
+    /* Write C (GEMM result) to global memory*/
+    copy(copy_c, tCrC, tCgC);
+  }
 
   /* Partition quantization output */
   auto copy_q = make_block_2d_copy_D(mma, Q);
@@ -197,29 +201,51 @@ gemm_device(ATensor   const& A,         // (M,K)
   constexpr auto M = decltype(get<0>(c_shape))::value;
   constexpr auto N = decltype(get<1>(c_shape))::value;
   constexpr int NumScaleBlocks = N / BlockSize;
-  constexpr auto s_size = size(tCrC.tv_layout()) / BlockSize;
-  auto s_tensor = make_tensor<SType>(Layout<Shape<Int<s_size>>>{});
-  auto s_tv_layout = make_layout(make_shape(Int<intel::sg_size>{}, make_shape(Int<M>{}, Int<NumScaleBlocks>{})),
-                                 make_stride(Int<0>{}, make_stride(ScaledBasis<Int<1>,0>{}, ScaledBasis<Int<1>,1>{})));
+  constexpr int rows_per_thr = M / intel::sg_size;
+  constexpr int per_thr = rows_per_thr * NumScaleBlocks;
+  auto s_tensor = make_tensor<SType>(Layout<Shape<Int<per_thr>>>{});
+  auto s_tv_layout = make_layout(
+      make_shape(Int<intel::sg_size>{}, make_shape(Int<rows_per_thr>{}, Int<NumScaleBlocks>{})),
+      make_stride(ScaledBasis<Int<1>,0>{},
+                  make_stride(ScaledBasis<Int<intel::sg_size>,0>{}, ScaledBasis<Int<1>,1>{})));
   auto trS = make_subgroup_tensor(s_tensor, s_tv_layout);
-
-  /* Compute per-SG tile of gS using SGLayout convention:
-     SG index = sm * THR_N + sn, so sm = idx / THR_N, sn = idx % THR_N.
-     local_partition can't be used here because it always decomposes the
-     thread index in column-major order, which doesn't match the n-major
-     SGLayout.  Use local_tile with explicitly computed SG coordinates. */
-  int sg_idx = local_id / intel::sg_size;
-  int sg_m = sg_idx / int(THR_N);
-  int sg_n = sg_idx % int(THR_N);
-  auto tgS = local_tile(gS, make_shape(Int<M>{}, Int<NumScaleBlocks>{}), make_coord(sg_m, sg_n));
 
   quantize<BlockSize>(tCrC, trQ, trS);
 
   /* Write LP quantize output to global memory */
   copy(copy_q, trQ, tgQ);
 
-  /* Write scale output to global memory cooperatively across the subgroup */
-  naive_cooperative_copy<intel::sg_size>(local_id % intel::sg_size, trS, tgS);
+  /* Compute per-SG tile of gS using SGLayout convention:
+  SG index = sm * THR_N + sn, so sm = idx / THR_N, sn = idx % THR_N.
+  local_partition can't be used here because it always decomposes the
+  thread index in column-major order, which doesn't match the n-major
+  SGLayout.  Use local_tile with explicitly computed SG coordinates. */
+  int sg_idx = local_id / intel::sg_size;
+  int sg_m = sg_idx / int(THR_N);
+  int sg_n = sg_idx % int(THR_N);
+  auto tgS = local_tile(gS, make_shape(Int<M>{}, Int<NumScaleBlocks>{}), make_coord(sg_m, sg_n));
+  /* Write scale output to global memory.
+      s_tensor holds per_thr = (M/16) * NumScaleBlocks values per thread.
+      The distributed TV layout assigns each lane its own rows:
+        lane t → rows {t, t+16, t+32, ...}.
+      s_tensor is indexed colexicographically within the per-thread subset:
+        s_tensor(r + b * rows_per_thr) = scale for row (lane + r*16), block b.
+      Bounds checks guard against out-of-bounds SGs when problem < WG tile. */
+  int lane = local_id % intel::sg_size;
+  int row_base = wg_m * int(get<0>(wg_tile)) + sg_m * int(M);
+  int col_base = wg_n * (int(get<1>(wg_tile)) / BlockSize) + sg_n * NumScaleBlocks;
+  int s_rows = int(size<0>(S));
+  int s_cols = int(size<1>(S));
+  for (int r = 0; r < rows_per_thr; ++r) {
+    int row = lane + r * int(intel::sg_size);
+    if (row_base + row < s_rows) {
+      for (int b = 0; b < NumScaleBlocks; ++b) {
+        if (col_base + b < s_cols) {
+          tgS(row, b) = s_tensor(r + b * rows_per_thr);
+        }
+      }
+    }
+  }
 }
 
 template <typename TA, typename TB, typename TC>
@@ -270,7 +296,8 @@ gemm_cute(sycl::queue &Queue,
           BTensor   const& B,         // (N,K)
           CTensor        & C,         // (M,N)
           QTensor        & Q,
-          STensor        & S)
+          STensor        & S,
+          int              verify = 0)
 {
   auto mma = choose_tiled_mma(A, B, C);
 
@@ -292,7 +319,7 @@ gemm_cute(sycl::queue &Queue,
 
   auto event = Queue.parallel_for<GemmCuteName<TA, TB, TC, layoutA, layoutB>>(sycl::nd_range<2>(global, local), kernel_props,
     [=](auto) {
-      gemm_device(A, B, C, Q, S, mma);
+      gemm_device(A, B, C, Q, S, mma, verify);
     }
   );
 
@@ -371,7 +398,7 @@ quantize_verify(CTensor const& C,     // (M, N) — GEMM result (float)
 
   using FloatToScale = cutlass::NumericConverter<ScaleType, float,
                         cutlass::FloatRoundStyle::round_toward_zero>;
-  using FloatToDst   = cutlass::NumericConverter<DstType, float,
+  using HalfToDst    = cutlass::NumericConverter<DstType, cutlass::half_t,
                         cutlass::FloatRoundStyle::round_to_nearest>;
 
   const float target_max = static_cast<float>(
@@ -390,7 +417,7 @@ quantize_verify(CTensor const& C,     // (M, N) — GEMM result (float)
       float block_amax = 0.0f;
       for (int k = 0; k < BlockSize; ++k) {
         float val = static_cast<float>(C(row, b * BlockSize + k));
-        block_amax = sycl::fmax(block_amax, sycl::fabs(val));
+        block_amax = std::max(block_amax, std::abs(val));
       }
 
       // Phase 2: compute expected scale
@@ -405,11 +432,13 @@ quantize_verify(CTensor const& C,     // (M, N) — GEMM result (float)
       }
 
       // Phase 3: verify quantized elements in this block
+      // GPU ASM does: F32 mul → F32→HF mov → HF→FP8 fcvt
       for (int k = 0; k < BlockSize; ++k) {
         int col = b * BlockSize + k;
         float val    = static_cast<float>(C(row, col));
-        float scaled = val * static_cast<float>(ref_scale);
-        DstType ref_q = FloatToDst{}(scaled);
+        float scaled = val * s;
+        cutlass::half_t h = static_cast<cutlass::half_t>(scaled);
+        DstType ref_q = HalfToDst{}(h);
 
         DstType gpu_q = Q(row, col);
         if (static_cast<float>(gpu_q) != static_cast<float>(ref_q)) {
@@ -459,7 +488,7 @@ test_case(sycl::queue &Queue, int m, int n, int k, int iterations, int verify)
   subbyte_pack(B);
 
   // Run the GEMM
-  gemm_cute<decltype(A), decltype(B), decltype(C), decltype(Q), decltype(S), TA, TB, TC, layoutA, layoutB>(Queue, A, B, C, Q, S);
+  gemm_cute<decltype(A), decltype(B), decltype(C), decltype(Q), decltype(S), TA, TB, TC, layoutA, layoutB>(Queue, A, B, C, Q, S, verify);
   Queue.wait_and_throw();
 
   if (verify != 0) {  

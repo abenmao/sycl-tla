@@ -30,10 +30,13 @@
  **************************************************************************************************/
 /*! \file
     \brief Block-wise quantization for SubgroupTensor on Intel Xe GPUs.
-    
+
     Provides in-register quantization from high-precision types (half_t, BF16, FP32) to
     low-precision types (E4M3, E5M2, E2M1) with block-wise scale factors.
-    
+
+    The optimized path fuses abs-max reduction, scale computation, type conversion
+    and reorder into a single inline vISA ASM block.
+
     This API is designed to enable fusion with GEMM prologue/epilogue operations,
     avoiding expensive register-to-memory conversions.
 */
@@ -44,7 +47,7 @@
 #include <cute/tensor.hpp>
 #include <cute/tensor_sg.hpp>
 #include <cute/algorithm/reorder.hpp>
-#include <cute/util/sycl_vec.hpp>
+#include <cute/atom/quantize_atom.hpp>
 
 #include <cutlass/numeric_conversion.h>
 #include <cutlass/numeric_types.h>
@@ -55,19 +58,188 @@
 namespace cute {
 
 //////////////////////////////////////////////////////////////////////////////
+/// compute_block_scales — Shared Steps 1-3 for both optimized and fallback paths
+///
+/// Step 1: Per-thread abs-max per (row, block) pair
+/// Step 2: Cross-lane reduction + compute per-(row, block) scale in F32
+/// Step 3: Write scales to output (converted to ScaleType)
+///
+/// Returns the per-(row, block) scale factors in block_scale_f32[M * NumBlocks],
+/// indexed colexicographically as block_scale_f32[m + block_id * M].
+//////////////////////////////////////////////////////////////////////////////
+template <typename SrcType, typename DstType, int NumBlocks,
+          int BlockSize, int NumValues, int ScaleNumValues,
+          class SrcTVLayout, class ScaleTVLayout,
+          class SrcEngine, class SrcLayoutWI,
+          class ScaleEngine, class ScaleLayoutWI>
+CUTE_HOST_DEVICE
+void compute_block_scales(
+  SubgroupTensor<SrcEngine, SrcLayoutWI, SrcTVLayout> const& src,
+  SubgroupTensor<ScaleEngine, ScaleLayoutWI, ScaleTVLayout>& scale,
+  float* block_scale_f32)
+{
+  using ScaleType = typename ScaleEngine::element_type;
+  constexpr auto tv_layout = SrcTVLayout{};
+  constexpr auto logical_shape = atuple_coshape(tv_layout);
+  constexpr int M = get<0>(logical_shape);
+  constexpr int NumScales = M * NumBlocks;
+
+  // Step 1: Per-thread abs-max per (row, block) pair
+  float local_max[NumScales];
+  CUTE_UNROLL
+  for (int i = 0; i < NumScales; i++) {
+    local_max[i] = 0.0f;
+  }
+  CUTE_UNROLL
+  for (int v = 0; v < NumValues; v++) {
+    auto coord    = tv_layout(0, C<0>{} + v);
+    int  m        = get<0>(coord);
+    int  block_id = get<1>(coord) / BlockSize;
+    int  idx      = m + block_id * M;
+    float abs_val = sycl::fabs(static_cast<float>(src.tensor()(v)));
+    local_max[idx] = sycl::fmax(local_max[idx], abs_val);
+  }
+
+  // Step 2: Cross-lane reduction + compute per-(row, block) scale in F32
+  const float target_max = static_cast<float>(cutlass::platform::numeric_limits<DstType>::max());
+  using FloatToScale = cutlass::NumericConverter<ScaleType, float,
+                                                cutlass::FloatRoundStyle::round_toward_zero>;
+  auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+  CUTE_UNROLL
+  for (int i = 0; i < NumScales; i++) {
+    local_max[i] = reduce_over_group(sg, local_max[i],
+                                        sycl::maximum<float>{});
+    float amax = local_max[i];
+    block_scale_f32[i] = (amax > 0.0f) ? (target_max / amax) : 0.0f;
+  }
+
+  // Step 3: Write scales to output (converted to ScaleType)
+  // Use lane ID so distributed scale layouts write the
+  // correct per-thread subset.
+  int lane = sg.get_local_id();
+  CUTE_UNROLL
+  for (int sv = 0; sv < ScaleNumValues; sv++) {
+    auto sc = ScaleTVLayout{}(lane, C<0>{} + sv);
+    int sm = int(get<0>(sc));
+    int sb = int(get<1>(sc));
+    scale.tensor()(sv) = FloatToScale{}(block_scale_f32[sm + sb * M]);
+  }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+/// quantize_impl — Optimized path (C++ abs-max/reduce/scale + ASM atoms)
+///
+/// Steps 1-3 are handled by compute_block_scales.
+/// Step 4 uses Xe_Quantize_Optimized ASM atoms for the multiply + type-convert
+/// step (mul + mov F32→HF + fcvt HF→FP8).
+///
+/// Supported type combinations:
+///   half_t     → float_e5m2_t, float_e4m3_t
+///   bfloat16_t → float_e5m2_t, float_e4m3_t
+///   float      → float_e5m2_t, float_e4m3_t
+///
+/// Requires: Xe target >= 35, sg_size == 16, NumValues divisible by 4.
+/// For unsupported combinations, the dispatcher falls back to the pure C++ path.
+//////////////////////////////////////////////////////////////////////////////
+template <typename SrcType, typename DstType, int NumBlocks,
+          int BlockSize, int NumValues, int ScaleNumValues,
+          class SrcLayout, class SrcTVLayout,
+          class SrcEngine, class SrcLayoutWI,
+          class DstFrag,
+          class ScaleEngine, class ScaleLayoutWI, class ScaleTVLayout>
+CUTE_HOST_DEVICE
+void quantize_impl(
+  QuantizeDispatchOptimized const&,
+  SubgroupTensor<SrcEngine, SrcLayoutWI, SrcTVLayout> const& src,
+  DstFrag& tmp_dst_frag,
+  SubgroupTensor<ScaleEngine, ScaleLayoutWI, ScaleTVLayout>& scale)
+{
+  constexpr auto tv_layout = SrcTVLayout{};
+  constexpr auto logical_shape = atuple_coshape(tv_layout);
+  constexpr int M = get<0>(logical_shape);
+  constexpr int NumScales = M * NumBlocks;
+
+  // Steps 1-3: Compute per-block scales and write to scale tensor
+  float block_scale_f32[NumScales];
+  compute_block_scales<SrcType, DstType, NumBlocks,
+                       BlockSize, NumValues, ScaleNumValues,
+                       SrcTVLayout, ScaleTVLayout>(
+    src, scale, block_scale_f32);
+
+  // Step 4: Quantize using ASM atoms (mul + fcvt, 4 values per call)
+  using Impl = Xe_Quantize_Optimized<SrcType, DstType>;
+  static_assert(NumValues % 4 == 0,
+    "Quantize requires NumValues to be a multiple of 4");
+  CUTE_UNROLL
+  for (int v = 0; v < NumValues; v += 4) {
+    typename Impl::ScaleRegister scales;
+    CUTE_UNROLL
+    for (int dv = 0; dv < 4; ++dv) {
+      auto coord    = tv_layout(0, C<0>{} + v + dv);
+      int  m        = int(get<0>(coord));
+      int  block_id = int(get<1>(coord)) / BlockSize;
+      scales[dv]    = block_scale_f32[m + block_id * M];
+    }
+    Impl::quantize(
+      recast_ptr<typename Impl::SrcRegister>(&src.tensor()(v)),
+      recast_ptr<typename Impl::DstRegister>(&tmp_dst_frag(v)),
+      scales);
+  }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+/// quantize_impl — Fallback path (pure C++, no inline ASM)
+///
+/// Steps 1-3 are handled by compute_block_scales.
+/// Step 4 uses standard C++ multiply + NumericConverter for type conversion.
+//////////////////////////////////////////////////////////////////////////////
+template <typename SrcType, typename DstType,
+          int NumBlocks, int BlockSize, int NumValues, int ScaleNumValues,
+          class SrcLayout, class SrcTVLayout,
+          class SrcEngine, class SrcLayoutWI,
+          class DstFrag,
+          class ScaleEngine, class ScaleLayoutWI, class ScaleTVLayout>
+CUTE_HOST_DEVICE
+void quantize_impl(
+  QuantizeDispatchFallback const&,
+  SubgroupTensor<SrcEngine, SrcLayoutWI, SrcTVLayout> const& src,
+  DstFrag& tmp_dst_frag,
+  SubgroupTensor<ScaleEngine, ScaleLayoutWI, ScaleTVLayout>& scale)
+{
+  constexpr auto tv_layout = SrcTVLayout{};
+  constexpr auto logical_shape = atuple_coshape(tv_layout);
+  constexpr int M = get<0>(logical_shape);
+  constexpr int NumScales = M * NumBlocks;
+
+  // Steps 1-3: Compute per-block scales and write to scale tensor
+  float block_scale_f32[NumScales];
+  compute_block_scales<SrcType, DstType, NumBlocks,
+                       BlockSize, NumValues, ScaleNumValues,
+                       SrcTVLayout, ScaleTVLayout>(
+    src, scale, block_scale_f32);
+
+  // Step 4: Quantize using pure C++ (multiply + convert via NumericConverter)
+  using FloatToDst = cutlass::NumericConverter<DstType, float,
+                                              cutlass::FloatRoundStyle::round_to_nearest>;
+  CUTE_UNROLL
+  for (int v = 0; v < NumValues; v++) {
+    auto coord    = tv_layout(0, C<0>{} + v);
+    int  m        = int(get<0>(coord));
+    int  block_id = int(get<1>(coord)) / BlockSize;
+    float s       = block_scale_f32[m + block_id * M];
+    float scaled  = static_cast<float>(src.tensor()(v)) * s;
+    tmp_dst_frag(v) = FloatToDst{}(scaled);
+  }
+}
+
+//////////////////////////////////////////////////////////////////////////////
 /// quantize_block_wise
 ///
 /// Quantizes a high-precision source tensor to a low-precision destination
 /// tensor with per-block scale factors following the MX format algorithm:
-///   Step 0: Extract compile-time constants (M, N, NumBlocks) from TV layout
-///   Step 1: Per-thread vertical abs-max into local_max[M][NumBlocks]
-///   Step 2: Cross-lane reduce_over_group + compute per-block scale
-///   Step 3: Write scale factors to output tensor
-///   Step 4: Quantize: dst[i] = round_to_nearest(src[i] * scale)
-///   Step 5: Reorder elements to destination layout
-///
-/// Coordinates (m, block_id) are derived at compile time via
-/// tv_layout(0, C<0>{} + v) inside CUTE_UNROLL for loops.
+///   Step 0: Validate preconditions and extract compile-time constants
+///   Step 1: Dispatch to quantize_impl (optimized or fallback)
+///   Step 2: Reorder elements to destination layout
 ///
 /// Preconditions:
 ///   - BlockSize >= sg_size (16).  Each quantization block must span at
@@ -92,16 +264,19 @@ void quantize_block_wise(
   using DstType   = typename DstEngine::element_type;
   using ScaleType = typename ScaleEngine::element_type;
 
-  // ---------- Step 0: Compile-time constants ----------
-  constexpr auto tv_layout     = SrcTVLayout{};
-  constexpr auto logical_shape = atuple_coshape(tv_layout);
-  constexpr int  M             = get<0>(logical_shape);
-  constexpr int  N             = get<1>(logical_shape);
-  constexpr int  NumBlocks     = N / BlockSize;
-  constexpr int  NumValues     = cosize_v<SrcLayout>;
+  // ---------- Step 0: Validate preconditions ----------
+  constexpr auto src_tv_layout     = SrcTVLayout{};
+  constexpr auto logical_shape = atuple_coshape(src_tv_layout);
+  constexpr int  M              = get<0>(logical_shape);
+  constexpr int  N              = get<1>(logical_shape);
+  constexpr int  NumBlocks      = N / BlockSize;
+  constexpr int  NumValues      = cosize_v<SrcLayout>;
+  constexpr int  ScaleNumValues = cosize_v<ScaleLayout>;
 
   static_assert(N % BlockSize == 0,
     "BlockSize must evenly divide the N dimension");
+  static_assert(M % intel::sg_size == 0,
+    "M must be a multiple of subgroup size for distributed scale layouts");
   static_assert(BlockSize >= intel::sg_size,
     "BlockSize must be >= subgroup size for compile-time block index");
   static_assert(BlockSize % intel::sg_size == 0,
@@ -126,75 +301,23 @@ void quantize_block_wise(
     //   - Total number of elements equals M * NumBlocks
     static_assert(get<0>(scale_shape) == M,
       "Scale M dimension must match source M");
-    constexpr int scale_num_elems = cosize_v<ScaleLayout>;
+    constexpr int scale_num_elems = cosize_v<ScaleTVLayout>;
     static_assert(scale_num_elems == M * NumBlocks,
       "Scale tensor must have M * (N/BlockSize) elements");
   }
 
-  // ---------- Step 1: Per-thread vertical abs-max ----------
-  float local_max[M][NumBlocks];
-  CUTE_UNROLL
-  for (int m = 0; m < M; m++) {
-    CUTE_UNROLL
-    for (int b = 0; b < NumBlocks; b++) {
-      local_max[m][b] = 0.0f;
-    }
-  }
+  // ---------- Step 1: Choose implementation and dispatch ----------
+  auto impl = choose_xe_quantize_impl<SrcType, DstType, NumValues>();
 
-  CUTE_UNROLL
-  for (int v = 0; v < NumValues; v++) {
-    auto coord    = tv_layout(0, C<0>{} + v);
-    int  m        = get<0>(coord);
-    int  block_id = get<1>(coord) / BlockSize;
-    float abs_val = sycl::fabs(static_cast<float>(src.tensor()(v)));
-    local_max[m][block_id] = sycl::fmax(local_max[m][block_id], abs_val);
-  }
+  auto dst_frag = make_fragment_like<DstType>(src.tensor());
+  quantize_impl<SrcType, DstType, NumBlocks,
+                BlockSize, NumValues, ScaleNumValues,
+                SrcLayout, SrcTVLayout>(
+    impl, src, dst_frag, scale);
 
-  // ---------- Step 2: Cross-lane horizontal reduction ----------
-  const float target_max = static_cast<float>(cutlass::platform::numeric_limits<DstType>::max());
-  using FloatToScale = cutlass::NumericConverter<ScaleType, float,
-                                                 cutlass::FloatRoundStyle::round_toward_zero>;
-  ScaleType block_scale[M][NumBlocks];
-  auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
-  CUTE_UNROLL
-  for (int m = 0; m < M; m++) {
-    CUTE_UNROLL
-    for (int b = 0; b < NumBlocks; b++) {
-      local_max[m][b] = reduce_over_group(sg, local_max[m][b],
-                                          sycl::maximum<float>{});
-      float amax = local_max[m][b];
-      float s = (amax > 0.0f) ? (target_max / amax) : 0.0f;
-      block_scale[m][b] = FloatToScale{}(s);
-    }
-  }
-
-  // ---------- Step 3: Write scales to output ----------
-  constexpr int ScaleNumValues = cosize_v<ScaleLayout>;
-  CUTE_UNROLL
-  for (int sv = 0; sv < ScaleNumValues; sv++) {
-    auto sc = ScaleTVLayout{}(0, C<0>{} + sv);
-    scale.tensor()(sv) = block_scale[int(get<0>(sc))][int(get<1>(sc))];
-  }
-
-  // ---------- Step 4: Quantize each element ----------
-  using FloatToDst = cutlass::NumericConverter<DstType, float,
-                                                cutlass::FloatRoundStyle::round_to_nearest>;
-
-  auto tmp_dst_frag = make_fragment_like<DstType>(src.tensor());
-
-  CUTE_UNROLL
-  for (int v = 0; v < NumValues; v++) {
-    auto coord    = tv_layout(0, C<0>{} + v);
-    int  m        = get<0>(coord);
-    int  block_id = get<1>(coord) / BlockSize;
-    float val    = static_cast<float>(src.tensor()(v));
-    float scaled = val * static_cast<float>(block_scale[m][block_id]);
-    tmp_dst_frag(v) = FloatToDst{}(scaled);
-  }
-
-  // ---------- Step 5: Reorder to destination layout ----------
-  auto tmp_dst_sgt = make_subgroup_tensor(tmp_dst_frag, tv_layout);
-  reorder(tmp_dst_sgt, dst);
+  // ---------- Step 2: Reorder to destination layout ----------
+  auto dst_sgt = make_subgroup_tensor(dst_frag, src_tv_layout);
+  reorder(dst_sgt, dst);
 }
 
 //////////////////////////////////////////////////////////////////////////////
