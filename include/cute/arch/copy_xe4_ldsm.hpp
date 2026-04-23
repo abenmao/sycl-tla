@@ -17,9 +17,16 @@ namespace sycl {
 namespace cute {
 namespace detail {
 
-//First Version will support only these modes
-//ArrayofVector support will be added later
-enum LDSMMode {
+// LDSM (Load/Store Matrix) access modes for Xe4 matrix descriptor operations.
+// These modes control how threads cooperatively access SLM (Shared Local Memory)
+// via hardware matrix descriptors.
+//
+// Fixed underlying type `: int` is required because SYCL kernel launch mandates
+// all types embedded in kernel template arguments be "device-copyable". Since
+// LDSMMode appears as a template parameter of XE4_LOAD_MATRIX / XE4_STORE_MATRIX
+// (which are part of the kernel type), an unscoped enum without a fixed underlying
+// type would fail the SYCL device-copyability check.
+enum LDSMMode : int {
   Scalar,
   Vector,
   CoopVector,

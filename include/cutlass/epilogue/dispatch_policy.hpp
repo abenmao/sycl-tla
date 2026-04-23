@@ -320,7 +320,8 @@ template<
   bool ReuseSmemC_,
   bool DelayAdmaStore_,
   int NumControlWarps_,
-  int NumEpilogueWarps_
+  int NumEpilogueWarps_,
+  bool UseMmaAwareLdsm_ = false
 >
 struct Xe4AdmaWarpSpecialized {
   constexpr static int StagesC = StagesC_;
@@ -330,6 +331,7 @@ struct Xe4AdmaWarpSpecialized {
   constexpr static bool DelayAdmaStore = DelayAdmaStore_;
   constexpr static int NumControlWarps = NumControlWarps_;
   constexpr static int NumEpilogueWarps = NumEpilogueWarps_;
+  constexpr static bool UseMmaAwareLdsm = UseMmaAwareLdsm_;
 };
 
 #elif defined (SYCL_INTEL_TARGET)

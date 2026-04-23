@@ -2,6 +2,7 @@
 
 #include "cute/arch/copy_xe4_dma_legacy.hpp"
 #include "cute/atom/copy_traits_xe4_dma_legacy.hpp"
+#include "cute/atom/copy_traits_xe4_ldsm.hpp"
 #include "cute/arch/copy_xe4_adma.hpp"
 #include "cute/atom/copy_traits_xe4_adma.hpp"
 #include "cute/container/array.hpp"
@@ -36,6 +37,7 @@ template <
   bool DelayTmaStore_,
   int NumControlWarps_,
   int NumEpilogueWarps_,
+  bool UseMmaAwareLdsm_,
   class CtaTileShape_, // (CTA_M,CTA_N,CTA_K, optional: Tile_L)
   class EpilogueTile_, // (EPI_TILE_M, EPI_TILE_N)
   class ElementC_,
@@ -53,7 +55,7 @@ template <
   class CopyOpR2R_
 >
 class CollectiveEpilogue<
-  Xe4AdmaWarpSpecialized<StagesC_, StagesD_, FragmentSize_, ReuseSmemC_, DelayTmaStore_, NumControlWarps_, NumEpilogueWarps_>,
+  Xe4AdmaWarpSpecialized<StagesC_, StagesD_, FragmentSize_, ReuseSmemC_, DelayTmaStore_, NumControlWarps_, NumEpilogueWarps_, UseMmaAwareLdsm_>,
   CtaTileShape_,
   EpilogueTile_,
   ElementC_,
@@ -74,7 +76,7 @@ public:
   //
   // Type Aliases
   //
-  using DispatchPolicy = Xe4AdmaWarpSpecialized<StagesC_, StagesD_, FragmentSize_, ReuseSmemC_, DelayTmaStore_, NumControlWarps_, NumEpilogueWarps_>;
+  using DispatchPolicy = Xe4AdmaWarpSpecialized<StagesC_, StagesD_, FragmentSize_, ReuseSmemC_, DelayTmaStore_, NumControlWarps_, NumEpilogueWarps_, UseMmaAwareLdsm_>;
   using CtaTileShape = CtaTileShape_;
   using EpilogueTile = EpilogueTile_;
   using FusionCallbacks = FusionCallbacks_;
@@ -592,14 +594,18 @@ public:
     auto sD_epi = make_slm_tensor<SmemElementD>(ptr_sD, SmemLayoutD{});   // (CTA_M,CTA_N,PIPE_D)
 
     // (t)hread-partition for (s)mem to (r)egister copy (tSR_)
-    auto [tiled_s2r, tiled_s2r_imm]  = []() {
-      constexpr int NumElementsPerThread = 32;
-      constexpr int NumWarpsAlongM = get<0>(EpilogueTile{}) / NumThreadsPerWarp;
-      constexpr int NumWarpsAlongN = get<1>(EpilogueTile{}) / NumElementsPerThread;
-      auto thr_layout = make_ordered_layout(Shape<Shape<Int<NumThreadsPerWarp>,Int<NumWarpsAlongM>>,Int<NumWarpsAlongN>>{}, Step<Step<_0,_2>,_1>{});
-      auto val_layout = make_ordered_layout(Shape<_1,Int<NumElementsPerThread>>{}, Step<_1,_0>{});
-      auto tiled_s2r = make_tiled_copy(Copy_Atom<CopyOpS2R, SmemElementD>{}, thr_layout, val_layout);
-      auto tiled_s2r_imm = make_tiled_copy(Copy_Atom<CopyOpS2RImm, SmemElementImm>{}, thr_layout, val_layout);
+    // Thread and value layouts derived from EpilogueTile and core matrix constants.
+    // NumElementsPerThread = EpiTileN / NumWarpsAlongN: N-elements per thread (warp),
+    // derived from the epilogue tile shape and warp count rather than hardcoded.
+    constexpr int NumWarpsAlongM = get<0>(EpilogueTile{}) / NumThreadsPerWarp;
+    constexpr int NumWarpsAlongN = NumEpilogueWarps / NumWarpsAlongM;
+    constexpr int NumElementsPerThread = get<1>(EpilogueTile{}) / NumWarpsAlongN;
+    auto epi_thr_layout = make_ordered_layout(Shape<Shape<Int<NumThreadsPerWarp>,Int<NumWarpsAlongM>>,Int<NumWarpsAlongN>>{}, Step<Step<_0,_2>,_1>{});
+    auto epi_val_layout = make_ordered_layout(Shape<_1,Int<NumElementsPerThread>>{}, Step<_1,_0>{});
+
+    auto [tiled_s2r, tiled_s2r_imm]  = [&]() {
+      auto tiled_s2r = make_tiled_copy(Copy_Atom<CopyOpS2R, SmemElementD>{}, epi_thr_layout, epi_val_layout);
+      auto tiled_s2r_imm = make_tiled_copy(Copy_Atom<CopyOpS2RImm, SmemElementImm>{}, epi_thr_layout, epi_val_layout);
       return make_tuple(tiled_s2r, tiled_s2r_imm);
     }();
 
@@ -686,8 +692,28 @@ public:
         load_pipeline.consumer_wait(load_pipe_consumer_state);
 
         if (is_C_load_needed) {
-          // Copy source tile from smem to register
-          copy(tiled_s2r, tSR_sC(_,_,_,load_pipe_consumer_state.index()), tSR_rC);
+          // Copy source C tile from SLM to registers (S2R).
+          if constexpr (cute::is_ldsm_load_matrix_v<CopyOpS2R>) {
+            // --- LDSM descriptor path via make_ldsm_copy_C ---
+            // Dispatch: MMA-aware API uses TiledMMA's AtomShape to derive warp
+            // distribution; geometry-only API derives purely from SLM tensor shape.
+            auto ldsm_s2r = [&]() {
+              if constexpr (UseMmaAwareLdsm_) {
+                return cute::make_ldsm_copy_C<NumEpilogueWarps>(
+                    tiled_mma, sC_epi(_,_,load_pipe_consumer_state.index()));
+              } else {
+                return cute::make_ldsm_copy_C<NumEpilogueWarps>(
+                    sC_epi(_,_,load_pipe_consumer_state.index()));
+              }
+            }();
+            auto coord_sC = make_identity_tensor(make_shape(get<0>(EpilogueTile{}), get<1>(EpilogueTile{})));
+            auto thr_ldsm = ldsm_s2r.get_slice(worker_id);
+            auto ldsm_src = thr_ldsm.partition_S(coord_sC);
+            copy(ldsm_s2r, ldsm_src, tSR_rC);
+          } else {
+            // Legacy XE4_LDSM vector load path (pointer-based, no descriptor)
+            copy(tiled_s2r, tSR_sC(_,_,_,load_pipe_consumer_state.index()), tSR_rC);
+          }
         }
 
         load_pipeline.consumer_release(load_pipe_consumer_state);
@@ -696,8 +722,21 @@ public:
         // The current tile in smem
         Tensor tSR_sAcc_mn = tSR_sAcc(_,_,_,epi_m,epi_n);
 
-        // Copy accumulator tile from smem to register
-        copy(tiled_s2r_imm, tSR_sAcc_mn, tSR_rAcc);
+        // Copy accumulator tile from SLM to registers (S2R for Acc).
+        // Same descriptor-based vs legacy dispatch pattern as the C load above.
+        if constexpr (cute::is_ldsm_load_matrix_v<CopyOpS2RImm>) {
+          // --- LDSM descriptor path for accumulator (intermediate result) ---
+          auto ldsm_s2r_imm = cute::make_ldsm_tiled_copy(
+              CopyOpS2RImm{}, sAcc_epi(_,_,epi_m,epi_n),
+              epi_thr_layout, epi_val_layout, true);
+          auto coord_sAcc = make_identity_tensor(make_shape(get<0>(EpilogueTile{}), get<1>(EpilogueTile{})));
+          auto thr_ldsm_imm = ldsm_s2r_imm.get_slice(worker_id);
+          auto ldsm_src_imm = thr_ldsm_imm.partition_S(coord_sAcc);
+          copy(ldsm_s2r_imm, ldsm_src_imm, tSR_rAcc);
+        } else {
+          // Legacy XE4_LDSM vector load path
+          copy(tiled_s2r_imm, tSR_sAcc_mn, tSR_rAcc);
+        }
 
         // Vectorized fragment loop with visitor callback entry point
         CUTLASS_PRAGMA_UNROLL
@@ -707,8 +746,31 @@ public:
 
         auto tRS_rD = tSR_rD;
 
-        // copy output tile from register to smem
-        copy(tiled_r2s, tRS_rD(_,_0{},_0{}), tRS_sD(_,epi_m,epi_n,store_pipe_producer_state.index()));
+        // Copy output D tile from registers to SLM (R2S).
+        if constexpr (cute::is_ldsm_store_matrix_v<CopyOpR2S>) {
+          // --- LDSM descriptor path via make_ldsm_copy_D ---
+          // See make_ldsm_copy_C dispatch above for MMA-aware vs geometry-only rationale.
+          auto sD_stage = sD_epi(_,_,store_pipe_producer_state.index());
+          auto sD_subtiled = flat_divide(sD_stage, EpilogueTile{});
+          auto ldsm_r2s = [&]() {
+            if constexpr (UseMmaAwareLdsm_) {
+              return cute::make_ldsm_copy_D<NumEpilogueWarps>(
+                  tiled_mma, sD_subtiled(_,_,epi_m,epi_n));
+            } else {
+              return cute::make_ldsm_copy_D<NumEpilogueWarps>(
+                  sD_subtiled(_,_,epi_m,epi_n));
+            }
+          }();
+          auto coord_sD = make_identity_tensor(make_shape(get<0>(EpilogueTile{}), get<1>(EpilogueTile{})));
+          auto thr_ldsm_r2s = ldsm_r2s.get_slice(worker_id);
+          auto ldsm_dst = thr_ldsm_r2s.partition_D(coord_sD);
+          // Rank-matched slicing: both tensors collapse trailing size-1 rest modes
+          // to produce matching rank-1 tensors for CuTe's copy().
+          copy(ldsm_r2s, tRS_rD(_,_0{},_0{}), ldsm_dst(_,_0{},_0{}));
+        } else {
+          // Legacy XE4_STSM vector store path
+          copy(tiled_r2s, tRS_rD(_,_0{},_0{}), tRS_sD(_,epi_m,epi_n,store_pipe_producer_state.index()));
+        }
 
         wave_order_barrier.arrive();
       }

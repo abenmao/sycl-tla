@@ -42,6 +42,8 @@ add_custom_target(
   cutlass_test_unit_cute_xe4_eu_slm_copy
   cutlass_test_unit_cute_xe4_adma_prefetch
   cutlass_test_unit_cute_xe4_adma_reduce
+  cutlass_test_unit_cute_xe4_ldsm_epilogue
+  cutlass_test_unit_cute_xe4_ldsm_epilogue_mma
 )
 
 add_custom_target(
@@ -58,6 +60,8 @@ add_custom_target(
   test_unit_cute_xe4_ldsm_red
   test_unit_cute_xe4_adma_prefetch
   test_unit_cute_xe4_adma_reduce
+  test_unit_cute_xe4_ldsm_epilogue
+  test_unit_cute_xe4_ldsm_epilogue_mma
 )
 
 cutlass_test_unit_add_executable(
@@ -115,4 +119,12 @@ cutlass_test_unit_add_executable(
   cutlass_test_unit_cute_xe4_adma_reduce
   adma_reduce.cpp
 )
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_ldsm_epilogue
+  ldsm_epilogue.cpp
+)
 
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_ldsm_epilogue_mma
+  ldsm_epilogue_mma.cpp
+)
