@@ -87,14 +87,15 @@ void block_quantize_kernel(SrcType*  src_global,
                                make_layout(Shape<Int<src_per_thr>>{}));
   auto src_sg   = make_subgroup_tensor(src_frag, SrcTVLayout{});
 
-  // --- Destination: zero-initialized register fragment ---
+  // --- Destination: owning register fragment ---
+  // Uses make_tensor<DstType> (owning) so that subbyte types (e.g., float_e2m1_t)
+  // are backed by array_subbyte with correct packed storage, matching the
+  // hardware byte-granularity packing assumed by subbyte_sg_tv_swizzle in reorder.
   constexpr int dst_total   = size(DstTVLayout{});
   constexpr int dst_per_thr = dst_total / intel::sg_size;
   static_assert(dst_total % intel::sg_size == 0);
 
-  DstType dst_local[dst_per_thr]{};
-  auto dst_frag = make_tensor(make_rmem_ptr(dst_local),
-                               make_layout(Shape<Int<dst_per_thr>>{}));
+  auto dst_frag = make_tensor<DstType>(make_layout(Shape<Int<dst_per_thr>>{}));
   auto dst_sg   = make_subgroup_tensor(dst_frag, DstTVLayout{});
 
   // --- Scale: zero-initialized register fragment ---
@@ -111,8 +112,9 @@ void block_quantize_kernel(SrcType*  src_global,
   quantize<BlockSize>(src_sg, dst_sg, scale_sg);
 
   // --- Store dst back to global (round-robin) ---
+  // Read through tensor accessor to handle subbyte packed storage correctly.
   for (int i = 0; i < dst_per_thr; ++i)
-    dst_global[tid + i * intel::sg_size] = dst_local[i];
+    dst_global[tid + i * intel::sg_size] = static_cast<DstType>(dst_frag(i));
 
   // --- Store scale back to global (round-robin) ---
   for (int i = 0; i < scale_per_thr; ++i)
@@ -639,6 +641,56 @@ TEST(CuTe_Xe_BlockQuantize, f32_to_e5m2_32x64_bs32) {
   XeBlockQuantizeTest<32,
       float, cutlass::float_e5m2_t, float,
       DataTVLayout_32x64, DataTVLayout_32x64, ScaleTVLayout_32x2, 26>::run();
+}
+
+// ============================================================================
+// Test Cases — Dst dtype = float_e2m1_t
+// ============================================================================
+// No optimized ASM path for E2M1; all tests use the fallback C++ path.
+
+// --- M=16, N=32, BlockSize=32 (single block per row, NumBlocks=1) ---
+TEST(CuTe_Xe_BlockQuantize, bf16_to_e2m1_16x32_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::bfloat16_t, cutlass::float_e2m1_t, float,
+      DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x1, 27>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, half_to_e2m1_16x32_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::half_t, cutlass::float_e2m1_t, float,
+      DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x1, 28>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, f32_to_e2m1_16x32_bs32) {
+  XeBlockQuantizeTest<32,
+      float, cutlass::float_e2m1_t, float,
+      DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x1, 29>::run();
+}
+
+// --- M=16, N=64, BlockSize=32 (two blocks per row, NumBlocks=2) ---
+TEST(CuTe_Xe_BlockQuantize, bf16_to_e2m1_16x64_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::bfloat16_t, cutlass::float_e2m1_t, float,
+      DataTVLayout_16x64, DataTVLayout_16x64, ScaleTVLayout_16x2, 30>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, half_to_e2m1_16x64_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::half_t, cutlass::float_e2m1_t, float,
+      DataTVLayout_16x64, DataTVLayout_16x64, ScaleTVLayout_16x2, 31>::run();
+}
+
+// --- M=32, N=64, BlockSize=32 (two blocks per row, NumBlocks=2) ---
+TEST(CuTe_Xe_BlockQuantize, bf16_to_e2m1_32x64_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::bfloat16_t, cutlass::float_e2m1_t, float,
+      DataTVLayout_32x64, DataTVLayout_32x64, ScaleTVLayout_32x2, 32>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, f32_to_e2m1_32x64_bs32) {
+  XeBlockQuantizeTest<32,
+      float, cutlass::float_e2m1_t, float,
+      DataTVLayout_32x64, DataTVLayout_32x64, ScaleTVLayout_32x2, 33>::run();
 }
 
 

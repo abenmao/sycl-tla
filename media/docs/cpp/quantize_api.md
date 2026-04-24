@@ -245,17 +245,18 @@ CRI, F32→E5M2, optimized quantize implementation.
 
 | # | M | K | N | GEMM-only (TF/s) | GEMM+quant (TF/s) | Measured R |
 |--:|------:|------:|------:|------:|------:|------:|
-| 1 | 1024 | 1024 | 1024 | 180.9 | 102.3 | 56.5% |
-| 2 | 2048 | 2048 | 2048 | 213.6 | 159.5 | 74.7% |
-| 3 | 4096 | 4096 | 4096 | 225.7 | 178.4 | 79.1% |
-| 4 | 512 | 1024 | 256 | 22.8 | 13.7 | 60.2% |
-| 5 | 512 | 2048 | 256 | 26.3 | 18.4 | 70.1% |
-| 6 | 512 | 4096 | 256 | 27.4 | 22.7 | 82.8% |
-| 7 | 512 | 8192 | 256 | 28.4 | 25.5 | 90.0% |
+| 1 | 1024 | 1024 | 1024 | 180.9 | 142.2 | 78.6% |
+| 2 | 2048 | 2048 | 2048 | 213.6 | 186.1 | 87.1% |
+| 3 | 4096 | 4096 | 4096 | 225.7 | 208.9 | 92.6% |
+| 4 | 512 | 1024 | 256 | 22.8 | 17.8 | 78.0% |
+| 5 | 512 | 2048 | 256 | 26.3 | 21.3 | 80.9% |
+| 6 | 512 | 4096 | 256 | 27.4 | 24.8 | 90.4% |
+| 7 | 512 | 8192 | 256 | 28.4 | 27.1 | 95.6% |
+| **Geomean** | | | | | | **85.9%** |
 
-At large K (4096, 8192) the measured ratio nearly matches the theoretical
-prediction. At small K (1024, 2048) the measured ratio is **9–12 pp higher**
-than theoretical. This is because the theoretical model assumes $T_{GEMM} = K$
+Across all measured shapes the measured ratio is **higher** than the
+theoretical prediction, with the largest gap at small K and a narrowing gap
+as K grows. This is because the theoretical model assumes $T_{GEMM} = K$
 (perfect DPAS saturation). In practice, non-DPAS overhead (load latency stalls,
 barrier waits, cache misses) makes $T_{GEMM} > K$. A larger $T_{GEMM}$ increases
 R because the quantize cost becomes a smaller fraction of total time. This
