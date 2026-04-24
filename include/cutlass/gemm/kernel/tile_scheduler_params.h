@@ -1856,7 +1856,7 @@ struct PersistentTileSchedulerSm90GroupParams {
 // Parameters for Xe4 tile schedulers
 //
 // TODO: Rename to PersistentTileSchedulerXe4Params after perf regression fixed.
-struct DynamicPersistentTileSchedulerXe4Params {
+struct PersistentTileSchedulerXe4Params {
 
   using UnderlyingParams = PersistentTileSchedulerSm90Params;
   using RasterOrder = UnderlyingParams::RasterOrder;
@@ -1873,9 +1873,9 @@ struct DynamicPersistentTileSchedulerXe4Params {
   RasterOrder raster_order_ = RasterOrder::AlongM;
 
   CUTLASS_HOST_DEVICE
-  static DynamicPersistentTileSchedulerXe4Params
+  static PersistentTileSchedulerXe4Params
   from_underlying(UnderlyingParams const& params, int max_swizzle_size) {
-    DynamicPersistentTileSchedulerXe4Params result{};
+    PersistentTileSchedulerXe4Params result{};
     result.underlying_params_ = params;
     result.divmod_cluster_shape_m_ = FastDivmod(params.cluster_shape_m_);
     result.divmod_cluster_shape_n_ = FastDivmod(params.cluster_shape_n_);

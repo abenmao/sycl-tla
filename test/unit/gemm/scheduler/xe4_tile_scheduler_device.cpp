@@ -70,7 +70,7 @@
 #include "cute/arch/cluster_xe4.hpp"
 #include "cute/arch/xe4_util.hpp"
 #include "cute/arch/xe4_inline_pisa.hpp"
-#include "cutlass/gemm/kernel/xe4_dynamic_tile_scheduler.hpp"
+#include "cutlass/gemm/kernel/xe4_tile_scheduler.hpp"
 #include "cutlass/pipeline/xe4_pipeline.hpp"
 #include "cutlass/cluster_launch.hpp"
 
@@ -93,7 +93,7 @@ static constexpr int kTileSize          = kThreadsPerSG;
 template <class ClusterShape_>
 struct SchedulerTraits {
   using ClusterShape  = ClusterShape_;
-  using TileScheduler = cutlass::gemm::kernel::detail::DynamicPersistentTileSchedulerXe4<kStages, ClusterShape>;
+  using TileScheduler = cutlass::gemm::kernel::detail::PersistentTileSchedulerXe4<kStages, ClusterShape>;
   using Params        = typename TileScheduler::Params;
   using CLCPipeline   = cutlass::PipelineCLCFetchAsync<kStages, ClusterShape>;
   using CLCPipeState  = typename CLCPipeline::PipelineState;
@@ -645,7 +645,7 @@ static void run_tileid_scheduler_test(
 // Convenience aliases for RasterOrderOptions
 ///////////////////////////////////////////////////////////////////////////////
 using RasterOrderOptions =
-    cutlass::gemm::kernel::detail::DynamicPersistentTileSchedulerXe4Params::RasterOrderOptions;
+    cutlass::gemm::kernel::detail::PersistentTileSchedulerXe4Params::RasterOrderOptions;
 
 ///////////////////////////////////////////////////////////////////////////////
 // Test cases — Cluster 1x1x1 (Vector-Add)

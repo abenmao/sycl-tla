@@ -95,18 +95,6 @@ jobs:
           ninja xe4_gemm
           ./examples/xe4/gemm/xe4_gemm
           echo "--------------------------------------"
-          echo "Running Xe4 GEMM Cluster Workload"
-          ninja xe4_gemm_cluster
-          ./examples/xe4/gemm/xe4_gemm_cluster
-          echo "--------------------------------------"
-          echo "Running Xe4 GEMM Dynamic Workload"
-          ninja xe4_gemm_dynamic
-          ./examples/xe4/gemm/xe4_gemm_dynamic
-          echo "--------------------------------------"
-          echo "Running Xe4 GEMM Cluster Dynamic Workload"
-          ninja xe4_gemm_cluster_dynamic
-          ./examples/xe4/gemm/xe4_gemm_cluster_dynamic
-          echo "--------------------------------------"
           echo "Running Xe4 GEMM Block-Scaled FP4/FP8 Workload"
           ninja xe4_gemm_blockscaled
           ./examples/xe4/gemm/xe4_gemm_blockscaled

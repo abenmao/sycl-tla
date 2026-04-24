@@ -73,7 +73,6 @@ struct StaticPersistentScheduler { };
 #if (SYCL_INTEL_TARGET == 40)
 #include "cutlass/gemm/kernel/xe4_tile_scheduler.hpp"
 #include "cutlass/gemm/kernel/xe4_static_tile_scheduler.hpp"
-#include "cutlass/gemm/kernel/xe4_dynamic_tile_scheduler.hpp"
 #elif defined (SYCL_INTEL_TARGET)
 #include "cutlass/gemm/kernel/xe_tile_scheduler_streamk.hpp"
 #include "cutlass/gemm/kernel/xe_tile_scheduler_group.hpp"
@@ -220,22 +219,6 @@ struct TileSchedulerSelector<
   using Scheduler = StaticPersistentTileSchedulerXe4<ClusterShape>;
 };
 
-// TODO: Fix Perf Regression from static/dynamic scheduler in Xe4.
-// Make dynamic scheduler the default for Xe4 once fixed.
-template <
-  class TileShape,
-  class ClusterShape,
-  uint32_t SchedulerPipelineStageCount
->
-struct TileSchedulerSelector<
-    DynamicPersistentScheduler,
-    cutlass::arch::Xe4,
-    TileShape,
-    ClusterShape,
-    SchedulerPipelineStageCount
-  > {
-  using Scheduler = DynamicPersistentTileSchedulerXe4<SchedulerPipelineStageCount, ClusterShape>;
-};
 #elif defined (SYCL_INTEL_TARGET)
 template <
   class TileShape,

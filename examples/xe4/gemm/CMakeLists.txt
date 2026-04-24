@@ -26,19 +26,6 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-
-add_xe4_test(xe4_gemm gemm.cpp)
-target_include_directories(xe4_gemm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_options(xe4_gemm PUBLIC
-	-Xsycl-target-backend=spir64_gen
-	-device\ jgs-a0)
-
-add_xe4_test(xe4_gemm_cluster gemm_cluster.cpp)
-target_include_directories(xe4_gemm_cluster PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_options(xe4_gemm_cluster PUBLIC
-	-Xsycl-target-backend=spir64_gen
-	-device\ jgs-a0)
-
 add_xe4_test(xe4_gemm_blockscaled gemm_blockscaled.cpp)
 target_include_directories(xe4_gemm_blockscaled PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_options(xe4_gemm_blockscaled PUBLIC
@@ -51,26 +38,8 @@ target_link_options(xe4_gemm_blockscaled_cluster PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)
 
-add_xe4_test(xe4_gemm_dynamic gemm_dynamic.cpp)
-target_include_directories(xe4_gemm_dynamic PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_options(xe4_gemm_dynamic PUBLIC
-	-Xsycl-target-backend=spir64_gen
-	-device\ jgs-a0)
-
-add_xe4_test(xe4_gemm_cluster_dynamic gemm_cluster_dynamic.cpp)
-target_include_directories(xe4_gemm_cluster_dynamic PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_options(xe4_gemm_cluster_dynamic PUBLIC
-	-Xsycl-target-backend=spir64_gen
-	-device\ jgs-a0)
-
-add_xe4_test(xe4_gemm_static gemm_static.cpp)
-target_include_directories(xe4_gemm_static PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_options(xe4_gemm_static PUBLIC
-	-Xsycl-target-backend=spir64_gen
-	-device\ jgs-a0)
-
-add_xe4_test(xe4_gemm_cluster_static gemm_cluster_static.cpp)
-target_include_directories(xe4_gemm_cluster_static PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_options(xe4_gemm_cluster_static PUBLIC
+add_xe4_test(xe4_gemm gemm.cpp)
+target_include_directories(xe4_gemm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(xe4_gemm PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)

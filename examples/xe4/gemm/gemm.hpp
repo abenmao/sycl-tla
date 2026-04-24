@@ -193,11 +193,18 @@ void run_gemm()
       cutlass::gemm::KernelTmaWarpSpecializedXe4<Config::StagesA, 1>
     >::CollectiveOp;
 
+    // Select scheduler tag for Xe4:
+    // - dynamic path: PersistentScheduler -> PersistentTileSchedulerXe4
+    // - static path : StaticPersistentScheduler -> StaticPersistentTileSchedulerXe4
+  using TileSchedulerType = cute::conditional_t<Config::isDynamicPersistent,
+      cutlass::gemm::PersistentScheduler,
+      cutlass::gemm::StaticPersistentScheduler>;
+
   using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
     Shape<int,int,int,int>,
     CollectiveMainloop,
     CollectiveEpilogue,
-    void
+    TileSchedulerType
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
@@ -245,25 +252,11 @@ void run_gemm()
     std::generate_n(Bias_s, sizeBias, [=]() { return static_cast<float>(rand()) / static_cast<float>(RAND_MAX); });
   }
 
-  auto [cluster_size_y, cluster_size_x, cluster_size_z] = ClusterShape{};
+  auto [cluster_size_x, cluster_size_y, cluster_size_z] = ClusterShape{};
   sycl::range<3> cluster_size(cluster_size_z, cluster_size_y, cluster_size_x);
 
-  auto num_groups = ceil_div(problem_shape_mnkl, TileShape {});
-  range<3> local_range(1, NumControlWarps + NumEpilogueWarps, cutlass::NumThreadsPerWarp);
-  range<3> group_range(1, get<0>(num_groups), get<1>(num_groups));
-
-  constexpr bool is_persistent = Config::is_persistent;
-  if constexpr (is_persistent) {
-    auto [cta_num_y, cta_num_x] = typename Config::CtaNum_MN {};
-    group_range[1] = min(group_range[1], cta_num_y * cluster_size_y);
-    group_range[2] = min(group_range[2], cta_num_x * cluster_size_x);
-  }
-
-  std::cout << "IsPersistentMode: " << is_persistent << std::endl;
   print("ProblemShape_MNKL: "); print(problem_shape_mnkl); print("\n");
   print("TileShape_MNK: "); print(TileShape{}); print("\n");
-  print("ceil_div(ProblemShape,TileShape): "); print(num_groups); print("\n");
-  std::cout << "Group range: {" << group_range[0] << ", " << group_range[1] << ", " << group_range[2] << "} \n";
 
   auto stride_A = cutlass::make_cute_packed_stride(StrideA{}, select<0,2,3>(problem_shape_mnkl));
   auto stride_B = cutlass::make_cute_packed_stride(StrideB{}, select<1,2,3>(problem_shape_mnkl));
@@ -286,6 +279,10 @@ void run_gemm()
     }
   }();
 
+  int device_id = 0;
+  int sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(device_id);
+  cutlass::KernelHardwareInfo kernel_hw_info{device_id, sm_count, 0};
+
   auto args = typename Gemm::GemmKernel::Arguments {
     problem_shape_mnkl,
     { A_s, stride_A, B_s, stride_B },
@@ -293,7 +290,13 @@ void run_gemm()
   };
 
   GemmKernel kernel;
-  auto params = kernel.to_underlying_arguments(args, nullptr);
+  auto params = kernel.to_underlying_arguments(args, kernel_hw_info, nullptr);
+
+  dim3 const grid = GemmKernel::get_grid_shape(params);
+  dim3 const block = GemmKernel::get_block_shape();
+
+  range<3> group_range(grid.z, grid.y, grid.x);
+  range<3> local_range(block.z, block.y, block.x);
 
   int smem_size = 0;
   cutlass::SyclClusterLaunchParams launch_params = {group_range, local_range, cluster_size, smem_size, q};

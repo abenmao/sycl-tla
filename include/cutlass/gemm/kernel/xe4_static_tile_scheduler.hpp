@@ -40,6 +40,35 @@ public:
   struct alignas(16) CLCResponse { uint32_t data[CLC_VS]; };
 
   using Params = typename BaseScheduler::Params;
+  using Arguments = typename BaseScheduler::Arguments;
+
+  template <class ProblemShapeMNKL, class TileShape, class ClusterShapeMNK>
+  static Params
+  to_underlying_arguments(
+      ProblemShapeMNKL problem_shape_mnkl,
+      TileShape tile_shape,
+      ClusterShapeMNK cluster_shape,
+      [[maybe_unused]] KernelHardwareInfo const& hw_info,
+      Arguments const& arguments,
+      [[maybe_unused]] void* workspace = nullptr,
+      [[maybe_unused]] const uint32_t epilogue_subtile = 1,
+      [[maybe_unused]] uint32_t ktile_start_alignment_count = 1u) {
+
+    static_assert(cute::is_static<TileShape>::value);
+    static_assert(cute::is_static<ClusterShapeMNK>::value);
+
+    dim3 problem_blocks = BaseScheduler::get_tiled_cta_shape_mnl(problem_shape_mnkl, tile_shape, cluster_shape);
+
+    Params params;
+    params.initialize(
+      problem_blocks,
+      to_gemm_coord(cluster_shape),
+      hw_info,
+      arguments.max_swizzle_size,
+      arguments.raster_order);
+
+    return params;
+  }
 
   // clc_response_ptr is a placeholder; it is just to make the StaticPersistentTileSchedulerXe4 and PersistentTileSchedulerXe4 constructor interfaces consistent
   CUTLASS_DEVICE explicit

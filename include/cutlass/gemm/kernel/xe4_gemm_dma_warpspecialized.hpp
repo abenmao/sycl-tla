@@ -25,10 +25,8 @@ class GemmUniversal<
   CollectiveEpilogue_,
   TileScheduler_,
   cute::enable_if_t<
-    cutlass::detail::is_kernel_tag_of_v<typename CollectiveMainloop_::DispatchPolicy::Schedule, KernelTmaWarpSpecializedXe4> &&
-    (!cute::is_same_v<TileScheduler_, StaticPersistentScheduler> && !cute::is_same_v<TileScheduler_, DynamicPersistentScheduler>)
-  >
-> {
+    cutlass::detail::is_kernel_tag_of_v<typename CollectiveMainloop_::DispatchPolicy::Schedule, KernelTmaWarpSpecializedXe4>>> 
+{
 public:
   //
   // Type Aliases
@@ -55,8 +53,8 @@ public:
 
   // Epilogue derived types
   using CollectiveEpilogue = CollectiveEpilogue_;
-  using ElementC = typename CollectiveEpilogue::ElementD;
-  using StrideC = typename CollectiveEpilogue::StrideD;
+  using ElementC = typename CollectiveEpilogue::ElementC;
+  using StrideC = typename CollectiveEpilogue::StrideC;
   using ElementD = typename CollectiveEpilogue::ElementD;
   using StrideD = typename CollectiveEpilogue::StrideD;
   using EpilogueArguments = typename CollectiveEpilogue::Arguments;
@@ -74,6 +72,8 @@ public:
   using TileSchedulerTag = TileScheduler_;
   using TileScheduler = typename detail::TileSchedulerSelector<
     TileSchedulerTag, ArchTag, TileShape, ClusterShape, SchedulerPipelineStageCount>::Scheduler;
+  using TileSchedulerArguments = typename TileScheduler::Arguments;
+  using TileSchedulerParams = typename TileScheduler::Params;
 
   static constexpr bool IsSchedDynamicPersistent = TileScheduler::IsDynamicPersistent;
 
@@ -83,6 +83,12 @@ public:
   static constexpr uint32_t NumMainloopLoadThreads = NumThreadsPerWarp; // 1 warp
   static constexpr uint32_t NumEpilogueLoadThreads = NumThreadsPerWarp; // 1 warp
   static constexpr uint32_t NumEpilogueThreads     = CollectiveEpilogue::ThreadCount;
+
+  // 4 EUs per Xecore, and 5 threads per EU, warps are assigned to EUs in round robin fashion.
+  // There are 4 control warps (Scheduler, Mainloop Load, MMA, Epilogue Load), 
+  // and the rest of the warps are Epilogue warps.
+  constexpr static int NumControlWarps = 4;
+  constexpr static int NumEpilogueWarps = 16;
 
   static constexpr uint32_t MaxThreadsPerBlock = NumSchedThreads +
                                                  NumMainloopLoadThreads + NumMMAThreads +
@@ -104,7 +110,7 @@ public:
 
   using EpiWaveOrderBarrier = typename CollectiveEpilogue::WaveOrderBarrier;
 
-  using CLCPipeline = cutlass::PipelineTmaAsync<SchedulerPipelineStageCount>;
+  using CLCPipeline = cutlass::PipelineCLCFetchAsync<SchedulerPipelineStageCount, ClusterShape>;
   using CLCPipelineState = typename CLCPipeline::PipelineState;
 
   // Kernel level shared memory storage
@@ -146,6 +152,7 @@ public:
     ProblemShape problem_shape;
     MainloopArguments mainloop;
     EpilogueArguments epilogue;
+    TileSchedulerArguments scheduler{};
   };
 
   // Kernel device entry point API
@@ -153,6 +160,8 @@ public:
     ProblemShape problem_shape;
     MainloopParams mainloop;
     EpilogueParams epilogue;
+    KernelHardwareInfo hw_info;
+    TileSchedulerParams scheduler;
   };
 
   enum class WarpCategory : int32_t {
@@ -171,19 +180,43 @@ public:
     uint32_t epilogue  = false;
   };
 
-  //
-  // Methods
-  //
-
-  // Convert to underlying arguments.
-  static
-  Params
+  static Params
   to_underlying_arguments(Arguments const& args, void* workspace) {
+    int device_id = 0;
+    int sm_count = KernelHardwareInfo::query_device_multiprocessor_count(device_id);
+    KernelHardwareInfo hw_info{device_id, sm_count, 0};
+    return to_underlying_arguments(args, hw_info, workspace);
+  }
+
+  static Params
+  to_underlying_arguments(Arguments const& args, KernelHardwareInfo const& hw_info, void* workspace) {
+    auto problem_shape_MNKL = append<4>(args.problem_shape, Int<1>{});
     return {
       args.problem_shape,
       CollectiveMainloop::to_underlying_arguments(args.problem_shape, args.mainloop, workspace),
-      CollectiveEpilogue::to_underlying_arguments(args.problem_shape, args.epilogue, workspace)
+      CollectiveEpilogue::to_underlying_arguments(args.problem_shape, args.epilogue, workspace),
+      hw_info,
+      TileScheduler::to_underlying_arguments(
+        problem_shape_MNKL, TileShape{}, ClusterShape{},
+        hw_info, args.scheduler, workspace
+      )
     };
+  }
+
+  static dim3
+  get_grid_shape(Params const& params) {
+    TileSchedulerArguments args{};
+    if constexpr (!std::is_const_v<decltype(args.max_swizzle_size)>) {
+      args.max_swizzle_size = 1 << params.scheduler.log_swizzle_size_;
+    }
+
+    return TileScheduler::get_grid_shape(params.scheduler, params.problem_shape, TileShape{}, ClusterShape{}, params.hw_info, args);
+  }
+
+  static dim3
+  get_block_shape() {
+    static constexpr int TotalSubGroups = NumControlWarps + NumEpilogueWarps;
+    return dim3(cutlass::NumThreadsPerWarp, TotalSubGroups, 1);
   }
 
   CUTLASS_DEVICE
@@ -205,6 +238,7 @@ public:
 
     bool lane_predicate = cute::elect_one_sync();
     auto cluster_shape = ClusterShape{};
+    int cluster_size = size(cluster_shape);
 
     auto ptr = alloc_slm_buffer<uint8_t, TensorStorageSize>(item.get_group());
     auto& shared_tensors = *reinterpret_cast<typename SharedStorage::TensorStorage*>(ptr);
@@ -217,9 +251,12 @@ public:
     auto abar_base = allocate_abar_bytes<0, PipelineStorageSize>();
     auto& shared_pipelines = *reinterpret_cast<typename SharedStorage::PipelineStorage*>(abar_base);
 
-    // Do we load source tensor C or other aux inputs
-    bool is_epi_load_needed = false;
-    bool is_first_cta_in_cluster = true;
+    constexpr bool is_epi_load_needed = !cute::is_void_v<ElementC>;
+    uint32_t cluster_wgid_x = get_cluster_wgid<0>();
+    uint32_t cluster_wgid_y = get_cluster_wgid<1>();
+    auto cluster_layout_mn = make_layout(select<0,1>(ClusterShape{}));
+    uint32_t cta_rank_in_cluster = cluster_layout_mn(make_coord(cluster_wgid_x, cluster_wgid_y));
+    bool is_first_cta_in_cluster = (cta_rank_in_cluster == 0);
     IsParticipant is_participant = {
       (warp_category == WarpCategory::MMA),                                 // mma
       (warp_category == WarpCategory::Sched) && is_first_cta_in_cluster,    // sched
@@ -291,10 +328,11 @@ public:
     } else {
       clc_pipeline_params.role = CLCPipeline::ThreadCategory::Consumer;
     }
+    clc_pipeline_params.producer_blockid = 0;
+    clc_pipeline_params.producer_arv_count = 1;
     clc_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::Sched);
-    clc_pipeline_params.num_producers = NumSchedThreads;
-    clc_pipeline_params.num_consumers = NumSchedThreads + NumMMAThreads + NumMainloopLoadThreads + NumEpilogueLoadThreads + NumEpilogueThreads;
-    CLCPipeline clc_pipeline(shared_pipelines.clc, clc_pipeline_params, cluster_shape, true_type{}, false_type{});
+    clc_pipeline_params.consumer_arv_count = NumSchedThreads + cluster_size * (NumMainloopLoadThreads + NumEpilogueThreads + NumEpilogueLoadThreads + NumMMAThreads);
+    CLCPipeline clc_pipeline(shared_pipelines.clc, clc_pipeline_params, cluster_shape);
 
     auto mainloop_pipe_producer_state = cutlass::make_producer_start_state<MainloopPipeline>();
     auto mainloop_pipe_consumer_state = MainloopPipelineState{};
@@ -336,10 +374,9 @@ public:
     auto load_inputs = collective_mainloop.load_init(problem_shape, shared_tensors.mainloop, make_tuple(tdesc_a, tdesc_b));
     auto intermedia_tensor = CollectiveEpilogue::get_intermedia_tensor(shared_tensors.epilogue);
 
-    auto coop_set_ids = collective_mainloop.coop_set_ids_;
-    auto problem_blocks_shape = TileScheduler::calculate_problem_blocks_shape(problem_shape_MNKL, CtaShape_MNK{});
-    auto scheduler = TileScheduler(&shared_tensors.clc_response[0], problem_blocks_shape, coop_set_ids);
-    auto work_tile_info = scheduler.initial_work_tile_info();
+    dim3 block_id_in_cluster = cute::block_id_in_cluster();
+    auto scheduler = TileScheduler(&shared_tensors.clc_response[0], params.scheduler, block_id_in_cluster);
+    auto work_tile_info = scheduler.initial_work_tile_info(cluster_shape);
 
     if (is_participant.main_load) {
       do {

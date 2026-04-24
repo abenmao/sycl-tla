@@ -82,7 +82,6 @@
 
 #if (SYCL_INTEL_TARGET == 40)
 #include "cutlass/gemm/collective/xe4_mma_warpspecialized.hpp"
-#include "cutlass/gemm/collective/xe4_mma_warpspecialized_static.hpp"
 #include "cutlass/gemm/collective/xe4_blockscaled_mma_warpspecialized.hpp"
 #elif defined (SYCL_INTEL_TARGET)
 #include "cutlass/gemm/collective/xe_mma.hpp"

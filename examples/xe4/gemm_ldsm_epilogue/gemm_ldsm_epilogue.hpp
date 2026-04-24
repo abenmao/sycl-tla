@@ -229,11 +229,12 @@ void run_gemm_ldsm_epilogue()
       cutlass::gemm::KernelTmaWarpSpecializedXe4<Config::StagesA, 1>
     >::CollectiveOp;
 
+  // TODO: Fix hang issue with dynamic scheduler.
   using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
     Shape<int,int,int,int>,
     CollectiveMainloop,
     CollectiveEpilogue,
-    void
+    cutlass::gemm::StaticPersistentScheduler
   >;
 
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
@@ -273,18 +274,15 @@ void run_gemm_ldsm_epilogue()
   auto D_s = malloc_shared<ElementD>(sizeC, q);
   std::fill_n(D_s, sizeC, ElementD(0));
 
-  auto [cluster_size_y, cluster_size_x, cluster_size_z] = ClusterShape{};
+  auto [cluster_size_x, cluster_size_y, cluster_size_z] = ClusterShape{};
   sycl::range<3> cluster_size(cluster_size_z, cluster_size_y, cluster_size_x);
 
   auto num_groups = ceil_div(problem_shape_mnkl, TileShape {});
-  range<3> local_range(1, NumControlWarps + NumEpilogueWarps, cutlass::NumThreadsPerWarp);
-  range<3> group_range(1, get<0>(num_groups), get<1>(num_groups));
 
   std::cout << "LDSM Epilogue GEMM" << std::endl;
   print("ProblemShape_MNKL: "); print(problem_shape_mnkl); print("\n");
   print("TileShape_MNK: "); print(TileShape{}); print("\n");
   print("ceil_div(ProblemShape,TileShape): "); print(num_groups); print("\n");
-  std::cout << "Group range: {" << group_range[0] << ", " << group_range[1] << ", " << group_range[2] << "} \n";
 
   auto stride_A = cutlass::make_cute_packed_stride(StrideA{}, select<0,2,3>(problem_shape_mnkl));
   auto stride_B = cutlass::make_cute_packed_stride(StrideB{}, select<1,2,3>(problem_shape_mnkl));
@@ -305,6 +303,12 @@ void run_gemm_ldsm_epilogue()
 
   GemmKernel kernel;
   auto params = kernel.to_underlying_arguments(args, nullptr);
+
+  dim3 const grid = GemmKernel::get_grid_shape(params);
+  dim3 const block = GemmKernel::get_block_shape();
+
+  range<3> group_range(grid.z, grid.y, grid.x);
+  range<3> local_range(block.z, block.y, block.x);
 
   int smem_size = 0;
   cutlass::SyclClusterLaunchParams launch_params = {group_range, local_range, cluster_size, smem_size, q};
