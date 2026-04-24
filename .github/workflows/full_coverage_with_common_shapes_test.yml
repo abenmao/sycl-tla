@@ -76,7 +76,7 @@ jobs:
         timeout-minutes: 30
         shell: bash
         run: |
-          BUILD_ID="${{ github.run_id }}-${{ github.run_attempt }}-common"
+          BUILD_ID="${{ github.run_id }}-common-${{ runner.name }}-${{ github.run_attempt }}"
           echo "BUILD_ID=${BUILD_ID}" >> $GITHUB_ENV
 
           # Detect the runner's compiler version for ABI compatibility
@@ -126,13 +126,13 @@ jobs:
           fi
 
           # Cleanup build artifacts older than 24 hours (by creation time, falling back to mtime)
-          # Only deletes directories matching our BUILD_ID pattern (digits-digits-common/small)
+          # Only deletes directories matching our BUILD_ID pattern (runid-common/small-runner-attempt)
           ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} "
             cutoff=\$(date -d '24 hours ago' +%s)
             for d in /home/${BUILD_SERVER_USER}/ci-builds/*/ /shared/builds/*/; do
               [ -d \"\$d\" ] || continue
               bname=\$(basename \"\$d\")
-              [[ \"\$bname\" =~ ^[0-9]+-[0-9]+-(common|small)$ ]] || continue
+              [[ \"\$bname\" =~ ^[0-9]+-(common|small)-.+-[0-9]+$ ]] || continue
               created=\$(stat -c %W \"\$d\" 2>/dev/null || echo 0)
               if [ \"\$created\" -le 0 ]; then
                 created=\$(stat -c %Y \"\$d\" 2>/dev/null || echo 0)
@@ -144,12 +144,13 @@ jobs:
           " || true
 
           # Layer 2: Full remote build (protected by 30-min step timeout)
-          # Clean up any leftover ci-build dir for this BUILD_ID.
-          # Docker may leave root-owned artifacts (e.g. mount stubs)
-          # that rsync (running as gta) cannot overwrite.
-          if ! ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} \
-            "sudo -n rm -rf /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID} && \
-             mkdir -p /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source"; then
+          # On re-run (attempt > 1), clean previous attempt's leftover dirs.
+          # Docker may leave root-owned artifacts that rsync cannot overwrite.
+          PREV_ATTEMPT_BUILD_ID="${{ github.run_id }}-common-${{ runner.name }}-$(( ${{ github.run_attempt }} - 1 ))"
+          if ! ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} "
+            sudo -n rm -rf /home/${BUILD_SERVER_USER}/ci-builds/${PREV_ATTEMPT_BUILD_ID} /shared/builds/${PREV_ATTEMPT_BUILD_ID};
+            mkdir -p /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source
+          "; then
             echo "::warning::Failed to prepare remote build directory."
             echo "failure_type=infra" >> $GITHUB_OUTPUT
             exit 1
@@ -367,7 +368,7 @@ jobs:
         if: always() && steps.build-strategy.outputs.use_remote == 'true'
         shell: bash
         run: |
-          if [ -n "${BUILD_ID}" ] && [[ "${BUILD_ID}" =~ ^[0-9]+-[0-9]+-(common|small)$ ]]; then
+          if [ -n "${BUILD_ID}" ] && [[ "${BUILD_ID}" =~ ^[0-9]+-(common|small)- ]]; then
             rm -rf /tmp/cutlass-build-${BUILD_ID} || true
             ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} \
               "sudo -n rm -rf /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID} /shared/builds/${BUILD_ID}" || true
