@@ -314,25 +314,14 @@ class TestbedImpl {
 
     using LocalGemm = cutlass::gemm::device::GemmUniversalAdapter<LocalGemmKernel>;
 
-    auto [cluster_size_y, cluster_size_x, cluster_size_z] = ClusterShape{};
+    auto [cluster_size_x, cluster_size_y, cluster_size_z] = ClusterShape{};
     sycl::range<3> cluster_size(cluster_size_z, cluster_size_y, cluster_size_x);
 
     auto num_groups = ceil_div(problem_shape, TileShape {});
-    range<3> local_range(1, NumControlWarps + NumEpilogueWarps, cutlass::NumThreadsPerWarp);
-    range<3> group_range(1, get<0>(num_groups), get<1>(num_groups));
-
-    constexpr bool is_persistent = Config::is_persistent;
-    if constexpr (is_persistent) {
-      auto [cta_num_y, cta_num_x] = typename Config::CtaNum_MN {};
-      group_range[1] = min(group_range[1], cta_num_y * cluster_size_y);
-      group_range[2] = min(group_range[2], cta_num_x * cluster_size_x);
-    }
-
-    std::cout << "IsPersistentMode: " << is_persistent << std::endl;
+    
     print("ProblemShape_MNKL: "); print(problem_shape); print("\n");
     print("TileShape_MNK: "); print(TileShape{}); print("\n");
     print("ceil_div(ProblemShape,TileShape): "); print(num_groups); print("\n");
-    std::cout << "Group range: {" << group_range[0] << ", " << group_range[1] << ", " << group_range[2] << "} \n";
 
     using FusionCallbacks = typename CollectiveEpilogue::FusionCallbacks;
     auto callbacks_args = [&]() {
@@ -351,6 +340,12 @@ class TestbedImpl {
 
     LocalGemmKernel kernel;
     auto params = kernel.to_underlying_arguments(args, nullptr);
+
+    dim3 const grid = LocalGemmKernel::get_grid_shape(params);
+    dim3 const block = LocalGemmKernel::get_block_shape();
+
+    range<3> group_range(grid.z, grid.y, grid.x);
+    range<3> local_range(block.z, block.y, block.x);
 
     int smem_size = 0;
     cutlass::SyclClusterLaunchParams launch_params = {group_range, local_range, cluster_size, smem_size, queue_};
@@ -762,11 +757,9 @@ class BlockscaledTestbed {
   }
 
   void launch(ProblemShape problem_shape) {
-    auto [cluster_size_y, cluster_size_x, cluster_size_z] = ClusterShape{};
+    auto [cluster_size_x, cluster_size_y, cluster_size_z] = ClusterShape{};
     sycl::range<3> cluster_size(cluster_size_z, cluster_size_y, cluster_size_x);
     auto num_groups = ceil_div(problem_shape, TileShape{});
-    range<3> local_range(1, GemmKernel::MaxThreadsPerBlock / cutlass::NumThreadsPerWarp, cutlass::NumThreadsPerWarp);
-    range<3> group_range(1, get<0>(num_groups), get<1>(num_groups));
 
     auto args = typename Gemm::GemmKernel::Arguments {
       problem_shape,
@@ -776,6 +769,13 @@ class BlockscaledTestbed {
 
     GemmKernel kernel;
     auto params = kernel.to_underlying_arguments(args, nullptr);
+
+    dim3 const grid = GemmKernel::get_grid_shape(params);
+    dim3 const block = GemmKernel::get_block_shape();
+
+    range<3> group_range(grid.z, grid.y, grid.x);
+    range<3> local_range(block.z, block.y, block.x);
+
     int smem_size = 0;
     cutlass::SyclClusterLaunchParams launch_params = {group_range, local_range, cluster_size, smem_size, queue_};
     cutlass::launch_kernel_on_cluster(launch_params, kernel, params).wait();
