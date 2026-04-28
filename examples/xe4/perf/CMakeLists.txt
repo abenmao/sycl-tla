@@ -8,6 +8,7 @@ endif()
 
 add_xe4_test(gemm_perf gemm/gemm_test.cpp)
 add_xe4_test(xe4_gemm_cluster_perf gemm_cluster/gemm_cluster_test.cpp)
+add_xe4_test(xe4_gemm_cluster_simple_perf gemm_cluster_simple/gemm_cluster_simple_perf.cpp)
 
 # Include directories for headers
 target_include_directories(gemm_perf PRIVATE
@@ -19,6 +20,12 @@ target_include_directories(gemm_perf PRIVATE
 target_include_directories(xe4_gemm_cluster_perf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/gemm_cluster
+    ${CMAKE_CURRENT_SOURCE_DIR}/testFixture
+)
+
+target_include_directories(xe4_gemm_cluster_simple_perf PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/gemm_cluster_simple
     ${CMAKE_CURRENT_SOURCE_DIR}/testFixture
 )
 

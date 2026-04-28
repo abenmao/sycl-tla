@@ -36,6 +36,9 @@ set(ONEMKL_INSTALL_DIR ${CMAKE_BINARY_DIR}/deps/oneMKL)
 
 # Try to find oneMKL using find_package
 find_package(MKL CONFIG QUIET PATHS $ENV{MKLROOT})
+if (NOT MKL_FOUND)
+  find_package(MKL CONFIG QUIET PATHS $ENV{MKL_ROOT})
+endif()
 
 if (MKL_FOUND)
   message(STATUS "oneMKL found.")

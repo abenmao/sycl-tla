@@ -308,7 +308,7 @@ class testFixture : public ::testing::TestWithParam<TestParamInfo> {
         /// GEMM setup and evaluation
         /////////////////////////////////////////////////////////////////////////////////////////////////
 
-        queue q;
+        queue q{sycl::property_list{sycl::property::queue::enable_profiling()}};
         auto dev = q.get_device();
         std::cout << "Running on " << dev.get_info<info::device::name>() << "\n";
 
@@ -418,11 +418,17 @@ class testFixture : public ::testing::TestWithParam<TestParamInfo> {
         int smem_size = 0;
         cutlass::SyclClusterLaunchParams launch_params = {group_range, local_range, cluster_size, smem_size, q};
 
-        cutlass::launch_kernel_on_cluster(
+        sycl::event gpu_event = cutlass::launch_kernel_on_cluster(
             launch_params,
             kernel,
-            params)
-            .wait();
+            params);
+
+        gpu_event.wait();
+
+        auto gpu_start = gpu_event.get_profiling_info<sycl::info::event_profiling::command_start>();
+        auto gpu_end = gpu_event.get_profiling_info<sycl::info::event_profiling::command_end>();
+        double gpu_time = (gpu_end - gpu_start) / 1000000.0;
+        std::cout << "GEMM kernel execution time: " << std::fixed << std::setprecision(6) << gpu_time << " ms\n";
 
         auto as_mem_layout = [](auto layout) {
             if constexpr (std::is_same_v<decltype(layout), cutlass::layout::RowMajor>) {

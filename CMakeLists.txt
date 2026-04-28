@@ -148,6 +148,7 @@ if (CUTLASS_ENABLE_SYCL)
     cri
     intel_gpu_jgs
     jgs
+    intel_gpu_jgs_pisa
   )
 
   foreach(ITEM IN LISTS DPCPP_SYCL_TARGET_LIST)
@@ -181,7 +182,7 @@ if (CUTLASS_ENABLE_SYCL)
       set(SYCL_TARGET_INTEL_GPU_CRI ON)
     endif()
 
-    if(("intel_gpu_jgs" IN_LIST DPCPP_SYCL_TARGET_LIST) OR ("jgs" IN_LIST DPCPP_SYCL_TARGET_LIST))
+    if(("intel_gpu_jgs" IN_LIST DPCPP_SYCL_TARGET_LIST) OR ("jgs" IN_LIST DPCPP_SYCL_TARGET_LIST) OR ("intel_gpu_jgs_pisa" IN_LIST DPCPP_SYCL_TARGET_LIST))
       if((NOT COMPILER_VERSION_2026_ONWARDS) AND (NOT DPCPP_SYCL_TARGET_LIST_LENGTH EQUAL 1))
         message(FATAL_ERROR "JGS Target with multi-target build is supported only with compiler version 2026 onwards")
       endif()
