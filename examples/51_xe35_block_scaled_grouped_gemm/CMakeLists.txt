@@ -28,6 +28,7 @@
 
 if (DEFINED SYCL_INTEL_TARGET AND SYCL_TARGET_INTEL_GPU_CRI)
   set(TEST_BASE "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
+  set(TEST_SCALE "--m=128 --n=128 --k=128 --groups=2 --iterations=1 --verify=1")
 
 cutlass_example_add_executable(
   51_xe35_block_scaled_grouped_gemm_e5m2
@@ -55,6 +56,7 @@ cutlass_example_add_executable(
   51_xe35_block_scaled_grouped_gemm_fp8_e4m3.cpp
   TEST_COMMAND_OPTIONS
   TEST_BASE
+  TEST_SCALE
 )
 
 endif()
