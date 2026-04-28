@@ -50,6 +50,7 @@ Base NVIDIA CUTLASS Versions for SYCL*TLA releases:
 |0.7-cri | 4.2.1 |
 |0.8 | 4.2.1 |
 |0.8-cri | 4.2.1 |
+|0.9 | 4.2.1 |
 |0.9-cri | 4.2.1 |
 
 # What's New in SYCL*TLA [0.9-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.9-cri)
