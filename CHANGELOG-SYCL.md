@@ -10,6 +10,19 @@
 ### Bug Fixes
   - Fix 50% performance drop for AOT-built kernels ([#443](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/443))
 
+## [SYCL*TLA 0.9](https://github.com/intel/sycl-tla/releases/tag/v0.9) (2026-04-30)
+### Enhancements
+- **Support FP8 upconversion for CuTe SLM Copy ([#772](https://github.com/intel/sycl-tla/pull/772))**
+- **Support AOT (Ahead-Of-Time) compilation instead of JIT ([#763](https://github.com/intel/sycl-tla/pull/763))**
+- **Add vectorized test cases for CuTe SLM Copy ([#766](https://github.com/intel/sycl-tla/pull/766))**
+- **Add some GEMM and Flash Attention benchmark cases ([#773](https://github.com/intel/sycl-tla/pull/773))**
+
+### Bug Fixes
+- **Fix example06 memory bandwidth computation bugs ([#778](https://github.com/intel/sycl-tla/pull/778))**
+- **Fix Python GEMM Generation bugs ([#768](https://github.com/intel/sycl-tla/pull/768))**
+- **Fix Python EVT test cases bugs ([#762](https://github.com/intel/sycl-tla/pull/762))**
+- **Fix AOT multitarget support bugs ([#765](https://github.com/intel/sycl-tla/pull/765))**
+
 ## [SYCL*TLA 0.8-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.8-cri) (2026-03-25)
 ### New Features (Notes: all the tests based on CRI simulator)
   - Support SLM Copy API functionalities and examples ([#d7fb251](https://github.com/intel-innersource/libraries.ai.cutlass.internal/commit/d7fb251), [#330](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/330), [#348](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/348))
