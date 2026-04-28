@@ -1,5 +1,15 @@
 # SYCL*TLA (previously referred to as cutlass-sycl) Changelog
 
+## [SYCL*TLA 0.9-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.9-cri) (2026-04-30)
+### Enhancements (Notes: all the tests based on CRI simulator)
+  - Optimize Quantization API performance ([#388](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/388), [#465](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/465))
+  - Optimize FP8 Block Scaled GEMM performance (Collective API) ([#477](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/477))
+  - Support arbitrary M/N dimensions in Block Scaled GEMM ([#444](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/444), [#401](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/401))
+  - Add large GQA shapes to Flash Attention prefill benchmark ([#397](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/397))
+
+### Bug Fixes
+  - Fix 50% performance drop for AOT-built kernels ([#443](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/443))
+
 ## [SYCL*TLA 0.8-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.8-cri) (2026-03-25)
 ### New Features (Notes: all the tests based on CRI simulator)
   - Support SLM Copy API functionalities and examples ([#d7fb251](https://github.com/intel-innersource/libraries.ai.cutlass.internal/commit/d7fb251), [#330](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/330), [#348](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/348))
