@@ -82,6 +82,8 @@
 #include "cutlass/util/reference/host/tensor_compare.h"
 #include "cutlass/util/reference/host/tensor_norm.h"
 #include "cutlass/util/reference/host/gett.hpp"
+
+#include "sycl_common.hpp"
 #include "helper.h"
 
 
@@ -200,9 +202,8 @@ struct Options {
 
   bool help = false;
 
-  int iterations = 1000;
+  int iterations = 1000, verify = 1;
   int m = 16, n = 8, k = 64, l = 1;
-  int verify = 1;
   double eps = 1e-5;
 
   // Parses the command line

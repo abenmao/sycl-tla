@@ -43,36 +43,31 @@ Base NVIDIA CUTLASS Versions for SYCL*TLA releases:
 |0.2 | 3.9.2 |
 |0.3 | 3.9.2 |
 |0.5 | 4.2.0 |
+|0.5-cri | 4.2.0 |
 |0.6 | 4.2.0 |
+|0.6-cri | 4.2.0 |
 |0.7 | 4.2.1 |
+|0.7-cri | 4.2.1 |
 |0.8 | 4.2.1 |
+|0.8-cri | 4.2.1 |
 
-# What's New in SYCL*TLA 0.8
-
-## [SYCL*TLA 0.8](https://github.com/intel/sycl-tla/releases/tag/v0.8) (2026-03-25)
-
-### Major Architecture Changes
-- **Support BMG G31 Platform ([#755](https://github.com/intel/sycl-tla/pull/755))**
-- **SLM Copy API functionalities and examples**
-  - Support CuTe copy engines for 1D LDSM/STSM operations with vISA ([#753](https://github.com/intel/sycl-tla/pull/753))
-  - Enable fusion example of 2 matmul operations through SLM Copy API ([#747](https://github.com/intel/sycl-tla/pull/747))
-  - Enable subgroup specialization example with SLM Copy API ([#735](https://github.com/intel/sycl-tla/pull/735))
-- **Support default sub-byte reorder for low-precision data types ([#709](https://github.com/intel/sycl-tla/pull/709))**
-
-### Enhancements
-- **Flash Attention Performance Improvements (for BMG and BF16)**:  
-  - Fix long context OOM issue ([#728](https://github.com/intel/sycl-tla/pull/728))
-  - Overall performance improved from ~45% to ~78% of peak([#728](https://github.com/intel/sycl-tla/pull/728), [#743](https://github.com/intel/sycl-tla/pull/743),[#749](https://github.com/intel/sycl-tla/pull/749),[#750](https://github.com/intel/sycl-tla/pull/750))
-  - Refine code and fix bugs ([#715](https://github.com/intel/sycl-tla/pull/715), [#716](https://github.com/intel/sycl-tla/pull/716),[#720](https://github.com/intel/sycl-tla/pull/720))
-- **Epilogue Visitor Tree (EVT) Enhancements**:
-  - Combine with SIGMOID function ([#686](https://github.com/intel/sycl-tla/pull/686))
-  - Add Relu variation test cases ([#693](https://github.com/intel/sycl-tla/pull/693))
-  - Enhance and refine code and test case([#703](https://github.com/intel/sycl-tla/pull/703), [#717](https://github.com/intel/sycl-tla/pull/717))
-- **GEMM Enhancements**:
-  - Support all GEMM tile shapes ([#738](https://github.com/intel/sycl-tla/pull/738))
-  - Enhance examples ([#726](https://github.com/intel/sycl-tla/pull/726))
+# What's New in SYCL*TLA [0.8-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.8-cri)
+### New Features (Notes: all the tests based on CRI simulator)
+  - Support SLM Copy API functionalities and examples ([#d7fb251](https://github.com/intel-innersource/libraries.ai.cutlass.internal/commit/d7fb251), [#330](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/330), [#348](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/348))
+  - Support FP8 block scaled GEMM for different scaled data type and dimensions ([#324](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/324))
+  - Support quantization and de-quantization API ([#315](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/315), [#285](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/285))
   
-**See the [CHANGELOG](https://github.com/intel/sycl-tla/blob/main/CHANGELOG-SYCL.md) for details of all past releases and updates.**
+### Performance (Internal Only)
+  - Systolic data is relatively accurate (CRI simulator can correctly simulate systolic behaviors), E2E data for reference only (CRI simulator cannot correctly simulate memory behaviors).
+
+  - Flash Attention Performance (for CRI and BF16)
+      - Improved Flash Attention performance from 23% to 42% peak
+        
+      | **Data Type** | **Prefill/Decode** | **% of Peak (E2E)** |
+      |:--------------|:-------------------|:---------|
+      |BF16           |     Prefill        |  42%  |
+
+**See the [CHANGELOG](CHANGELOG-SYCL.md) for details of all past releases and updates.**
 
 # CuTe
 
@@ -114,6 +109,7 @@ SYCL*TLA runs successfully on the following Intel GPUs.
 |---|---|
 |Intel Data Center GPU Max Series            |Xe-HPC|
 |Intel Arc GPU B580 Graphics                       |Xe2|
+|Intel Data Center GPU Crescent Island             |Xe3p|
 
 ## Validated Software Configurations
 
@@ -123,9 +119,7 @@ We are regularly testing following setup in CI.
 |-----------------|----------|-----------------|--------|---------------------|-----------------------|
 |Xe-HPC| Ubuntu 24.04 |2025.3+ |G++13  | 25.48 | 2.24 |
 |Xe2| Ubuntu 25.04 |2025.3+  |G++13  | 26.01 | 2.27 |
-
-
-
+|Xe3p| Ubuntu 25.04 |2025.3+  |G++13  | 26.01 | 2.27 |
 
 
 ## Target Architecture
@@ -141,6 +135,12 @@ Or
 ```
 cmake .. -DDPCPP_SYCL_TARGET="intel_gpu_bmg_g21" 
 ```
+Or
+
+```
+cmake .. -DDPCPP_SYCL_TARGET="intel_gpu_cri"
+```
+
 
 Or
 
@@ -193,6 +193,7 @@ Create a build directory within the SYCL*TLA project, then run CMake. You need t
 the target Intel GPU architecture using the `DPCPP_SYCL_TARGET` flag.
 For Intel Data Center GPU Max Series (Ponte Vecchio), use `intel_gpu_pvc`.
 For Intel Arc GPU B580 Graphics, use `intel_gpu_bmg_g21`.
+For Intel Data Center GPU Crescent Island, use `intel_gpu_cri`.
 For Intel Arc GPU Battlemage (G31), use `intel_gpu_bmg_g31`.
 
 ```bash
@@ -205,6 +206,12 @@ Or for Intel Arc GPU B580 Graphics:
 
 ```bash
 $  CC=icx CXX=icpx cmake .. -G Ninja -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET="intel_gpu_bmg_g21" # compiles for Intel Arc GPU B580 Graphics
+```
+
+Or for Intel Data Center GPU Crescent Island:
+
+```bash
+$  CC=icx CXX=icpx cmake .. -G Ninja -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET="intel_gpu_cri" # compiles for Intel Data Center GPU Crescent Island
 ```
 
 Or for Intel Arc GPU Battlemage (G31):

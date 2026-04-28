@@ -78,7 +78,9 @@ struct XE_LOAD_2D : XE_Copy_Op_2D_Base<Bits, Height, Width, Width/BlockWidth>
   CUTE_HOST_DEVICE static void copy(const int *payload, T *dst) {
 #ifdef CUTE_ARCH_COPY_XE_ENABLED
     using namespace intel;
-    auto &dv = *reinterpret_cast<storage_vector_t<T, Width * Height * Bits / sg_size>*>(dst);
+    // TODO: to workaround the GRF aligned visa issue, may have better way in the future
+    constexpr auto grf_aligned_size = cute::max(64, Width * Height);
+    auto &dv = *reinterpret_cast<storage_vector_t<T, grf_aligned_size * Bits / sg_size> *>(dst);
     asm (
       "lsc_load_block2d.ugm (M1, 1)  %0:d%2.%3x%4x%5nn flat[%1+(0,0)]"
         : "=rw"(dv)
@@ -145,10 +147,17 @@ struct XE_PREFETCH_2D : XE_Copy_Op_2D_Base<Bits, Height, Width>
 {
   CUTE_HOST_DEVICE static void copy(const int *payload) {
 #ifdef CUTE_ARCH_COPY_XE_ENABLED
+#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+    asm (
+      "lsc_load_block2d.ugm.ca.ca.ca (M1, 1)  %%null:d%1.%2x%3nn flat[%0+(0,0)]"
+        :: "rw.u"(payload), "P"(Bits), "P"(Width), "P"(Height)
+    );
+#else
     asm (
       "lsc_load_block2d.ugm.ca.ca (M1, 1)  %%null:d%1.%2x%3nn flat[%0+(0,0)]"
         :: "rw.u"(payload), "P"(Bits), "P"(Width), "P"(Height)
     );
+#endif
 #else
     CUTE_INVALID_CONTROL_PATH("Cannot use Xe block 2D copy atom on non-Xe hardware");
 #endif

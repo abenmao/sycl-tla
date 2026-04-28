@@ -5,7 +5,7 @@ inputs:
     description: "Install for PVC or BMG gpu"
     type: string
   IGC:
-    description: "Use ROLLING, STAGING, or LTS release"
+    description: "Use ROLLING or STAGING release"
     type: string
 
 runs:
@@ -31,6 +31,9 @@ runs:
         else
           exit 1
         fi
+        sudo apt-get install -y libze-intel-gpu1 libze-dev intel-metrics-discovery \
+          intel-opencl-icd ocl-icd-opencl-dev clinfo intel-gsc intel-ocloc g++
+        dpkg -l | grep libhwloc15 > /dev/null || sudo apt install -y libhwloc15
     - name: Install Intel graphics drivers
       if: inputs.IGC == 'STAGING'
       shell: bash

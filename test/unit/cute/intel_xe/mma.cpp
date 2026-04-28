@@ -91,6 +91,14 @@ TEST(PVC_CuTe_Xe, MMA_XE_1x16x32_S32U8U8S32_TT) {
     Shape<_128, _128, _16>{}, Shape<_1, _1, _1>{});
 }
 
+// TODO: This case will fail when export IGC_ExtraOCLOptions="-cl-intel-512-GRF-per-thread" 
+// on CRI, so we temporarily disable it here, it will be enabled again when the 
+// issue is resolved.
+// TEST(PVC_CuTe_Xe, MMA_XE_8x16x16_F32BF16BF16F32_TT) {
+//   MMA_Test<XE_8x16x16_F32BF16BF16F32_TT, 256, 256, 32, 64, 32, bfloat16_t,
+//            bfloat16_t, float>(512, 512, 256);
+// }
+
 TEST(PVC_CuTe_Xe, MMA_XE_8x16x16_F32BF16BF16F32_TT) {
   run_mma_test<XE_8x16x16_F32BF16BF16F32_TT, 
                cutlass::bfloat16_t, cutlass::bfloat16_t, float>(
@@ -281,6 +289,25 @@ TEST(PVC_CuTe_Xe, MMA_DPAS_TF32_1x16) {
                cutlass::tfloat32_t, cutlass::tfloat32_t, float>(
     Shape<_128, _128, _16>{}, Shape<_1, _1, _1>{});
 }
+
+#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+// TODO: add full FP8/FP4/MXFP8/MXFP4 test here
+// missing FP4/MXFP8/MMXFP4 case here due to:
+// 1. Examples under folder examples/50_xe35_block_scaled_gemm covered MXFP8/MXFP4 cases.
+// 2. Examples/cute/tutorial/xe_gemm.cpp covered FP8/FP4 cases.
+// 3. It is somewhat tedious and repetitive to da that here.
+TEST(PVC_CuTe_Xe, MMA_DPAS_E5M2) {
+  run_mma_test<XE_DPAS_TT<8, float, cutlass::float_e5m2_t>, 
+               cutlass::float_e5m2_t, cutlass::float_e5m2_t, float>(
+    Shape<_128, _128, _16>{}, Shape<_2, _2, _1>{});
+}
+
+TEST(PVC_CuTe_Xe, MMA_DPAS_E4M3) {
+  run_mma_test<XE_DPAS_TT<8, float, cutlass::float_e4m3_t>, 
+               cutlass::float_e4m3_t, cutlass::float_e4m3_t, float>(
+    Shape<_128, _128, _16>{}, Shape<_2, _2, _1>{});
+}
+#endif
 
 #else
 

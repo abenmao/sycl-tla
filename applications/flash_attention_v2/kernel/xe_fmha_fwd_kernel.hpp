@@ -81,10 +81,14 @@ public:
   using ElementQ = typename CollectiveMainloop::TensorQ::element_type;
   using ElementK = typename CollectiveMainloop::TensorK::element_type;
   using ElementV = typename CollectiveMainloop::TensorV::element_type;
-
+  using ElementScale = typename CollectiveMainloop::TensorScaleQ::element_type;
+  using StrideScaleQ = decltype(stride(typename CollectiveMainloop::TensorScaleQ{}));
+  using StrideScaleK = decltype(stride(typename CollectiveMainloop::TensorScaleK{}));
+  using StrideScaleV = decltype(stride(typename CollectiveMainloop::TensorScaleV{}));
   using StrideQ = decltype(stride(typename CollectiveMainloop::TensorQ{}));
   using StrideK = decltype(stride(typename CollectiveMainloop::TensorK{}));
   using StrideV = decltype(stride(typename CollectiveMainloop::TensorV{}));
+  static constexpr bool UseScale = CollectiveMainloop::UseScale;
 
   using SGPerWG = typename CollectiveMainloop::SGPerWG;
 
@@ -126,6 +130,15 @@ public:
     StrideV dV;
     ElementO *O;
     StrideO dO;
+    const ElementScale *scaleQ = nullptr;
+    StrideScaleQ dScaleQ{};
+    const ElementScale *scaleK = nullptr;
+    StrideScaleK dScaleK{};
+    const ElementScale *scaleV = nullptr;
+    StrideScaleV dScaleV{};
+    float scale_k;
+    float scale_v;
+    int group_size = 32;
     const ElementK *K_cache;
     StrideK dK_cache{};
     const ElementV *V_cache;
@@ -274,7 +287,6 @@ public:
       Tensor V_cache = make_tensor(make_gmem_ptr(dcV_cache), make_layout(shape_V_cache, stride_v_cache));
       Tensor O = make_tensor(make_gmem_ptr(ptrO), make_layout(shape_O, stride_o));
 
-
       // O accumulator types
       FragA tArA;
       FragARow tA_max, tA_sum;
@@ -282,16 +294,65 @@ public:
       // Main loop
       int l_coord = is_var_len ? 0 : idx_b;
       CollectiveMainloop mainloop(params.mainloop, shared_storage.mainloop);
-      mainloop(Q(_,_,head_q,l_coord),
-               K(_,_,head,l_coord),
-               V(_,_,head,l_coord),
-               tArA, tA_max, tA_sum,
-               blk_qv, 0, k_blocks, k_blocks,
-               thr_id, seq_len, seq_len_kv_cache, idx_b,
-               full_tile_offset, discard_seq_coord,
-               K_cache(_,_,head,l_coord),
-               V_cache(_,_,head,l_coord));
+      if constexpr (UseScale) {
+        auto scale_q = cute::ceil_div(s.head_size_qk, p.group_size);
+        auto scale_k = cute::ceil_div(s.head_size_qk, p.group_size);
+        int scale_v = cute::ceil_div(seq_len_kv, p.group_size);
 
+        auto shape_scale_Q = make_shape(seq_len_qo, scale_q, s.num_heads_q, batch_dim);
+        auto shape_scale_K = make_shape(seq_len_kv, scale_k, s.num_heads_kv, batch_dim);
+        auto shape_scale_V = make_shape(s.head_size_vo, scale_v, s.num_heads_kv, batch_dim);
+        int offset_scaleQ = 0; int offset_scaleK = 0; int offset_scaleV = 0;
+        if constexpr (is_var_len) {
+          auto qo_cumulative = s.seq_len_qo.cumulative_length;
+          auto kv_cumulative = s.seq_len_kv.cumulative_length;
+          auto kv_scale_cumulative = s.seq_len_kv.cumulative_scale_length;
+          offset_scaleQ = s.num_heads_q * scale_q * qo_cumulative[idx_b];
+          offset_scaleK = s.num_heads_kv * scale_k * kv_cumulative[idx_b];
+          offset_scaleV = s.num_heads_kv * kv_scale_cumulative[idx_b];
+        }
+
+        auto stride_scaleQ = is_var_len ? cutlass::make_cute_packed_stride(StrideScaleQ{}, shape_scale_Q) : p.dScaleQ;
+        auto stride_scaleK = is_var_len ? cutlass::make_cute_packed_stride(StrideScaleK{}, shape_scale_K) : p.dScaleK;
+        auto stride_scaleV = is_var_len ? cutlass::make_cute_packed_stride(StrideScaleV{}, shape_scale_V) : p.dScaleV;
+
+        auto dcScaleQ = const_cast<ElementScale*>(p.scaleQ + offset_scaleQ);
+        auto dcScaleK = const_cast<ElementScale*>(p.scaleK + offset_scaleK);
+        auto dcScaleV = const_cast<ElementScale*>(p.scaleV + offset_scaleV);
+
+        Tensor ScaleQ = make_tensor(make_gmem_ptr(dcScaleQ), make_layout(shape_scale_Q, stride_scaleQ));
+        Tensor ScaleK = make_tensor(make_gmem_ptr(dcScaleK), make_layout(shape_scale_K, stride_scaleK));
+        Tensor ScaleV = make_tensor(make_gmem_ptr(dcScaleV), make_layout(shape_scale_V, stride_scaleV));
+
+        auto ScaleQ_head = ScaleQ(_, _, head_q, l_coord);
+        auto ScaleK_head = ScaleK(_, _, head, l_coord);
+        auto ScaleV_head = ScaleV(_, _, head, l_coord);
+
+        mainloop(Q(_,_,head_q,l_coord),
+                 K(_,_,head,l_coord),
+                 V(_,_,head,l_coord),
+                 tArA, tA_max, tA_sum,
+                 blk_qv, 0, k_blocks, k_blocks,
+                 thr_id, seq_len, 0, l_coord,
+                 full_tile_offset, discard_seq_coord,
+                 K_cache(_,_,head,l_coord),
+                 V_cache(_,_,head,l_coord),
+                 p.scale_k, p.scale_v,
+                 ScaleQ_head,
+                 ScaleK_head,
+                 ScaleV_head);
+      } else {
+        mainloop(Q(_,_,head_q,l_coord),
+                 K(_,_,head,l_coord),
+                 V(_,_,head,l_coord),
+                 tArA, tA_max, tA_sum,
+                 blk_qv, 0, k_blocks, k_blocks,
+                 thr_id, seq_len, seq_len_kv_cache, idx_b,
+                 full_tile_offset, discard_seq_coord,
+                 K_cache(_,_,head,l_coord),
+                 V_cache(_,_,head,l_coord),
+                 p.scale_k, p.scale_v);
+      }
       if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
         sycl::group_barrier(get_work_group<3>());
       }
@@ -361,6 +422,8 @@ public:
     MainloopSharedStorage mainloop;
     EpilogueSharedStorage epilogue;
   };
+
+  static constexpr bool UseScale = false;
 
   static constexpr int SharedStorageSize = is_empty_v<SharedStorage> ? size_t(0)
                                                                      : sizeof(SharedStorage);
@@ -594,6 +657,11 @@ public:
       int block_budget_remained = num_blocks_per_wg;
       int batch_head_id = start_batch_head_id;
       bool is_update_batch_head_id = false;
+      // Skip excess WGs whose start_batch_head_id is already out of range.
+      // This happens when total_k_blocks < GridDimZ (more WGs than work).
+      if (batch_head_id >= num_batch_heads) {
+        block_budget_remained = 0;
+      }
       while (block_budget_remained > 0) {
         int num_new_blocks = local_k_blocks - num_computed_blocks;
         if (num_new_blocks <= block_budget_remained) {

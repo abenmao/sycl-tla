@@ -1,0 +1,43 @@
+name: "Tiny Coverage with Small Shapes Test"
+
+on:
+  push:
+    branches: [ "cri","cri_pathfinding","v0.1.0_next" ]
+  pull_request:
+    branches: [ "cri","cri_pathfinding","v0.1.0_next" ]
+  merge_group:
+    branches: [ "cri","cri_pathfinding","v0.1.0_next" ]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run-tests:
+    strategy:
+      matrix:
+        include:
+          - compiler: RELEASE
+            gpu: CRI
+            intel_graphics: ROLLING
+            sycl_target: intel_gpu_cri
+            runner: [self-hosted, shanghai-cri, Linux, X64]
+
+    name: Tiny Coverage with Small Shapes Test on ${{ matrix.gpu }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      - name: Build
+        shell: bash
+        run: bash ./.github/scripts/cri_simulator_compile.sh build
+      - name: Run example tests
+        shell: bash
+        run: bash ./.github/scripts/cri_simulator_compile.sh test examples
+      - name: Run unit tests
+        shell: bash
+        run: bash ./.github/scripts/cri_simulator_compile.sh test ut

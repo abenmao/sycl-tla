@@ -199,6 +199,8 @@ struct Xe2DLoadTraitsBase : Xe2DTraitsBase<Op, XMode, YMode, ValType, TiledStrid
   using Super = Xe2DTraitsBase<Op, XMode, YMode, ValType, TiledStrides>;
   using Traits = typename Super::Traits;
   using ThrID = typename Super::ThrID;
+  using AtomShape = Shape<Int<Op::AtomHeight>, Int<Op::AtomWidth>>;
+  using BlockShape = Shape<Int<Op::AtomHeight>, Int<Op::AtomWidth / Op::BlockCount>>;
 
   using Super::Super;
 
@@ -394,6 +396,9 @@ struct Copy_Traits<XE_PREFETCH_2D<CopyBits, Height, Width, BlockWidth>, XMode, Y
   using ThrID = typename Super::ThrID;
 
   using Super::Super;
+
+  using AtomShape = Shape<Int<Op::AtomHeight>, Int<Op::AtomWidth>>;
+  using BlockShape = AtomShape;
 
   // Execution.
   template <class SEngine, class SLayout,
@@ -784,7 +789,7 @@ make_block_2d_copy_A(CopyOp                   const& op,    // Copy operation
                      TiledMMA                 const& mma,   // TiledMMA instance
                      Tensor<GEngine, GLayout> const& gmem)  // Global tensor
 {
-  static_assert(is_xe_block_2d_atom_v<CopyOp>, "Expected a block 2D atom");
+  // static_assert(is_xe_block_2d_atom_v<CopyOp>, "Expected a block 2D atom");
   using ValType = typename GEngine::value_type;
   return make_block_2d_copy_A<ValType>(op, mma, gmem.stride()).with(gmem);
 }

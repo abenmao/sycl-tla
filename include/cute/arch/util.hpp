@@ -308,6 +308,26 @@ explode_mma(PtrD&& d, int_sequence<Id...>,
 {
   return MMA_Op::fma(d[Id]..., a[Ia]..., b[Ib]..., c[Ic]...);
 }
+
+template <class MMA_Op,
+          class PtrD, int... Id,
+          class PtrA, int... Ia,
+          class PtrB, int... Ib,
+          class PtrC, int... Ic,
+          class PtrE, int... Ie,
+          class PtrF, int... If>
+CUTE_HOST_DEVICE constexpr
+void
+explode_mma(PtrD&& d, int_sequence<Id...>,
+        PtrA&& a, int_sequence<Ia...>,
+        PtrB&& b, int_sequence<Ib...>,
+        PtrC&& c, int_sequence<Ic...>,
+        PtrE&& e, int_sequence<Ie...>,
+        PtrF&& f, int_sequence<If...>,
+        uint16_t g, uint16_t h)
+{
+  return MMA_Op::fma(d[Id]..., a[Ia]..., b[Ib]..., c[Ic]..., e[Ie]..., f[If]..., g, h);
+}
 #endif
 
 //

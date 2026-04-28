@@ -72,7 +72,6 @@
 #include "cutlass/util/reference/device/tensor_compare.h"
 #include "sycl_common.hpp"
 #include "helper.h"
-#include "cutlass/util/mixed_dtype_utils.hpp"
 
 using namespace cute;
 
@@ -102,6 +101,7 @@ struct Options {
     help(false),
     error(false),
     m(5120), n(4096), k(4096), l(1), iterations(20), verify(1),
+    g(128), mode(2),
     alpha(1.f), beta(0.f)
   { }
 
@@ -139,7 +139,7 @@ struct Options {
       << "  --g=<int>                   The size of each group for the scales and zeros. To broadcast a vector of scales or zeros, set the group size to K.\n"
       << "  --mode=<int>                The mode to run the gemm. 0 is Convert Only, 1 is Convert and Scale, 2 is Convert and Scale with Zero Point\n"
       << "  --alpha=<s32>               Epilogue scalar alpha\n"
-      << "  --beta=<s32>                Epilogue scalar beta\n\n"
+      << "  --beta=<s32>                Epilogue scalar beta\n"
       << "  --iterations=<int>          Iterations\n"
       << "  --verify=<int>              Specify whether to verify.\n\n";
 
@@ -567,7 +567,6 @@ struct ExampleRunner {
     ProblemShapeType problem_size = ProblemShapeType{options.m, options.n, options.k, options.l};
 
     initialize(options);
-
     typename Gemm::GemmKernel::Arguments arguments{
         cutlass::gemm::GemmUniversalMode::kGemm,
         problem_size,

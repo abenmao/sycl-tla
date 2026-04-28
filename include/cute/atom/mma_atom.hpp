@@ -135,12 +135,19 @@ struct MMA_Atom<MMA_Traits<MMAOperation, Args...>>
     // Check that this tensor is likely already partitioned
     CUTE_STATIC_ASSERT_V(rank(ctensor) >= Int<3>{});  // VMN
     CUTE_STATIC_ASSERT_V(size<0>(ctensor) == size<1>(LayoutC_TV{}));
-    // C is a bit special because we are after accumulators here
-    // The input/output type doesn't have to match the accumulator type
-    //static_assert(std::is_same<ValTypeC, typename remove_cvref_t<CTensor>::value_type>::value, "Expecting ValTypeC type");
 
-    // We'll never base the accumulator layout on the input tensor layout, so just return a FrgTypeC tensor
-    return make_tensor<FrgTypeC>(shape(ctensor));
+    if constexpr (has_dereference<FrgTypeC>::value) {
+      // If the intended FrgTypeC is a view (of the current tensor), forward the whole
+      return make_tensor<FrgTypeC>(static_cast<CTensor&&>(ctensor));
+    } else {
+      // C is a bit special because we are after accumulators here
+      // The input/output type doesn't have to match the accumulator type
+      //static_assert(std::is_same<ValTypeC, typename remove_cvref_t<CTensor>::value_type>::value, "Expecting ValTypeC type");
+
+      // We'll never base the accumulator layout on the input tensor layout, so just return a FrgTypeC tensor
+      return make_tensor<FrgTypeC>(shape(ctensor));
+    }
+    CUTE_GCC_UNREACHABLE;
   }
 
   template <class ATensor>
