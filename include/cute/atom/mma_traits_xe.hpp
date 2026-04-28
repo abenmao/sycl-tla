@@ -127,64 +127,88 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
     constexpr int RegNumB = extent<typename MMAOp::BRegisters>::value;
     constexpr int RegNumC = extent<typename MMAOp::CRegisters>::value;
 
-    auto unzipped_A = unzip_tensor(A_zipped);
-    auto unzipped_B = unzip_tensor(B_zipped);
-
-    auto& A   = get<0>(unzipped_A);
-    auto& SFA = get<1>(unzipped_A);
-    auto& B   = get<0>(unzipped_B);
-    auto& SFB = get<1>(unzipped_B);
-
-    Tensor rA = recast<RegTypeA>(A);
-    Tensor rB = recast<RegTypeB>(B);
     Tensor rD = recast<RegTypeD>(D);
     Tensor rC = recast<RegTypeC>(C);
 
-    CUTE_STATIC_ASSERT_V(size(rA) == Int<RegNumA>{});
-    CUTE_STATIC_ASSERT_V(size(rB) == Int<RegNumB>{});
     CUTE_STATIC_ASSERT_V(size(rD) == Int<RegNumD>{});
     CUTE_STATIC_ASSERT_V(size(rC) == Int<RegNumC>{});
 
-    // Detect zip payload to choose between hardware BDPAS and software-scaled DPAS.
+    // Detect zip payload to choose between hardware BDPAS, software-scaled DPAS, and plain DPAS.
     // Hardware BDPAS (MX path):          4-element zip (data + scale + m_offset + k_offset)
     // Software DPAS  (FP8/BF16/FP16...): 2-element zip (data + scale)
+    // Plain DPAS (no scaling):           non-zip tensor (data only)
     // The zip arity is set by the mainloop (xe_blockscaled_mma vs xe_fp8_blockscaled_mma)
-    constexpr auto zip_arity = tuple_size<decltype(unzipped_A)>::value;
-    constexpr bool use_hardware_bdpas = (zip_arity == 4);
+    using AValType = typename remove_cvref_t<decltype(A_zipped)>::value_type;
+    constexpr bool is_zip_input = is_tuple<AValType>::value;
 
-    if constexpr (use_hardware_bdpas) {
-      // === Hardware BDPAS path ===
-      auto& SFA_M_OFFSET = get<2>(unzipped_A);
-      auto& SFA_K_OFFSET = get<3>(unzipped_A);
-      auto& SFB_N_OFFSET = get<2>(unzipped_B);
-      auto& SFB_K_OFFSET = get<3>(unzipped_B);
+    if constexpr (!is_zip_input) {
+      // === Plain DPAS path (no scaling) ===
+      Tensor rA = recast<RegTypeA>(A_zipped);
+      Tensor rB = recast<RegTypeB>(B_zipped);
 
-      auto sfa_offset = SFA_M_OFFSET[0] + SFA_K_OFFSET[0];
-      auto sfb_offset = SFB_N_OFFSET[0] + SFB_K_OFFSET[0];
+      CUTE_STATIC_ASSERT_V(size(rA) == Int<RegNumA>{});
+      CUTE_STATIC_ASSERT_V(size(rB) == Int<RegNumB>{});
 
-      cute::detail::explode_mma<MMAOp>(
-              rD,   make_int_sequence<RegNumD>{},
-              rA,   make_int_sequence<RegNumA>{},
-              rB,   make_int_sequence<RegNumB>{},
-              rC,   make_int_sequence<RegNumC>{},
-              SFA, make_int_sequence<1>{},
-              SFB, make_int_sequence<1>{},
-              sfa_offset,
-              sfb_offset);
+      cute::detail::explode_mma<BaseOp>(
+              rD, make_int_sequence<RegNumD>{},
+              rA, make_int_sequence<RegNumA>{},
+              rB, make_int_sequence<RegNumB>{},
+              rC, make_int_sequence<RegNumC>{});
     } else {
-      // === Software-scaled DPAS path ===
-      RegTypeD product{};
-      RegTypeC zero{};
-      BaseOp::fma(product, rA[0], rB[0], zero);
+      auto unzipped_A = unzip_tensor(A_zipped);
+      auto unzipped_B = unzip_tensor(B_zipped);
 
-      RegTypeD out{};
-      for (int i = 0; i < M; ++i) {
-        float const scale = static_cast<float>(SFA(i)) * static_cast<float>(SFB(i));
-        float const value = static_cast<float>(product[i]) * scale + static_cast<float>(rC[0][i]);
-        out[i] = static_cast<TD>(value);
+      auto& A = get<0>(unzipped_A);
+      auto& B = get<0>(unzipped_B);
+
+      Tensor rA = recast<RegTypeA>(A);
+      Tensor rB = recast<RegTypeB>(B);
+
+      CUTE_STATIC_ASSERT_V(size(rA) == Int<RegNumA>{});
+      CUTE_STATIC_ASSERT_V(size(rB) == Int<RegNumB>{});
+
+      constexpr auto zip_arity = tuple_size<decltype(unzipped_A)>::value;
+
+      if constexpr (zip_arity == 4) {
+        // === Hardware BDPAS path ===
+        auto& SFA = get<1>(unzipped_A);
+        auto& SFB = get<1>(unzipped_B);
+        auto& SFA_M_OFFSET = get<2>(unzipped_A);
+        auto& SFA_K_OFFSET = get<3>(unzipped_A);
+        auto& SFB_N_OFFSET = get<2>(unzipped_B);
+        auto& SFB_K_OFFSET = get<3>(unzipped_B);
+
+        auto sfa_offset = SFA_M_OFFSET[0] + SFA_K_OFFSET[0];
+        auto sfb_offset = SFB_N_OFFSET[0] + SFB_K_OFFSET[0];
+
+        cute::detail::explode_mma<MMAOp>(
+                rD,   make_int_sequence<RegNumD>{},
+                rA,   make_int_sequence<RegNumA>{},
+                rB,   make_int_sequence<RegNumB>{},
+                rC,   make_int_sequence<RegNumC>{},
+                SFA, make_int_sequence<1>{},
+                SFB, make_int_sequence<1>{},
+                sfa_offset,
+                sfb_offset);
+      } else {
+        // === Software-scaled DPAS path ===
+        static_assert(zip_arity == 2, "Unsupported zip arity");
+        auto& SFA = get<1>(unzipped_A);
+        auto& SFB = get<1>(unzipped_B);
+
+        RegTypeD product{};
+        RegTypeC zero{};
+        BaseOp::fma(product, rA[0], rB[0], zero);
+
+        RegTypeD out{};
+        for (int i = 0; i < M; ++i) {
+          float const scale = static_cast<float>(SFA(i)) * static_cast<float>(SFB(i));
+          float const value = static_cast<float>(product[i]) * scale + static_cast<float>(rC[0][i]);
+          out[i] = static_cast<TD>(value);
+        }
+
+        rD[0] = out;
       }
-
-      rD[0] = out;
     }
   }
 
