@@ -50,22 +50,18 @@ Base NVIDIA CUTLASS Versions for SYCL*TLA releases:
 |0.7-cri | 4.2.1 |
 |0.8 | 4.2.1 |
 |0.8-cri | 4.2.1 |
+|0.9-cri | 4.2.1 |
 
-# What's New in SYCL*TLA [0.8-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.8-cri)
-### New Features (Notes: all the tests based on CRI simulator)
-  - Support SLM Copy API functionalities and examples ([#d7fb251](https://github.com/intel-innersource/libraries.ai.cutlass.internal/commit/d7fb251), [#330](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/330), [#348](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/348))
-  - Support FP8 block scaled GEMM for different scaled data type and dimensions ([#324](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/324))
-  - Support quantization and de-quantization API ([#315](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/315), [#285](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/285))
-  
-### Performance (Internal Only)
-  - Systolic data is relatively accurate (CRI simulator can correctly simulate systolic behaviors), E2E data for reference only (CRI simulator cannot correctly simulate memory behaviors).
+# What's New in SYCL*TLA [0.9-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.9-cri)
 
-  - Flash Attention Performance (for CRI and BF16)
-      - Improved Flash Attention performance from 23% to 42% peak
-        
-      | **Data Type** | **Prefill/Decode** | **% of Peak (E2E)** |
-      |:--------------|:-------------------|:---------|
-      |BF16           |     Prefill        |  42%  |
+### Enhancements (Notes: all the tests based on CRI simulator)
+  - Optimize Quantization API performance ([#388](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/388), [#465](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/465))
+  - Optimize FP8 Block Scaled GEMM performance (Collective API) ([#477](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/477))
+  - Support arbitrary M/N dimensions in Block Scaled GEMM ([#444](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/444), [#401](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/401))
+  - Add large GQA shapes to Flash Attention prefill benchmark ([#397](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/397))
+
+### Bug Fixes
+  - Fix 50% performance drop for AOT-built kernels ([#443](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/443))
 
 **See the [CHANGELOG](CHANGELOG-SYCL.md) for details of all past releases and updates.**
 
