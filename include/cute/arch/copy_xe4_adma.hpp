@@ -2,6 +2,7 @@
 
 #include "async_tensor_copy.hpp"
 #include "async_linear_copy.hpp"
+#include "async_linear_reduce.hpp"
 
 namespace cute {
 
@@ -131,21 +132,23 @@ struct XE4_ADMA_LOAD_MULTICAST
 ///
 ///   IntType (ired):
 ///     - Bit-width must be 32 or 64
-///     - Ops: Add, Smin, Smax, Umin, Umax, And, Or, Xor
+///     - Ops: Add, Smin, Smax, Umin, Umax, And, Or, Xor, Incwrap, Decwrap
 ///
 ///   FloatType (fred):
 ///     - Ops: Add, Min, Max
 ///     - Min/Max only supported for 16-bit types (half, bf16)
 ///     - float/double/tf32 only support Add
 ///
-/// Inherited by XE4_ADMA_STORE_REDUCE to validate at instantiation time.
+/// Inherited by XE4_ADMA_STORE_REDUCE and XE4_ADMA_LINEAR_REDUCE to validate at instantiation time.
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 template<typename T, RedOp Rop>
 struct XE4_ADMA_RedBase {
 
   // Classify T as IntType or FloatType for asm instruction selection (ired vs fred)
   static constexpr RedType RedDType = (std::is_same_v<T, int> ||
-                                    std::is_same_v<T, uint32_t>)
+                                    std::is_same_v<T, uint32_t> ||
+                                    std::is_same_v<T, long> ||
+                                    std::is_same_v<T, unsigned long>)
                                  ? RedType::IntType
                                  : ((std::is_same_v<T, cutlass::tfloat32_t> ||
                                       std::is_same_v<T, float> ||
@@ -160,18 +163,22 @@ struct XE4_ADMA_RedBase {
   static constexpr inline bool check_constraints() {
 
     static_assert(RedDType != RedType::none);
-    constexpr unsigned int BitWidth =sizeof_bits_v<T>;
-    if constexpr (RedDType ==RedType::IntType) {
+    constexpr unsigned int BitWidth = sizeof_bits_v<T>;
+    if constexpr (RedDType == RedType::IntType) {
       // ired: 32-bit or 64-bit integers only
       static_assert(cmp_values<BitWidth, 32, 64>());
-      // ired: supported ops are Add, signed/unsigned min/max, and bitwise ops
+      // ired: supported ops — Add, signed/unsigned min/max, bitwise, incwrap/decwrap
       static_assert(cmp_values<static_cast<int>(Rop),
                                static_cast<int>(RedOp::Add), static_cast<int>(RedOp::Smin),
                                static_cast<int>(RedOp::Smax), static_cast<int>(RedOp::Umin),
                                static_cast<int>(RedOp::Umax), static_cast<int>(RedOp::And),
-                               static_cast<int>(RedOp::Or), static_cast<int>(RedOp::Xor)>());
+                               static_cast<int>(RedOp::Or), static_cast<int>(RedOp::Xor),
+                               static_cast<int>(RedOp::Incwrap), static_cast<int>(RedOp::Decwrap)>());
+      if constexpr (Rop == RedOp::Incwrap || Rop == RedOp::Decwrap) {
+        static_assert(BitWidth == 32, "Incwrap/Decwrap only supported for 32-bit integers");
+      }
     }
-    if constexpr (RedDType ==RedType::FloatType) {
+    if constexpr (RedDType == RedType::FloatType) {
       // fred: only Add, Min, Max supported
       static_assert(cmp_values<static_cast<int>(Rop),
                                static_cast<int>(RedOp::Add),
@@ -258,6 +265,21 @@ struct XE4_ADMA_STORE_REDUCE : public XE4_ADMA_RedBase<T, Rop>
     detail::AsyncTensorReduce<Super::RedDType>::template Copy<detail::CacheCtrl::L2wb_L3wb,
                               Rop, BType>(mat_desc_, gmem_ptr, abar_ptr,
                               reinterpret_cast<TensorPayload *>(tdesc_ptr), coord);
+  }
+};
+
+
+// SLM → gmem linear (1D) atomic reduction using raw pointers.
+template<typename T, RedOp Rop, BarrierType BType = BarrierType::Abarrier>
+struct XE4_ADMA_LINEAR_REDUCE : public XE4_ADMA_RedBase<T, Rop>
+{
+  using Super = XE4_ADMA_RedBase<T, Rop>;
+
+  CUTE_HOST_DEVICE static void
+  copy(void* gmem_ptr, void* slm_ptr, uint32_t copy_size, uint64_t* abar_ptr) {
+    detail::AsyncLinearReduce<Super::RedDType>::template
+      Reduce<detail::CacheCtrl::L2wb_L3wb, Rop, BType, T>(
+        gmem_ptr, slm_ptr, copy_size, abar_ptr);
   }
 };
 

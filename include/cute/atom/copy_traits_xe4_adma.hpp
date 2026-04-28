@@ -108,6 +108,44 @@ struct Copy_Traits<XE4_ADMA_LINEAR_STORE, CopySizeInBytes, OpArgs...>
   }
 };
 
+template <typename T, RedOp Rop, BarrierType BType,
+          class CopySizeInBytes, class... OpArgs>
+struct Copy_Traits<XE4_ADMA_LINEAR_REDUCE<T, Rop, BType>, CopySizeInBytes, OpArgs...>
+{
+  static_assert(int32_t(CopySizeInBytes::value) % 16 == 0,
+                "ADMA Linear Reduce requires copy size in Bytes to be aligned to 16B.");
+
+  using ThrID = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1,decltype(CopySizeInBytes{} * C<8>{})>>;
+  using DstLayout = Layout<Shape<_1,decltype(CopySizeInBytes{} * C<8>{})>>;
+  using RefLayout = SrcLayout;
+
+  cute::tuple<OpArgs...> reduce_abar_;
+
+  CUTE_HOST_DEVICE constexpr
+  Copy_Traits<XE4_ADMA_LINEAR_REDUCE<T, Rop, BType>, CopySizeInBytes, uint64_t*>
+  with(uint64_t* abar_ptr) const {
+    return {abar_ptr};
+  }
+
+  template <class TS, class SLayout,
+            class TD, class DLayout>
+  friend CUTE_HOST_DEVICE constexpr void
+  copy_unpack(Copy_Traits        const& traits,
+              Tensor<TS,SLayout> const& src,
+              Tensor<TD,DLayout>      & dst)
+  {
+    static_assert(is_same<cute::tuple<OpArgs...>, cute::tuple<uint64_t*>>::value,
+                  "Extra arguments not set. Set .with() before use.");
+    static_assert(is_smem<TS>::value, "Expected smem src for XE4_ADMA_LINEAR_REDUCE");
+    static_assert(is_gmem<TD>::value, "Expected gmem dst for XE4_ADMA_LINEAR_REDUCE");
+    XE4_ADMA_LINEAR_REDUCE<T, Rop, BType>::copy(
+                               raw_pointer_cast(dst.data()),
+                               const_cast<void*>(static_cast<const void*>(raw_pointer_cast(src.data()))),
+                               int32_t(CopySizeInBytes::value), get<0>(traits.reduce_abar_));
+  }
+};
+
 template <class CopyOp, class... Args>
 struct ADMA_LOAD_Unpack
 {

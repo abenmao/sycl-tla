@@ -139,6 +139,7 @@ template <> struct md_type<sycl::ext::oneapi::bfloat16> {
 template <> struct md_type<int> {static constexpr fixstr::fixed_string value {".32b"};};
 template <> struct md_type<uint32_t> {static constexpr fixstr::fixed_string value {".32b"};};
 template <> struct md_type<long> {static constexpr fixstr::fixed_string value {".64b"};};
+template <> struct md_type<unsigned long> {static constexpr fixstr::fixed_string value {".64b"};};
 template <typename T> constexpr auto _mdtype = md_type<T>::value;
 
 enum class morder {
