@@ -242,8 +242,13 @@ struct ExampleRunner {
     const float min_dequant_val = 0.5f;
     const float scale_max = options.const_scale ? 1.0 : max_dequant_val / elt_max_f;
     const float scale_min = options.const_scale ? 1.0 : min_dequant_val / elt_max_f;
+#if defined(CUTLASS_TEST_FOR_CRI)
+    cutlass::reference::device::BlockFillRandomUniformCopyFromHost(
+        block.get(), block.size(), seed, Element(scale_max), Element(scale_min));
+#else
     cutlass::reference::device::BlockFillRandomUniform(
         block.get(), block.size(), seed, Element(scale_max), Element(scale_min));
+#endif
     return true;
   }
 
@@ -323,15 +328,20 @@ struct ExampleRunner {
     auto shape_A = cute::make_shape(M, K, L);
     auto shape_B = cute::make_shape(N, K, L);
     auto shape_CD = cute::make_shape(M, N, L);
-    auto shape_scale_A = cute::make_shape(options.m, scale_k, L);
-    auto shape_scale_B = cute::make_shape(options.n, scale_k, L);
+
+    // 2D block load requires surface width to be 4-byte aligned
+    constexpr int scaleAlign = cute::ceil_div(4, (int)sizeof(ElementScaleA));
+    int padded_M = cute::round_up(options.m, scaleAlign);
+    int padded_N = cute::round_up(options.n, scaleAlign);
+    auto shape_scale_A_padded = cute::make_shape(padded_M, scale_k, L);
+    auto shape_scale_B_padded = cute::make_shape(padded_N, scale_k, L);
 
     stride_A = cutlass::make_cute_packed_stride(StrideA{}, shape_A);
     stride_B = cutlass::make_cute_packed_stride(StrideB{}, shape_B);
     stride_C = cutlass::make_cute_packed_stride(StrideC{}, shape_CD);
     stride_D = cutlass::make_cute_packed_stride(StrideD{}, shape_CD);
-    stride_SA = cutlass::make_cute_packed_stride(StrideScaleA{}, shape_scale_A);
-    stride_SB = cutlass::make_cute_packed_stride(StrideScaleB{}, shape_scale_B);
+    stride_SA = cutlass::make_cute_packed_stride(StrideScaleA{}, shape_scale_A_padded);
+    stride_SB = cutlass::make_cute_packed_stride(StrideScaleB{}, shape_scale_B_padded);
 
     block_A.reset(static_cast<std::size_t>(M) * K * L);
     block_A_dq.reset(static_cast<std::size_t>(M) * K * L);
@@ -340,8 +350,8 @@ struct ExampleRunner {
     block_C.reset(static_cast<std::size_t>(M) * N * L);
     block_D.reset(static_cast<std::size_t>(M) * N * L);
     block_ref_D.reset(static_cast<std::size_t>(M) * N * L);
-    block_scaleA.reset(static_cast<std::size_t>(scale_k) * L * M);
-    block_scaleB.reset(static_cast<std::size_t>(scale_k) * L * N);
+    block_scaleA.reset(static_cast<std::size_t>(scale_k) * L * padded_M);
+    block_scaleB.reset(static_cast<std::size_t>(scale_k) * L * padded_N);
     if constexpr (std::is_same_v<ElementA, half_t> || std::is_same_v<ElementA, float>) {
       initialize_block(block_A, seed + 2023, ElementA(0.f), ElementA(1.f));
     } else {
@@ -364,8 +374,8 @@ struct ExampleRunner {
 
     auto layout_A = make_layout(shape_A, stride_A);
     auto layout_B = make_layout(shape_B, stride_B);
-    auto layout_scale_A = make_layout(shape_scale_A, stride_SA);
-    auto layout_scale_B = make_layout(shape_scale_B, stride_SB);
+    auto layout_scale_A = make_layout(shape_scale_A_padded, stride_SA);
+    auto layout_scale_B = make_layout(shape_scale_B_padded, stride_SB);
 
     apply_scale(block_A_dq.get(), block_A.get(), layout_A, block_scaleA.get(),  layout_scale_A, options, scaleGroupSize);
     apply_scale(block_B_dq.get(), block_B.get(), layout_B, block_scaleB.get(),  layout_scale_B, options, scaleGroupSize);

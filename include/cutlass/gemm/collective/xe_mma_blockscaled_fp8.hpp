@@ -176,15 +176,28 @@ public:
   static constexpr int SG_K = ceil_div(BLK_K, SG_NUMS_K);
   using SubgroupTileShape = Shape<C<SG_M>, C<SG_N>, C<SG_K>>;
 
-  static_assert(SG_N <= GroupN,
-    "SG_N must not exceed GroupN — each subgroup must fall within a single scale B N-block.");
+  // Compile-time path selection for scale loading strategy
+  // Scale-B is indexed by N scale blocks (extent ceil(N / GroupN)).
+  // Per-lane loading is valid only for true per-element N scaling.
+  static constexpr bool kPerLaneScaleB = (GroupN == 1);
+  static_assert(kPerLaneScaleB || SG_N <= GroupN,
+                "Broadcast scale-B path requires each subgroup N tile to remain within a single "
+                "GroupN block; use GroupN == 1 for per-lane scale-B loading or ensure SG_N <= GroupN.");
+  // Use fine-grain K-scale loading whenever GroupK boundaries can fall within a BLK_K tile.
+  static constexpr bool kFineGrainScaleK = (GroupK < BLK_K) || ((GroupK % BLK_K) != 0);
 
-  static_assert(GroupK >= BLK_K && GroupK % BLK_K == 0,
-    "GroupK must be a multiple of BLK_K so that scale boundaries align with tile boundaries.");
+  // Deferred-scale path: applies to the broadcast-scale-B path (GroupN != 1;
+  // the static_assert above guarantees each SG_N tile stays within one GroupN block)
+  // and to aligned K-scale groups (GroupK >= BLK_K and GroupK is a multiple of BLK_K).
+  // In this regime scaleA/scaleB stay constant over each BLK_K tile and GroupK boundaries
+  // align with tile boundaries, so DPAS can accumulate raw results and apply the combined
+  // scale once when draining each GroupK block.
+  static constexpr bool kUseDeferredScale = (!kPerLaneScaleB) && (!kFineGrainScaleK);
 
   // Accumulator iterations
   static constexpr int M_ITERS = SG_M / ATOM_M;
   static constexpr int N_ITERS = SG_N / ATOM_N;
+  static constexpr int ScaleAChunks = cute::ceil_div(SG_M, SubgroupSize);
 
   static constexpr auto Num_SGs = SG_NUMS_M * SG_NUMS_N * SG_NUMS_K;
   static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{});
@@ -273,6 +286,160 @@ public:
     return implementable;
   }
 
+  /// Load a single scale-A value with bounds check.
+  CUTLASS_DEVICE static ElementScaleA
+  load_scale_a_value(Params const &mainloop, int m_abs, int k_scale_idx, int l_coord, int M_extent) {
+    return (m_abs < M_extent) ? mainloop.mAscale(m_abs, k_scale_idx, l_coord) : ElementScaleA(0);
+  }
+
+  /// Load a single scale-B value with bounds check.
+  CUTLASS_DEVICE static ElementScaleB
+  load_scale_b_value(Params const &mainloop, int n_abs, int k_scale_idx, int l_coord, int N_extent) {
+    return (n_abs < N_extent) ? mainloop.mBscale(n_abs, k_scale_idx, l_coord) : ElementScaleB(0);
+  }
+
+  /// Fill tScaleA(v, mi, ki) for a single ki with per-element scale values.
+  template <class ScaleATensor>
+  CUTLASS_DEVICE static void
+  fill_scale_a_ki(ScaleATensor &tScaleA, int ki,
+                  Params const &mainloop, int m_coord, int k_scale_idx, int l_coord, int M_extent) {
+    CUTLASS_PRAGMA_UNROLL
+    for (int mi = 0; mi < M_ITERS; mi++) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int v = 0; v < ATOM_M; v++) {
+        tScaleA(v, mi, ki) = load_scale_a_value(
+            mainloop, m_coord + mi * ATOM_M + v, k_scale_idx, l_coord, M_extent);
+      }
+    }
+  }
+
+  /// Fill tScaleA for all ki with the same per-element value (broadcast across K).
+  template <int KIters, class ScaleATensor>
+  CUTLASS_DEVICE static void
+  fill_scale_a_all_ki(ScaleATensor &tScaleA,
+                      Params const &mainloop, int m_coord, int k_scale_idx, int l_coord, int M_extent) {
+    CUTLASS_PRAGMA_UNROLL
+    for (int mi = 0; mi < M_ITERS; mi++) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int v = 0; v < ATOM_M; v++) {
+        const ElementScaleA sa = load_scale_a_value(
+            mainloop, m_coord + mi * ATOM_M + v, k_scale_idx, l_coord, M_extent);
+        CUTLASS_PRAGMA_UNROLL
+        for (int ki = 0; ki < KIters; ++ki) {
+          tScaleA(v, mi, ki) = sa;
+        }
+      }
+    }
+  }
+
+  /// Fill tScaleB per-lane for a single ki (GroupN=1 path).
+  template <int ScaleBV, class ScaleBTensor>
+  CUTLASS_DEVICE static void
+  fill_scale_b_per_lane_ki(ScaleBTensor &tScaleB, int ki,
+                           Params const &mainloop, int n_coord, int k_scale_idx, int l_coord,
+                           int N_scale_extent, int lane_id) {
+    CUTLASS_PRAGMA_UNROLL
+    for (int ni = 0; ni < N_ITERS; ni++) {
+      const auto sb = load_scale_b_value(
+          mainloop, n_coord + ni * ATOM_N + lane_id, k_scale_idx, l_coord, N_scale_extent);
+      CUTLASS_PRAGMA_UNROLL
+      for (int v = 0; v < ScaleBV; v++) {
+        tScaleB(v, ni, ki) = sb;
+      }
+    }
+  }
+
+  /// Fill tScaleB with broadcast value for a single ki.
+  template <int ScaleBV, class ScaleBTensor>
+  CUTLASS_DEVICE static void
+  fill_scale_b_broadcast_ki(ScaleBTensor &tScaleB, int ki,
+                            Params const &mainloop, int n_scale_coord, int k_scale_idx, int l_coord) {
+    const ElementScaleB sb = static_cast<ElementScaleB>(
+        mainloop.mBscale(n_scale_coord, k_scale_idx, l_coord));
+    CUTLASS_PRAGMA_UNROLL
+    for (int ni = 0; ni < N_ITERS; ni++) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int v = 0; v < ScaleBV; v++) {
+        tScaleB(v, ni, ki) = sb;
+      }
+    }
+  }
+
+  /// Fill tScaleB with broadcast value for all ki.
+  template <int ScaleBV, int KIters, class ScaleBTensor>
+  CUTLASS_DEVICE static void
+  fill_scale_b_broadcast_all_ki(ScaleBTensor &tScaleB,
+                                Params const &mainloop, int n_scale_coord, int k_scale_idx, int l_coord) {
+    const ElementScaleB sb = static_cast<ElementScaleB>(
+        mainloop.mBscale(n_scale_coord, k_scale_idx, l_coord));
+    CUTLASS_PRAGMA_UNROLL
+    for (int ni = 0; ni < N_ITERS; ni++) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int v = 0; v < ScaleBV; v++) {
+        CUTLASS_PRAGMA_UNROLL
+        for (int ki = 0; ki < KIters; ++ki) {
+          tScaleB(v, ni, ki) = sb;
+        }
+      }
+    }
+  }
+
+  /// Load deferred scale-A into compact per-chunk fragment (for later broadcast).
+  template <class ScaleAFragment>
+  CUTLASS_DEVICE static void
+  copy_deferred_scale_a(ScaleAFragment &fragment_scaleA,
+                        Params const &mainloop,
+                        int m_coord,
+                        int k_scale_idx,
+                        int l_coord,
+                        int lane_id,
+                        int M_extent) {
+    CUTLASS_PRAGMA_UNROLL
+    for (int load_idx = 0; load_idx < ScaleAChunks; load_idx++) {
+      fragment_scaleA(0, load_idx, 0) = load_scale_a_value(
+          mainloop, m_coord + load_idx * SubgroupSize + lane_id, k_scale_idx, l_coord, M_extent);
+    }
+  }
+
+  /// Drain raw_accum by applying combined scaleA * scaleB at a GroupK boundary.
+  template <class FrgTensorD, class RawAccum, class ScaleAFragment, class Subgroup>
+  CUTLASS_DEVICE static void
+  drain_deferred_scale_accum(FrgTensorD &accum,
+                             RawAccum &raw_accum,
+                             ScaleAFragment &fragment_scaleA,
+                             Subgroup sg_handle,
+                             Params const &mainloop,
+                             int m_coord,
+                             int n_scale_coord,
+                             int k_scale_idx,
+                             int l_coord,
+                             int lane_id,
+                             int M_extent) {
+    const ElementAccumulator scale_b_val = static_cast<ElementAccumulator>(
+        mainloop.mBscale(n_scale_coord, k_scale_idx, l_coord));
+
+    copy_deferred_scale_a(
+        fragment_scaleA, mainloop, m_coord, k_scale_idx, l_coord, lane_id, M_extent);
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int mi = 0; mi < M_ITERS; mi++) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int v = 0; v < ATOM_M; v++) {
+        const int m_local = mi * ATOM_M + v;
+        const int load_idx = m_local / SubgroupSize;
+        const int lane_idx = m_local % SubgroupSize;
+        const ElementScaleA sa = group_broadcast(
+            sg_handle, fragment_scaleA(0, load_idx, 0), lane_idx);
+        const ElementAccumulator combined_scale = static_cast<ElementAccumulator>(sa) * scale_b_val;
+        CUTLASS_PRAGMA_UNROLL
+        for (int ni = 0; ni < N_ITERS; ni++) {
+          accum(v, mi, ni) += raw_accum(v, mi, ni) * combined_scale;
+          raw_accum(v, mi, ni) = ElementAccumulator(0);
+        }
+      }
+    }
+  }
+
   template <class FrgTensorD,
     class TensorA,
     class TensorB,
@@ -310,7 +477,6 @@ public:
     /* Register fragments for MMA */
     auto tCrA = thr_mma.partition_sg_fragment_A(gA(_,_,0));
     auto tCrB = thr_mma.partition_sg_fragment_B(gB(_,_,0));
-
     /* Register fragments for copies */
     auto tArA = thr_copy_a.partition_sg_fragment_D(gA(_,_,0));
     auto tBrB = thr_copy_b.partition_sg_fragment_D(gB(_,_,0));
@@ -343,10 +509,18 @@ public:
     const int M_extent = get<0>(mainloop.mAscale.shape());
     const int N_scale_extent = get<0>(mainloop.mBscale.shape());
 
-    // Scale B index: clamp to valid range for partial N-tiles
-    const int n_scale_coord = cute::min(n_coord / GroupN, N_scale_extent - 1);
+    // Scale B index for broadcast path (GroupN >= ATOM_N)
+    [[maybe_unused]] const int n_scale_coord = [&]() {
+      if constexpr (kPerLaneScaleB) { return 0; }
+      else { return cute::min(n_coord / GroupN, N_scale_extent - 1); }
+    }();
+    [[maybe_unused]] const int lane_id = thread_idx % SubgroupSize;
 
     const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K_start));
+
+    [[maybe_unused]] auto sg_handle = sycl::ext::oneapi::this_work_item::get_sub_group();
+    [[maybe_unused]] auto fragment_scaleA = make_tensor<ElementScaleA>(
+      Layout<Shape<_1, Int<ScaleAChunks>, _1>>{});
 
     // Pre-prefetch data tiles
     constexpr int barrier_scope = 2;
@@ -358,13 +532,23 @@ public:
     }
 
     // Scale fragments
-    auto tScaleA = make_tensor<ElementScaleA>(tCrA.layout());
-    auto tScaleB = make_tensor<ElementScaleB>(tCrB.layout());
-    auto zippedA = make_zip_tensor(tCrA, tScaleA);
-    auto zippedB = make_zip_tensor(tCrB, tScaleB);
+    [[maybe_unused]] auto tScaleA = make_tensor<ElementScaleA>(tCrA.layout());
+    [[maybe_unused]] auto tScaleB = make_tensor<ElementScaleB>(tCrB.layout());
+    [[maybe_unused]] auto zippedA = make_zip_tensor(tCrA, tScaleA);
+    [[maybe_unused]] auto zippedB = make_zip_tensor(tCrB, tScaleB);
 
     constexpr int GEMM_K_ITERS = decltype(size<2>(tScaleA.shape()))::value;
     constexpr int SCALE_B_V = decltype(size<0>(tScaleB.shape()))::value;
+
+    [[maybe_unused]] auto raw_accum = [&] {
+      if constexpr (kUseDeferredScale) {
+        auto frag = make_fragment_like(accum);
+        clear(frag);
+        return frag;
+      } else {
+        return cute::make_tuple();
+      }
+    }();
 
     //
     // Mainloop
@@ -373,37 +557,38 @@ public:
     int prev_k_scale_idx = -1;
 
     for (int k_tile = k_start_idx; k_tile < k_tile_end; k_tile++, prefetch_k++) {
-      // Reload scale fragments when entering a new scale K-block
-      const int k_scale_idx = (k_tile * BLK_K) / GroupK;
-      if (k_scale_idx != prev_k_scale_idx) {
-        prev_k_scale_idx = k_scale_idx;
 
-        const float scale_b_val = static_cast<float>(
-            mainloop.mBscale(n_scale_coord, k_scale_idx, l_coord));
-
+      if constexpr (kPerLaneScaleB) {
+        // Per-lane scale path (GroupN=1): reload both scales per ki.
         CUTLASS_PRAGMA_UNROLL
-        for (int mi = 0; mi < M_ITERS; mi++) {
-          CUTLASS_PRAGMA_UNROLL
-          for (int v = 0; v < ATOM_M; v++) {
-            const int m_abs = m_coord + mi * ATOM_M + v;
-            const ElementScaleA sa = (m_abs < M_extent)
-                ? mainloop.mAscale(m_abs, k_scale_idx, l_coord)
-                : ElementScaleA(0.0f);
-            CUTLASS_PRAGMA_UNROLL
-            for (int ki = 0; ki < GEMM_K_ITERS; ++ki) {
-              tScaleA(v, mi, ki) = sa;
-            }
-          }
+        for (int ki = 0; ki < GEMM_K_ITERS; ++ki) {
+          const int k_scale_idx = (k_tile * BLK_K + ki * MMA_K) / GroupK;
+          fill_scale_a_ki(tScaleA, ki, mainloop, m_coord, k_scale_idx, l_coord, M_extent);
+          fill_scale_b_per_lane_ki<SCALE_B_V>(tScaleB, ki, mainloop, n_coord, k_scale_idx, l_coord, N_scale_extent, lane_id);
         }
-
+      } else if constexpr (kFineGrainScaleK) {
+        // Fine-grain K path: different ki may map to different scale groups.
         CUTLASS_PRAGMA_UNROLL
-        for (int ni = 0; ni < N_ITERS; ni++) {
-          CUTLASS_PRAGMA_UNROLL
-          for (int v = 0; v < SCALE_B_V; v++) {
-            CUTLASS_PRAGMA_UNROLL
-            for (int ki = 0; ki < GEMM_K_ITERS; ++ki) {
-              tScaleB(v, ni, ki) = ElementScaleB(scale_b_val);
+        for (int ki = 0; ki < GEMM_K_ITERS; ++ki) {
+          const int k_scale_idx = (k_tile * BLK_K + ki * MMA_K) / GroupK;
+          fill_scale_a_ki(tScaleA, ki, mainloop, m_coord, k_scale_idx, l_coord, M_extent);
+          fill_scale_b_broadcast_ki<SCALE_B_V>(tScaleB, ki, mainloop, n_scale_coord, k_scale_idx, l_coord);
+        }
+      } else {
+        // Per-tile scale: group doesn't change within a BLK_K tile.
+        const int k_scale_idx = (k_tile * BLK_K) / GroupK;
+        if (k_scale_idx != prev_k_scale_idx) {
+          if constexpr (kUseDeferredScale) {
+            // Drain raw_accum using the PREVIOUS GroupK block's scale before switching groups.
+            if (prev_k_scale_idx >= 0) {
+              drain_deferred_scale_accum(accum, raw_accum, fragment_scaleA, sg_handle,
+                  mainloop, m_coord, n_scale_coord, prev_k_scale_idx, l_coord, lane_id, M_extent);
             }
+            prev_k_scale_idx = k_scale_idx;
+          } else {
+            prev_k_scale_idx = k_scale_idx;
+            fill_scale_a_all_ki<GEMM_K_ITERS>(tScaleA, mainloop, m_coord, k_scale_idx, l_coord, M_extent);
+            fill_scale_b_broadcast_all_ki<SCALE_B_V, GEMM_K_ITERS>(tScaleB, mainloop, n_scale_coord, k_scale_idx, l_coord);
           }
         }
       }
@@ -421,9 +606,23 @@ public:
       reorder(tArA, tCrA);
       reorder(tBrB, tCrB);
 
-      cute::gemm(tiled_mma, zippedA, zippedB, accum);
+      if constexpr (kUseDeferredScale) {
+        // Direct DPAS accumulation into raw_accum (no per-element scale multiply).
+        // The 16 DPAS atoms become back-to-back, freeing float ALU bandwidth between tiles.
+        cute::gemm(tiled_mma, tCrA, tCrB, raw_accum);
+      } else {
+        cute::gemm(tiled_mma, zippedA, zippedB, accum);
+      }
 
       barrier_wait(barrier_scope);
+    }
+
+    // Drain the final GroupK block.
+    if constexpr (kUseDeferredScale) {
+      if (prev_k_scale_idx >= 0) {
+        drain_deferred_scale_accum(accum, raw_accum, fragment_scaleA, sg_handle,
+            mainloop, m_coord, n_scale_coord, prev_k_scale_idx, l_coord, lane_id, M_extent);
+      }
     }
   }
 };

@@ -229,6 +229,9 @@ struct ExampleRunner {
   using ScalePolicy = RunnerScalePolicy<DispatchPolicy>;
   static constexpr int scaleGroupK = ScalePolicy::group_k;
   static constexpr int scaleGroupN = ScalePolicy::group_n;
+  // 2D block load requires surface width to be 4-byte aligned
+  static constexpr int scaleAlignA = cute::ceil_div(4, (int)sizeof(ElementScaleA));
+  static constexpr int scaleAlignB = cute::ceil_div(4, (int)sizeof(ElementScaleB));
 
   //
   // Data members
@@ -362,8 +365,9 @@ struct ExampleRunner {
       // compare_reference
       passed &= cutlass::reference::device::BlockCompareRelativelyEqual(
         block_ref_D.at(i).get(), block_D.at(i).get(), block_D.at(i).size(), epsilon, non_zero_floor); 
-      if (!passed)
+      if (!passed) {
         break;
+      }
     }
 
     return passed;
@@ -379,8 +383,13 @@ struct ExampleRunner {
     const float min_dequant_val = 0.5f;
     const float scale_max = max_dequant_val / elt_max_f;
     const float scale_min = min_dequant_val / elt_max_f;
+#if defined(CUTLASS_TEST_FOR_CRI)
+    cutlass::reference::device::BlockFillRandomUniformCopyFromHost(
+        block.get(), block.size(), seed, Element(scale_max), Element(scale_min));
+#else
     cutlass::reference::device::BlockFillRandomUniform(
         block.get(), block.size(), seed, Element(scale_max), Element(scale_min));
+#endif
     return true;
   }
 
@@ -533,8 +542,10 @@ struct ExampleRunner {
       int64_t elements_D = M * N;
       
       const int scale_k = cute::ceil_div(K, scaleGroupK);
-      int64_t elements_SFA = scale_k * M;
-      int64_t elements_SFB = static_cast<int64_t>(scale_k) * ScalePolicy::scale_n_extent(N);
+      int padded_M = cute::round_up(M, scaleAlignA);
+      int padded_N_scale = cute::round_up(ScalePolicy::scale_n_extent(N), scaleAlignB);
+      int64_t elements_SFA = static_cast<int64_t>(scale_k) * padded_M;
+      int64_t elements_SFB = static_cast<int64_t>(scale_k) * padded_N_scale;
       cutlass::DeviceAllocation<ElementA> a;
       a.reset(elements_A);
       block_A.push_back(a);
@@ -592,8 +603,10 @@ struct ExampleRunner {
       auto shape_B = cute::make_shape(N, K, L);
       auto shape_CD = cute::make_shape(M, N, L);
       const int scale_k = cute::ceil_div(K, scaleGroupK);
-      auto shape_scale_A = cute::make_shape(M, scale_k, L);
-      auto shape_scale_B = cute::make_shape(ScalePolicy::scale_n_extent(N), scale_k, L);
+      int padded_M = cute::round_up(M, scaleAlignA);
+      int padded_N_scale = cute::round_up(ScalePolicy::scale_n_extent(N), scaleAlignB);
+      auto shape_scale_A = cute::make_shape(padded_M, scale_k, L);
+      auto shape_scale_B = cute::make_shape(padded_N_scale, scale_k, L);
 
       auto stride_a = cutlass::make_cute_packed_stride(StrideA{}, shape_A);
       auto stride_b = cutlass::make_cute_packed_stride(StrideB{}, shape_B);

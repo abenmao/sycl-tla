@@ -3,8 +3,18 @@ set -e
 
 # ============================================================
 # CUTLASS Docker Build Script
-# Used by BMG runners to offload compilation to build server
+# Used by runners to offload compilation to a dedicated build server.
+# The CI workflow auto-detects weak runners (low CPU/RAM) and routes
+# them here.
+#
+# Exit codes (also referenced by CI workflow fallback logic):
+#   0   = success
+#   1   = general/unknown error (e.g. bad BUILD_TARGETS value)
+#   EXIT_COMPILE_ERROR (42)
+#       = compilation error (cmake configure or ninja build failure)
+#         CI workflow treats this as a code bug → no fallback
 # ============================================================
+readonly EXIT_COMPILE_ERROR=42
 
 # Arguments
 SYCL_TARGET="${SYCL_TARGET:-intel_gpu_bmg_g21}"
@@ -73,7 +83,8 @@ cmake "${SOURCE_DIR}" -G Ninja \
     -DCUTLASS_ENABLE_BENCHMARKS=ON \
     -DCUTLASS_SYCL_RUNNING_CI=ON \
     -DCUTLASS_SYCL_PROFILING_ENABLED=ON \
-    ${CMAKE_EXTRA_FLAGS}
+    ${CMAKE_EXTRA_FLAGS} \
+    || { echo "ERROR: CMake configuration failed"; exit ${EXIT_COMPILE_ERROR}; }
 
 NINJA_JOBS="${NINJA_JOBS:-$(nproc)}"
 
@@ -82,20 +93,20 @@ echo "[3/4] Building with -j${NINJA_JOBS}..."
 case "${BUILD_TARGETS}" in
     all)
         echo "Building test/all..."
-        ninja -j${NINJA_JOBS} test/all
+        ninja -j${NINJA_JOBS} test/all || { echo "ERROR: Build (test/all) failed"; exit ${EXIT_COMPILE_ERROR}; }
         echo "Building examples/all..."
-        ninja -j${NINJA_JOBS} examples/all
+        ninja -j${NINJA_JOBS} examples/all || { echo "ERROR: Build (examples/all) failed"; exit ${EXIT_COMPILE_ERROR}; }
         echo "Building benchmarks/all..."
-        ninja -j${NINJA_JOBS} benchmarks/all
+        ninja -j${NINJA_JOBS} benchmarks/all || { echo "ERROR: Build (benchmarks/all) failed"; exit ${EXIT_COMPILE_ERROR}; }
         ;;
     test)
-        ninja -k0 -j${NINJA_JOBS} test/all
+        ninja -k0 -j${NINJA_JOBS} test/all || { echo "ERROR: Build (test/all) failed"; exit ${EXIT_COMPILE_ERROR}; }
         ;;
     examples)
-        ninja -j${NINJA_JOBS} examples/all
+        ninja -j${NINJA_JOBS} examples/all || { echo "ERROR: Build (examples/all) failed"; exit ${EXIT_COMPILE_ERROR}; }
         ;;
     benchmarks)
-        ninja -j${NINJA_JOBS} benchmarks/all
+        ninja -j${NINJA_JOBS} benchmarks/all || { echo "ERROR: Build (benchmarks/all) failed"; exit ${EXIT_COMPILE_ERROR}; }
         ;;
     *)
         echo "Unknown build target: ${BUILD_TARGETS}"

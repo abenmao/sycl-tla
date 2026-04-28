@@ -1,0 +1,15 @@
+name: Sync v0.1.0_next → main
+
+on:
+  push:
+    branches:
+        - v0.1.0_next
+
+jobs:
+  call-shared-sync:
+    uses: intel-innersource/applications.ai.gpu.devops.tools/.github/workflows/branch-sync.yml@master
+    with:
+        source_branch: v0.1.0_next
+        target_branch: main
+    secrets:
+        GH_TOKEN: ${{ secrets.HABDEVOPS_GITHUB_TOKEN }}

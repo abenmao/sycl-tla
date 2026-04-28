@@ -87,14 +87,15 @@ void block_quantize_kernel(SrcType*  src_global,
                                make_layout(Shape<Int<src_per_thr>>{}));
   auto src_sg   = make_subgroup_tensor(src_frag, SrcTVLayout{});
 
-  // --- Destination: zero-initialized register fragment ---
+  // --- Destination: owning register fragment ---
+  // Uses make_tensor<DstType> (owning) so that subbyte types (e.g., float_e2m1_t)
+  // are backed by array_subbyte with correct packed storage, matching the
+  // hardware byte-granularity packing assumed by subbyte_sg_tv_swizzle in reorder.
   constexpr int dst_total   = size(DstTVLayout{});
   constexpr int dst_per_thr = dst_total / intel::sg_size;
   static_assert(dst_total % intel::sg_size == 0);
 
-  DstType dst_local[dst_per_thr]{};
-  auto dst_frag = make_tensor(make_rmem_ptr(dst_local),
-                               make_layout(Shape<Int<dst_per_thr>>{}));
+  auto dst_frag = make_tensor<DstType>(make_layout(Shape<Int<dst_per_thr>>{}));
   auto dst_sg   = make_subgroup_tensor(dst_frag, DstTVLayout{});
 
   // --- Scale: zero-initialized register fragment ---
@@ -111,8 +112,9 @@ void block_quantize_kernel(SrcType*  src_global,
   quantize<BlockSize>(src_sg, dst_sg, scale_sg);
 
   // --- Store dst back to global (round-robin) ---
+  // Read through tensor accessor to handle subbyte packed storage correctly.
   for (int i = 0; i < dst_per_thr; ++i)
-    dst_global[tid + i * intel::sg_size] = dst_local[i];
+    dst_global[tid + i * intel::sg_size] = static_cast<DstType>(dst_frag(i));
 
   // --- Store scale back to global (round-robin) ---
   for (int i = 0; i < scale_per_thr; ++i)
@@ -166,7 +168,7 @@ void reference_block_wise_quantize(
 {
   using FloatToScale  = cutlass::NumericConverter<ScaleType, float,
                          cutlass::FloatRoundStyle::round_toward_zero>;
-  using FloatToDst    = cutlass::NumericConverter<DstType, float,
+  using FloatToDst   = cutlass::NumericConverter<DstType, float,
                          cutlass::FloatRoundStyle::round_to_nearest>;
 
   const float target_max = static_cast<float>(
@@ -189,15 +191,13 @@ void reference_block_wise_quantize(
 
       // Phase 2: compute & store scale
       float s = (block_amax > 0.0f) ? (target_max / block_amax) : 0.0f;
-      ScaleType scale = FloatToScale{}(s);
-      scales[static_cast<size_t>(m * NumBlocks + b)] = scale;
+      scales[static_cast<size_t>(m * NumBlocks + b)] = FloatToScale{}(s);
 
       // Phase 3: quantize each element in the block
       for (int k = 0; k < BlockSize; ++k) {
         int n = b * BlockSize + k;
-        float val    = static_cast<float>(src[static_cast<size_t>(m * N + n)]);
-        float scaled = val * static_cast<float>(scale);
-        dst[static_cast<size_t>(m * N + n)] = FloatToDst{}(scaled);
+        float val = static_cast<float>(src[static_cast<size_t>(m * N + n)]);
+        dst[static_cast<size_t>(m * N + n)] = FloatToDst{}(val * s);
       }
     }
   }
@@ -260,13 +260,16 @@ void roundrobin_to_logical(const cutlass::host_vector<T>& global, // size(TVLayo
 // ============================================================================
 // Initialize source data (row-major logical)
 // ============================================================================
-template <class SrcType>
+template <int BlockSize, class SrcType>
 void initialize_source(std::vector<SrcType>& src, int M, int N) {
   src.resize(static_cast<size_t>(M * N));
   for (size_t i = 0; i < src.size(); ++i) {
+    int col = static_cast<int>(i) % N;
+    int block_idx = col / BlockSize;
     // Alternating sign pattern to exercise negative values
     float sign = (i % 3 == 0) ? -1.0f : 1.0f;
-    float val  = sign * static_cast<float>(i % 17) * 0.5f;
+    // Scale by (block_idx+1) so different blocks have distinct amax values
+    float val  = sign * static_cast<float>(i % 17) * 0.2f + static_cast<float>(block_idx + 1);
     if constexpr (std::is_same_v<SrcType, cutlass::bfloat16_t>) {
       src[i] = cutlass::bfloat16_t(val);
     } else if constexpr (std::is_same_v<SrcType, cutlass::half_t>) {
@@ -308,33 +311,74 @@ using DataTVLayout_16x32 = decltype(make_layout(
                 make_stride(ScaledBasis<Int<1>,0>{}, ScaledBasis<Int<16>,1>{}))
 ));
 
-// ---- Scale TV Layout for (M=16, NumBlocks=1) ----
-// Thread stride = 0 (degenerate, scales are subgroup-uniform).
-// Shape:  (Int<16>, (Int<16>, Int<1>))
-// Stride: (Int<0>, (ScaledBasis<Int<1>,0>, ScaledBasis<Int<1>,1>))
+// ---- Src/Dst TV Layout: M=16, N=64 ----
+// Shape:  (Int<16>, (Int<16>, Int<4>))
+// Stride: (ScaledBasis<Int<1>,1>, (ScaledBasis<Int<1>,0>, ScaledBasis<Int<16>,1>))
 //
-// Mapping: (t, (v0, v1)) → m = v0,  nb = v1 = 0
-//   - coshape: (16, 1),  total: 256,  per_thr: 16
+// Mapping: (t, (v0, v1)) → m = v0,  n = t + v1*16
+//   - coshape: (16, 64),  total: 1024,  per_thr: 64
 //
-using ScaleTVLayout_16x1 = decltype(make_layout(
-    make_shape(Int<16>{}, make_shape(Int<16>{}, Int<1>{})),
-    make_stride(Int<0>{},
-                make_stride(ScaledBasis<Int<1>,0>{}, ScaledBasis<Int<1>,1>{}))
+using DataTVLayout_16x64 = decltype(make_layout(
+    make_shape(Int<16>{}, make_shape(Int<16>{}, Int<4>{})),
+    make_stride(ScaledBasis<Int<1>,1>{},
+                make_stride(ScaledBasis<Int<1>,0>{}, ScaledBasis<Int<16>,1>{}))
 ));
 
-// ---- Scale TV Layout for (M=16, NumBlocks=2) ----
-// Thread stride = 0 (degenerate, scales are subgroup-uniform).
-// Shape:  (Int<16>, (Int<16>, Int<2>))
-// Stride: (Int<0>, (ScaledBasis<Int<1>,0>, ScaledBasis<Int<1>,1>))
+// ---- MMA-like Src/Dst TV Layout: M=32, N=64 (atom=8, 4 M-iters, 4 N-iters) ----
+// Shape:  (Int<16>, (Int<8>, (Int<4>, Int<4>)))
+// Stride: (ScaledBasis<Int<1>,1>, (ScaledBasis<Int<1>,0>, (ScaledBasis<Int<8>,0>, ScaledBasis<Int<16>,1>)))
+// These match the real MMA C fragment layout from partition_sg_fragment_C:
+//   Value mode = (atom_M, (M_iters, N_iters))
+//   - atom_M=8: rows within one DPAS atom (stride 1 in M)
+//   - M_iters:  number of atom repetitions in M (stride 8 in M)
+//   - N_iters:  number of atom repetitions in N (stride 16 in N)
 //
-// Mapping: (t, (v0, v1)) → m = v0,  nb = v1
-//   - coshape: (16, 2),  total: 512,  per_thr: 32
+// Mapping: (t, (v0, (v1, v2))) → m = v0 + v1*8,  n = t + v2*16
+//   - coshape: (32, 64),  total: 2048,  per_thr: 128
 //
-using ScaleTVLayout_16x2 = decltype(make_layout(
-    make_shape(Int<16>{}, make_shape(Int<16>{}, Int<2>{})),
-    make_stride(Int<0>{},
-                make_stride(ScaledBasis<Int<1>,0>{}, ScaledBasis<Int<1>,1>{}))
+using DataTVLayout_32x64 = decltype(make_layout(
+    make_shape(Int<16>{}, make_shape(Int<8>{}, make_shape(Int<4>{}, Int<4>{}))),
+    make_stride(ScaledBasis<Int<1>,1>{},
+                make_stride(ScaledBasis<Int<1>,0>{},
+                            make_stride(ScaledBasis<Int<8>,0>{}, ScaledBasis<Int<16>,1>{})))
 ));
+
+// ---- Scale TV Layouts ----
+//
+// Scale shape: (M, NumBlocks) — one scale per (row, block) pair.
+// Requires M % 16 = 0 (distributed): Each thread owns its assigned rows' scales.
+//   Thread t → row(s) via ScaledBasis<1,0>; value mode holds NumBlocks.
+//   per_thr = (M/16) * NumBlocks,  total = M * NumBlocks
+//
+
+// M=16, NB=1: thread t → (m=t, nb=0), per_thr=1, total=16
+using ScaleTVLayout_16x1 = decltype(make_layout(
+    make_shape(Int<16>{}, make_shape(Int<1>{}, Int<1>{})),
+    make_stride(ScaledBasis<Int<1>,0>{},
+                make_stride(Int<0>{}, ScaledBasis<Int<1>,1>{}))
+));
+
+// M=16, NB=2: thread t → (m=t, nb=v), per_thr=2, total=32
+using ScaleTVLayout_16x2 = decltype(make_layout(
+    make_shape(Int<16>{}, make_shape(Int<1>{}, Int<2>{})),
+    make_stride(ScaledBasis<Int<1>,0>{},
+                make_stride(Int<0>{}, ScaledBasis<Int<1>,1>{}))
+));
+
+// M=32, NB=2: thread t → rows {t, t+16}, per_thr=4, total=64
+using ScaleTVLayout_32x2 = decltype(make_layout(
+    make_shape(Int<16>{}, make_shape(Int<2>{}, Int<2>{})),
+    make_stride(ScaledBasis<Int<1>,0>{},
+                make_stride(ScaledBasis<Int<16>,0>{}, ScaledBasis<Int<1>,1>{}))
+));
+
+// M=16, NB=4: thread t → (m=t, nb=v), per_thr=4, total=64
+using ScaleTVLayout_16x4 = decltype(make_layout(
+    make_shape(Int<16>{}, make_shape(Int<1>{}, Int<4>{})),
+    make_stride(ScaledBasis<Int<1>,0>{},
+                make_stride(Int<0>{}, ScaledBasis<Int<1>,1>{}))
+));
+
 
 // ============================================================================
 // Test struct: XeBlockQuantizeTest
@@ -355,12 +399,13 @@ struct XeBlockQuantizeTest {
     constexpr auto logical_shape = atuple_coshape(SrcTVLayout{});
     constexpr int M = get<0>(logical_shape);
     constexpr int N = get<1>(logical_shape);
+    constexpr int NumBlocks = N / BlockSize;
 
     // ---- 1. Initialize row-major logical source data ----
     std::vector<SrcType> src_logical;
-    initialize_source(src_logical, M, N);
+    initialize_source<BlockSize>(src_logical, M, N);
 
-    // ---- 2. CPU reference ----
+    // ---- 2. CPU reference (per-row, per-block quantization) ----
     std::vector<DstType>   ref_dst;
     std::vector<ScaleType> ref_scales;
     reference_block_wise_quantize<BlockSize>(src_logical, ref_dst, ref_scales, M, N);
@@ -383,14 +428,24 @@ struct XeBlockQuantizeTest {
     std::vector<DstType> gpu_dst_logical;
     roundrobin_to_logical<DstTVLayout>(rr_dst, gpu_dst_logical, M, N);
 
-    // Compute scale dimensions from data shape + quantization parameters.
-    // (Avoids atuple_coshape which collapses rank when a dimension is 1.)
-    constexpr int ScaleM = M;
-    constexpr int ScaleN = N / BlockSize;
-    std::vector<ScaleType> gpu_scale_logical;
-    roundrobin_to_logical<ScaleTVLayout>(rr_scale, gpu_scale_logical, ScaleM, ScaleN);
+    // Scale: reconstruct logical (M, NumBlocks) from round-robin global memory.
+    // Works for distributed layouts (each thread stores its own subset).
+    constexpr int scale_per_thr = scale_total / intel::sg_size;
+    constexpr auto scale_tv = ScaleTVLayout{};
+    std::vector<ScaleType> gpu_scales(static_cast<size_t>(M * NumBlocks), ScaleType{});
+    for (int tid = 0; tid < intel::sg_size; ++tid) {
+      for (int v = 0; v < scale_per_thr; ++v) {
+        auto coord = scale_tv(tid, v);
+        int sm  = int(get<0>(coord));
+        int snb = int(get<1>(coord));
+        gpu_scales[static_cast<size_t>(sm * NumBlocks + snb)] =
+            rr_scale[static_cast<size_t>(tid + v * intel::sg_size)];
+      }
+    }
 
     // ---- 6. Compare dst element-by-element ----
+    const float dst_max_f = static_cast<float>(
+        cutlass::platform::numeric_limits<DstType>::max());
     for (int m = 0; m < M; ++m) {
       for (int n = 0; n < N; ++n) {
         size_t idx = static_cast<size_t>(m * N + n);
@@ -401,78 +456,241 @@ struct XeBlockQuantizeTest {
     }
 
     // ---- 7. Compare scales element-by-element ----
-    // Scale magnitudes can be large (target_max / block_amax), so use a
-    // relative tolerance of 1e-6 (≈ a few float32 ULPs) instead of a fixed
-    // absolute threshold.
-    for (int s0 = 0; s0 < ScaleM; ++s0) {
-      for (int s1 = 0; s1 < ScaleN; ++s1) {
-        size_t idx = static_cast<size_t>(s0 * ScaleN + s1);
-        float gpu_val = static_cast<float>(gpu_scale_logical[idx]);
-        float ref_val = static_cast<float>(ref_scales[idx]);
+    // Both ref_scales and gpu_scales are in row-major (M, NumBlocks) order:
+    //   index = m * NumBlocks + b
+    for (int m = 0; m < M; ++m) {
+      for (int b = 0; b < NumBlocks; ++b) {
+        int idx = m * NumBlocks + b;
+        float gpu_val = static_cast<float>(gpu_scales[static_cast<size_t>(idx)]);
+        float ref_val = static_cast<float>(ref_scales[static_cast<size_t>(idx)]);
         float tol = 1e-6f * std::max(std::abs(gpu_val), std::abs(ref_val));
         EXPECT_NEAR(gpu_val, ref_val, std::max(tol, 1e-6f))
-            << "scale mismatch at (" << s0 << ", " << s1 << ")";
+            << "scale mismatch at (" << m << ", block " << b << ")";
       }
     }
   }
 };
 
 // ============================================================================
-// Test Cases (blocking along N)
+// Test Cases — M=16, N=32, BlockSize=32 (single block per row, NumBlocks=1)
 // ============================================================================
-// Src/Dst: M=16, N=32  (DataTVLayout_16x32)
-// Uses same TV layout for dst as src (reorder is identity; reorder is tested separately).
+// Src/Dst: DataTVLayout_16x32 — 32 values per thread, uses optimized path.
 
-// --- BlockSize=32 (single block per row, NumBlocks=1) ---
-// Scale shape: (16, 1)
-
-TEST(CuTe_Xe_BlockQuantize, bf16_to_e4m3_dim1_bs32) {
+TEST(CuTe_Xe_BlockQuantize, bf16_to_e4m3_16x32_bs32) {
   XeBlockQuantizeTest<32,
       cutlass::bfloat16_t, cutlass::float_e4m3_t, float,
       DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x1, 0>::run();
 }
 
-TEST(CuTe_Xe_BlockQuantize, bf16_to_e5m2_dim1_bs32) {
+TEST(CuTe_Xe_BlockQuantize, bf16_to_e5m2_16x32_bs32) {
   XeBlockQuantizeTest<32,
       cutlass::bfloat16_t, cutlass::float_e5m2_t, float,
       DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x1, 1>::run();
 }
 
-TEST(CuTe_Xe_BlockQuantize, half_to_e4m3_dim1_bs32) {
+TEST(CuTe_Xe_BlockQuantize, half_to_e4m3_16x32_bs32) {
   XeBlockQuantizeTest<32,
       cutlass::half_t, cutlass::float_e4m3_t, float,
       DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x1, 2>::run();
 }
 
-TEST(CuTe_Xe_BlockQuantize, half_to_e5m2_dim1_bs32) {
+TEST(CuTe_Xe_BlockQuantize, half_to_e5m2_16x32_bs32) {
   XeBlockQuantizeTest<32,
       cutlass::half_t, cutlass::float_e5m2_t, float,
       DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x1, 3>::run();
 }
 
-// --- BlockSize=16 (two blocks per row, NumBlocks=2) ---
+// --- M=16, N=32, BlockSize=16 (two blocks per row, NumBlocks=2) ---
 // Scale shape: (16, 2)
 
-TEST(CuTe_Xe_BlockQuantize, bf16_to_e4m3_dim1_bs16) {
+TEST(CuTe_Xe_BlockQuantize, bf16_to_e4m3_16x32_bs16) {
   XeBlockQuantizeTest<16,
       cutlass::bfloat16_t, cutlass::float_e4m3_t, float,
       DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x2, 4>::run();
 }
 
-TEST(CuTe_Xe_BlockQuantize, bf16_to_e5m2_dim1_bs16) {
+TEST(CuTe_Xe_BlockQuantize, bf16_to_e5m2_16x32_bs16) {
   XeBlockQuantizeTest<16,
       cutlass::bfloat16_t, cutlass::float_e5m2_t, float,
       DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x2, 5>::run();
 }
 
-TEST(CuTe_Xe_BlockQuantize, half_to_e4m3_dim1_bs16) {
+TEST(CuTe_Xe_BlockQuantize, half_to_e4m3_16x32_bs16) {
   XeBlockQuantizeTest<16,
       cutlass::half_t, cutlass::float_e4m3_t, float,
       DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x2, 6>::run();
 }
 
-TEST(CuTe_Xe_BlockQuantize, half_to_e5m2_dim1_bs16) {
+TEST(CuTe_Xe_BlockQuantize, half_to_e5m2_16x32_bs16) {
   XeBlockQuantizeTest<16,
       cutlass::half_t, cutlass::float_e5m2_t, float_ue8m0_t,
       DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x2, 7>::run();
 }
+
+// ============================================================================
+// Test Cases — M=16, N=64, BlockSize=32 (two blocks per row, NumBlocks=2)
+// ============================================================================
+// Src/Dst: DataTVLayout_16x64 — 64 values per thread, uses optimized path.
+
+TEST(CuTe_Xe_BlockQuantize, half_to_e4m3_16x64_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::half_t, cutlass::float_e4m3_t, float,
+      DataTVLayout_16x64, DataTVLayout_16x64, ScaleTVLayout_16x2, 11>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, bf16_to_e5m2_16x64_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::bfloat16_t, cutlass::float_e5m2_t, float,
+      DataTVLayout_16x64, DataTVLayout_16x64, ScaleTVLayout_16x2, 12>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, half_to_e5m2_16x64_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::half_t, cutlass::float_e5m2_t, float,
+      DataTVLayout_16x64, DataTVLayout_16x64, ScaleTVLayout_16x2, 13>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, bf16_to_e4m3_16x64_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::bfloat16_t, cutlass::float_e4m3_t, float,
+      DataTVLayout_16x64, DataTVLayout_16x64, ScaleTVLayout_16x2, 14>::run();
+}
+
+// --- M=16, N=64, BlockSize=16 (four blocks per row, NumBlocks=4) ---
+// Scale shape: (16, 4) via ScaleTVLayout_16x4
+
+TEST(CuTe_Xe_BlockQuantize, bf16_to_e4m3_16x64_bs16) {
+  XeBlockQuantizeTest<16,
+      cutlass::bfloat16_t, cutlass::float_e4m3_t, float,
+      DataTVLayout_16x64, DataTVLayout_16x64, ScaleTVLayout_16x4, 15>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, half_to_e5m2_16x64_bs16) {
+  XeBlockQuantizeTest<16,
+      cutlass::half_t, cutlass::float_e5m2_t, float,
+      DataTVLayout_16x64, DataTVLayout_16x64, ScaleTVLayout_16x4, 16>::run();
+}
+
+// ============================================================================
+// Test Cases — M=32, N=64, BlockSize=32 (two blocks per row, NumBlocks=2)
+// ============================================================================
+// Src/Dst: DataTVLayout_32x64 — 128 values per thread, uses optimized path.
+
+TEST(CuTe_Xe_BlockQuantize, half_to_e4m3_32x64_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::half_t, cutlass::float_e4m3_t, float,
+      DataTVLayout_32x64, DataTVLayout_32x64, ScaleTVLayout_32x2, 17>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, bf16_to_e5m2_32x64_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::bfloat16_t, cutlass::float_e5m2_t, float,
+      DataTVLayout_32x64, DataTVLayout_32x64, ScaleTVLayout_32x2, 18>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, half_to_e5m2_32x64_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::half_t, cutlass::float_e5m2_t, float,
+      DataTVLayout_32x64, DataTVLayout_32x64, ScaleTVLayout_32x2, 19>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, bf16_to_e4m3_32x64_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::bfloat16_t, cutlass::float_e4m3_t, float,
+      DataTVLayout_32x64, DataTVLayout_32x64, ScaleTVLayout_32x2, 20>::run();
+}
+
+// ============================================================================
+// Test Cases — Src dtype = float32
+// ============================================================================
+
+// --- M=16, N=32, BlockSize=32 (single block per row, NumBlocks=1) ---
+TEST(CuTe_Xe_BlockQuantize, f32_to_e4m3_16x32_bs32) {
+  XeBlockQuantizeTest<32,
+      float, cutlass::float_e4m3_t, float,
+      DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x1, 21>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, f32_to_e5m2_16x32_bs32) {
+  XeBlockQuantizeTest<32,
+      float, cutlass::float_e5m2_t, float,
+      DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x1, 22>::run();
+}
+
+// --- M=16, N=64, BlockSize=32 (two blocks per row, NumBlocks=2) ---
+TEST(CuTe_Xe_BlockQuantize, f32_to_e4m3_16x64_bs32) {
+  XeBlockQuantizeTest<32,
+      float, cutlass::float_e4m3_t, float,
+      DataTVLayout_16x64, DataTVLayout_16x64, ScaleTVLayout_16x2, 23>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, f32_to_e5m2_16x64_bs32) {
+  XeBlockQuantizeTest<32,
+      float, cutlass::float_e5m2_t, float,
+      DataTVLayout_16x64, DataTVLayout_16x64, ScaleTVLayout_16x2, 24>::run();
+}
+
+// --- M=32, N=64, BlockSize=32 (two blocks per row, NumBlocks=2) ---
+TEST(CuTe_Xe_BlockQuantize, f32_to_e4m3_32x64_bs32) {
+  XeBlockQuantizeTest<32,
+      float, cutlass::float_e4m3_t, float,
+      DataTVLayout_32x64, DataTVLayout_32x64, ScaleTVLayout_32x2, 25>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, f32_to_e5m2_32x64_bs32) {
+  XeBlockQuantizeTest<32,
+      float, cutlass::float_e5m2_t, float,
+      DataTVLayout_32x64, DataTVLayout_32x64, ScaleTVLayout_32x2, 26>::run();
+}
+
+// ============================================================================
+// Test Cases — Dst dtype = float_e2m1_t
+// ============================================================================
+// No optimized ASM path for E2M1; all tests use the fallback C++ path.
+
+// --- M=16, N=32, BlockSize=32 (single block per row, NumBlocks=1) ---
+TEST(CuTe_Xe_BlockQuantize, bf16_to_e2m1_16x32_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::bfloat16_t, cutlass::float_e2m1_t, float,
+      DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x1, 27>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, half_to_e2m1_16x32_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::half_t, cutlass::float_e2m1_t, float,
+      DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x1, 28>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, f32_to_e2m1_16x32_bs32) {
+  XeBlockQuantizeTest<32,
+      float, cutlass::float_e2m1_t, float,
+      DataTVLayout_16x32, DataTVLayout_16x32, ScaleTVLayout_16x1, 29>::run();
+}
+
+// --- M=16, N=64, BlockSize=32 (two blocks per row, NumBlocks=2) ---
+TEST(CuTe_Xe_BlockQuantize, bf16_to_e2m1_16x64_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::bfloat16_t, cutlass::float_e2m1_t, float,
+      DataTVLayout_16x64, DataTVLayout_16x64, ScaleTVLayout_16x2, 30>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, half_to_e2m1_16x64_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::half_t, cutlass::float_e2m1_t, float,
+      DataTVLayout_16x64, DataTVLayout_16x64, ScaleTVLayout_16x2, 31>::run();
+}
+
+// --- M=32, N=64, BlockSize=32 (two blocks per row, NumBlocks=2) ---
+TEST(CuTe_Xe_BlockQuantize, bf16_to_e2m1_32x64_bs32) {
+  XeBlockQuantizeTest<32,
+      cutlass::bfloat16_t, cutlass::float_e2m1_t, float,
+      DataTVLayout_32x64, DataTVLayout_32x64, ScaleTVLayout_32x2, 32>::run();
+}
+
+TEST(CuTe_Xe_BlockQuantize, f32_to_e2m1_32x64_bs32) {
+  XeBlockQuantizeTest<32,
+      float, cutlass::float_e2m1_t, float,
+      DataTVLayout_32x64, DataTVLayout_32x64, ScaleTVLayout_32x2, 33>::run();
+}
+
+

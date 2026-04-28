@@ -57,48 +57,19 @@ Base NVIDIA CUTLASS Versions for SYCL*TLA releases:
 |0.8 | 4.2.1 |
 |0.8-cri | 4.2.1 |
 |0.8-jgs | 4.2.1 |
+|0.9 | 4.2.1 |
+|0.9-cri | 4.2.1 |
 
-# What's New in SYCL*TLA [0.8-jgs](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.8-jgs)
-### Architecture
-  - Block-scaled collective builder & collective MMA for GEMM ([#326](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/326))
-  - Static & dynamic persistent tile schedulers ([#242](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/242), [#322](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/322)) · MXFP8/NVFP4+ block-scaled MMA ([#202](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/202))
-  - Cluster barrier APIs ([#288](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/288)) · Asymmetric register allocation & EU Copy atoms ([#336](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/336))
-  - Matrix reduction `ired_matrix`/`fred_matrix` ([#306](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/306)) · ArrayOfVectors Load/Store Matrix ([#295](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/295))
-### Features
-  - FP8 block-scaled grouped GEMM ([#324](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/324)) · TF32 A/B, FP32 C/D kernel support ([#217](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/217))
-  - FlashAttention 3 & 4 for Xe4 ([#150](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/150), [#236](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/236))
-### Validation & Performance
-  - GTest-based GEMM performance test suite ([#222](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/222), [#247](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/247)) · BF16 GEMM reaches **91% of SIMT target** on 2048³ (256×512×128 tile)
+# What's New in SYCL*TLA [0.9-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.9-cri)
+
+### Enhancements (Notes: all the tests based on CRI simulator)
+  - Optimize Quantization API performance ([#388](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/388), [#465](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/465))
+  - Optimize FP8 Block Scaled GEMM performance (Collective API) ([#477](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/477))
+  - Support arbitrary M/N dimensions in Block Scaled GEMM ([#444](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/444), [#401](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/401))
+  - Add large GQA shapes to Flash Attention prefill benchmark ([#397](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/397))
+
 ### Bug Fixes
-  - Fix Xe4 FMHA4 segfault ([#311](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/311)) · Fix unordered load/store matrix ([#273](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/273))
-
-> **API Reference:** [Xe4 Feature Implementation Status](media/docs/cpp/xe4_features_apis.md) — full list of Xe4 CuTe atoms, data types, and APIs.
-
-# What's New in SYCL*TLA [0.8-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.8-cri)
-### New Features (Notes: all the tests based on CRI simulator)
-  - Support SLM Copy API functionalities and examples ([#d7fb251](https://github.com/intel-innersource/libraries.ai.cutlass.internal/commit/d7fb251), [#330](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/330), [#348](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/348))
-  - Support FP8 block scaled GEMM for different scaled data type and dimensions ([#324](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/324))
-  - Support quantization and de-quantization API ([#315](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/315), [#285](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/285))
-  
-  - Support SLM Copy API functionalities and examples ([#d7fb251](https://github.com/intel-innersource/libraries.ai.cutlass.internal/commit/d7fb251), [#330](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/330), [#348](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/348))
-  - Support FP8 block scaled GEMM for different scaled data type and dimensions ([#324](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/324))
-  - Support quantization and de-quantization API ([#315](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/315), [#285](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/285))
-  
-### Performance (Internal Only)
-  - Systolic data is relatively accurate (CRI simulator can correctly simulate systolic behaviors), E2E data for reference only (CRI simulator cannot correctly simulate memory behaviors).
-
-  - Flash Attention Performance (for CRI and BF16)
-      - Improved Flash Attention performance from 23% to 42% peak
-        
-  - Systolic data is relatively accurate (CRI simulator can correctly simulate systolic behaviors), E2E data for reference only (CRI simulator cannot correctly simulate memory behaviors).
-
-  - Flash Attention Performance (for CRI and BF16)
-      - Improved Flash Attention performance from 23% to 42% peak
-        
-      | **Data Type** | **Prefill/Decode** | **% of Peak (E2E)** |
-      |:--------------|:-------------------|:---------|
-      |BF16           |     Prefill        |  42%  |
-      |BF16           |     Prefill        |  42%  |
+  - Fix 50% performance drop for AOT-built kernels ([#443](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/443))
 
 **See the [CHANGELOG](CHANGELOG-SYCL.md) for details of all past releases and updates.**
 
