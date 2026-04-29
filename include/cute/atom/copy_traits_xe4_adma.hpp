@@ -27,84 +27,123 @@ struct is_xe4_adma_store_reduce<XE4_ADMA_STORE_REDUCE<T, Rop, BType>>
 template <typename T>
 inline constexpr bool is_xe4_adma_store_reduce_v = is_xe4_adma_store_reduce<T>::value;
 
-template <class CopySizeInBytes, class... OpArgs>
-struct Copy_Traits<XE4_ADMA_LINEAR_LOAD, CopySizeInBytes, OpArgs...>
+template <BarrierType BType> struct XE4_ADMA_LINEAR_LOAD_OP;
+template <BarrierType BType> struct XE4_ADMA_LINEAR_STORE_OP;
+struct XE4_ADMA_LINEAR_LOAD_MULTICAST_CLUSTER_OP;
+
+template <BarrierType BType, class CopySizeInBytes>
+struct Copy_Traits<XE4_ADMA_LINEAR_LOAD<BType>, CopySizeInBytes>
 {
   static_assert(int32_t(CopySizeInBytes::value) % 16 == 0,
                 "ADMA Linear Load requires copy size in Bytes to be aligned to 16B.");
 
-  using ThrID = Layout<_1>;
-  using SrcLayout = Layout<Shape<_1,decltype(CopySizeInBytes{} * C<8>{})>>;
-  using DstLayout = Layout<Shape<_1,decltype(CopySizeInBytes{} * C<8>{})>>;
+  using ThrID     = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1, decltype(CopySizeInBytes{} * C<8>{})>>;
+  using DstLayout = SrcLayout;
   using RefLayout = SrcLayout;
 
-  // XE4_ADMA_LINEAR_LOAD arguments
-  // 0: uint64_t* abar_ptr
-  cute::tuple<OpArgs...> load_abar_;
-
-  // Record the memory barrier for the instruction
+  template <detail::CacheCtrl CC = detail::CacheCtrl::L2c_L3uc>
   CUTE_HOST_DEVICE constexpr
-  Copy_Traits<XE4_ADMA_LINEAR_LOAD, CopySizeInBytes, uint64_t*>
-  with(uint64_t* abar_ptr) const {
+  Copy_Traits<XE4_ADMA_LINEAR_LOAD_OP<BType>, CopySizeInBytes, detail::CacheHint<CC>>
+  with(uint64_t* abar_ptr, detail::CacheHint<CC> = {}) const {
     return {abar_ptr};
   }
 
-  template <class TS, class SLayout,
-            class TD, class DLayout>
-  friend CUTE_HOST_DEVICE constexpr void
+  // Not directly executable — must call .with(abar_ptr) first.
+  template <class TS, class SLayout, class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits        const& traits,
+              Tensor<TS,SLayout> const& src,
+              Tensor<TD,DLayout>      & dst) = delete;
+};
+
+template <BarrierType BType>
+struct XE4_ADMA_LINEAR_LOAD_OP : XE4_ADMA_LINEAR_LOAD<BType> {};
+
+template <BarrierType BType, class CopySizeInBytes, detail::CacheCtrl CC>
+struct Copy_Traits<XE4_ADMA_LINEAR_LOAD_OP<BType>, CopySizeInBytes, detail::CacheHint<CC>>
+{
+  static_assert(int32_t(CopySizeInBytes::value) % 16 == 0,
+                "ADMA Linear Load requires copy size in Bytes to be aligned to 16B.");
+
+  using ThrID     = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1, decltype(CopySizeInBytes{} * C<8>{})>>;
+  using DstLayout = SrcLayout;
+  using RefLayout = SrcLayout;
+
+  uint64_t* abar_ptr_;
+
+  template <class TS, class SLayout, class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
   copy_unpack(Copy_Traits        const& traits,
               Tensor<TS,SLayout> const& src,
               Tensor<TD,DLayout>      & dst)
   {
-    static_assert(is_same<cute::tuple<OpArgs...>, cute::tuple<uint64_t*>>::value,
-                  "Extra arguments not set. Set .with() before use.");
     static_assert(is_gmem<TS>::value, "Expected gmem src for XE4_ADMA_LINEAR_LOAD");
     static_assert(is_smem<TD>::value, "Expected smem dst for XE4_ADMA_LINEAR_LOAD");
-    XE4_ADMA_LINEAR_LOAD::copy(raw_pointer_cast(dst.data()),
-                               const_cast<void*>(static_cast<const void*>(raw_pointer_cast(src.data()))),
-                               int32_t(CopySizeInBytes::value), get<0>(traits.load_abar_));
+    XE4_ADMA_LINEAR_LOAD<BType>::template copy<CC>(
+        raw_pointer_cast(dst.data()),
+        const_cast<void*>(static_cast<const void*>(raw_pointer_cast(src.data()))),
+        int32_t(CopySizeInBytes::value),
+        traits.abar_ptr_);
   }
 };
 
-template <class CopySizeInBytes, class... OpArgs>
-struct Copy_Traits<XE4_ADMA_LINEAR_STORE, CopySizeInBytes, OpArgs...>
+template <BarrierType BType, class CopySizeInBytes>
+struct Copy_Traits<XE4_ADMA_LINEAR_STORE<BType>, CopySizeInBytes>
 {
   static_assert(int32_t(CopySizeInBytes::value) % 16 == 0,
                 "ADMA Linear Store requires copy size in Bytes to be aligned to 16B.");
 
-  using ThrID = Layout<_1>;
-  // Map from (src-thr,src-val) to bit
-  using SrcLayout = Layout<Shape<_1,decltype(CopySizeInBytes{} * C<8>{})>>;
-  // Map from (dst-thr,dst-val) to bit
-  using DstLayout = Layout<Shape<_1,decltype(CopySizeInBytes{} * C<8>{})>>;
-  // Reference map from (thr,val) to bit
+  using ThrID     = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1, decltype(CopySizeInBytes{} * C<8>{})>>;
+  using DstLayout = SrcLayout;
   using RefLayout = SrcLayout;
 
-  // XE4_ADMA_LINEAR_STORE arguments
-  // 0: uint64_t* abar_ptr
-  cute::tuple<OpArgs...> store_abar_;
-
-  // Record the memory barrier for the instruction
+  template <detail::CacheCtrl CC = detail::CacheCtrl::L2wb_L3uc>
   CUTE_HOST_DEVICE constexpr
-  Copy_Traits<XE4_ADMA_LINEAR_STORE, CopySizeInBytes, uint64_t*>
-  with(uint64_t* abar_ptr) const {
+  Copy_Traits<XE4_ADMA_LINEAR_STORE_OP<BType>, CopySizeInBytes, detail::CacheHint<CC>>
+  with(uint64_t* abar_ptr, detail::CacheHint<CC> = {}) const {
     return {abar_ptr};
   }
 
-  template <class TS, class SLayout,
-            class TD, class DLayout>
-  friend CUTE_HOST_DEVICE constexpr void
+  // Not directly executable — must call .with(abar_ptr) first.
+  template <class TS, class SLayout, class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits        const& traits,
+              Tensor<TS,SLayout> const& src,
+              Tensor<TD,DLayout>      & dst) = delete;
+};
+
+template <BarrierType BType>
+struct XE4_ADMA_LINEAR_STORE_OP : XE4_ADMA_LINEAR_STORE<BType> {};
+
+template <BarrierType BType, class CopySizeInBytes, detail::CacheCtrl CC>
+struct Copy_Traits<XE4_ADMA_LINEAR_STORE_OP<BType>, CopySizeInBytes, detail::CacheHint<CC>>
+{
+  static_assert(int32_t(CopySizeInBytes::value) % 16 == 0,
+                "ADMA Linear Store requires copy size in Bytes to be aligned to 16B.");
+
+  using ThrID     = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1, decltype(CopySizeInBytes{} * C<8>{})>>;
+  using DstLayout = SrcLayout;
+  using RefLayout = SrcLayout;
+
+  uint64_t* abar_ptr_;
+
+  template <class TS, class SLayout, class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
   copy_unpack(Copy_Traits        const& traits,
               Tensor<TS,SLayout> const& src,
               Tensor<TD,DLayout>      & dst)
   {
-    static_assert(is_same<cute::tuple<OpArgs...>, cute::tuple<uint64_t*>>::value,
-                  "Extra arguments not set. Set .with() before use.");
     static_assert(is_smem<TS>::value, "Expected smem src for XE4_ADMA_LINEAR_STORE");
     static_assert(is_gmem<TD>::value, "Expected gmem dst for XE4_ADMA_LINEAR_STORE");
-    XE4_ADMA_LINEAR_STORE::copy(raw_pointer_cast(dst.data()),
-                               const_cast<void*>(static_cast<const void*>(raw_pointer_cast(src.data()))),
-                               int32_t(CopySizeInBytes::value), get<0>(traits.store_abar_));
+    XE4_ADMA_LINEAR_STORE<BType>::template copy<CC>(
+        raw_pointer_cast(dst.data()),
+        const_cast<void*>(static_cast<const void*>(raw_pointer_cast(src.data()))),
+        int32_t(CopySizeInBytes::value),
+        traits.abar_ptr_);
   }
 };
 
@@ -143,6 +182,106 @@ struct Copy_Traits<XE4_ADMA_LINEAR_REDUCE<T, Rop, BType>, CopySizeInBytes, OpArg
                                raw_pointer_cast(dst.data()),
                                const_cast<void*>(static_cast<const void*>(raw_pointer_cast(src.data()))),
                                int32_t(CopySizeInBytes::value), get<0>(traits.reduce_abar_));
+  }
+};
+template <class CopySizeInBytes>
+struct Copy_Traits<XE4_ADMA_LINEAR_LOAD_MULTICAST_CLUSTER, CopySizeInBytes>
+{
+  static_assert(int32_t(CopySizeInBytes::value) % 16 == 0,
+                "ADMA Linear Load (cluster) requires copy size in bytes to be 16B-aligned.");
+
+  using ThrID     = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1, decltype(CopySizeInBytes{} * C<8>{})>>;
+  using DstLayout = SrcLayout;
+  using RefLayout = SrcLayout;
+
+  template <detail::CacheCtrl CC = detail::CacheCtrl::L2c_L3uc>
+  CUTE_HOST_DEVICE constexpr
+  Copy_Traits<XE4_ADMA_LINEAR_LOAD_MULTICAST_CLUSTER_OP, CopySizeInBytes, detail::CacheHint<CC>>
+  with(uint64_t* abar_ptr, uint32_t multicast_mask, detail::CacheHint<CC> = {}) const {
+    return {abar_ptr, multicast_mask};
+  }
+
+  // Not directly executable — must call .with(abar_ptr, multicast_mask) first.
+  template <class TS, class SLayout, class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits        const& traits,
+              Tensor<TS, SLayout> const& src,
+              Tensor<TD, DLayout>      & dst) = delete;
+};
+
+struct XE4_ADMA_LINEAR_LOAD_MULTICAST_CLUSTER_OP : XE4_ADMA_LINEAR_LOAD_MULTICAST_CLUSTER {};
+
+template <class CopySizeInBytes, detail::CacheCtrl CC>
+struct Copy_Traits<XE4_ADMA_LINEAR_LOAD_MULTICAST_CLUSTER_OP, CopySizeInBytes, detail::CacheHint<CC>>
+{
+  static_assert(int32_t(CopySizeInBytes::value) % 16 == 0,
+                "ADMA Linear Load (cluster) requires copy size in bytes to be 16B-aligned.");
+
+  using ThrID     = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1, decltype(CopySizeInBytes{} * C<8>{})>>;
+  using DstLayout = SrcLayout;
+  using RefLayout = SrcLayout;
+
+  uint64_t* abar_ptr_;
+  uint32_t  multicast_mask_;
+
+  template <class TS, class SLayout, class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits        const& traits,
+              Tensor<TS, SLayout> const& src,
+              Tensor<TD, DLayout>      & dst)
+  {
+    static_assert(is_gmem<TS>::value,
+                  "XE4_ADMA_LINEAR_LOAD_MULTICAST_CLUSTER requires global-memory source.");
+    static_assert(is_smem<TD>::value,
+                  "XE4_ADMA_LINEAR_LOAD_MULTICAST_CLUSTER requires shared-memory destination.");
+    XE4_ADMA_LINEAR_LOAD_MULTICAST_CLUSTER::copy<CC>(
+        raw_pointer_cast(dst.data()),
+        const_cast<void*>(static_cast<const void*>(raw_pointer_cast(src.data()))),
+        int32_t(CopySizeInBytes::value),
+        traits.abar_ptr_,
+        traits.multicast_mask_);
+  }
+};
+
+template <class CopySizeInBytes, class... OpArgs>
+struct Copy_Traits<XE4_ADMA_LINEAR_LOAD_LOCAL_TO_REMOTE_SLM_CLUSTER, CopySizeInBytes, OpArgs...>
+{
+  static_assert(int32_t(CopySizeInBytes::value) % 16 == 0,
+                "ADMA Linear Load (Local to Remote SLM) requires copy size in bytes to be 16B-aligned.");
+
+  using ThrID     = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1, decltype(CopySizeInBytes{} * C<8>{})>>;
+  using DstLayout = SrcLayout;
+  using RefLayout = SrcLayout;
+
+  cute::tuple<OpArgs...> opargs_;
+
+  CUTE_HOST_DEVICE constexpr
+  Copy_Traits<XE4_ADMA_LINEAR_LOAD_LOCAL_TO_REMOTE_SLM_CLUSTER, CopySizeInBytes, uint64_t*, uint32_t>
+  with(uint64_t* abar_ptr, uint32_t multicast_mask) const {
+    return {make_tuple(abar_ptr, multicast_mask)};
+  }
+
+  template <class TS, class SLayout, class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits        const& traits,
+              Tensor<TS, SLayout> const& src,
+              Tensor<TD, DLayout>      & dst)
+  {
+    static_assert(is_same<cute::tuple<OpArgs...>, cute::tuple<uint64_t*, uint32_t>>::value,
+                  "abar and multicast_mask not set. Call .with(abar_ptr, multicast_mask) before use.");
+    static_assert(is_smem<TS>::value,
+                  "XE4_ADMA_LINEAR_LOAD_LOCAL_TO_REMOTE_SLM_CLUSTER requires shared-memory source.");
+    static_assert(is_smem<TD>::value,
+                  "XE4_ADMA_LINEAR_LOAD_LOCAL_TO_REMOTE_SLM_CLUSTER requires shared-memory destination.");
+    XE4_ADMA_LINEAR_LOAD_LOCAL_TO_REMOTE_SLM_CLUSTER::copy(
+        raw_pointer_cast(dst.data()),
+        const_cast<void*>(static_cast<const void*>(raw_pointer_cast(src.data()))),
+        int32_t(CopySizeInBytes::value),
+        get<0>(traits.opargs_),
+        get<1>(traits.opargs_));
   }
 };
 

@@ -51,6 +51,20 @@ set(ADMA_LINEAR_REDUCE_TARGET xe4_adma_linear_reduce)
 add_xe4_test(${ADMA_LINEAR_REDUCE_TARGET} adma_linear_reduce_xe4.cpp)
 target_include_directories(${ADMA_LINEAR_REDUCE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_options(${ADMA_LINEAR_REDUCE_TARGET} PUBLIC
+    -Xsycl-target-backend=spir64_gen
+        -device\ jgs-a0)
+
+set(ADMA_CLUSTER_LINEAR_COPY_TARGET xe4_adma_cluster_linear_copy)
+add_xe4_test(${ADMA_CLUSTER_LINEAR_COPY_TARGET} adma_cluster_linear_copy_xe4.cpp)
+target_include_directories(${ADMA_CLUSTER_LINEAR_COPY_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(${ADMA_CLUSTER_LINEAR_COPY_TARGET} PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)
+
+set(ADMA_CLUSTER_LINEAR_REMOTE_COPY_TARGET xe4_adma_cluster_linear_remote_copy)
+add_xe4_test(${ADMA_CLUSTER_LINEAR_REMOTE_COPY_TARGET} adma_cluster_linear_remote_copy_xe4.cpp)
+target_include_directories(${ADMA_CLUSTER_LINEAR_REMOTE_COPY_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(${ADMA_CLUSTER_LINEAR_REMOTE_COPY_TARGET} PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)
 

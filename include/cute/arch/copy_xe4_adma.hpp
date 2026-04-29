@@ -17,11 +17,14 @@ struct XE4_ADMA_PREFETCH;
 /// XE4_ADMA_LINEAR_LOAD: Initiates a async linear copy from global memory to shared memory
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+template <BarrierType BType = BarrierType::Abarrier>
 struct XE4_ADMA_LINEAR_LOAD
-{  
+{
+  template <detail::CacheCtrl CC = detail::CacheCtrl::L2c_L3uc>
   CUTE_HOST_DEVICE static void
-  copy(void* slm_ptr, void* gmem_ptr, uint32_t copy_size, uint64_t *abar_ptr) {
-    detail::AsyncLinearGlobal2SLM::Copy(slm_ptr, gmem_ptr, copy_size, abar_ptr);
+  copy(void* slm_ptr, void const* gmem_ptr, uint32_t copy_size, uint64_t *abar_ptr) {
+    detail::AsyncLinearGlobal2SLM::Copy<CC, BType>(slm_ptr, gmem_ptr, copy_size, abar_ptr,
+                                            detail::CacheHint<CC>{});
   }
 };
 
@@ -29,11 +32,50 @@ struct XE4_ADMA_LINEAR_LOAD
 /// XE4_ADMA_LINEAR_STORE: Initiates a async linear copy from shared memory to global memory
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+template <BarrierType BType = BarrierType::Abarrier>
 struct XE4_ADMA_LINEAR_STORE
 {
+  template <detail::CacheCtrl CC = detail::CacheCtrl::L2wb_L3uc>
   CUTE_HOST_DEVICE static void
-  copy(void* gmem_ptr, void* slm_ptr, uint32_t copy_size, uint64_t *abar_ptr) {
-    detail::AsyncLinearSLM2Global::Copy(gmem_ptr, slm_ptr, copy_size, abar_ptr);
+  copy(void* gmem_ptr, void const* slm_ptr, uint32_t copy_size, uint64_t *abar_ptr) {
+    detail::AsyncLinearSLM2Global::Copy<CC, BType>(gmem_ptr, slm_ptr, copy_size, abar_ptr,
+                                            detail::CacheHint<CC>{});
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// XE4_ADMA_LINEAR_LOAD_MULTICAST_CLUSTER — Initiates a async linear copy from global memory
+// to shared memory using multi-cast
+////////////////////////////////////////////////////////////////////////////////////////////////////
+struct XE4_ADMA_LINEAR_LOAD_MULTICAST_CLUSTER
+{
+  template <detail::CacheCtrl CC = detail::CacheCtrl::L2c_L3uc>
+  CUTE_HOST_DEVICE static void
+  copy(void*       slm_ptr,
+       void const* gmem_ptr,
+       uint32_t    copy_size,
+       uint64_t*   abar_ptr,
+       uint32_t    multicast_mask)
+  {
+    detail::AsyncLinearMultiCastGlobal2SLM::Copy<CC>(slm_ptr, gmem_ptr, copy_size, abar_ptr, multicast_mask,
+                                                  detail::CacheHint<CC>{});
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// XE4_ADMA_LINEAR_LOAD_LOCAL_TO_REMOTE_SLM_CLUSTER — Initiates a async linear copy from local SLM memory
+// to remote SLM memory using multi-cast
+////////////////////////////////////////////////////////////////////////////////////////////////////
+struct XE4_ADMA_LINEAR_LOAD_LOCAL_TO_REMOTE_SLM_CLUSTER
+{
+  CUTE_HOST_DEVICE static void
+  copy(void*       slm_ptr_dst,
+       void const* slm_ptr_src,
+       uint32_t    copy_size,
+       uint64_t*   abar_ptr,
+       uint32_t    multicast_mask)
+  {
+    detail::AsyncLinearMultiCastLocal2RemoteSLM::Copy(slm_ptr_dst, slm_ptr_src, copy_size, abar_ptr, multicast_mask);
   }
 };
 

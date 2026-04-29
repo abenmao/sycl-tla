@@ -204,7 +204,8 @@ bool run_config(sycl::queue& queue) {
   // Build atoms and launch
   using SmemLayout = decltype(make_layout(Int<N>{}, Int<1>{}));
   constexpr auto Bytes = Int<N * (int)sizeof(T)>{};
-  auto load_atom   = make_tiled_copy(Copy_Atom<Copy_Traits<XE4_ADMA_LINEAR_LOAD,
+  // Load & Reduce Atoms
+  auto load_atom   = make_tiled_copy(Copy_Atom<Copy_Traits<XE4_ADMA_LINEAR_LOAD<>,
                          decltype(Bytes)>, T>{}, Layout<_1>{}, Layout<Int<N>>{});
   auto reduce_atom = make_tiled_copy(Copy_Atom<Copy_Traits<XE4_ADMA_LINEAR_REDUCE<T, Rop,
                          BarrierType::Abarrier>, decltype(Bytes)>, T>{}, Layout<_1>{}, Layout<Int<N>>{});

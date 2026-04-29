@@ -222,8 +222,8 @@ adma_linear_copy_A_k_major(uint32_t probSize,
   PRINT(sC);
 #endif
 
-  using GmemTiledCopyA = cute::Copy_Traits<cute::XE4_ADMA_LINEAR_LOAD, cute::Int<copyBytesA>>;
-  using GmemTiledCopyC = cute::Copy_Traits<cute::XE4_ADMA_LINEAR_STORE, cute::Int<copyBytesC>>;
+  using GmemTiledCopyA = cute::Copy_Traits<cute::XE4_ADMA_LINEAR_LOAD<>, cute::Int<copyBytesA>>;
+  using GmemTiledCopyC = cute::Copy_Traits<cute::XE4_ADMA_LINEAR_STORE<>, cute::Int<copyBytesC>>;
 
   // Non-cluster case gives effective layout ((_1),_1,_1,_1):((_0),_0,_0,_0)
   //auto cluster_layout_vmnk = tiled_divide(make_layout(ClusterShape_MNK{}), make_tile(typename TiledMma::AtomThrID{}));
