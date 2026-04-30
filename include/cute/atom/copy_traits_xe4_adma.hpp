@@ -594,7 +594,7 @@ struct Copy_Traits<XE4_ADMA_STORE, T, NumBitsPerADMA, AuxParams_>
   CUTE_HOST_DEVICE constexpr
   auto make_args_tuple(Args&&... args) const {
     return make_tuple(
-        const_cast<T*>(tensorDesc_.g_pointer), tdesc_ptr_,
+        tdesc_ptr_, tensorDesc_.g_pointer,
         tensorDesc_.matrix_desc, static_cast<Args&&>(args)...);
   }
 
@@ -646,7 +646,7 @@ struct Copy_Traits<XE4_ADMA_STORE_OP, T, NumBitsPerADMA, detail::CacheHint<CC>>
   CUTE_HOST_DEVICE constexpr
   TensorDescriptor<T> const*
   get_tma_descriptor() const {
-    return reinterpret_cast<TensorDescriptor<T> const*>(get<1>(opargs_));
+    return reinterpret_cast<TensorDescriptor<T> const*>(get<0>(opargs_));
   }
 };
 
@@ -816,7 +816,8 @@ struct Copy_Traits<XE4_ADMA_STORE_REDUCE_OP<T, Rop, BType>, T, NumBitsPerADMA>
   using DstLayout = Layout<Shape<_1,NumBitsPerADMA>>;
   using RefLayout = SrcLayout;
 
-  // 5-element opargs matching unified 7-arg CopyOp (Unpack adds slm_ptr + coord)
+  // 4-element opargs; ADMA_STORE_Unpack inserts slm_ptr + coord before the last element
+  // Final call: (tdesc_ptr, gmem_ptr, mat_desc, slm_ptr, coord, abar_ptr) — 6 args
   tuple<
   uint64_t*,
   T const*,
