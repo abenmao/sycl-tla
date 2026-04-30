@@ -44,6 +44,7 @@ add_custom_target(
   cutlass_test_unit_cute_xe4_adma_reduce
   cutlass_test_unit_cute_xe4_ldsm_epilogue
   cutlass_test_unit_cute_xe4_ldsm_epilogue_mma
+  cutlass_test_unit_cute_xe4_tensor_pipe_quantize_api
 )
 
 add_custom_target(
@@ -62,6 +63,7 @@ add_custom_target(
   test_unit_cute_xe4_adma_reduce
   test_unit_cute_xe4_ldsm_epilogue
   test_unit_cute_xe4_ldsm_epilogue_mma
+  test_unit_cute_xe4_tensor_pipe_quantize_api
 )
 
 cutlass_test_unit_add_executable(
@@ -127,4 +129,9 @@ cutlass_test_unit_add_executable(
 cutlass_test_unit_add_executable(
   cutlass_test_unit_cute_xe4_ldsm_epilogue_mma
   ldsm_epilogue_mma.cpp
+)
+
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_tensor_pipe_quantize_api
+  tensor_pipe_quantize_api_test.cpp
 )

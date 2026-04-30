@@ -141,6 +141,8 @@ jobs:
           ninja cutlass_test_unit_cute_xe4
           ./test/unit/cute/xe4/cutlass_test_unit_cute_xe4_reduce_exp
           ./test/unit/cute/xe4/cutlass_test_unit_cute_xe4_adma_load_store
+          ninja cutlass_test_unit_cute_xe4_tensor_pipe_quantize_api
+          ./test/unit/cute/xe4/cutlass_test_unit_cute_xe4_tensor_pipe_quantize_api
           
       - name: Stop Xe4 Simulator
         if: always()

@@ -254,4 +254,101 @@ auto tensor_pipe_exp2_reduce(Tensor<SrcEngine, SrcLayout> const &src,
 
   return ret_dsrc1;
 }
+
+// Tensor processing downconvert wrapper for tensor_pipe_quantize (gtp_tcvd)
+//
+// Register-to-register type downconversion via the gtp_tcvd pISA instruction.
+// Converts N source elements from a wider type (float, bf16, fp16) to a narrower
+// type (bf8, hf8, fp4_e2m1, s8, s4) in registers.
+//
+// Expects src to be a single row tensor per work-item: shape (N,) or (1, N)
+// User should slice the tensor before calling:
+//   tensor_pipe_quantize<bf8, bf16>(src_tensor(work_item_id, _), dst_tensor(work_item_id, _))
+//
+// Template parameters:
+//   TcvdDstType: semantic destination type (bf8, hf8, fp4_e2m1, s8, s4)
+//   TcvdSrcType: semantic source type (float, bf16, fp16)
+//
+// Supported conversions (tcvd.toty.fromty.m32nN):
+//   .toty   = { .e5m2, .e4m3, .e3m2, .e2m3, .e2m1, .s8, .s4 }
+//   .fromty = { .f16, .bf16, .f32 }
+//
+// For sub-byte types (fp4_e2m1), output bytes pack multiple elements
+// (e.g., 2 fp4 values per byte, lower nibble = even element, upper = odd).
+template <typename TcvdDstType,
+          typename TcvdSrcType,
+          typename SrcEngine,
+          typename SrcLayout,
+          typename DstEngine,
+          typename DstLayout>
+CUTE_HOST_DEVICE
+void tensor_pipe_quantize(Tensor<SrcEngine, SrcLayout> const& src,
+                          Tensor<DstEngine, DstLayout>& dst)
+{
+  using src_type = typename SrcEngine::value_type;
+  using dst_type = typename DstEngine::value_type;
+
+  auto src_shape = shape(src);
+  constexpr uint32_t N = size(src_shape);
+
+  static_assert((N >= 1 && N <= 4) || N == 8 || N == 16 || N == 32,
+                "N must be 1, 2, 3, 4, 8, 16, or 32");
+
+  static_assert(cute::is_same_v<TcvdSrcType, fp16> ||
+                cute::is_same_v<TcvdSrcType, bf16> ||
+                cute::is_same_v<TcvdSrcType, float>,
+                "TcvdSrcType (.fromty) must be fp16, bf16, or float");
+
+  static_assert(cute::is_same_v<TcvdDstType, bf8>       ||
+                cute::is_same_v<TcvdDstType, hf8>       ||
+                cute::is_same_v<TcvdDstType, fp4_e2m1>  ||
+                cute::is_same_v<TcvdDstType, int8_t>    ||
+                cute::is_same_v<TcvdDstType, int4_t>,
+                "TcvdDstType (.toty) must be bf8 (e5m2), hf8 (e4m3), fp4_e2m1 (e2m1), int8_t (s8), or int4_t (s4)");
+
+  // Number of uint32_t registers needed to hold N source elements and destination bytes.
+  // uint32_t is the register-width operand format required by the pISA gtp_tcvd instruction.
+  constexpr uint32_t dtype_reg_size = sizeof(uint32_t);
+  constexpr uint32_t N_reg_src = round_up_<N * sizeof(src_type), dtype_reg_size>::value;
+  constexpr uint32_t N_dst_bytes = N * ::sizeof_bits<TcvdDstType>() / 8;
+  constexpr uint32_t N_reg_dst = round_up_<N_dst_bytes, dtype_reg_size>::value;
+
+#if defined(__SYCL_DEVICE_ONLY__)
+  // Marshal src tensor into uint32_t register buffers for the pISA instruction.
+  uint32_t src_u32[N_reg_src];
+  memcpy(src_u32, reinterpret_cast<const src_type*>(raw_pointer_cast(src.data())), N * sizeof(src_type));
+
+  // Tenor Pipe downconvert: N wide elements -> N narrow elements.
+  // Sub-byte types (e.g. fp4) are packed by the instruction itself (2×fp4 per byte).
+  uint32_t dst_u32[N_reg_dst];
+  gtp_tcvd<TcvdDstType, TcvdSrcType, N, uint32_t>(dst_u32, src_u32);
+
+  // Copy packed result back to the destination tensor.
+  memcpy(raw_pointer_cast(dst.data()), dst_u32, N_dst_bytes);
+#endif
+}
+
+// Overload returning the destination tensor (allocates a stack buffer).
+// The caller is responsible for copying the result to SLM or GMEM.
+template <typename TcvdDstType,
+          typename TcvdSrcType,
+          typename DstType,
+          typename SrcEngine,
+          typename SrcLayout>
+CUTE_HOST_DEVICE
+auto tensor_pipe_quantize(Tensor<SrcEngine, SrcLayout> const& src)
+{
+  using src_type = typename SrcEngine::value_type;
+
+  auto src_shape = shape(src);
+  constexpr uint32_t N = size(src_shape);
+  constexpr uint32_t N_dst_bytes = N * ::sizeof_bits<TcvdDstType>() / 8;
+
+  DstType dst_buf[N_dst_bytes];
+  auto dst = make_tensor(make_rmem_ptr(dst_buf), make_shape(Int<N_dst_bytes>{}));
+
+  tensor_pipe_quantize<TcvdDstType, TcvdSrcType>(src, dst);
+
+  return dst;
+}
 }
