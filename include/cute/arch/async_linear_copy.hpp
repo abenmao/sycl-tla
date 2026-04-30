@@ -72,5 +72,16 @@ struct AsyncLinearMultiCastLocal2RemoteSLM
   }
 };
 
+struct AsyncLinearGlobalPrefetch
+{
+  static inline void
+  Prefetch(void* gmem_ptr, uint32_t size)
+  {
+#if defined (__SYCL_DEVICE_ONLY__)
+    asm volatile("async_linear_prefetch.L2c.L3uc.global [%0], %1;" ::"r"(gmem_ptr), "r"(size));
+#endif
+  }
+};
+
 }
 }

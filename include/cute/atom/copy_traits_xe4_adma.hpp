@@ -147,6 +147,31 @@ struct Copy_Traits<XE4_ADMA_LINEAR_STORE_OP<BType>, CopySizeInBytes, detail::Cac
   }
 };
 
+template <class CopySizeInBytes>
+struct Copy_Traits<XE4_ADMA_LINEAR_PREFETCH, CopySizeInBytes>
+{
+  static_assert(int32_t(CopySizeInBytes::value) % 16 == 0,
+                "ADMA Linear Prefetch requires copy size in Bytes to be aligned to 16B.");
+
+  using ThrID = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1,decltype(CopySizeInBytes{} * C<8>{})>>;
+  using DstLayout = Layout<Shape<_1,decltype(CopySizeInBytes{} * C<8>{})>>;
+  using RefLayout = SrcLayout;
+
+  template <class TS, class SLayout,
+            class TD, class DLayout>
+  friend CUTE_HOST_DEVICE constexpr void
+  copy_unpack([[maybe_unused]] Copy_Traits const& traits,
+              Tensor<TS,SLayout>          const& src,
+              [[maybe_unused]] Tensor<TD,DLayout>& dst)
+  {
+    static_assert(is_gmem<TS>::value, "Expected gmem src for XE4_ADMA_LINEAR_PREFETCH");
+    XE4_ADMA_LINEAR_PREFETCH::copy(
+        const_cast<void*>(static_cast<const void*>(raw_pointer_cast(src.data()))),
+        int32_t(CopySizeInBytes::value));
+  }
+};
+
 template <typename T, RedOp Rop, BarrierType BType,
           class CopySizeInBytes, class... OpArgs>
 struct Copy_Traits<XE4_ADMA_LINEAR_REDUCE<T, Rop, BType>, CopySizeInBytes, OpArgs...>

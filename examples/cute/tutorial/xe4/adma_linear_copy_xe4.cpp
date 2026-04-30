@@ -32,6 +32,8 @@
 #include <cstdio>
 #include <cassert>
 #include <iostream>
+#include <string>
+#include <type_traits>
 
 #include <sycl/sycl.hpp>
 #include <cute/tensor.hpp>
@@ -71,14 +73,15 @@ inline void xe4_syncthreads() {
 
 #define PRINT(x) print(#x ": "); print(x); print("\n");
 
-template <class ProblemShape, int CopyElements,
-          class TA, class SmemLayoutA, class SmemLayoutC, class ADMA_A,
-          class ADMA_C,
+template <bool EnablePrefetch,
+          class ProblemShape, int CopyElements,
+          class TA, class SmemLayoutA, class SmemLayoutC, class ADMA_P,
+          class ADMA_A, class ADMA_C,
           class TC, class CStride>
 void
 adma_linear_copy_device(ProblemShape problemSize,
-            TA const* A, SmemLayoutA sA_layout, SmemLayoutC sC_layout, ADMA_A adma_load_a,
-            ADMA_C adma_store_c,
+            TA const* A, SmemLayoutA sA_layout, SmemLayoutC sC_layout, ADMA_P adma_prefetch_a,
+            ADMA_A adma_load_a, ADMA_C adma_store_c,
             TC* C, CStride dC,
             sycl::nd_item<3> item)
 {
@@ -145,8 +148,10 @@ adma_linear_copy_device(ProblemShape problemSize,
   {
       if ((warp_idx == 0) && elect_one_thr)
       {
+        if constexpr (EnablePrefetch) {
+          copy(adma_prefetch_a, tAgA, tAsA);
+        }
         xe4_set_barrier_transaction_bytes(load_a_abar[0], dma_transaction_bytesA);
-        // .with(abar, copy_bytes) — ASYNC_LINEAR_LOAD needs both args
         copy(adma_load_a.with(&load_a_abar[0]), tAgA, tAsA);
       }
 
@@ -166,7 +171,7 @@ adma_linear_copy_device(ProblemShape problemSize,
 }
 
 // Setup params for a adma_linear_copy_A_k_major
-template <class TensorA, class TensorC>
+template <bool EnablePrefetch, class TensorA, class TensorC>
 void
 adma_linear_copy_A_k_major(uint32_t probSize,
         TensorA const& A,
@@ -222,6 +227,7 @@ adma_linear_copy_A_k_major(uint32_t probSize,
   PRINT(sC);
 #endif
 
+  using GmemTiledCopyP = cute::Copy_Traits<cute::XE4_ADMA_LINEAR_PREFETCH, cute::Int<copyBytesA>>;
   using GmemTiledCopyA = cute::Copy_Traits<cute::XE4_ADMA_LINEAR_LOAD<>, cute::Int<copyBytesA>>;
   using GmemTiledCopyC = cute::Copy_Traits<cute::XE4_ADMA_LINEAR_STORE<>, cute::Int<copyBytesC>>;
 
@@ -232,6 +238,12 @@ adma_linear_copy_A_k_major(uint32_t probSize,
   // ADMA_LINEAR_LOAD/STORE are raw-pointer ops, NOT TMA descriptor ops.
   // Use make_tiled_copy (not make_tma_copy) so .with(abar, bytes) routes through
   // XE4_ADMA_LINEAR_COPY_Unpack (4-arg copy) instead of XE4_COPY_Unpack (5-arg).
+  auto adma_prefetch_a = make_tiled_copy(
+    Copy_Atom<GmemTiledCopyP, TA>{},
+    Layout<_1>{},
+    Layout<Int<copyElements>>{}
+  );
+
   auto adma_load_a = make_tiled_copy(
     Copy_Atom<GmemTiledCopyA, TA>{},
     Layout<_1>{},
@@ -279,86 +291,109 @@ adma_linear_copy_A_k_major(uint32_t probSize,
   auto launch_cfg = syclexp::launch_config(Range, Props);
   syclexp::submit_with_event(queue, [&](sycl::handler &handler) {
     syclexp::nd_launch(handler, launch_cfg, [=](sycl::nd_item<3> item) ALWAYS_INLINE {
-      adma_linear_copy_device<decltype(prob_shape), copyElements,
-                  TA, decltype(sA), decltype(sC), decltype(adma_load_a),
-                  decltype(adma_store_c),
+      adma_linear_copy_device<EnablePrefetch, decltype(prob_shape), copyElements,
+                  TA, decltype(sA), decltype(sC), decltype(adma_prefetch_a),
+                  decltype(adma_load_a), decltype(adma_store_c),
                   TC, decltype(dC)>(
                   prob_shape,
-                  A_ptr, sA, sC, adma_load_a,
-                  adma_store_c,
+                  A_ptr, sA, sC, adma_prefetch_a,
+                  adma_load_a, adma_store_c,
                   C_ptr, dC, item);
     });
   }).wait();
 }
 
 
-template <class TensorA, class TensorC>
+template <bool EnablePrefetch, class TensorA, class TensorC>
 void
 adma_linear_copy(uint32_t probSize,
      TensorA const& A,
      TensorC& C,
      sycl::queue& queue)
 {
-  return adma_linear_copy_A_k_major(probSize, A, C, queue);
+  return adma_linear_copy_A_k_major<EnablePrefetch>(probSize, A, C, queue);
 }
 
-int main(int argc, char** argv)
+template <bool EnablePrefetch, class TensorA, class TensorRef, class TensorC>
+void run_and_verify(const char* label, uint32_t sizeA, TensorA& A, TensorRef& A_ref, TensorC& C, sycl::queue& queue)
 {
-  sycl::queue queue{sycl::gpu_selector_v};
-  
-  std::cout << "Running on device: " 
-            << queue.get_device().get_info<sycl::info::device::name>() 
-            << std::endl;
+  using TA = typename TensorRef::element_type;
+  using TC = typename TensorC::element_type;
 
-  int m = 1024;
-  int k = 1024;
-  
-  using TA = fp16;
-  using TC = fp16;
-  using TI = fp16;
-
-  auto prob_shape = make_shape(m, k);
-
-  uint32_t sizeA = size(prob_shape);
-  auto A = make_shared_usm_tensor<TA, 'R'>(queue, 1, sizeA);
-  auto C = make_shared_usm_tensor<TC, 'R'>(queue, 1, sizeA);
-
-  random_fill(A);
   zero_fill(C);
 
-  bool ok = false;
-  
-  auto A_ref = make_shared_usm_tensor<TA, 'R'>(queue, 1, sizeA);
-
-  copy(A, A_ref);
-  subbyte_pack(A);
-
-  double gflops = (2.0*m*k) * 1e-9;
-
-  const int timing_iterations = 0;
-
-  // Warmup
-  adma_linear_copy(sizeA, A, C, queue);
+  adma_linear_copy<EnablePrefetch>(sizeA, A, C, queue);
   queue.wait_and_throw();
-  
-  // Extract raw pointers from tensor iterators
+
   TA* A_ref_ptr = &*A_ref.data();
   TC* C_ptr = &*C.data();
 
   int err_cnt = 0;
-  for (uint32_t i = 0; i < sizeA; i++)
-  {
+  for (uint32_t i = 0; i < sizeA; i++) {
     if (A_ref_ptr[i] != C_ptr[i]) {
-      printf("Mismatch at index %u: A_ref = %f, C = %f\n", i, static_cast<float>(A_ref_ptr[i]), static_cast<float>(C_ptr[i]));
-      //break;
+      printf("  Mismatch at index %u: A_ref = %f, C = %f\n", i, static_cast<float>(A_ref_ptr[i]), static_cast<float>(C_ptr[i]));
       err_cnt++;
     }
   }
-  
-  printf("Verification: %s\n", (err_cnt == 0) ? "PASSED" : "FAILED");
 
+  printf("[%s] Verification: %s\n", label, (err_cnt == 0) ? "PASSED" : "FAILED");
   if (err_cnt != 0) {
     throw std::runtime_error("ADMA linear copy verification failed! Output does not match input.");
+  }
+}
+
+int main(int argc, char** argv)
+{
+  std::string prefetch_val = "both";
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg.rfind("--prefetch=", 0) == 0) {
+      prefetch_val = arg.substr(11);
+    } else if (arg.rfind("-prefetch=", 0) == 0) {
+      prefetch_val = arg.substr(10);
+    } else if (arg == "--help" || arg == "-h") {
+      printf("Usage: %s [--prefetch=yes|no|both(default)]\n", argv[0]);
+      return 0;
+    }
+  }
+
+  bool run_prefetch    = (prefetch_val == "yes" || prefetch_val == "both");
+  bool run_no_prefetch = (prefetch_val == "no"  || prefetch_val == "both");
+
+  if (!run_prefetch && !run_no_prefetch) {
+    printf("Unknown --prefetch value '%s'. Use --help for usage.\n", prefetch_val.c_str());
+    return 1;
+  }
+
+  sycl::queue queue{sycl::gpu_selector_v};
+
+  std::cout << "Running on device: "
+            << queue.get_device().get_info<sycl::info::device::name>()
+            << std::endl;
+
+  int m = 1024;
+  int k = 1024;
+
+  using TA = fp16;
+  using TC = fp16;
+
+  auto prob_shape = make_shape(m, k);
+  uint32_t sizeA = size(prob_shape);
+
+  auto A = make_shared_usm_tensor<TA, 'R'>(queue, 1, sizeA);
+  auto C = make_shared_usm_tensor<TC, 'R'>(queue, 1, sizeA);
+  auto A_ref = make_shared_usm_tensor<TA, 'R'>(queue, 1, sizeA);
+
+  random_fill(A);
+  copy(A, A_ref);
+  subbyte_pack(A);
+
+  if (run_prefetch) {
+    run_and_verify<true>("with prefetch", sizeA, A, A_ref, C, queue);
+  }
+
+  if (run_no_prefetch) {
+    run_and_verify<false>("without prefetch", sizeA, A, A_ref, C, queue);
   }
 
   return 0;
