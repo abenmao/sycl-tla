@@ -92,6 +92,18 @@ target_link_options(${EU_COPY_TARGET} PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)
 
+set(TMMA_GEMM_TARGET xe4_gemm_tiled_tmma)
+add_xe4_test(${TMMA_GEMM_TARGET} gemm_tiled_tmma.cpp)
+
+target_include_directories(
+	${TMMA_GEMM_TARGET} PRIVATE 
+    ${CUTLASS_DIR}/include
+    ${CUTLASS_DIR}/examples/cute/tutorial/xe4/
+) 
+target_link_options(${TMMA_GEMM_TARGET} PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)
+
 add_executable(xe4_gemm_asymmetric gemm_epilogue_asymmetric_adma_amma.cpp)
 add_test(
   NAME ctest_examples_test_xe4_gemm_asymmetric

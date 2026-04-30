@@ -34,5 +34,6 @@ Intel GPU Extensions
   :maxdepth: 1
 
   Xe 2D Copy Operations<xe_2d_copy.md>
+  XE4 TMM Atom<0t_tmm_atom.md>
   Intel Performance Tuning Guide<12_intel_performance_guide.md>
   Intel SYCL GEMM Companion<11_intel_gemm_companion.md>

@@ -42,6 +42,8 @@ add_custom_target(
   cutlass_test_unit_cute_xe4_eu_slm_copy
   cutlass_test_unit_cute_xe4_adma_prefetch
   cutlass_test_unit_cute_xe4_adma_reduce
+  cutlass_test_unit_cute_xe4_tmm_single_op
+  cutlass_test_unit_cute_xe4_tmma_atoms
   cutlass_test_unit_cute_xe4_ldsm_epilogue
   cutlass_test_unit_cute_xe4_ldsm_epilogue_mma
   cutlass_test_unit_cute_xe4_tensor_pipe_quantize_api
@@ -61,6 +63,8 @@ add_custom_target(
   test_unit_cute_xe4_ldsm_red
   test_unit_cute_xe4_adma_prefetch
   test_unit_cute_xe4_adma_reduce
+  test_unit_cute_xe4_tmm_single_op
+  test_unit_cute_xe4_tmma_atoms
   test_unit_cute_xe4_ldsm_epilogue
   test_unit_cute_xe4_ldsm_epilogue_mma
   test_unit_cute_xe4_tensor_pipe_quantize_api
@@ -109,6 +113,13 @@ cutlass_test_unit_add_executable(
   cutlass_test_unit_cute_xe4_eu_slm_copy
   slm_copy_test.cpp
 )
+
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_tmma_atoms
+	tmm_tiled_copy.cpp
+	tmm_fragment_layout.cpp
+)
+
 # ADMA prefetch unit tests — validates async_tensor_prefetch + load roundtrip
 cutlass_test_unit_add_executable(
   cutlass_test_unit_cute_xe4_adma_prefetch
@@ -124,6 +135,11 @@ cutlass_test_unit_add_executable(
 cutlass_test_unit_add_executable(
   cutlass_test_unit_cute_xe4_ldsm_epilogue
   ldsm_epilogue.cpp
+)
+
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_tmm_single_op
+  tmm_single_op.cpp
 )
 
 cutlass_test_unit_add_executable(
