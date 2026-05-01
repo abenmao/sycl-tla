@@ -59,6 +59,33 @@ Base NVIDIA CUTLASS Versions for SYCL*TLA releases:
 |0.8-jgs | 4.2.1 |
 |0.9 | 4.2.1 |
 |0.9-cri | 4.2.1 |
+|0.9-jgs | 4.2.1 |
+
+# What's New in SYCL*TLA [0.9-jgs](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.9-jgs)
+
+### Architecture & APIs (XE4)
+  - Add XE4 TMMA atom and TMMA GEMM example ([#422](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/422))
+  - Add ADMA linear prefetch/reduction atoms and tutorials (G2S/S2G, `fred`/`ired`) ([#468](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/468), [#457](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/457), [#406](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/406), [#409](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/409), [#402](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/402))
+  - Add new Load/Store Matrix APIs and GEMM example with new APIs ([#416](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/416))
+  - Add Tensor Pipe downconvert APIs and examples with new APIs ([#462](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/462))
+  - Add CuTe tutorials for LinearCopy local-to-remote SLM and multi-cast/local-to-remote SLM flows ([#487](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/487))
+  - Add CuTe atoms, copy traits and tutorial for `ADMA_LINEAR_LOAD_MULTICAST` (GMEM→SLM multi-cast and local-to-remote SLM) ([#452](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/452))
+
+### GEMM & Flash Attention
+  - Add GEMM MX cluster support for XE4 ([#412](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/412))
+  - Add XE4 GEMM support for ADMA prefetch/reduce path ([#407](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/407))
+  - Add FP4xFP8 and FP4/FP8xBF16/FP16 support for XE4 block-scaled GEMM ([#424](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/424))
+
+### Validation & Tooling
+  - Add XE4 unit tests for block-scaled GEMM and scheduler behavior ([#394](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/394), [#405](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/405))
+  - Add basic Flash Attention performance tests and GEMM perf test refactor ([#425](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/425), [#403](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/403))
+  - Enable `intel_gpu_jgs_pisa` as a supported SYCL target ([#411](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/411))
+
+### Bug Fixes
+  - Fix scheduler-order related GEMM and block-scaled GEMM test issues ([#478](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/478))
+  - Refactor XE4 GEMM path to remove older tile scheduler dependencies ([#440](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/440))
+  - Fix JGS target issues in multitarget flow ([#453](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/453))
+  - Fix block-scaled SF SMEM using padding for TileK < 8×VS ([#435](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/435))
 
 # What's New in SYCL*TLA [0.9-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.9-cri)
 
@@ -190,9 +217,9 @@ CUTLASS is described in the following documents and the accompanying
 
   | # | Feature | Summary |
   |---|---|---|
-  | 1 | [Async MMA (AMMA)](./media/docs/cpp/xe4_features_apis.md#1-async-mma-amma--compute-apis) | AMMA compute atoms with barrier tracking and cluster multicast variants |
+  | 1 | [MMA (AMMA/TMM)](./media/docs/cpp/xe4_features_apis.md#1-mma-ammatmm--compute-apis) | AMMA async compute atoms and TMM synchronous tensor-matrix atoms with barrier tracking and cluster multicast variants |
   | 2 | [Data Types for MMA](./media/docs/cpp/xe4_features_apis.md#2-data-types-for-mma) | Standard and block-scaled MMA data types (TF32, BF16, FP16, FP8, FP4, MXFP4/8) |
-  | 3 | [Async DMA (ADMA)](./media/docs/cpp/xe4_features_apis.md#3-async-dma-adma--data-movement) | Async load, store, and multicast DMA atoms |
+  | 3 | [Async DMA (ADMA)](./media/docs/cpp/xe4_features_apis.md#3-async-dma-adma--data-movement) | Tensor + linear ADMA load/store/prefetch/reduce and multicast flows |
   | 4 | [LDSM/STSM](./media/docs/cpp/xe4_features_apis.md#4-slm--register-ldsmstsm--eu-access-to-core-matrix) | Load/store matrix atoms for SLM ↔ register data movement |
   | 5 | [A-Barriers](./media/docs/cpp/xe4_features_apis.md#5-addressable-barriers-a-barriers) | Addressable barrier init, arrive, wait, and transaction APIs |
   | 6 | [Cluster APIs](./media/docs/cpp/xe4_features_apis.md#6-cluster-apis) | Cluster synchronization, relaxed barriers, and leader election |
@@ -200,6 +227,7 @@ CUTLASS is described in the following documents and the accompanying
   | 8 | [Collective Builder & Block-Scaled GEMM](./media/docs/cpp/xe4_features_apis.md#8-collective-builder--block-scaled-gemm-support) | Collective MMA builders for standard and block-scaled GEMM |
   | 9 | [Asymmetric Register Allocation](./media/docs/cpp/xe4_features_apis.md#9-asymmetric-register-allocation) | Control/worker sub-group register partitioning for epilogue |
   | 10 | [EU Copy Atoms](./media/docs/cpp/xe4_features_apis.md#10-eu-copy-atoms) | EU-based copy atoms for GMEM/SLM/register data movement |
+  | 11 | [Tensor Pipe Quantize/Downconvert](./media/docs/cpp/xe4_features_apis.md#11-tensor-pipe-quantizedownconvert) | Register-level tensor-pipe quantize/downconvert APIs and XE4 tests |
 
 # Resources
 

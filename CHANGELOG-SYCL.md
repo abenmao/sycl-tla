@@ -1,5 +1,30 @@
 # SYCL*TLA (previously referred to as cutlass-sycl) Changelog
 
+## [SYCL*TLA 0.9-jgs](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.9-jgs) (2026-04-30)
+### Architecture & APIs (XE4)
+  - Add XE4 TMMA atom and TMMA GEMM example ([#422](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/422))
+  - Add ADMA linear prefetch/reduction atoms and tutorials (G2S/S2G, `fred`/`ired`) ([#468](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/468), [#457](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/457), [#406](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/406), [#409](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/409), [#402](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/402))
+  - Add new Load/Store Matrix APIs and GEMM example with new APIs ([#416](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/416))
+  - Add Tensor Pipe downconvert APIs and examples with new APIs ([#462](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/462))
+  - Add CuTe tutorials for LinearCopy local-to-remote SLM and multi-cast/local-to-remote SLM flows ([#487](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/487))
+  - Add CuTe atoms, copy traits and tutorial for `ADMA_LINEAR_LOAD_MULTICAST` (GMEM→SLM multi-cast and local-to-remote SLM) ([#452](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/452))
+
+### GEMM & Flash Attention
+  - Add GEMM MX cluster support for XE4 ([#412](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/412))
+  - Add XE4 GEMM support for ADMA prefetch/reduce path ([#407](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/407))
+  - Add FP4xFP8 and FP4/FP8xBF16/FP16 support for XE4 block-scaled GEMM ([#424](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/424))
+
+### Validation & Tooling
+  - Add XE4 unit tests for block-scaled GEMM and scheduler behavior ([#394](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/394), [#405](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/405))
+  - Add basic Flash Attention performance tests and GEMM perf test refactor ([#425](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/425), [#403](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/403))
+  - Enable `intel_gpu_jgs_pisa` as a supported SYCL target ([#411](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/411))
+
+### Bug Fixes
+  - Fix scheduler-order related GEMM and block-scaled GEMM test issues ([#478](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/478))
+  - Refactor XE4 GEMM path to remove older tile scheduler dependencies ([#440](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/440))
+  - Fix JGS target issues in multitarget flow ([#453](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/453))
+  - Fix block-scaled SF SMEM using padding for TileK < 8×VS ([#435](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/435))
+
 ## [SYCL*TLA 0.9-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.9-cri) (2026-04-30)
 ### Enhancements (Notes: all the tests based on CRI simulator)
   - Optimize Quantization API performance ([#388](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/388), [#465](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/465))
