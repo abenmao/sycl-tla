@@ -46,6 +46,8 @@ namespace test {
 namespace gemm {
 namespace xe4 {
 
+// Standard FP16 GEMM config
+// Params: LayoutB, CtaNumMN, ActivationType, OperationCType, M, N, K, L
 template <
   typename LayoutB_,
   typename CtaNumMN_,
@@ -75,6 +77,9 @@ struct GEMM_CONFIG {
   static constexpr cute::array<int, 4> ProblemShape_MNKL = {M_, N_, K_, L_};
 };
 
+// Block-scaled GEMM config base
+// Params: ElementAB, ElementSF (scale factor), ElementD (output), SFVecSize,
+//         CtaTileShape_MNK, PipelineStages, M, N, K, L, ClusterShape_MNK (optional)
 template <
   typename ElementAB_,
   typename ElementSF_,
@@ -105,264 +110,85 @@ struct BS_GEMM_CONFIG_BASE {
   static constexpr int PipelineStages = PipelineStages_;
 };
 
+// GEMM_CONFIG<LayoutB, CtaNumMN, ActivationType, OperationCType, M, N, K, L>
 TEST(XE4_GEMM, config_a_row_row) {
-  using ConfigA = GEMM_CONFIG<
-    cutlass::layout::RowMajor,
-    Shape<_2, _1>,
-    ActivationType::SiLu,
-    OperationCType::Mul,
-    512,
-    768,
-    384,
-    1>;
+  using ConfigA = GEMM_CONFIG<cutlass::layout::RowMajor, Shape<_2, _1>, ActivationType::SiLu, OperationCType::Mul, 256, 512, 128, 1>;
   run_gemm<ConfigA>();
 }
 
 TEST(XE4_GEMM, config_a_row_row_small) {
-  using ConfigA = GEMM_CONFIG<
-    cutlass::layout::RowMajor,
-    Shape<_1, _1>,
-    ActivationType::SiLu,
-    OperationCType::Mul,
-    32,
-    32,
-    128,
-    1>;
+  using ConfigA = GEMM_CONFIG<cutlass::layout::RowMajor, Shape<_1, _1>, ActivationType::SiLu, OperationCType::Mul, 32, 32, 128, 1>;
   run_gemm<ConfigA>();
 }
 
 TEST(XE4_GEMM, config_b_row_col) {
-  using ConfigB = GEMM_CONFIG<
-    cutlass::layout::ColumnMajor,
-    Shape<_1, _1>,
-    ActivationType::None,
-    OperationCType::Add,
-    256,
-    512,
-    384,
-    1>;
+  using ConfigB = GEMM_CONFIG<cutlass::layout::ColumnMajor, Shape<_1, _1>, ActivationType::None, OperationCType::Add, 512, 256, 128, 1>;
   run_gemm<ConfigB>();
 }
 
-using BS_GEMM_NVFP4 = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e2m1_t,
-  cutlass::float_ue4m3_t,
-  float,
-  16,
-  Shape<_256, _256, _128>,
-  4,
-  256,
-  512,
-  384,
-  1>;
+// BS_GEMM_CONFIG_BASE<ElementAB, ElementSF, ElementD, SFVecSize, CtaTileShape_MNK, PipelineStages, M, N, K, L, [ClusterShape_MNK]>
+using BS_GEMM_NVFP4 = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue4m3_t, float, 16, Shape<_256, _256, _128>, 4, 256, 512, 384, 1>;
 
-using BS_GEMM_NVFP4_small = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e2m1_t,
-  cutlass::float_ue4m3_t,
-  float,
-  16,
-  Shape<_64, _64, _128>,
-  2,
-  64,
-  64,
-  128,
-  1>;
+using BS_GEMM_NVFP4_small = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue4m3_t, float, 16, Shape<_64, _64, _128>, 2, 64, 64, 128, 1>;
 
-  using BS_GEMM_NVFP4_2k = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e2m1_t,
-  cutlass::float_ue4m3_t,
-  float,
-  16,
-  Shape<_256, _512, _128>,
-  2,
-  2048,
-  2048,
-  2048,
-  1>;
+using BS_GEMM_NVFP4_2k = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue4m3_t, float, 16, Shape<_256, _512, _128>, 2, 2048, 2048, 2048, 1>;
 
-using BS_GEMM_NVFP4_OP_FP16 = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e2m1_t,
-  cutlass::float_ue4m3_t,
-  sycl::half,
-  16,
-  Shape<_256, _256, _128>,
-  4,
-  256,
-  512,
-  384,
-  1>;
+using BS_GEMM_NVFP4_OP_FP16 = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue4m3_t, sycl::half, 16, Shape<_256, _256, _128>, 4, 256, 512, 384, 1>;
 
-using BS_GEMM_NVFP4_OP_BF16 = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e2m1_t,
-  cutlass::float_ue4m3_t,
-  sycl::ext::oneapi::bfloat16,
-  16,
-  Shape<_256, _256, _128>,
-  4,
-  256,
-  512,
-  384,
-  1>;
+using BS_GEMM_NVFP4_OP_BF16 = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue4m3_t, sycl::ext::oneapi::bfloat16, 16, Shape<_256, _256, _128>, 4, 256, 512, 384, 1>;
 
-using BS_GEMM_NVFP4_CLUSTER_211 = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e2m1_t,
-  cutlass::float_ue4m3_t,
-  float,
-  16,
-  Shape<_256, _256, _128>,
-  4,
-  256,
-  512,
-  384,
-  1,
-  Shape<_2, _1, _1>>;
+// Cluster configurations (last parameter is ClusterShape_MNK)
+using BS_GEMM_NVFP4_CLUSTER_211 = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue4m3_t, float, 16, Shape<_64, _64, _128>, 2, 128, 64, 128, 1, Shape<_2, _1, _1>>;
+using BS_GEMM_NVFP4_CLUSTER_121 = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue4m3_t, float, 16, Shape<_64, _64, _128>, 2, 64, 128, 128, 1, Shape<_1, _2, _1>>;
+using BS_GEMM_NVFP4_CLUSTER_221 = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue4m3_t, float, 16, Shape<_64, _64, _128>, 2, 128, 128, 128, 1, Shape<_2, _2, _1>>;
+using BS_GEMM_NVFP4_CLUSTER_411 = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue4m3_t, float, 16, Shape<_64, _64, _128>, 2, 128, 64, 128, 1, Shape<_4, _1, _1>>;
+using BS_GEMM_NVFP4_CLUSTER_141 = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue4m3_t, float, 16, Shape<_64, _64, _128>, 2, 64, 128, 128, 1, Shape<_1, _4, _1>>;
 
-  using BS_GEMM_NVFP4_CLUSTER_121 = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e2m1_t,
-  cutlass::float_ue4m3_t,
-  float,
-  16,
-  Shape<_256, _256, _128>,
-  4,
-  256,
-  512,
-  384,
-  1,
-  Shape<_1, _2, _1>>;
-
-  using BS_GEMM_NVFP4_CLUSTER_112 = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e2m1_t,
-  cutlass::float_ue4m3_t,
-  float,
-  16,
-  Shape<_256, _256, _128>,
-  4,
-  256,
-  512,
-  384,
-  1,
-  Shape<_1, _1, _2>>;
-
+// NVFP4+ (ue5m3 scale factor) with VecSize=16 - template parameterized on output type
 template <typename ElementD_>
-using BS_GEMM_NVFP4P_VS16_T = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e2m1_t,
-  cutlass::float_ue5m3_t,
-  ElementD_,
-  16,
-  Shape<_256, _256, _128>,
-  4,
-  256,
-  512,
-  384,
-  1>;
+using BS_GEMM_NVFP4P_VS16_T = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue5m3_t, ElementD_, 16, Shape<_256, _256, _128>, 4, 256, 512, 384, 1>;
 
 using BS_GEMM_NVFP4P_VS16 = BS_GEMM_NVFP4P_VS16_T<float>;
 using BS_GEMM_NVFP4P_VS16_OP_FP16 = BS_GEMM_NVFP4P_VS16_T<sycl::half>;
 using BS_GEMM_NVFP4P_VS16_OP_BF16 = BS_GEMM_NVFP4P_VS16_T<sycl::ext::oneapi::bfloat16>;
 
-using BS_GEMM_NVFP4P_VS16_small = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e2m1_t,
-  cutlass::float_ue5m3_t,
-  float,
-  16,
-  Shape<_64, _64, _128>,
-  2,
-  64,
-  64,
-  128,
-  1>;
+using BS_GEMM_NVFP4P_VS16_small = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue5m3_t, float, 16, Shape<_64, _64, _128>, 2, 64, 64, 128, 1>;
 
+// NVFP4+ with VecSize=32 - template parameterized on output type
 template <typename ElementD_>
-using BS_GEMM_NVFP4P_VS32_T = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e2m1_t,
-  cutlass::float_ue5m3_t,
-  ElementD_,
-  32,
-  Shape<_256, _256, _256>,
-  4,
-  256,
-  512,
-  512,
-  1>;
+using BS_GEMM_NVFP4P_VS32_T = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue5m3_t, ElementD_, 32, Shape<_256, _256, _256>, 4, 256, 512, 512, 1>;
 
 using BS_GEMM_NVFP4P_VS32 = BS_GEMM_NVFP4P_VS32_T<float>;
 using BS_GEMM_NVFP4P_VS32_OP_FP16 = BS_GEMM_NVFP4P_VS32_T<sycl::half>;
 using BS_GEMM_NVFP4P_VS32_OP_BF16 = BS_GEMM_NVFP4P_VS32_T<sycl::ext::oneapi::bfloat16>;
 
+// MXFP4 (ue8m0 scale factor) with VecSize=16 - template parameterized on output type
 template <typename ElementD_>
-using BS_GEMM_MXFP4_VS16_T = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e2m1_t,
-  cutlass::float_ue8m0_t,
-  ElementD_,
-  16,
-  Shape<_256, _256, _128>,
-  4,
-  256,
-  512,
-  384,
-  1>;
+using BS_GEMM_MXFP4_VS16_T = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, ElementD_, 16, Shape<_256, _256, _128>, 4, 256, 512, 384, 1>;
 
 using BS_GEMM_MXFP4_VS16 = BS_GEMM_MXFP4_VS16_T<float>;
 using BS_GEMM_MXFP4_VS16_OP_FP16 = BS_GEMM_MXFP4_VS16_T<sycl::half>;
 using BS_GEMM_MXFP4_VS16_OP_BF16 = BS_GEMM_MXFP4_VS16_T<sycl::ext::oneapi::bfloat16>;
 
-using BS_GEMM_MXFP4_VS16_small = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e2m1_t,
-  cutlass::float_ue8m0_t,
-  float,
-  16,
-  Shape<_64, _64, _128>,
-  2,
-  64,
-  64,
-  384,
-  1>;
+using BS_GEMM_MXFP4_VS16_small = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, float, 16, Shape<_64, _64, _128>, 2, 64, 64, 384, 1>;
 
+// MXFP4 with VecSize=32 - template parameterized on output type
 template <typename ElementD_>
-using BS_GEMM_MXFP4_VS32_T = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e2m1_t,
-  cutlass::float_ue8m0_t,
-  ElementD_,
-  32,
-  Shape<_128, _256, _256>,
-  4,
-  256,
-  512,
-  512,
-  1>;
+using BS_GEMM_MXFP4_VS32_T = BS_GEMM_CONFIG_BASE<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, ElementD_, 32, Shape<_128, _256, _256>, 4, 256, 512, 512, 1>;
 
 using BS_GEMM_MXFP4_VS32 = BS_GEMM_MXFP4_VS32_T<float>;
 using BS_GEMM_MXFP4_VS32_OP_FP16 = BS_GEMM_MXFP4_VS32_T<sycl::half>;
 using BS_GEMM_MXFP4_VS32_OP_BF16 = BS_GEMM_MXFP4_VS32_T<sycl::ext::oneapi::bfloat16>;
 
+// FP8 (e4m3 element, ue8m0 scale factor) with VecSize=32 - template parameterized on output type
 template <typename ElementD_>
-using BS_GEMM_FP8_T = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e4m3_t,
-  cutlass::float_ue8m0_t,
-  ElementD_,
-  32,
-  Shape<_256, _256, _256>,
-  4,
-  256,
-  512,
-  512,
-  1>;
+using BS_GEMM_FP8_T = BS_GEMM_CONFIG_BASE<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, ElementD_, 32, Shape<_256, _256, _256>, 4, 256, 512, 512, 1>;
 
 using BS_GEMM_FP8 = BS_GEMM_FP8_T<float>;
 using BS_GEMM_FP8_OP_FP16 = BS_GEMM_FP8_T<sycl::half>;
 using BS_GEMM_FP8_OP_BF16 = BS_GEMM_FP8_T<sycl::ext::oneapi::bfloat16>;
 
-using BS_GEMM_FP8_small = BS_GEMM_CONFIG_BASE<
-  cutlass::float_e4m3_t,
-  cutlass::float_ue8m0_t,
-  float,
-  32,
-  Shape<_64, _64, _256>,
-  2,
-  64,
-  64,
-  256,
-  1>;
+using BS_GEMM_FP8_small = BS_GEMM_CONFIG_BASE<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, float, 32, Shape<_64, _64, _256>, 2, 64, 64, 256, 1>;
 
 
 TEST(XE4_GEMM, blockscaled_fp4_nvfp4) {
@@ -386,16 +212,25 @@ TEST(XE4_GEMM, blockscaled_fp4_nvfp4_op_bf16) {
   EXPECT_TRUE(run_blockscaled_gemm<BS_GEMM_NVFP4_OP_BF16>());
 }
 
-// Not supported in current HW generation due to lack of cluster-level support
-// TEST(XE4_GEMM, DISABLED_blockscaled_fp4_nvfp4_cluster211) {
-//    EXPECT_TRUE(run_blockscaled_gemm<BS_GEMM_NVFP4_CLUSTER_211>());
-// }
-// TEST(XE4_GEMM, DISABLED_blockscaled_fp4_nvfp4_cluster112) {
-//    EXPECT_TRUE(run_blockscaled_gemm<BS_GEMM_NVFP4_CLUSTER_112>());
-// }
-// TEST(XE4_GEMM, DISABLED_blockscaled_fp4_nvfp4_cluster121) {
-//    EXPECT_TRUE(run_blockscaled_gemm<BS_GEMM_NVFP4_CLUSTER_121>());
-// }
+TEST(XE4_GEMM, blockscaled_fp4_nvfp4_cluster211) {
+  EXPECT_TRUE(run_blockscaled_gemm<BS_GEMM_NVFP4_CLUSTER_211>());
+}
+
+TEST(XE4_GEMM, blockscaled_fp4_nvfp4_cluster121) {
+  EXPECT_TRUE(run_blockscaled_gemm<BS_GEMM_NVFP4_CLUSTER_121>());
+}
+
+TEST(XE4_GEMM, blockscaled_fp4_nvfp4_cluster221) {
+  EXPECT_TRUE(run_blockscaled_gemm<BS_GEMM_NVFP4_CLUSTER_221>());
+}
+
+TEST(XE4_GEMM, blockscaled_fp4_nvfp4_cluster411) {
+  EXPECT_TRUE(run_blockscaled_gemm<BS_GEMM_NVFP4_CLUSTER_411>());
+}
+
+TEST(XE4_GEMM, DISABLED_blockscaled_fp4_nvfp4_cluster141) {
+  EXPECT_TRUE(run_blockscaled_gemm<BS_GEMM_NVFP4_CLUSTER_141>());
+}
 
 TEST(XE4_GEMM, blockscaled_fp4_nvfp4p_vs16) {
   EXPECT_TRUE(run_blockscaled_gemm<BS_GEMM_NVFP4P_VS16>());
