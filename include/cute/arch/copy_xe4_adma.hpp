@@ -201,6 +201,8 @@ struct XE4_ADMA_RedBase {
   // Classify T as IntType or FloatType for asm instruction selection (ired vs fred)
   static constexpr RedType RedDType = (std::is_same_v<T, int> ||
                                     std::is_same_v<T, uint32_t> ||
+                                    std::is_same_v<T, int64_t> ||
+                                    std::is_same_v<T, uint64_t> ||
                                     std::is_same_v<T, long> ||
                                     std::is_same_v<T, unsigned long>)
                                  ? RedType::IntType

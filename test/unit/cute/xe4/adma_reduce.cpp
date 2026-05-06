@@ -212,3 +212,52 @@ TEST(XE4_CuTe, ADMA_StoreReduce_Abarrier_int_Add)
   test_adma_store_reduce<int, RedOp::Add, cute::BarrierType::Abarrier>(
       gmem_layout, smem_layout, 10, 7);
 }
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////
+///
+///  DOUBLE FLOAT STORE-REDUCTIONS (fred) — validates rd_type<double> fix
+///
+////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+TEST(XE4_CuTe, ADMA_Fred_StoreReduce_Add_double_32x32)
+{
+  Layout smem_layout = Layout<Shape<_32,_32>, Stride<_1,_32>>{};
+  Layout gmem_layout = smem_layout;
+  test_adma_store_reduce<double, RedOp::Add>(gmem_layout, smem_layout, 10.0, 3.0);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////
+///
+///  INT64 INTEGER STORE-REDUCTIONS (ired) — validates int64_t classifier fix
+///
+////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+TEST(XE4_CuTe, ADMA_Ired_StoreReduce_Add_int64_32x32)
+{
+  Layout smem_layout = Layout<Shape<_32,_32>, Stride<_1,_32>>{};
+  Layout gmem_layout = smem_layout;
+  test_adma_store_reduce<int64_t, RedOp::Add>(gmem_layout, smem_layout,
+                                              int64_t(10), int64_t(3));
+}
+
+TEST(XE4_CuTe, ADMA_Ired_StoreReduce_Smin_int64_32x32)
+{
+  Layout smem_layout = Layout<Shape<_32,_32>, Stride<_1,_32>>{};
+  Layout gmem_layout = smem_layout;
+  test_adma_store_reduce<int64_t, RedOp::Smin>(gmem_layout, smem_layout,
+                                               int64_t(100), int64_t(-5));
+}
+
+TEST(XE4_CuTe, ADMA_Ired_StoreReduce_Smax_int64_32x32)
+{
+  Layout smem_layout = Layout<Shape<_32,_32>, Stride<_1,_32>>{};
+  Layout gmem_layout = smem_layout;
+  test_adma_store_reduce<int64_t, RedOp::Smax>(gmem_layout, smem_layout,
+                                               int64_t(-5), int64_t(100));
+}

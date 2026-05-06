@@ -59,19 +59,20 @@ namespace cutlass::test {
 template<typename T, cute::RedOp Rop>
 T host_reduce(T base, T operand) {
   using cute::RedOp;
-  if constexpr (Rop == RedOp::Add)  return static_cast<T>(float(base) + float(operand));
+  if constexpr (Rop == RedOp::Add)  return static_cast<T>(double(base) + double(operand));
   if constexpr (Rop == RedOp::Min)  return std::min(base, operand);
   if constexpr (Rop == RedOp::Max)  return std::max(base, operand);
   if constexpr (Rop == RedOp::Smin) return std::min(base, operand);
   if constexpr (Rop == RedOp::Smax) return std::max(base, operand);
   if constexpr (Rop == RedOp::Umin) return std::min(base, operand);
   if constexpr (Rop == RedOp::Umax) return std::max(base, operand);
+  using UintType = std::conditional_t<(sizeof(T) > 4), uint64_t, uint32_t>;
   if constexpr (Rop == RedOp::And)  return static_cast<T>(
-      static_cast<uint32_t>(base) & static_cast<uint32_t>(operand));
+      static_cast<UintType>(base) & static_cast<UintType>(operand));
   if constexpr (Rop == RedOp::Or)   return static_cast<T>(
-      static_cast<uint32_t>(base) | static_cast<uint32_t>(operand));
+      static_cast<UintType>(base) | static_cast<UintType>(operand));
   if constexpr (Rop == RedOp::Xor)  return static_cast<T>(
-      static_cast<uint32_t>(base) ^ static_cast<uint32_t>(operand));
+      static_cast<UintType>(base) ^ static_cast<UintType>(operand));
   return base; // fallback
 }
 

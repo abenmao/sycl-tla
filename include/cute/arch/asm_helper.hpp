@@ -140,6 +140,8 @@ template <> struct md_type<int> {static constexpr fixstr::fixed_string value {".
 template <> struct md_type<uint32_t> {static constexpr fixstr::fixed_string value {".32b"};};
 template <> struct md_type<long> {static constexpr fixstr::fixed_string value {".64b"};};
 template <> struct md_type<unsigned long> {static constexpr fixstr::fixed_string value {".64b"};};
+template <> struct md_type<long long> {static constexpr fixstr::fixed_string value {".64b"};};
+template <> struct md_type<unsigned long long> {static constexpr fixstr::fixed_string value {".64b"};};
 template <typename T> constexpr auto _mdtype = md_type<T>::value;
 
 enum class morder {
@@ -231,6 +233,7 @@ template <> struct tensor_exp_xch<false> { static constexpr fixstr::fixed_string
 template <typename> struct rd_type;
 template <> struct rd_type<cutlass::tfloat32_t> {static constexpr fixstr::fixed_string value {".32b.fp"};};
 template <> struct rd_type<float> {static constexpr fixstr::fixed_string value {".32b.fp"};};
+template <> struct rd_type<double> {static constexpr fixstr::fixed_string value {".64b.fp"};};
 template <> struct rd_type<sycl::half> {static constexpr fixstr::fixed_string value {".16b.fp"};};
 template <> struct rd_type<cutlass::half_t> {static constexpr fixstr::fixed_string value {".16b.fp"};};
 template <> struct rd_type<unsigned short> {static constexpr fixstr::fixed_string value {".16b.uint"};};
