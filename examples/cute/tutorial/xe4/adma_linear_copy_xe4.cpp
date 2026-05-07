@@ -352,7 +352,10 @@ int main(int argc, char** argv)
     } else if (arg.rfind("-prefetch=", 0) == 0) {
       prefetch_val = arg.substr(10);
     } else if (arg == "--help" || arg == "-h") {
-      printf("Usage: %s [--prefetch=yes|no|both(default)]\n", argv[0]);
+      printf("Usage: %s [--prefetch=yes|no|both(default)]\n"
+             "  yes  — run only with ADMA linear prefetch enabled\n"
+             "  no   — run only without prefetch (baseline)\n"
+             "  both — run both variants and verify each (default)\n", argv[0]);
       return 0;
     }
   }

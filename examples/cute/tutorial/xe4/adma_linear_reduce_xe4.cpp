@@ -172,6 +172,10 @@ template <typename T, RedOp Rop>
 bool run_config(sycl::queue& queue) {
   constexpr int N         = 65536 / (int)sizeof(T);
   constexpr bool order_dep = (Rop == RedOp::Incwrap || Rop == RedOp::Decwrap);
+  // Incwrap/Decwrap are order-dependent: result depends on the sequence of
+  // reductions applied. Multiple WGs reduce concurrently with no guaranteed
+  // ordering, making the final value non-deterministic. Restrict to 1 WG so
+  // the CPU reference can reproduce the exact reduction sequence.
   constexpr int n_tiles   = order_dep ? 1 : 8;
   constexpr int totalSize = n_tiles * N;
 

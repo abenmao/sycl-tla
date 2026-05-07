@@ -72,8 +72,10 @@ struct AsyncLinearMultiCastLocal2RemoteSLM
   }
 };
 
-struct AsyncLinearGlobalPrefetch
+struct AsyncLinearCopyPrefetchFromGlobal
 {
+  // Cache control is hardcoded to L2-cached, L3-uncached (.L2c.L3uc).
+  // This is the only cache policy supported by async_linear_prefetch per BSPEC.
   static inline void
   Prefetch(void* gmem_ptr, uint32_t size)
   {

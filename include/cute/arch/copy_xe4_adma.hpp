@@ -87,7 +87,7 @@ struct XE4_ADMA_LINEAR_PREFETCH
 {
   CUTE_HOST_DEVICE static void
   copy(void* gmem_ptr, uint32_t copy_size) {
-    detail::AsyncLinearGlobalPrefetch::Prefetch(gmem_ptr, copy_size);
+    detail::AsyncLinearCopyPrefetchFromGlobal::Prefetch(gmem_ptr, copy_size);
   }
 };
 
