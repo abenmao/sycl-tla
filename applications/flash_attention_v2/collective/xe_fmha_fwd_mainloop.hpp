@@ -463,9 +463,6 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       clear(tA_sum);
     }
 
-    /* Check if */
-    bool check_remainder_k = (seq_len % get<1>(TileShapeQK{}) != 0);
-    
     /* Main loop body */
     auto mainloop_body = [&](auto cached_k, int K,
                              auto& copy_k_cur, auto& copy_v_cur,
@@ -560,29 +557,46 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       /* Causal masking - only in non-cache mode */
       if constexpr (!is_cache && CausalMask) {
         if (K == total_blk - 1) {
-          // Need to get global col and row indices to mask the elements
+          // Need to get global col and row indices to mask the elements.
+          // Use the logical new-KV tile index (K - kblocks_cache) so that
+          // col_idx correctly reflects the position within the new-KV segment
+          // even when seq_len_kv_cache is not a multiple of BLK_K (i.e.
+          // kblocks_cache * BLK_K > seq_len_kv_cache).
+          int new_k_tile = K - kblocks_cache;
           Tensor cPgP = make_identity_tensor(make_shape(seq_len, seq_len));
-          Tensor gP = local_tile(cPgP, take<0,2>(TileShapeQK{}), make_coord(get<0>(blk_qv), K));
+          Tensor gP = local_tile(cPgP, take<0,2>(TileShapeQK{}), make_coord(get<0>(blk_qv), new_k_tile));
           auto cS_thread = thr_mma_qk.partition_C(gP);
           CUTLASS_PRAGMA_UNROLL
           for (int i = 0; i < tSrS.size(); ++i) {
             int row_idx = get<0>(cS_thread(i));
-            int col_idx = get<1>(cS_thread(i));
+            // get<1>(cS_thread(i)) is the new-KV-local column; add seq_len_kv_cache
+            // to get the logical full-sequence column coordinate.
+            int col_idx = get<1>(cS_thread(i)) + seq_len_kv_cache;
             if (col_idx - seq_len_kv_cache - full_tile_offset > row_idx - discard_seq_coord) {
               tSrS(i) = ElementS(-INFINITY);
             }
           }
         }
       }
-      /* k masking for remainder tiles */
-      if constexpr (!is_cache) {
-        if (check_remainder_k && K == total_blk - 1) {
+      /* k masking for remainder tiles (cache and new) */
+      {
+        int seq_len_new = seq_len - seq_len_kv_cache;
+        bool check_remainder_k = (seq_len_new % get<1>(TileShapeQK{}) != 0);
+        bool check_remainder_k_cache = CachedKV && (seq_len_kv_cache % get<1>(TileShapeQK{}) != 0);
+        bool has_remainder = is_cache
+            ? (check_remainder_k_cache && K == kblocks_cache - 1)
+            : (check_remainder_k && K == total_blk - 1);
+        if (has_remainder) {
+          int seq_bound = is_cache ? seq_len_kv_cache : seq_len_new;
           FragSRow k_rem_mask;
-          int k_val = get<0>(tKgK_cur(0,0,0,k_idx,0)) + kblocks_cache * get<1>(TileShapeQK{});
+          // Use logical tile index to compute k_val, so the mask is correct even
+          // when PagedKV is enabled (k_idx is physical in that case).
+          int logical_k_tile = is_cache ? K : (K - kblocks_cache);
+          int k_val = get<0>(tKgK_cur(0,0,0,logical_k_tile,0));
           int k = k_val + get_sub_group().get_local_id()[0];
           CUTLASS_PRAGMA_UNROLL
           for (int i = 0; i < k_rem_mask.size(); i++, k += intel::sg_size) {
-            k_rem_mask(i) = (k < seq_len) ? ElementS(sycl::nan(0u)) : ElementS(-INFINITY);
+            k_rem_mask(i) = (k < seq_bound) ? ElementS(sycl::nan(0u)) : ElementS(-INFINITY);
           }
           CUTLASS_PRAGMA_UNROLL
           for (int i = 0; i < tSrS.size(); i++) {

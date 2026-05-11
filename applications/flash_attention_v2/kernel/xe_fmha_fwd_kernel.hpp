@@ -239,7 +239,11 @@ public:
       if (CollectiveMainloop::CausalMask && seq_coord < discard_seq_coord) continue;
       const int seq_len_new = CollectiveMainloop::CausalMask ? full_tile_offset + cute::min(seq_len_kv, seq_coord - discard_seq_coord) + q_sg_tile : seq_len_kv;
       const int seq_len = seq_len_new + seq_len_kv_cache;
-      const int k_blocks = cute::ceil_div(seq_len, get<1>(TileShapeQK{}));
+      // Compute k_blocks as sum of cache tiles + new tiles to avoid losing new data
+      // when seq_len_kv_cache is not a multiple of the tile size.
+      const int kblocks_cache = CollectiveMainloop::CachedKV ? cute::ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{})) : 0;
+      const int kblocks_new = cute::ceil_div(seq_len_new, get<1>(TileShapeQK{}));
+      const int k_blocks = kblocks_cache + kblocks_new;
 
       int offset_q = 0, offset_k = 0, offset_v = 0, offset_o = 0;
       int offset_k_cache = 0, offset_v_cache = 0;
