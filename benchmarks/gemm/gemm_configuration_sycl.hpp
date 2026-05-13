@@ -180,7 +180,7 @@ struct BlockScalingGemmConfiguration<
 {
   static constexpr int PipelineStages = 2;
   using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages>;
-  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeXMX16;
+  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
 
   // Configurations in benchmarks.hpp can pass either a layout tag (e.g. RowMajor) or a Stride directly
   using StrideA = std::conditional_t<cute::is_tuple_v<LayoutA>, LayoutA, TagToStrideA_t<LayoutA>>;
@@ -205,15 +205,14 @@ struct BlockScalingGemmConfiguration<
   using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
           EpilogueDispatchPolicy,
           TileShape,
-          float,// ElementAccumulator
-          cutlass::gemm::TagToStrideC_t<LayoutC>, // Converts CUTLASS 2.x to CUTLASS 3.x representation
-          float,// ElementOutput
-          cutlass::gemm::TagToStrideC_t<LayoutD>, // Converts CUTLASS 2.x to CUTLASS 3.x representation
+          void,
+          float,                // ElementAccumulator
+          cutlass::gemm::TagToStrideC_t<LayoutC>,
+          float,                // ElementOutput
+          cutlass::gemm::TagToStrideC_t<LayoutD>,
           FusionCallbacks,
-          XE_2D_U32x8x16_LD_N,
-          void, void,
-          XE_2D_U32x8x16_ST_N,
-          void, void>;
+          void,
+          void>;
     using GemmKernel = kernel::GemmUniversal<
     Shape<int, int, int, int>,
     CollectiveMainloop,
