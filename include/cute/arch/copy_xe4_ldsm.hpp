@@ -78,7 +78,7 @@ struct XE4_LDSTMatrixBase {
   static constexpr bool Coop = (Mode == CoopVector);
   static constexpr cute::Vecdir Vdir = getVdir();
   static constexpr cute::Arrdir Adir = adir;
-  static constexpr bool Unordered = (Mode == UnorderedVector);
+  static constexpr bool Unordered = (Mode == UnorderedVector || Mode == UnorderedArrOfVectors);
 
   static constexpr int BitWidth =sizeof_bits_v<T>;
   static constexpr int CopyBitsPerThread = BitWidth*Vlen;
@@ -86,7 +86,7 @@ struct XE4_LDSTMatrixBase {
 
   static constexpr auto strides = SLayout{}.stride();
   static constexpr MatrixType Type = get<1>(strides) == 1 ? MatrixType::Type1 : MatrixType::Type2;
-  static constexpr cute::morder Order = (Mode == UnorderedVector) ? cute::morder::unordered : cute::morder::ordered;
+  static constexpr cute::morder Order = (Mode == UnorderedVector || Mode == UnorderedArrOfVectors) ? cute::morder::unordered : cute::morder::ordered;
 
   static constexpr inline void check_row_vector_constraints() {
     if constexpr (Type==MatrixType::Type1) {
@@ -328,7 +328,7 @@ using XE4_STSM_UVector = XE4_STORE_MATRIX<T, SLayout, LDSMMode::UnorderedVector,
 
 // Store Matrix Coop Unordered Array of Vector
 template <typename T, class SLayout, uint32_t vlen, uint32_t alen>
-using XE4_STSM_UAOfVector = XE4_STORE_MATRIX<T, SLayout, LDSMMode::UnorderedVector, vlen,
+using XE4_STSM_UAOfVector = XE4_STORE_MATRIX<T, SLayout, LDSMMode::UnorderedArrOfVectors, vlen,
                                          cute::Vecdir::Cooprow, alen, cute::Arrdir::Arow>;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
