@@ -1,0 +1,714 @@
+name: Bidirectional Repository Sync
+
+on:
+  # Manual trigger - run workflow on-demand from GitHub Actions UI
+  workflow_dispatch:
+    inputs:
+      sync_direction:
+        description: Sync direction
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - downstream
+          - upstream
+      public_branch:
+        description: Public repo branch (intel/sycl-tla)
+        required: false
+        default: main
+        type: string
+      internal_branch:
+        description: Internal repo branch (base branch)
+        required: false
+        default: v0.1.0_next
+        type: string
+      claude_model:
+        description: Claude model to use for conflict resolution
+        required: false
+        default: us.anthropic.claude-opus-4-6-v1
+        type: string
+      max_turns:
+        description: Maximum Claude turns for conflict resolution
+        required: false
+        default: "60"
+        type: string
+      aws_region:
+        description: AWS region for Bedrock
+        required: false
+        default: us-east-2
+        type: string
+      create_pr:
+        description: Create or update a PR after sync
+        required: false
+        default: true
+        type: boolean
+
+  # Scheduled trigger - runs automatically for BOTH downstream and upstream sync
+  # To disable automatic runs, comment out or remove the schedule section below
+  schedule:
+    # Run bidirectional sync daily at 2 AM UTC
+    - cron: '0 2 * * *'
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: bidirectional-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  downstream-sync:
+    name: Downstream Sync (Public → Internal)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Runs on: manual trigger or scheduled runs
+    if: |
+      (github.event_name == 'workflow_dispatch' && (inputs.sync_direction == 'downstream' || inputs.sync_direction == 'both')) ||
+      github.event_name == 'schedule'
+    env:
+      PUBLIC_BRANCH: ${{ inputs.public_branch || 'main' }}
+      INTERNAL_BRANCH: ${{ inputs.internal_branch || 'v0.1.0_next' }}
+      SYNC_CLAUDE_MODEL: ${{ inputs.claude_model || 'us.anthropic.claude-opus-4-6-v1' }}
+      SYNC_MAX_TURNS: ${{ inputs.max_turns || '60' }}
+      SYNC_AWS_REGION: ${{ inputs.aws_region || 'us-east-2' }}
+      PUBLIC_REPO: intel/sycl-tla
+      HAS_BEDROCK_TOKEN: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK != '' }}
+
+    steps:
+      - name: Checkout internal repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.INTERNAL_REPO_TOKEN || github.token }}
+
+      - name: Configure Git
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Check for existing downstream sync PR
+        id: check_existing_pr
+        env:
+          GH_TOKEN: ${{ secrets.INTERNAL_REPO_TOKEN || github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Look for open PRs with sync/downstream-* pattern targeting the base branch
+          EXISTING_PR=$(gh pr list \
+            --base "${{ env.INTERNAL_BRANCH }}" \
+            --state open \
+            --json number,headRefName,title \
+            --jq '.[] | select(.headRefName | startswith("sync/downstream-")) | .headRefName' \
+            | head -n 1)
+
+          if [ -n "${EXISTING_PR}" ]; then
+            echo "EXISTING_SYNC_BRANCH=${EXISTING_PR}" >> "$GITHUB_ENV"
+            echo "found_existing=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Found existing downstream sync PR on branch: ${EXISTING_PR}"
+          else
+            echo "found_existing=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No existing downstream sync PR found"
+          fi
+
+      - name: Add public remote and prepare sync branch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git remote add public https://github.com/${PUBLIC_REPO}.git 2>/dev/null || \
+            git remote set-url public https://github.com/${PUBLIC_REPO}.git
+          git fetch public "${PUBLIC_BRANCH}"
+          git fetch origin "${INTERNAL_BRANCH}"
+
+          PUBLIC_COMMIT=$(git rev-parse "public/${PUBLIC_BRANCH}")
+          PUBLIC_SHORT=$(git rev-parse --short "${PUBLIC_COMMIT}")
+
+          echo "PUBLIC_COMMIT=${PUBLIC_COMMIT}" >> "$GITHUB_ENV"
+          echo "PUBLIC_SHORT=${PUBLIC_SHORT}" >> "$GITHUB_ENV"
+
+          # Reuse existing branch if found, otherwise create new one with timestamp
+          if [ "${{ steps.check_existing_pr.outputs.found_existing }}" = "true" ]; then
+            BRANCH_NAME="${EXISTING_SYNC_BRANCH}"
+            echo "::notice::Reusing existing sync branch: ${BRANCH_NAME}"
+            git fetch origin "${BRANCH_NAME}"
+            git checkout -B "${BRANCH_NAME}" "origin/${BRANCH_NAME}"
+
+            # Check if there are new changes to sync
+            git merge --no-commit --no-ff "public/${PUBLIC_BRANCH}" || true
+            if [ -z "$(git status --porcelain)" ] && [ ! -f .git/MERGE_HEAD ]; then
+              echo "::notice::No new changes to sync - existing PR is up to date"
+              echo "SKIP_SYNC=true" >> "$GITHUB_ENV"
+              git merge --abort 2>/dev/null || true
+              exit 0
+            fi
+            git merge --abort 2>/dev/null || true
+
+            # Reset to base and redo the merge properly
+            git reset --hard "origin/${INTERNAL_BRANCH}"
+          else
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            BRANCH_NAME="sync/downstream-${PUBLIC_SHORT}-${TIMESTAMP}"
+            echo "::notice::Creating new sync branch: ${BRANCH_NAME}"
+            git checkout -B "${INTERNAL_BRANCH}" "origin/${INTERNAL_BRANCH}"
+            git checkout -b "${BRANCH_NAME}"
+          fi
+
+          echo "BRANCH_NAME=${BRANCH_NAME}" >> "$GITHUB_ENV"
+
+          set +e
+          git merge --no-commit --no-ff "public/${PUBLIC_BRANCH}"
+          set -e
+
+          # Explicitly resolve workflow paths to current-branch versions.
+          echo "::notice::Excluding .github/workflows/ from merge..."
+          if git ls-files -u -- .github/workflows/ | grep -q .; then
+            echo "::notice::Resolving workflow conflicts using current branch version..."
+            git checkout --ours -- .github/workflows/
+          fi
+          git checkout HEAD -- .github/workflows/ 2>/dev/null || true
+          git add -A .github/workflows/ 2>/dev/null || true
+
+          # Recompute conflicts after workflow exclusions are applied.
+          git diff --name-only --diff-filter=U > "${RUNNER_TEMP}/downstream_conflicted_files.txt" || true
+          if [ -s "${RUNNER_TEMP}/downstream_conflicted_files.txt" ]; then
+            echo "MERGE_STATE=conflict" >> "$GITHUB_ENV"
+          else
+            echo "MERGE_STATE=clean" >> "$GITHUB_ENV"
+          fi
+
+      - name: Validate AWS Bedrock configuration (conflict only)
+        if: env.MERGE_STATE == 'conflict' && env.SKIP_SYNC != 'true' && env.HAS_BEDROCK_TOKEN != 'true'
+        shell: bash
+        run: |
+          echo "::error::Merge has conflicts, but Claude conflict resolution is unavailable because AWS_BEARER_TOKEN_BEDROCK is not configured."
+          exit 1
+
+      - name: Run Claude Code for downstream conflict resolution
+        if: env.MERGE_STATE == 'conflict' && env.SKIP_SYNC != 'true' && env.HAS_BEDROCK_TOKEN == 'true'
+        uses: anthropics/claude-code-action@v1.0.80
+        env:
+          CLAUDE_CODE_USE_BEDROCK: '1'
+          CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1'
+          AWS_REGION: ${{ env.SYNC_AWS_REGION }}
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+        with:
+          github_token: ${{ secrets.INTERNAL_REPO_TOKEN || github.token }}
+          use_bedrock: 'true'
+          model: ${{ env.SYNC_CLAUDE_MODEL }}
+          prompt: |
+            You are resolving a downstream sync from the public repository (intel/sycl-tla) into this internal repository.
+
+            Repository context:
+            - Public repository: ${{ env.PUBLIC_REPO }}
+            - Public branch: ${{ env.PUBLIC_BRANCH }}
+            - Public commit: ${{ env.PUBLIC_COMMIT }}
+            - Internal base branch: ${{ env.INTERNAL_BRANCH }}
+            - Current merge state: ${{ env.MERGE_STATE }}
+
+            The repository is already on a dedicated sync branch with an in-progress merge of public/${{ env.PUBLIC_BRANCH }}.
+
+            Your task:
+            - Resolve the downstream sync end-to-end in the current working tree.
+            - Bring over all changes from the public repository.
+            - Preserve internal-only features, configurations, and sensitive information that should not be in the public repo.
+            - Handle conflicts intelligently: public changes should generally take precedence unless they conflict with internal-only requirements.
+            - Preserve internal CI/workflow logic, authentication, and secrets management.
+            - Keep the result conservative and focused on downstream sync only.
+            - IMPORTANT: .github/workflows/ directory has already been excluded from the merge and should not be modified.
+
+            Before finishing:
+            - Ensure there are no unmerged files.
+            - Leave the repository in a clean, fully resolved git state.
+            - Stage the final result with git add -A.
+            - Do not create the PR yourself.
+            - If conflicts cannot be automatically resolved, document them clearly in a SYNC_CONFLICTS.md file.
+          claude_args: |
+            --model ${{ env.SYNC_CLAUDE_MODEL }}
+            --max-turns ${{ env.SYNC_MAX_TURNS }}
+            --dangerously-skip-permissions
+
+      - name: Finalize downstream sync commit
+        id: finalize_downstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Skip if no new changes detected
+          if [ "${SKIP_SYNC:-false}" = "true" ]; then
+            echo "::notice::Skipping sync - no new changes"
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Double-check workflow files are excluded
+          echo "::notice::Verifying .github/workflows/ exclusion..."
+          git checkout HEAD -- .github/workflows/ 2>/dev/null || true
+          git add -A .github/workflows/ 2>/dev/null || true
+
+          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+            echo "::error::Sync left unresolved merge conflicts"
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
+
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+              git commit \
+                -m "sync: downstream from ${PUBLIC_REPO} ${{ env.PUBLIC_SHORT }}" \
+                -m "Automated downstream sync from public repository prepared with Claude Code." \
+                -m "Public commit: ${{ env.PUBLIC_COMMIT }}"
+            else
+              git commit \
+                -m "sync: align with ${PUBLIC_REPO} ${{ env.PUBLIC_SHORT }}" \
+                -m "Automated downstream sync from public repository prepared with Claude Code." \
+                -m "Public commit: ${{ env.PUBLIC_COMMIT }}"
+            fi
+          fi
+
+          AHEAD_COUNT=$(git rev-list --count "origin/${INTERNAL_BRANCH}..HEAD")
+          echo "AHEAD_COUNT=${AHEAD_COUNT}" >> "$GITHUB_ENV"
+
+          if [ "$AHEAD_COUNT" -eq 0 ]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push downstream sync branch
+        if: steps.finalize_downstream.outputs.has_changes == 'true'
+        shell: bash
+        run: |
+          # Force push if updating existing branch, normal push for new branch
+          if [ "${{ steps.check_existing_pr.outputs.found_existing }}" = "true" ]; then
+            git push --force-with-lease origin "${{ env.BRANCH_NAME }}"
+          else
+            git push --set-upstream origin "${{ env.BRANCH_NAME }}"
+          fi
+
+      - name: Create or update downstream PR
+        if: steps.finalize_downstream.outputs.has_changes == 'true' && (inputs.create_pr || github.event_name == 'schedule')
+        env:
+          GH_TOKEN: ${{ secrets.INTERNAL_REPO_TOKEN || github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > pr_body.md <<EOF
+          ## Automated Downstream Sync (Public → Internal)
+
+          This PR syncs changes from the public repository into this internal repository.
+
+          ### Public Repository Details
+          - Repository: ${{ env.PUBLIC_REPO }}
+          - Branch: ${{ env.PUBLIC_BRANCH }}
+          - Commit: [${{ env.PUBLIC_SHORT }}](https://github.com/${{ env.PUBLIC_REPO }}/commit/${{ env.PUBLIC_COMMIT }})
+
+          ### Sync Strategy
+          - Merge public changes into internal repository
+          - Preserve internal-only features and configurations
+          - Keep sensitive information and internal CI/workflow logic intact
+          - Public changes take precedence unless they conflict with internal requirements
+
+          ### Review Checklist
+          - [ ] Verify no sensitive internal information was removed
+          - [ ] Check that internal-only features are preserved
+          - [ ] Validate authentication and secrets management
+          - [ ] Ensure CI/CD pipelines still work correctly
+          - [ ] Review conflict resolution decisions (if any)
+
+          ### Automation
+          This branch was prepared by the bidirectional sync workflow using Claude Code for merge resolution.
+
+          **Merge state at start:** ${{ env.MERGE_STATE }}
+          EOF
+
+          PR_URL=$(gh pr list \
+            --base "${{ env.INTERNAL_BRANCH }}" \
+            --head "${{ env.BRANCH_NAME }}" \
+            --json url \
+            --jq '.[0].url')
+
+          if [ -z "${PR_URL}" ]; then
+            gh pr create \
+              --title "sync(downstream): ${PUBLIC_REPO} ${{ env.PUBLIC_SHORT }}" \
+              --body-file pr_body.md \
+              --base "${{ env.INTERNAL_BRANCH }}" \
+              --head "${{ env.BRANCH_NAME }}"
+          else
+            gh pr edit "${PR_URL}" \
+              --title "sync(downstream): ${PUBLIC_REPO} ${{ env.PUBLIC_SHORT }}" \
+              --body-file pr_body.md
+          fi
+
+      - name: Downstream sync summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## Downstream Sync Summary (Public → Internal)" >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo "- Provider: AWS Bedrock" >> "$GITHUB_STEP_SUMMARY"
+          echo "- AWS Region: ${SYNC_AWS_REGION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Internal base branch: ${INTERNAL_BRANCH}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Public repository: ${PUBLIC_REPO}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Public branch: ${PUBLIC_BRANCH}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Public commit: [${{ env.PUBLIC_SHORT }}](https://github.com/${PUBLIC_REPO}/commit/${{ env.PUBLIC_COMMIT }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Sync branch: ${{ env.BRANCH_NAME }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Merge state at start: ${{ env.MERGE_STATE }}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.finalize_downstream.outputs.has_changes }}" = "true" ]; then
+            echo "- Result: ✅ sync branch pushed" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Result: ℹ️ no changes to push" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  upstream-sync:
+    name: Upstream Sync (Internal → Public)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Runs on: manual trigger or scheduled runs
+    if: |
+      (github.event_name == 'workflow_dispatch' && (inputs.sync_direction == 'upstream' || inputs.sync_direction == 'both')) ||
+      github.event_name == 'schedule'
+    # Allow upstream to run even if downstream fails or is skipped
+    continue-on-error: false
+    env:
+      PUBLIC_BRANCH: ${{ inputs.public_branch || 'main' }}
+      INTERNAL_BRANCH: ${{ inputs.internal_branch || 'v0.1.0_next' }}
+      SYNC_CLAUDE_MODEL: ${{ inputs.claude_model || 'us.anthropic.claude-opus-4-6-v1' }}
+      SYNC_MAX_TURNS: ${{ inputs.max_turns || '60' }}
+      SYNC_AWS_REGION: ${{ inputs.aws_region || 'us-east-2' }}
+      PUBLIC_REPO: intel/sycl-tla
+      HAS_BEDROCK_TOKEN: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK != '' }}
+
+    steps:
+      - name: Validate required tokens for upstream automation
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.PUBLIC_REPO_TOKEN }}" ]; then
+            echo "::error::PUBLIC_REPO_TOKEN secret is required for upstream sync. github.token from this repository cannot push branches or create PRs in ${PUBLIC_REPO}."
+            exit 1
+          fi
+
+          if [ -z "${{ secrets.INTERNAL_REPO_TOKEN }}" ]; then
+            echo "::error::INTERNAL_REPO_TOKEN secret is required for upstream sync. It is used to fetch ${INTERNAL_BRANCH} from the internal repository."
+            exit 1
+          fi
+
+      - name: Checkout public repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PUBLIC_REPO }}
+          fetch-depth: 0
+          token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+
+      - name: Configure Git
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Check for existing upstream sync PR
+        id: check_existing_pr
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Look for open PRs with sync/upstream-* pattern targeting the base branch
+          EXISTING_PR=$(gh pr list \
+            --repo "${{ env.PUBLIC_REPO }}" \
+            --base "${{ env.PUBLIC_BRANCH }}" \
+            --state open \
+            --json number,headRefName,title \
+            --jq '.[] | select(.headRefName | startswith("sync/upstream-")) | .headRefName' \
+            | head -n 1)
+
+          if [ -n "${EXISTING_PR}" ]; then
+            echo "EXISTING_SYNC_BRANCH=${EXISTING_PR}" >> "$GITHUB_ENV"
+            echo "found_existing=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Found existing upstream sync PR on branch: ${EXISTING_PR}"
+          else
+            echo "found_existing=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No existing upstream sync PR found"
+          fi
+
+      - name: Add internal remote and prepare sync branch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          INTERNAL_REPO_URL="https://x-access-token:${{ secrets.INTERNAL_REPO_TOKEN }}@github.com/intel-innersource/libraries.ai.cutlass.internal.git"
+
+          git remote add internal "${INTERNAL_REPO_URL}" 2>/dev/null || \
+            git remote set-url internal "${INTERNAL_REPO_URL}"
+          git fetch internal "${INTERNAL_BRANCH}"
+          git fetch origin "${PUBLIC_BRANCH}"
+
+          INTERNAL_COMMIT=$(git rev-parse "internal/${INTERNAL_BRANCH}")
+          INTERNAL_SHORT=$(git rev-parse --short "${INTERNAL_COMMIT}")
+
+          echo "INTERNAL_COMMIT=${INTERNAL_COMMIT}" >> "$GITHUB_ENV"
+          echo "INTERNAL_SHORT=${INTERNAL_SHORT}" >> "$GITHUB_ENV"
+
+          # Reuse existing branch if found, otherwise create new one with timestamp
+          if [ "${{ steps.check_existing_pr.outputs.found_existing }}" = "true" ]; then
+            BRANCH_NAME="${EXISTING_SYNC_BRANCH}"
+            echo "::notice::Reusing existing sync branch: ${BRANCH_NAME}"
+            git fetch origin "${BRANCH_NAME}"
+            git checkout -B "${BRANCH_NAME}" "origin/${BRANCH_NAME}"
+
+            # Check if there are new changes to sync
+            git merge --no-commit --no-ff "internal/${INTERNAL_BRANCH}" || true
+            if [ -z "$(git status --porcelain)" ] && [ ! -f .git/MERGE_HEAD ]; then
+              echo "::notice::No new changes to sync - existing PR is up to date"
+              echo "SKIP_SYNC=true" >> "$GITHUB_ENV"
+              git merge --abort 2>/dev/null || true
+              exit 0
+            fi
+            git merge --abort 2>/dev/null || true
+
+            # Reset to base and redo the merge properly
+            git reset --hard "origin/${PUBLIC_BRANCH}"
+          else
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            BRANCH_NAME="sync/upstream-${INTERNAL_SHORT}-${TIMESTAMP}"
+            echo "::notice::Creating new sync branch: ${BRANCH_NAME}"
+            git checkout -B "${PUBLIC_BRANCH}" "origin/${PUBLIC_BRANCH}"
+            git checkout -b "${BRANCH_NAME}"
+          fi
+
+          echo "BRANCH_NAME=${BRANCH_NAME}" >> "$GITHUB_ENV"
+
+          set +e
+          git merge --no-commit --no-ff "internal/${INTERNAL_BRANCH}"
+          set -e
+
+          # Explicitly resolve workflow paths to current-branch versions.
+          echo "::notice::Excluding .github/workflows/ from merge..."
+          if git ls-files -u -- .github/workflows/ | grep -q .; then
+            echo "::notice::Resolving workflow conflicts using current branch version..."
+            git checkout --ours -- .github/workflows/
+          fi
+          git checkout HEAD -- .github/workflows/ 2>/dev/null || true
+          git add -A .github/workflows/ 2>/dev/null || true
+
+          # Recompute conflicts after workflow exclusions are applied.
+          git diff --name-only --diff-filter=U > "${RUNNER_TEMP}/upstream_conflicted_files.txt" || true
+          if [ -s "${RUNNER_TEMP}/upstream_conflicted_files.txt" ]; then
+            echo "MERGE_STATE=conflict" >> "$GITHUB_ENV"
+          else
+            echo "MERGE_STATE=clean" >> "$GITHUB_ENV"
+          fi
+
+      - name: Validate AWS Bedrock configuration (conflict only)
+        if: env.MERGE_STATE == 'conflict' && env.SKIP_SYNC != 'true' && env.HAS_BEDROCK_TOKEN != 'true'
+        shell: bash
+        run: |
+          echo "::error::Merge has conflicts, but Claude conflict resolution is unavailable because AWS_BEARER_TOKEN_BEDROCK is not configured."
+          exit 1
+
+      - name: Run Claude Code for upstream conflict resolution
+        if: env.MERGE_STATE == 'conflict' && env.SKIP_SYNC != 'true' && env.HAS_BEDROCK_TOKEN == 'true'
+        uses: anthropics/claude-code-action@v1.0.80
+        env:
+          CLAUDE_CODE_USE_BEDROCK: '1'
+          CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1'
+          AWS_REGION: ${{ env.SYNC_AWS_REGION }}
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+        with:
+          github_token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          use_bedrock: 'true'
+          model: ${{ env.SYNC_CLAUDE_MODEL }}
+          prompt: |
+            You are resolving an upstream sync from the internal repository into the public repository (intel/sycl-tla).
+
+            Repository context:
+            - Public repository: ${{ env.PUBLIC_REPO }}
+            - Public branch: ${{ env.PUBLIC_BRANCH }}
+            - Internal commit: ${{ env.INTERNAL_COMMIT }}
+            - Current merge state: ${{ env.MERGE_STATE }}
+
+            The repository is already on a dedicated sync branch with an in-progress merge of internal/${{ env.INTERNAL_BRANCH }}.
+
+            CRITICAL SECURITY REQUIREMENTS:
+            - Strip ALL internal-only configurations, secrets, and authentication details.
+            - Remove any references to internal systems, infrastructure, or services.
+            - Exclude internal CI/CD pipeline configurations and internal workflow files.
+            - Strip proprietary or confidential code comments and documentation.
+            - Ensure no internal URLs, hostnames, or service endpoints are exposed.
+            - Remove internal team member information and contact details.
+            - IMPORTANT: .github/workflows/ directory has already been excluded from the merge and should not be modified.
+
+            Your task:
+            - Resolve the upstream sync end-to-end in the current working tree.
+            - Bring over appropriate changes from internal to public.
+            - CAREFULLY filter out any internal-only content before it reaches the public repo.
+            - Preserve public repository's existing structure and conventions.
+            - Handle conflicts with extreme caution: public repository should never receive sensitive internal information.
+            - When in doubt, exclude rather than include.
+            - Keep the result conservative and focused on safe upstream sync only.
+
+            Before finishing:
+            - Double-check that NO internal secrets, credentials, or sensitive configuration leaked through.
+            - Ensure there are no unmerged files.
+            - Leave the repository in a clean, fully resolved git state.
+            - Stage the final result with git add -A.
+            - Do not create the PR yourself.
+            - If conflicts cannot be safely resolved, document them clearly in a SYNC_CONFLICTS.md file.
+          claude_args: |
+            --model ${{ env.SYNC_CLAUDE_MODEL }}
+            --max-turns ${{ env.SYNC_MAX_TURNS }}
+            --dangerously-skip-permissions
+
+      - name: Finalize upstream sync commit
+        id: finalize_upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Skip if no new changes detected
+          if [ "${SKIP_SYNC:-false}" = "true" ]; then
+            echo "::notice::Skipping sync - no new changes"
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Double-check workflow files are excluded
+          echo "::notice::Verifying .github/workflows/ exclusion..."
+          git checkout HEAD -- .github/workflows/ 2>/dev/null || true
+          git add -A .github/workflows/ 2>/dev/null || true
+
+          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+            echo "::error::Sync left unresolved merge conflicts"
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
+
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+
+            # Double-check for common sensitive patterns before committing.
+            echo "::notice::Scanning for sensitive information..."
+            if git diff --cached | grep -iE '(api[_-]?key|secret|password|token|credentials|private[_-]?key).*[:=]' | grep -v 'example\|sample\|placeholder\|dummy'; then
+              echo "::warning::Potential sensitive information detected in staged changes. Review carefully!"
+            fi
+
+            if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+              git commit \
+                -m "sync: upstream from internal ${{ env.INTERNAL_SHORT }}" \
+                -m "Automated upstream sync from internal repository prepared with Claude Code." \
+                -m "Internal commit: ${{ env.INTERNAL_COMMIT }}" \
+                -m "" \
+                -m "⚠️  This sync has been filtered to exclude internal-only configurations."
+            else
+              git commit \
+                -m "sync: align with internal ${{ env.INTERNAL_SHORT }}" \
+                -m "Automated upstream sync from internal repository prepared with Claude Code." \
+                -m "Internal commit: ${{ env.INTERNAL_COMMIT }}" \
+                -m "" \
+                -m "⚠️  This sync has been filtered to exclude internal-only configurations."
+            fi
+          fi
+
+          AHEAD_COUNT=$(git rev-list --count "origin/${PUBLIC_BRANCH}..HEAD")
+          echo "AHEAD_COUNT=${AHEAD_COUNT}" >> "$GITHUB_ENV"
+
+          if [ "$AHEAD_COUNT" -eq 0 ]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push upstream sync branch
+        if: steps.finalize_upstream.outputs.has_changes == 'true'
+        shell: bash
+        run: |
+          # Force push if updating existing branch, normal push for new branch
+          if [ "${{ steps.check_existing_pr.outputs.found_existing }}" = "true" ]; then
+            git push --force-with-lease origin "${{ env.BRANCH_NAME }}"
+          else
+            git push --set-upstream origin "${{ env.BRANCH_NAME }}"
+          fi
+
+      - name: Create or update upstream PR
+        if: steps.finalize_upstream.outputs.has_changes == 'true' && (inputs.create_pr || github.event_name == 'schedule')
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > pr_body.md <<EOF
+          ## Automated Upstream Sync (Internal → Public)
+
+          This PR syncs changes from the internal repository into this public repository.
+
+          ### Internal Repository Details
+          - Internal commit: ${{ env.INTERNAL_SHORT }}
+
+          ### Sync Strategy
+          - Merge appropriate changes from internal repository
+          - **Filter out all internal-only configurations and sensitive information**
+          - Preserve public repository conventions and structure
+          - Exclude internal CI/CD, authentication, and secrets management
+
+          ### ⚠️ SECURITY REVIEW REQUIRED
+          This PR requires careful security review before merging:
+          - [ ] Verify NO internal secrets, credentials, or tokens are exposed
+          - [ ] Check that internal URLs, hostnames, and service endpoints are removed
+          - [ ] Ensure internal-only features and configurations are excluded
+          - [ ] Review conflict resolution decisions carefully
+          - [ ] Confirm no proprietary or confidential information is present
+          - [ ] Check that internal team member info is not exposed
+
+          ### Automation
+          This branch was prepared by the bidirectional sync workflow using Claude Code for merge resolution and security filtering.
+
+          **Merge state at start:** ${{ env.MERGE_STATE }}
+
+          EOF
+
+          PR_URL=$(gh pr list \
+            --base "${{ env.PUBLIC_BRANCH }}" \
+            --head "${{ env.BRANCH_NAME }}" \
+            --json url \
+            --jq '.[0].url')
+
+          if [ -z "${PR_URL}" ]; then
+            gh pr create \
+              --title "sync(upstream): internal ${{ env.INTERNAL_SHORT }}" \
+              --body-file pr_body.md \
+              --base "${{ env.PUBLIC_BRANCH }}" \
+              --head "${{ env.BRANCH_NAME }}"
+          else
+            gh pr edit "${PR_URL}" \
+              --title "sync(upstream): internal ${{ env.INTERNAL_SHORT }}" \
+              --body-file pr_body.md
+          fi
+
+      - name: Upstream sync summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## Upstream Sync Summary (Internal → Public)" >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo "- Provider: AWS Bedrock" >> "$GITHUB_STEP_SUMMARY"
+          echo "- AWS Region: ${SYNC_AWS_REGION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Public repository: ${PUBLIC_REPO}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Public branch: ${PUBLIC_BRANCH}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Internal branch: ${INTERNAL_BRANCH}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Internal commit: ${{ env.INTERNAL_SHORT }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Sync branch: ${{ env.BRANCH_NAME }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Merge state at start: ${{ env.MERGE_STATE }}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.finalize_upstream.outputs.has_changes }}" = "true" ]; then
+            echo "- Result: ✅ sync branch pushed" >> "$GITHUB_STEP_SUMMARY"
+            echo "- ⚠️  **Security review required before merging**" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Result: ℹ️ no changes to push" >> "$GITHUB_STEP_SUMMARY"
+          fi
