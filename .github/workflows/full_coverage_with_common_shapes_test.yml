@@ -174,6 +174,7 @@ jobs:
               -v /shared/builds/${BUILD_ID}:/workspace/output \
               -v /home/${BUILD_SERVER_USER}/tools/bmg-ocloc:/workspace/tools/bmg-ocloc:ro \
               -v /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source/.github/docker/build.sh:/workspace/bin/build.sh:ro \
+              -e DISABLE_FLASH_ATTENTION=0 \
               -e SYCL_TARGET=${{ matrix.sycl_target }} \
               -e BUILD_TARGETS=all \
               -e NINJA_JOBS=52 \
@@ -348,7 +349,7 @@ jobs:
         run: |
           cd ${BUILD_DIR:-build}
           if [ "${{ matrix.gpu }}" = "BMG" ]; then
-            ctest -R cbenchmarks -E "flash_attention" --output-on-failure
+            ctest -R cbenchmarks --output-on-failure
           elif [ "${{ matrix.gpu }}" = "PVC" ]; then
             ctest -R cbenchmarks -E "fp8|config_file_bmg_prefill_bf16|prefill_legacy_xe_config_file_pvc" --output-on-failure
           else
