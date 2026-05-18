@@ -954,9 +954,12 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
 #endif
     };
     compat::experimental::launch_policy policy{sycl_grid, sycl_block, launch_props, kernel_props};
+#if defined(CUTLASS_SYCL_PROFILING_ENABLED)
     auto event = compat::experimental::launch<cutlass::device_kernel<FMHAKernel>, FMHAKernel>(policy, params);
-
     EventManager::getInstance().addEvent(event);
+#else
+    compat::experimental::launch<cutlass::device_kernel<FMHAKernel>, FMHAKernel, false>(policy, params);
+#endif
   }
 
   cutlass::Status run(const Options &options, const cutlass::KernelHardwareInfo &hw_info) {
