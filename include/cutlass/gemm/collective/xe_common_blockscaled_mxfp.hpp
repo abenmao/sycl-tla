@@ -193,4 +193,36 @@ namespace cutlass::gemm::collective
                             make_scaled_offsets_k<IterK, MmaK, GroupK, BlockShapeB>());
   }
 
+  template <class ElementScale, class CopyOp, int SgMN, int SubgroupSize, class ScaleFragment, class ScaleTensor>
+  CUTLASS_DEVICE static void
+  fill_scalar_bdpas_scale_fragment(ScaleFragment &fragment,
+                                   ScaleTensor const &scale_tensor,
+                                   int mn_coord,
+                                   int k_scale_base,
+                                   int l_coord,
+                                   int mn_extent,
+                                   int k_scale_extent,
+                                   int lane_id) {
+    constexpr int AtomHeight = CopyOp::AtomHeight;
+    constexpr int AtomWidth = CopyOp::AtomWidth;
+    constexpr int BlockWidth = CopyOp::AtomWidth / CopyOp::BlockCount;
+    constexpr int BlockSize = AtomHeight * BlockWidth;
+    constexpr int ScaleTraitsSize = AtomHeight * AtomWidth / SubgroupSize;
+    constexpr int ScaleTraitsNum = cute::ceil_div(SgMN, AtomWidth);
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int tile = 0; tile < ScaleTraitsNum; ++tile) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int v = 0; v < ScaleTraitsSize; ++v) {
+        int const linear = lane_id + SubgroupSize * v;
+        int const block = linear / BlockSize;
+        int const block_offset = linear - block * BlockSize;
+        int const mn_abs = mn_coord + tile * AtomWidth + block * BlockWidth + (block_offset % BlockWidth);
+        int const k_scale_idx = k_scale_base + (block_offset / BlockWidth);
+        bool const in_bounds = (mn_abs < mn_extent) && (k_scale_idx < k_scale_extent);
+        fragment(v, tile, 0) = in_bounds ? scale_tensor(mn_abs, k_scale_idx, l_coord) : ElementScale(0);
+      }
+    }
+  }
+
 } // namespace cutlass::gemm::collective

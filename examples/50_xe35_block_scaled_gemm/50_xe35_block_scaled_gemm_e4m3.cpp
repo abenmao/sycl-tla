@@ -94,12 +94,11 @@ cutlass::Status run_mx_case(Options & options){
           FusionCallBacks,
           void, void>;
 
-  // 2D block load requires scale surface width to be 4-byte aligned.
-  // For 8-bit scale elements, M and N must be multiples of 4.
+  // 2D block load for scale A requires M to be 4-byte aligned.
   constexpr int ScaleAlignElems = cute::ceil_div(4, (int)sizeof(ElementScale));
-  bool scale_aligned = (options.m % ScaleAlignElems == 0) && (options.n % ScaleAlignElems == 0);
+  bool scale_m_aligned = (options.m % ScaleAlignElems == 0);
 
-  if (scale_aligned) {
+  if (scale_m_aligned) {
     // Fast path: 2D block load for scale factors (hardware BDPAS)
     using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages, GroupSize>;
     using CollectiveMainloop = cutlass::gemm::collective::CollectiveMma<
@@ -125,7 +124,7 @@ cutlass::Status run_mx_case(Options & options){
     hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
     CUTLASS_CHECK(ExampleRunner<Gemm>{}.run(options, hw_info));
   } else {
-    // Scalar fallback: per-element scalar loads for scale factors (software-scaled DPAS).
+    // Scalar fallback: per-element scalar loads for scale factors with BDPAS.
     using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaledImpl<
         PipelineStages, cute::tuple<cute::_1, cute::_1, cute::Int<GroupSize>>>;
     using CollectiveMainloop = cutlass::gemm::collective::CollectiveMma<

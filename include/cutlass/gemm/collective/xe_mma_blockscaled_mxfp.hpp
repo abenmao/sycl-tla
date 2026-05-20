@@ -46,9 +46,22 @@ using namespace cute;
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
+namespace detail {
+
+template <class GroupSizeK_>
+struct MxfpScalarScaleLoadGroupSize : GroupSizeK_ {};
+
+template <class GroupSize_>
+struct IsMxfpScalarScaleLoadGroupSize : cute::false_type {};
+
+template <class GroupSizeK_>
+struct IsMxfpScalarScaleLoadGroupSize<MxfpScalarScaleLoadGroupSize<GroupSizeK_>> : cute::true_type {};
+
+} // namespace detail
+
 template <
   int Stages,
-  int GroupSize,
+  class GroupSize_,
   class KernelSchedule,
   class TileShape_,
   class ElementPairA_,
@@ -65,7 +78,7 @@ template <
   class SmemCopyAtomB_,
   class TransformB_>
 struct CollectiveMma<
-  MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::Int<GroupSize>, KernelSchedule>,
+  MainloopIntelXeXMX16BlockScaledImpl<Stages, GroupSize_, KernelSchedule>,
     TileShape_,
     ElementPairA_,
     StridePairA_,
@@ -85,7 +98,7 @@ public:
   //
   // Type Aliases
   //
-  using DispatchPolicy = MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::Int<GroupSize>, KernelSchedule>;
+  using DispatchPolicy = MainloopIntelXeXMX16BlockScaledImpl<Stages, GroupSize_, KernelSchedule>;
   using WorkgroupTileShape = TileShape_;
 
   using GmemTiledCopyPairA = GmemTiledCopyPairA_;
@@ -164,6 +177,8 @@ public:
       return cute::is_same_v<LeftmostStrideB, _1>;
     }
   }();
+
+  static constexpr int GroupSize = int(GroupSize_{});
   
   static_assert(!(cute::is_same_v<ElementA, cutlass::float_e2m1_t> || 
                   cute::is_same_v<ElementB, cutlass::float_e2m1_t>) || (GroupSize == 32), 
@@ -203,6 +218,7 @@ public:
   using SubgroupTileShape = Shape<C<SG_M>, C<SG_N>, C<SG_K>>;
 
   static constexpr auto GroupK = GroupSize;
+  static constexpr bool kScalarScaleLoad = detail::IsMxfpScalarScaleLoadGroupSize<GroupSize_>::value;
 
   static_assert(SG_K >= 32, "Intel Xe blockscaled MMA requires SG_K to be at least 32.");
 
@@ -310,14 +326,14 @@ public:
       CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Problem Size doesn't meet the minimum alignment requirements for XE 2D copy.\n");
     }
 
-    // 2D block load requires M/N to be multiples of ScaleAlignElems (4 for 8-bit scales).
-    // For unaligned M/N, use the tuple-based MXFP block-scaled scalar scale-load variant instead.
-    if (M % ScaleAlignElems != 0 || N % ScaleAlignElems != 0) {
-      CUTLASS_TRACE_HOST("  CAN IMPLEMENT: M/N not aligned for 2D block load of scale factors. "
-                         "Use the tuple-based MXFP BlockScaled scalar scale-load variant "
-                         "(e.g. MainloopIntelXeXMX16BlockScaledImpl<..., tuple<_1, _1, Int<32>>>) "
-                         "for arbitrary M/N.\n");
-      implementable = false;
+    if constexpr (!kScalarScaleLoad) {
+      // 2D block load requires M/N to be multiples of ScaleAlignElems (4 for 8-bit scales).
+      // For unaligned M/N, use the scalar scale-load BDPAS fallback instead.
+      if (M % ScaleAlignElems != 0 || N % ScaleAlignElems != 0) {
+        CUTLASS_TRACE_HOST("  CAN IMPLEMENT: M/N not aligned for 2D block load of scale factors. "
+                           "Use the MXFP BlockScaled scalar scale-load BDPAS fallback for arbitrary M/N.\n");
+        implementable = false;
+      }
     }
 
     return implementable;
@@ -392,6 +408,80 @@ public:
     const int l_coord = l_idx;
 
     const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K_start));
+
+    if constexpr (kScalarScaleLoad) {
+      constexpr int barrier_scope = 2;
+      const int M_extent = get<0>(mainloop.mAscale.shape());
+      const int N_extent = get<0>(mainloop.mBscale.shape());
+      const int K_scale_extent = get<1>(mainloop.mAscale.shape());
+      const int lane_id = thread_idx % SubgroupSize;
+
+      using ScalarScaleCopyA = typename ScaleCopyTraits<ElementScaleA, cute::ceil_div(SG_K, GroupK), SG_M>::Type;
+      using ScalarScaleCopyB = typename ScaleCopyTraits<ElementScaleB, cute::ceil_div(SG_K, GroupK), SG_N>::Type;
+      constexpr int ScalarScaleTraitsSizeA = ScalarScaleCopyA::AtomHeight * ScalarScaleCopyA::AtomWidth / SubgroupSize;
+      constexpr int ScalarScaleTraitsSizeB = ScalarScaleCopyB::AtomHeight * ScalarScaleCopyB::AtomWidth / SubgroupSize;
+      constexpr int ScalarScaleTraitsNumA = cute::ceil_div(SG_M, ScalarScaleCopyA::AtomWidth);
+      constexpr int ScalarScaleTraitsNumB = cute::ceil_div(SG_N, ScalarScaleCopyB::AtomWidth);
+      auto fragment_scaleA = make_tensor<ElementScaleA>(
+        Layout<Shape<Int<ScalarScaleTraitsSizeA>, Int<ScalarScaleTraitsNumA>, _1>>{});
+      auto fragment_scaleB = make_tensor<ElementScaleB>(
+        Layout<Shape<Int<ScalarScaleTraitsSizeB>, Int<ScalarScaleTraitsNumB>, _1>>{});
+      using ScalarBlockShapeA = Shape<Int<ScalarScaleCopyA::AtomHeight>,
+                                      Int<ScalarScaleCopyA::AtomWidth / ScalarScaleCopyA::BlockCount>>;
+      using ScalarBlockShapeB = Shape<Int<ScalarScaleCopyB::AtomHeight>,
+                                      Int<ScalarScaleCopyB::AtomWidth / ScalarScaleCopyB::BlockCount>>;
+      auto [scale_m_offsets, scale_n_offsets, scale_ak_offsets, scale_bk_offsets] = make_scaled_offsets<
+          GemmIterM::value, GemmIterN::value, GemmIterK::value, MMA_K, GroupK,
+          ScalarBlockShapeA, ScalarBlockShapeB>();
+
+      using scaleA_vec_t = intel::vector_t<ElementScaleA, decltype(size(fragment_scaleA))::value>;
+      using scaleB_vec_t = intel::vector_t<ElementScaleB, decltype(size(fragment_scaleB))::value>;
+
+      clear(accum);
+
+      int prefetch_k = k_start_idx;
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
+        prefetch(prefetch_a, pAgA(_, _, _, prefetch_k));
+        prefetch(prefetch_b, pBgB(_, _, _, prefetch_k));
+      }
+
+      const int k_tile_end = k_tile_count + k_start_idx;
+      for (int k_tile = k_start_idx; k_tile < k_tile_end; k_tile++, prefetch_k++) {
+        const int k_scale_base = (k_tile * BLK_K) / GroupK;
+        fill_scalar_bdpas_scale_fragment<ElementScaleA, ScalarScaleCopyA, SG_M, SubgroupSize>(
+            fragment_scaleA, mainloop.mAscale, m_coord, k_scale_base, l_coord,
+            M_extent, K_scale_extent, lane_id);
+        fill_scalar_bdpas_scale_fragment<ElementScaleB, ScalarScaleCopyB, SG_N, SubgroupSize>(
+            fragment_scaleB, mainloop.mBscale, n_coord, k_scale_base, l_coord,
+            N_extent, K_scale_extent, lane_id);
+
+        barrier_arrive(barrier_scope);
+
+        copy(copy_a, tAgA(_,_,_,k_tile), tArA);
+        copy(copy_b, tBgB(_,_,_,k_tile), tBrB);
+
+        if (prefetch_k < k_tile_end) {
+          prefetch(prefetch_a, pAgA(_, _, _, prefetch_k));
+          prefetch(prefetch_b, pBgB(_, _, _, prefetch_k));
+        }
+
+        reorder(tArA, tCrA);
+        reorder(tBrB, tCrB);
+
+        Tensor scaleA = make_tensor(recast<scaleA_vec_t>(fragment_scaleA).data(),
+                                    make_layout(Shape<_1, GemmIterM, _1>{}, Stride<_1, _0, _0>{}));
+        Tensor scaleB = make_tensor(recast<scaleB_vec_t>(fragment_scaleB).data(),
+                                    make_layout(Shape<_1, GemmIterN, _1>{}, Stride<_1, _0, _0>{}));
+        cute::gemm(tiled_mma, make_zip_tensor(tCrA, scaleA, scale_m_offsets, scale_ak_offsets),
+                  make_zip_tensor(tCrB, scaleB, scale_n_offsets, scale_bk_offsets), accum);
+
+        barrier_wait(barrier_scope);
+      }
+
+      return;
+    }
+
     constexpr int k_reload_factor = cute::max(GroupK / BLK_K, 1);
 
     auto [tiled_copy_scaleA, copy_iter_scaleA, fragment_scaleA] = make_scaled_copy<GmemTiledCopyScaleA, NonVoidElementScaleA,
@@ -440,6 +530,62 @@ public:
                 make_zip_tensor(tCrB, scaleB, scale_n_offsets, scale_bk_offsets), accum);
     }
   }
+};
+
+template <
+  int Stages,
+  class GroupSizeK_,
+  class KernelSchedule,
+  class TileShape_,
+  class ElementPairA_,
+  class StridePairA_,
+  class ElementPairB_,
+  class StridePairB_,
+  class TiledMma_,
+  class GmemTiledCopyPairA_,
+  class SmemLayoutAtomA_,
+  class SmemCopyAtomA_,
+  class TransformA_,
+  class GmemTiledCopyPairB_,
+  class SmemLayoutAtomB_,
+  class SmemCopyAtomB_,
+  class TransformB_>
+struct CollectiveMma<
+  MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::tuple<cute::_1, cute::_1, GroupSizeK_>, KernelSchedule>,
+    TileShape_,
+    ElementPairA_,
+    StridePairA_,
+    ElementPairB_,
+    StridePairB_,
+    TiledMma_,
+    GmemTiledCopyPairA_,
+    SmemLayoutAtomA_,
+    SmemCopyAtomA_,
+    TransformA_,
+    GmemTiledCopyPairB_,
+    SmemLayoutAtomB_,
+    SmemCopyAtomB_,
+    TransformB_>
+  : public CollectiveMma<MainloopIntelXeXMX16BlockScaledImpl<Stages,
+                         detail::MxfpScalarScaleLoadGroupSize<GroupSizeK_>, KernelSchedule>,
+                         TileShape_,
+                         ElementPairA_,
+                         StridePairA_,
+                         ElementPairB_,
+                         StridePairB_,
+                         TiledMma_,
+                         GmemTiledCopyPairA_,
+                         SmemLayoutAtomA_,
+                         SmemCopyAtomA_,
+                         TransformA_,
+                         GmemTiledCopyPairB_,
+                         SmemLayoutAtomB_,
+                         SmemCopyAtomB_,
+                         TransformB_>
+{
+public:
+  using DispatchPolicy = MainloopIntelXeXMX16BlockScaledImpl<Stages,
+      cute::tuple<cute::_1, cute::_1, GroupSizeK_>, KernelSchedule>;
 };
 
 } // namespace cutlass::gemm::collective

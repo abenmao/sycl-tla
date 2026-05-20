@@ -44,7 +44,7 @@ namespace cutlass::gemm::collective {
 
 template <
   int Stages,
-  int GroupSize,
+  class GroupSize_,
   class Schedule,
   class TileShape_,
   class ElementPairA_,
@@ -61,7 +61,7 @@ template <
   class SmemCopyAtomB_,
   class TransformB_>
 struct CollectiveMma<
-  MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, cute::Int<GroupSize>, Schedule>,
+  MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, GroupSize_, Schedule>,
     TileShape_,
     ElementPairA_,
     StridePairA_,
@@ -76,7 +76,7 @@ struct CollectiveMma<
     SmemLayoutAtomB_,
     SmemCopyAtomB_,
     TransformB_> : 
-    public CollectiveMma<MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::Int<GroupSize>>,
+    public CollectiveMma<MainloopIntelXeXMX16BlockScaledImpl<Stages, GroupSize_, KernelXe>,
                               TileShape_,
                               ElementPairA_,
                               StridePairA_,
@@ -96,8 +96,9 @@ public:
   //
   // Type Aliases
   //
-  using DispatchPolicy = MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, cute::Int<GroupSize>, Schedule>;
-  using Base = CollectiveMma<MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::Int<GroupSize>>,
+  using DispatchPolicy = MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, GroupSize_, Schedule>;
+  static constexpr int GroupSize = int(GroupSize_{});
+  using Base = CollectiveMma<MainloopIntelXeXMX16BlockScaledImpl<Stages, GroupSize_, KernelXe>,
                     TileShape_,
                     ElementPairA_,
                     StridePairA_,
@@ -227,6 +228,62 @@ public:
     return implementable;
   }
 
+};
+
+template <
+  int Stages,
+  class GroupSizeK_,
+  class Schedule,
+  class TileShape_,
+  class ElementPairA_,
+  class StridePairA_,
+  class ElementPairB_,
+  class StridePairB_,
+  class TiledMma_,
+  class GmemTiledCopyPairA_,
+  class SmemLayoutAtomA_,
+  class SmemCopyAtomA_,
+  class TransformA_,
+  class GmemTiledCopyPairB_,
+  class SmemLayoutAtomB_,
+  class SmemCopyAtomB_,
+  class TransformB_>
+struct CollectiveMma<
+  MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, cute::tuple<cute::_1, cute::_1, GroupSizeK_>, Schedule>,
+    TileShape_,
+    ElementPairA_,
+    StridePairA_,
+    ElementPairB_,
+    StridePairB_,
+    TiledMma_,
+    GmemTiledCopyPairA_,
+    SmemLayoutAtomA_,
+    SmemCopyAtomA_,
+    TransformA_,
+    GmemTiledCopyPairB_,
+    SmemLayoutAtomB_,
+    SmemCopyAtomB_,
+    TransformB_> :
+    public CollectiveMma<MainloopIntelXeXMX16BlockScaledGroupImpl<Stages,
+                         detail::MxfpScalarScaleLoadGroupSize<GroupSizeK_>, Schedule>,
+                         TileShape_,
+                         ElementPairA_,
+                         StridePairA_,
+                         ElementPairB_,
+                         StridePairB_,
+                         TiledMma_,
+                         GmemTiledCopyPairA_,
+                         SmemLayoutAtomA_,
+                         SmemCopyAtomA_,
+                         TransformA_,
+                         GmemTiledCopyPairB_,
+                         SmemLayoutAtomB_,
+                         SmemCopyAtomB_,
+                         TransformB_>
+{
+public:
+  using DispatchPolicy = MainloopIntelXeXMX16BlockScaledGroupImpl<Stages,
+      cute::tuple<cute::_1, cute::_1, GroupSizeK_>, Schedule>;
 };
 
 } // namespace cutlass::gemm::collective
