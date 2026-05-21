@@ -550,7 +550,7 @@ The full example in `examples/cute/tutorial/xe4/gemm_tiled_tmma.cpp` uses a
   global memory into shared local memory (SLM) using plain `copy()`.
 - **Consumer subgroups** (the remaining 8) run TMM via `tmma_gemm` (in
   `examples/cute/tutorial/xe4/gemm_tiled_tmma.hpp`), which partitions the
-  SLM tensors with `TiledMMA` and calls `MMA_Op::fma` directly.
+  SLM tensors with `TiledMMA` and calls `cute::gemm(tiled_mma, ...)`.
 
 The kernel skeleton (from `gemm_device` in `gemm_tiled_tmma.cpp`):
 
@@ -604,14 +604,8 @@ for (int i = 0; i < size(tAgA); ++i) tArA(i) = tAgA(i);
 for (int i = 0; i < size(tBgB); ++i) tBrB(i) = tBgB(i);
 for (int i = 0; i < size(tDgD); ++i) tDrD(i) = tDgD(i);
 
-// MNK loop — calls MMA_Op::fma for each (m, n, k) combination
-CUTE_UNROLL
-for (int k = 0; k < K_iters; ++k)
-  CUTE_UNROLL
-  for (int m = 0; m < M_iters; ++m)
-    CUTE_UNROLL
-    for (int n = 0; n < N_iters; ++n)
-      MMA_Op::fma(tDrD(0,m,n), tArA(0,m,k), tBrB(0,n,k), tDrD(0,m,n));
+// Compute with TMM through CuTe's tiled MMA path
+cute::gemm(tiled_mma, tArA, tBrB, tDrD);
 
 copy(tDrD, tDgD);  // write register fragments back to SLM output tile
 ```

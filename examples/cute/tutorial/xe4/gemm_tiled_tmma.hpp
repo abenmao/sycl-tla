@@ -59,6 +59,8 @@ CUTE_HOST_DEVICE
 void tmma_gemm(TensorA const& gA, TensorB const& gB, TensorD & gD, 
     sycl::nd_item<3> it, StreamT out = StreamT{} ) {
 
+  (void)out;
+
 	constexpr int kSubGroupSize = cute::size(typename MMA_Op::ThrID{});
   static_assert(kSubGroupSize == 32,
       "tmma_gemm requires a subgroup size of exactly 32!");
@@ -67,9 +69,6 @@ void tmma_gemm(TensorA const& gA, TensorB const& gB, TensorD & gD,
   using TB = typename TensorB::value_type;
   using TD = typename TensorD::value_type;
 
-  auto my_sg_id = it.get_sub_group().get_group_id();
-  auto my_lane_id = it.get_sub_group().get_local_id(); // within the subgroup //
-  auto my_wg_id = it.get_group(2);
   // assumes local_range(1,1,workgroup_size) //
   auto my_wg_level_lane_id =  // lane-id within the workgroup //
     (it.get_local_id(2) - (kSubGroupSize*kNumProducerSGs)); 
@@ -110,41 +109,8 @@ void tmma_gemm(TensorA const& gA, TensorB const& gB, TensorD & gD,
   }
 
 
-  // Call cute::gemm with tiled_mma directly //
-  // TODO(vamsikku): currently direct call gemm will do a scalar explosion of
-  // the fma also extent does not directly work on marray it needs to be replaced
-  // with carrays and Variadic templates which can unpack arguments //
-  //gemm(tiled_mma, tArA, tBrB, tDrD);
-
-  // Extract the sizes of the REST dimensions
-  // tCrC is ((Vals), REST_M, REST_N), so size<1> is M, size<2> is N
-  int const M_iters = cute::size<1>(tDrD);
-  int const N_iters = cute::size<2>(tDrD);
-  int const K_iters = cute::size<2>(tArA);
-
-  if (!my_lane_id && !my_wg_id) {
-    //out << "Layout:" << thr_sg_layout << std::endl;
-    out << "my_wg_lane_id=" << my_wg_level_lane_id << sycl::endl; 
-    out << "sg=" << my_sg_id << " " << "(rest: m x n x k)="
-        << M_iters << " x " << N_iters << " x " << K_iters << " Addr="
-        << &tAgA(0) << sycl::endl;;
-  }
-
-  CUTE_UNROLL
-  for (int k = 0; k < K_iters; ++k) {
-    CUTE_UNROLL
-    for (int m = 0; m < M_iters; ++m) {
-      CUTE_UNROLL
-      for (int n = 0; n < N_iters; ++n) {
-        MMA_Op::fma(
-					*reinterpret_cast<typename MMA_Op::DRegisters *>(&tDrD(0, m, n)),
-          *reinterpret_cast<typename MMA_Op::ARegisters const *>(&tArA(0, m, k)),
-          *reinterpret_cast<typename MMA_Op::BRegisters const *>(&tBrB(0, n, k)),
-          *reinterpret_cast<typename MMA_Op::DRegisters *>(&tDrD(0, m, n))
-        );
-      }
-    }
-  }
+  // Call cute::gemm with tiled_mma directly.
+  cute::gemm(tiled_mma, tArA, tBrB, tDrD);
   copy(tDrD, tDgD);
 }
 

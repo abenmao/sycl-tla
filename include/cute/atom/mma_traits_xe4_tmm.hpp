@@ -277,5 +277,58 @@ struct MMA_Traits<XE4_TMM<d_type, a_type, b_type, c_type, N>>
   using CLayout = tmm::CLayout<c_type, M_atom, N>;
 };
 
+template <class d_type, class a_type, class b_type, class c_type, int N,
+          class TD, class DLayout,
+          class TA, class ALayout,
+          class TB, class BLayout,
+          class TC, class CLayout>
+CUTE_HOST_DEVICE constexpr
+void
+mma_unpack(MMA_Traits<XE4_TMM<d_type, a_type, b_type, c_type, N>> const&,
+           Tensor<TD, DLayout>      & D,
+           Tensor<TA, ALayout> const& A,
+           Tensor<TB, BLayout> const& B,
+           Tensor<TC, CLayout> const& C)
+{
+  static_assert(is_rmem<TD>::value, "Expected registers in MMA_Atom::call");
+  static_assert(is_rmem<TA>::value, "Expected registers in MMA_Atom::call");
+  static_assert(is_rmem<TB>::value, "Expected registers in MMA_Atom::call");
+  static_assert(is_rmem<TC>::value, "Expected registers in MMA_Atom::call");
+
+  using MMA_Op   = XE4_TMM<d_type, a_type, b_type, c_type, N>;
+  using RegTypeD = typename MMA_Op::DRegisters;
+  using RegTypeA = typename MMA_Op::ARegisters;
+  using RegTypeB = typename MMA_Op::BRegisters;
+  using RegTypeC = typename MMA_Op::CRegisters;
+
+  Tensor rA = recast<RegTypeA>(A);
+  Tensor rB = recast<RegTypeB>(B);
+  Tensor rD = recast<RegTypeD>(D);
+  Tensor rC = recast<RegTypeC>(C);
+
+  CUTE_STATIC_ASSERT_V(size(rA) == Int<1>{});
+  CUTE_STATIC_ASSERT_V(size(rB) == Int<1>{});
+  CUTE_STATIC_ASSERT_V(size(rD) == Int<1>{});
+  CUTE_STATIC_ASSERT_V(size(rC) == Int<1>{});
+
+  MMA_Op::fma(rD[0], rA[0], rB[0], rC[0]);
+}
+
+template <class d_type, class a_type, class b_type, class c_type, int N,
+          class TD, class DLayout,
+          class TA, class ALayout,
+          class TB, class BLayout,
+          class TC, class CLayout>
+CUTE_HOST_DEVICE constexpr
+void
+mma_unpack(MMA_Traits<XE4_TMM<d_type, a_type, b_type, c_type, N>> const& traits,
+           Tensor<TD, DLayout>     && D,
+           Tensor<TA, ALayout> const& A,
+           Tensor<TB, BLayout> const& B,
+           Tensor<TC, CLayout> const& C)
+{
+  mma_unpack(traits, D, A, B, C);
+}
+
 
 } // namespace cute
