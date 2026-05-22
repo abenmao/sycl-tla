@@ -146,6 +146,8 @@ if (CUTLASS_ENABLE_SYCL)
     bmg
     intel_gpu_cri
     cri
+    intel_gpu_pisa
+    pisa
   )
 
   foreach(ITEM IN LISTS DPCPP_SYCL_TARGET_LIST)
