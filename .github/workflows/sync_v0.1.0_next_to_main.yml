@@ -11,5 +11,4 @@ jobs:
     with:
         source_branch: v0.1.0_next
         target_branch: main
-    secrets:
-        GH_TOKEN: ${{ secrets.HABDEVOPS_GITHUB_TOKEN }}
+        host_id: host/github-apps-oidc/64519-fusion_ci_cut_gh
