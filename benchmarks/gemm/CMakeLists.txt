@@ -31,7 +31,9 @@
 
 if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
   set(CONFIG_FILE_CRI_SMALL --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_small_gemm.in)
-  set(GEMM_CONFIG_ARGS CONFIG_FILE_CRI_SMALL)
+  # ByteDance real-scenario LLM shapes from xpu-perf/micro_perf workloads
+  set(CONFIG_FILE_BYTEDANCE --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/bytedance/input_small_gemm.in)
+  set(GEMM_CONFIG_ARGS CONFIG_FILE_CRI_SMALL CONFIG_FILE_BYTEDANCE)
 else()
   set(CONFIG_FILE_BMG_SMALL --config_file=${CUTLASS_DIR}/benchmarks/device/bmg/input_files/input_small_gemm.in)
   set(GEMM_CONFIG_ARGS CONFIG_FILE_BMG_SMALL)
