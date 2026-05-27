@@ -44,7 +44,7 @@ namespace cutlass::gemm::collective {
 
 template <
   int Stages,
-  class GroupSize_,
+  int GroupSize,
   class Schedule,
   class TileShape_,
   class ElementPairA_,
@@ -61,7 +61,7 @@ template <
   class SmemCopyAtomB_,
   class TransformB_>
 struct CollectiveMma<
-  MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, GroupSize_, Schedule>,
+  MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, cute::Int<GroupSize>, Schedule>,
     TileShape_,
     ElementPairA_,
     StridePairA_,
@@ -76,7 +76,7 @@ struct CollectiveMma<
     SmemLayoutAtomB_,
     SmemCopyAtomB_,
     TransformB_> : 
-    public CollectiveMma<MainloopIntelXeXMX16BlockScaledImpl<Stages, GroupSize_, KernelXe>,
+    public CollectiveMma<MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::Int<GroupSize>, KernelXe>,
                               TileShape_,
                               ElementPairA_,
                               StridePairA_,
@@ -96,9 +96,8 @@ public:
   //
   // Type Aliases
   //
-  using DispatchPolicy = MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, GroupSize_, Schedule>;
-  static constexpr int GroupSize = int(GroupSize_{});
-  using Base = CollectiveMma<MainloopIntelXeXMX16BlockScaledImpl<Stages, GroupSize_, KernelXe>,
+  using DispatchPolicy = MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, cute::Int<GroupSize>, Schedule>;
+  using Base = CollectiveMma<MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::Int<GroupSize>, KernelXe>,
                     TileShape_,
                     ElementPairA_,
                     StridePairA_,
@@ -115,7 +114,6 @@ public:
                     TransformB_>;
 
     using BaseArguments = typename Base::Arguments;
-    using BaseParams = typename Base::Params;
 
     using ElementA = typename Base::ElementA;
     using ElementB = typename Base::ElementB;
@@ -164,12 +162,8 @@ public:
   static constexpr Params
   to_underlying_arguments(ProblemShape const &problem_shape,
                           Arguments const &args, void *workspace) {
+    (void)problem_shape;
     (void)workspace;
-
-    auto problem_shape_MNK = repeat_like(typename ProblemShape::UnderlyingProblemShape{}, int32_t(1));;
-    auto init_M = get<0>(problem_shape_MNK);
-    auto init_N = get<1>(problem_shape_MNK);
-    auto init_K = get<2>(problem_shape_MNK);
 
     return Params{
       args
@@ -228,62 +222,6 @@ public:
     return implementable;
   }
 
-};
-
-template <
-  int Stages,
-  class GroupSizeK_,
-  class Schedule,
-  class TileShape_,
-  class ElementPairA_,
-  class StridePairA_,
-  class ElementPairB_,
-  class StridePairB_,
-  class TiledMma_,
-  class GmemTiledCopyPairA_,
-  class SmemLayoutAtomA_,
-  class SmemCopyAtomA_,
-  class TransformA_,
-  class GmemTiledCopyPairB_,
-  class SmemLayoutAtomB_,
-  class SmemCopyAtomB_,
-  class TransformB_>
-struct CollectiveMma<
-  MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, cute::tuple<cute::_1, cute::_1, GroupSizeK_>, Schedule>,
-    TileShape_,
-    ElementPairA_,
-    StridePairA_,
-    ElementPairB_,
-    StridePairB_,
-    TiledMma_,
-    GmemTiledCopyPairA_,
-    SmemLayoutAtomA_,
-    SmemCopyAtomA_,
-    TransformA_,
-    GmemTiledCopyPairB_,
-    SmemLayoutAtomB_,
-    SmemCopyAtomB_,
-    TransformB_> :
-    public CollectiveMma<MainloopIntelXeXMX16BlockScaledGroupImpl<Stages,
-                         detail::MxfpScalarScaleLoadGroupSize<GroupSizeK_>, Schedule>,
-                         TileShape_,
-                         ElementPairA_,
-                         StridePairA_,
-                         ElementPairB_,
-                         StridePairB_,
-                         TiledMma_,
-                         GmemTiledCopyPairA_,
-                         SmemLayoutAtomA_,
-                         SmemCopyAtomA_,
-                         TransformA_,
-                         GmemTiledCopyPairB_,
-                         SmemLayoutAtomB_,
-                         SmemCopyAtomB_,
-                         TransformB_>
-{
-public:
-  using DispatchPolicy = MainloopIntelXeXMX16BlockScaledGroupImpl<Stages,
-      cute::tuple<cute::_1, cute::_1, GroupSizeK_>, Schedule>;
 };
 
 } // namespace cutlass::gemm::collective

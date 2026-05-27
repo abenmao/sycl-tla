@@ -94,62 +94,29 @@ cutlass::Status run_mx_case(Options & options){
           FusionCallBacks,
           void, void>;
 
-  // 2D block load for scale A requires M to be 4-byte aligned.
-  constexpr int ScaleAlignElems = cute::ceil_div(4, (int)sizeof(ElementScale));
-  bool scale_m_aligned = (options.m % ScaleAlignElems == 0);
+  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages, GroupSize>;
+  using CollectiveMainloop = cutlass::gemm::collective::CollectiveMma<
+          GEMMDispatchPolicy,
+          TileShape,
+          cute::tuple<ElementInputA, ElementScale>,
+          cute::tuple<cutlass::gemm::TagToStrideA_t<LayoutA>, StrideScale>,
+          cute::tuple<ElementInputB, ElementScale>,
+          cute::tuple<cutlass::gemm::TagToStrideB_t<LayoutB>, StrideScale>,
+          TiledMma,
+          cute::tuple<GmemTiledCopyA, GmemTiledCopyScaleA>, void, void, cute::identity,
+          cute::tuple<GmemTiledCopyB, GmemTiledCopyScaleB>, void, void, cute::identity
+  >;
 
-  if (scale_m_aligned) {
-    // Fast path: 2D block load for scale factors (hardware BDPAS)
-    using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages, GroupSize>;
-    using CollectiveMainloop = cutlass::gemm::collective::CollectiveMma<
-            GEMMDispatchPolicy,
-            TileShape,
-            cute::tuple<ElementInputA, ElementScale>,
-            cute::tuple<cutlass::gemm::TagToStrideA_t<LayoutA>, StrideScale>,
-            cute::tuple<ElementInputB, ElementScale>,
-            cute::tuple<cutlass::gemm::TagToStrideB_t<LayoutB>, StrideScale>,
-            TiledMma,
-            cute::tuple<GmemTiledCopyA, GmemTiledCopyScaleA>, void, void, cute::identity,
-            cute::tuple<GmemTiledCopyB, GmemTiledCopyScaleB>, void, void, cute::identity
-    >;
+  using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
+    Shape<int, int, int, int>,
+    CollectiveMainloop,
+    CollectiveEpilogue
+  >;
+  using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
 
-    using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
-      Shape<int, int, int, int>,
-      CollectiveMainloop,
-      CollectiveEpilogue
-    >;
-    using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-
-    cutlass::KernelHardwareInfo hw_info;
-    hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
-    CUTLASS_CHECK(ExampleRunner<Gemm>{}.run(options, hw_info));
-  } else {
-    // Scalar fallback: per-element scalar loads for scale factors with BDPAS.
-    using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaledImpl<
-        PipelineStages, cute::tuple<cute::_1, cute::_1, cute::Int<GroupSize>>>;
-    using CollectiveMainloop = cutlass::gemm::collective::CollectiveMma<
-            GEMMDispatchPolicy,
-            TileShape,
-            cute::tuple<ElementInputA, ElementScale>,
-            cute::tuple<cutlass::gemm::TagToStrideA_t<LayoutA>, StrideScale>,
-            cute::tuple<ElementInputB, ElementScale>,
-            cute::tuple<cutlass::gemm::TagToStrideB_t<LayoutB>, StrideScale>,
-            TiledMma,
-            cute::tuple<GmemTiledCopyA, GmemTiledCopyScaleA>, void, void, cute::identity,
-            cute::tuple<GmemTiledCopyB, GmemTiledCopyScaleB>, void, void, cute::identity
-    >;
-
-    using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
-      Shape<int, int, int, int>,
-      CollectiveMainloop,
-      CollectiveEpilogue
-    >;
-    using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
-
-    cutlass::KernelHardwareInfo hw_info;
-    hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
-    CUTLASS_CHECK(ExampleRunner<Gemm>{}.run(options, hw_info));
-  }
+  cutlass::KernelHardwareInfo hw_info;
+  hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
+  CUTLASS_CHECK(ExampleRunner<Gemm>{}.run(options, hw_info));
 
   return cutlass::Status::kSuccess;
 }

@@ -229,7 +229,6 @@ struct Xe2DLoadTraitsBase : Xe2DTraitsBase<Op, XMode, YMode, ValType, TiledStrid
   }
 };
 
-
 // Split a subgroup-level layout into a TV-layout.
 template <typename InLayout, int CopyBits, int ValBits, int Threads>
 struct XeInterleavedLayoutHelper {
