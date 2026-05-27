@@ -772,7 +772,6 @@ print(ThrCopy<TiledCopy, ThrIdx> const& thr_copy)
 #include <cute/atom/copy_traits_xe.hpp>
 #include <cute/atom/copy_traits_xe_2d.hpp>
 #include <cute/atom/copy_traits_xe_legacy.hpp>
-#include <cute/atom/copy_traits_xe4_adma.hpp>
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
