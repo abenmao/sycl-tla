@@ -71,7 +71,7 @@ foreach(HEAD_DIM 64 96 128 192)
       set(INPUT_MACRO "IS_FLOAT_E2M1")
     endif()
 
-   if (INPUT_TYPE STREQUAL "mx_float_e5m2_t" OR  INPUT_TYPE STREQUAL "mx_float_e4m3_t" OR INPUT_TYPE STREQUAL "mx_float_e2m1_t")
+    if (INPUT_TYPE STREQUAL "mx_float_e5m2_t" OR  INPUT_TYPE STREQUAL "mx_float_e4m3_t" OR INPUT_TYPE STREQUAL "mx_float_e2m1_t")
       cutlass_example_add_executable(
         06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM}
         06_xe_fmha_fwd_mxfp.cpp
