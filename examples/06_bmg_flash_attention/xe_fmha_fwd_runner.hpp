@@ -1255,34 +1255,4 @@ struct FMHAConfig {
     CUTLASS_CHECK(runner.run(options, hw_info));
     return 0;
   }
-
-  static int run(const Options &options) {
-    bool cached_kv = options.seq_len_kv_cache > 0;
-    if constexpr (persistent) {
-      if (options.use_paged_kv || options.seq_len_kv_cache > 0) {
-        std::cerr << "Error: Persistent kernel does not support paged/cached KV cache (use_paged_kv or seq_len_kv_cache > 0)." << std::endl;
-        return -1;
-      }
-      return run<false, false, false, cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options);
-    } else if constexpr (UseScale) {
-      // UseScale do not support CachedKV/PagedKV
-      if (options.varlen) {
-        return run<true, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler>(options);
-      } else {
-        return run<false, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler>(options);
-      }
-    } else if (options.use_paged_kv && !options.varlen) {
-      return run<false, true, true, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler>(options);
-    } else if(!options.use_paged_kv && options.varlen && !cached_kv) {
-      return run<true, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler>(options);
-    } else if(!options.use_paged_kv && !options.varlen && !cached_kv) {
-      return run<false, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler>(options);
-    } else if (!options.use_paged_kv && options.varlen && cached_kv) {
-      return run<true, true, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler>(options);
-    } else if (!options.use_paged_kv && !options.varlen && cached_kv) {
-      return run<false, true, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler>(options);
-    } else {
-      return run<true, true, true, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler>(options);
-    }
-  }
 };

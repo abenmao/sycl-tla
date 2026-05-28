@@ -1,6 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
- * Copyright (C) 2025 Intel Corporation, All rights reserved.
+ * Copyright (C) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,24 +29,21 @@
  *
  **************************************************************************************************/
 /*! \file
-    \brief Flash Attention V2 Prefill for Intel BMG
+    \brief Flash Attention V2 with Cached KV for Intel BMG
 
-    This example constructs and executes a Flash Attention Prefill kernel on Intel BMG. The
-    definition of the GEMM, options etc for this example are defined in the associated
-    bmg_flash_attn_runner.hpp header file.
+    This file instantiates only the CachedKV=true kernel variants,
+    split out from the main 06_xe_fmha_fwd.cpp to reduce per-binary compile time.
 
-    See https://arxiv.org/pdf/2307.08691 for details of Flash Attention V2 algorithm
+    Instantiated kernels (8 total):
+      - Causal × {true, false}
+      - VarLen × {true, false}
+      - CachedKV = true
+      - PagedKV × {true, false}
 
-    To run this example:
-      $ ./examples/sycl/06_bmg_flash_attention/06_xe_fmha_fwd --seq_len_qo=512
-        --seq_len_kv=512 --head_size_vo=128 --head_size_qk=128
-
-    To build & run this example (from your build dir):
-
-      $ ninja 06_xe_fmha_fwd
-      $ ./examples/sycl/06_bmg_flash_attention/06_xe_fmha_fwd
-
-    Call with `--help` for information about available options
+    To build & run (from your build dir):
+      $ ninja 06_xe_fmha_fwd_prefill_cached_kv_bfloat16_t_hdim128
+      $ ./examples/sycl/06_bmg_flash_attention/06_xe_fmha_fwd_prefill_cached_kv_bfloat16_t_hdim128 \
+            --seq_len_kv_cache=256
 */
 
 #include "xe_fmha_fwd_runner.hpp"
@@ -71,27 +67,22 @@ int main(int argc, const char **argv) {
     return -1;
   }
 
-
-#if defined(IS_MX_FLOAT_E5M2)
-  using ElementType = cutlass::mx_float8_t<float_e5m2_t>;
-  using ElementQ = typename ElementType::DataType;
-  using ElementK = typename ElementType::DataType;
-  using ElementV = typename ElementType::DataType;
-  using ElementScale = typename ElementType::ScaleFactorType;
-#elif defined(IS_MX_FLOAT_E4M3)
-  using ElementType = cutlass::mx_float8_t<float_e4m3_t>;
-  using ElementQ = typename ElementType::DataType;
-  using ElementK = typename ElementType::DataType;
-  using ElementV = typename ElementType::DataType;
-  using ElementScale = typename ElementType::ScaleFactorType;
-#elif defined(IS_MX_FLOAT_E2M1)
-  using ElementType = cutlass::mx_float4_t<float_e2m1_t>;
-  using ElementQ = typename ElementType::DataType;
-  using ElementK = typename ElementType::DataType;
-  using ElementV = bfloat16_t;
-  using ElementScale = typename ElementType::ScaleFactorType;
+#ifdef IS_FLOAT_E5M2
+  using ElementQ = cutlass::float_e5m2_t;
+  using ElementK = cutlass::float_e5m2_t;
+  using ElementV = cutlass::float_e5m2_t;
+#elif defined(IS_FLOAT_E4M3)
+  using ElementQ = cutlass::float_e4m3_t;
+  using ElementK = cutlass::float_e4m3_t;
+  using ElementV = cutlass::float_e4m3_t;
+#elif defined(IS_FLOAT_E2M1)
+  using ElementQ = cutlass::float_e2m1_t;
+  using ElementK = cutlass::float_e2m1_t;
+  using ElementV = cutlass::bfloat16_t;
 #else
-#error Only support mx_float_e5m2_t, mx_float_e4m3_t, mx_float_e2m1_t input types.
+  using ElementQ = bfloat16_t;
+  using ElementK = bfloat16_t;
+  using ElementV = bfloat16_t;
 #endif
 
  // Define the work-group tile shape depending on the head-size of the second matmul
@@ -116,11 +107,17 @@ int main(int argc, const char **argv) {
   using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
 
 #elif HEAD_DIM == 128
-  using ShapeQK = Shape<_128, _64, _32>;
-  using ShapePV = Shape<_128, _32, _64>;
-  using ShapeOut = Shape<_128, _128>;
+#if !(defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+  using ShapeQK = Shape<_256, _32, _32>;
+  using ShapePV = Shape<_256, _32, _32>;
+  using ShapeOut = Shape<_256, _128>;
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
-
+#else
+  using ShapeQK = Shape<_256, _64, _64>;
+  using ShapePV = Shape<_256, _64, _64>;
+  using ShapeOut = Shape<_256, _128>;
+  using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
+#endif
 #elif HEAD_DIM == 192
   using ShapeQK = Shape<_256, _64, _32>;
   using ShapePV = Shape<_256, _32, _64>;
@@ -129,36 +126,40 @@ int main(int argc, const char **argv) {
 
 #endif
 #elif defined(DECODE)
+
+#define NUM_SG _8
+#define KV_TILE_SIZE _512
+
 #if HEAD_DIM == 16
   /* Tiny config for testing */
   using ShapeQK = Shape<_1, _16, _16>;       // (q,k,d)
   using ShapePV = Shape<_1, _16, _16>;       // (q,v,k)
   using ShapeOut = Shape<_1, _16>;           // (q,v)
-  using SubgroupLayoutQK = Layout<Shape<_1, _2, _1>>;
+  using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 64
-    using ShapeQK = Shape<_1, _512, _64>;
-    using ShapePV = Shape<_1, _32, _512>;
+    using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
+    using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
     using ShapeOut = Shape<_1, _64>;
-    using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
+    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 96
-    using ShapeQK = Shape<_1, _512, _64>;
-    using ShapePV = Shape<_1, _32, _512>;
+    using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
+    using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
     using ShapeOut = Shape<_1, _96>;
-    using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
+    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 128
-    using ShapeQK = Shape<_1, _512, _64>;
-    using ShapePV = Shape<_1, _32, _512>;
+    using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
+    using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
     using ShapeOut = Shape<_1, _128>;
-    using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
+    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 192
-    using ShapeQK = Shape<_1, _512, _64>;
-    using ShapePV = Shape<_1, _32, _512>;
+    using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
+    using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
     using ShapeOut = Shape<_1, _192>;
-    using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
+    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 #endif
 #else
 #error Either DECODE or PREFILL should be defined.
@@ -166,29 +167,42 @@ int main(int argc, const char **argv) {
 
 #ifdef DECODE
   constexpr int PipelineStages = 1;
-  constexpr bool UseScale = false;
 #else
   constexpr int PipelineStages = 2;
-  constexpr bool UseScale = true;
 #endif
-#if defined(IS_MX_FLOAT_E5M2) || defined(IS_MX_FLOAT_E4M3) || defined(IS_MX_FLOAT_E2M1)
-  // UseScale does not support CachedKV/PagedKV
+
+  // Directly instantiate only CachedKV=true, PagedKV=false kernels.
+  // Causal and VarLen are dispatched at runtime.
+  // UseScale (mxfp) is not supported with CachedKV.
   using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler;
-  using FMHACausal    = FMHAConfig<true, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>;
-  using FMHANonCausal = FMHAConfig<false, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>;
+
+  using FMHACausal    = FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV>;
+  using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV>;
+
+  if (options.seq_len_kv_cache <= 0) {
+    std::cerr << "Error: seq_len_kv_cache must be > 0 for the cached_kv binary." << std::endl;
+    return -1;
+  }
 
   if (options.is_causal) {
-    if (options.varlen) {
-      return FMHACausal::template run<true, false, false, Scheduler>(options);
+    if (options.use_paged_kv && options.varlen) {
+      return FMHACausal::template run<true, true, true, Scheduler>(options);
+    } else if (options.use_paged_kv && !options.varlen) {
+      return FMHACausal::template run<false, true, true, Scheduler>(options);
+    } else if (!options.use_paged_kv && options.varlen) {
+      return FMHACausal::template run<true, true, false, Scheduler>(options);
     } else {
-      return FMHACausal::template run<false, false, false, Scheduler>(options);
+      return FMHACausal::template run<false, true, false, Scheduler>(options);
     }
   } else {
-    if (options.varlen) {
-      return FMHANonCausal::template run<true, false, false, Scheduler>(options);
+    if (options.use_paged_kv && options.varlen) {
+      return FMHANonCausal::template run<true, true, true, Scheduler>(options);
+    } else if (options.use_paged_kv && !options.varlen) {
+      return FMHANonCausal::template run<false, true, true, Scheduler>(options);
+    } else if (!options.use_paged_kv && options.varlen) {
+      return FMHANonCausal::template run<true, true, false, Scheduler>(options);
     } else {
-      return FMHANonCausal::template run<false, false, false, Scheduler>(options);
+      return FMHANonCausal::template run<false, true, false, Scheduler>(options);
     }
   }
-#endif
 }

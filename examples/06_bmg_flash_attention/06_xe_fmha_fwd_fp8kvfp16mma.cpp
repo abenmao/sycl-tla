@@ -153,6 +153,26 @@ int main(int argc, const char **argv) {
   using ElementV = cutlass::float_e4m3_t;
   using ElementScale = float;
 
-  return options.is_causal ? FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>::run(options) :
-                             FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>::run(options);
+  using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler;
+  using FMHACausal    = FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>;
+  using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>;
+
+  if (options.seq_len_kv_cache > 0 || options.use_paged_kv) {
+    std::cerr << "Error: CachedKV/PagedKV requested. Use the cached_kv binary." << std::endl;
+    return -1;
+  }
+
+  if (options.is_causal) {
+    if (options.varlen) {
+      return FMHACausal::template run<true, false, false, Scheduler>(options);
+    } else {
+      return FMHACausal::template run<false, false, false, Scheduler>(options);
+    }
+  } else {
+    if (options.varlen) {
+      return FMHANonCausal::template run<true, false, false, Scheduler>(options);
+    } else {
+      return FMHANonCausal::template run<false, false, false, Scheduler>(options);
+    }
+  }
 }

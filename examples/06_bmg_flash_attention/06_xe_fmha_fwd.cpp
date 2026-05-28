@@ -181,9 +181,35 @@ int main(int argc, const char **argv) {
 #endif
 
 #if PERSISTENT
-  return FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, /*persistent=*/true, ElementQ, ElementK, ElementV>::run(options);
+  if (options.use_paged_kv || options.seq_len_kv_cache > 0) {
+    std::cerr << "Error: Persistent kernel does not support paged/cached KV cache (use_paged_kv or seq_len_kv_cache > 0)." << std::endl;
+    return -1;
+  }
+  using FMHAPersistent = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, /*persistent=*/true, ElementQ, ElementK, ElementV>;
+  return FMHAPersistent::template run<false, false, false, cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options);
 #else
-  return options.is_causal ? FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  /*persistent=*/false, ElementQ, ElementK, ElementV>::run(options)
-  : FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  /*persistent=*/false, ElementQ, ElementK, ElementV>::run(options);
+  if (options.seq_len_kv_cache > 0 || options.use_paged_kv) {
+    std::cerr << "Error: CachedKV/PagedKV requested. Use the cached_kv binary." << std::endl;
+    return -1;
+  }
+
+  using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler;
+
+  using FMHACausal    = FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV>;
+  using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV>;
+
+  if (options.is_causal) {
+    if (options.varlen) {
+      return FMHACausal::template run<true, false, false, Scheduler>(options);
+    } else {
+      return FMHACausal::template run<false, false, false, Scheduler>(options);
+    }
+  } else {
+    if (options.varlen) {
+      return FMHANonCausal::template run<true, false, false, Scheduler>(options);
+    } else {
+      return FMHANonCausal::template run<false, false, false, Scheduler>(options);
+    }
+  }
 #endif
 }
