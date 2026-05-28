@@ -212,13 +212,6 @@ public:
     int head_group_q = s.num_heads_q / s.num_heads_kv;
 
     int thr_id = int(ThreadIdxX());
-    int sub_group_id = thr_id / intel::sg_size;
-    int q_sg_tile = get<0>(shape_div(TileShapeQK{}, shape(SubgroupLayoutQK{})));
-
-    auto cS = make_identity_tensor(take<0,2>(TiledMMAQK{}.tile_mnk()));
-    auto tScS = TiledMMAQK{}.get_slice(thr_id).partition_C(cS);
-    auto q_offset_wi = get<0>(tScS(0));
-    auto q_offset_sg = group_broadcast(sycl::ext::oneapi::this_work_item::get_sub_group(), q_offset_wi, 0);
 
     TileScheduler tile_scheduler{params.scheduler};
 
@@ -232,23 +225,43 @@ public:
       auto [seq_len_qo, seq_len_kv, seq_len_kv_cache] = sequence_length_shape;
       if (blk_q * get<0>(TileShapeQK{}) >= seq_len_qo) continue;
 
-      auto offset = cute::min(seq_len_qo, seq_len_kv);
-      auto discard_seq_coord = seq_len_qo - offset;
-      auto full_tile_offset = seq_len_kv - offset;
-      int seq_coord = cute::min(seq_len_qo, (blk_q * get<0>(TileShapeQK{}) + q_offset_sg));
+      int discard_seq_coord = 0;
+      int full_tile_offset = 0;
+      int seq_len_new = seq_len_kv;
+      if constexpr (CollectiveMainloop::CausalMask) {
+        int q_sg_tile = get<0>(shape_div(TileShapeQK{}, shape(SubgroupLayoutQK{})));
+        auto cS = make_identity_tensor(take<0,2>(TiledMMAQK{}.tile_mnk()));
+        auto tScS = TiledMMAQK{}.get_slice(thr_id).partition_C(cS);
+        auto q_offset_wi = get<0>(tScS(0));
+        auto q_offset_sg = group_broadcast(
+            sycl::ext::oneapi::this_work_item::get_sub_group(), q_offset_wi, 0);
 
-      if (CollectiveMainloop::CausalMask && seq_coord < discard_seq_coord) continue;
-      const int seq_len_new = CollectiveMainloop::CausalMask ? full_tile_offset + cute::min(seq_len_kv, seq_coord - discard_seq_coord) + q_sg_tile : seq_len_kv;
+        int offset = cute::min(seq_len_qo, seq_len_kv);
+        discard_seq_coord = seq_len_qo - offset;
+        full_tile_offset = seq_len_kv - offset;
+        int seq_coord = cute::min(seq_len_qo, (blk_q * get<0>(TileShapeQK{}) + q_offset_sg));
+        if (seq_coord < discard_seq_coord) continue;
+        seq_len_new = full_tile_offset + cute::min(seq_len_kv, seq_coord - discard_seq_coord) + q_sg_tile;
+      }
       const int seq_len = seq_len_new + seq_len_kv_cache;
       // Compute k_blocks as sum of cache tiles + new tiles to avoid losing new data
       // when seq_len_kv_cache is not a multiple of the tile size.
-      const int kblocks_cache = CollectiveMainloop::CachedKV ? cute::ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{})) : 0;
-      const int kblocks_new = cute::ceil_div(seq_len_new, get<1>(TileShapeQK{}));
-      const int k_blocks = kblocks_cache + kblocks_new;
+      int k_blocks;
+      if constexpr (CollectiveMainloop::CausalMask || CollectiveMainloop::CachedKV) {
+        const int kblocks_cache = CollectiveMainloop::CachedKV ? cute::ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{})) : 0;
+        const int kblocks_new = cute::ceil_div(seq_len_new, get<1>(TileShapeQK{}));
+        k_blocks = kblocks_cache + kblocks_new;
+      } else {
+        k_blocks = static_cast<int>(static_cast<unsigned>(seq_len) / static_cast<unsigned>(get<1>(TileShapeQK{})));
+      }
 
       int offset_q = 0, offset_k = 0, offset_v = 0, offset_o = 0;
       int offset_k_cache = 0, offset_v_cache = 0;
+      int batch_dim = s.batch;
+      int l_coord = idx_b;
       if constexpr (is_var_len) {
+        batch_dim = 1;
+        l_coord = 0;
         auto qo_cumulative = s.seq_len_qo.cumulative_length;
         auto kv_cumulative = s.seq_len_kv.cumulative_length;
         offset_q = s.num_heads_q * s.head_size_qk * qo_cumulative[idx_b];
@@ -262,7 +275,6 @@ public:
         }
       }
 
-      auto batch_dim = is_var_len ? 1 : s.batch;
       auto shape_Q = make_shape(seq_len_qo, s.head_size_qk, s.num_heads_q, batch_dim);
       auto shape_K = make_shape(seq_len_kv, s.head_size_qk, s.num_heads_kv, batch_dim);
       auto shape_V = make_shape(s.head_size_vo, seq_len_kv, s.num_heads_kv, batch_dim);
@@ -278,12 +290,20 @@ public:
       auto dcV_cache = const_cast<ElementV*>(p.V_cache + offset_v_cache);
       auto ptrO = p.O + offset_o;
 
-      auto stride_q = is_var_len ? cutlass::make_cute_packed_stride(StrideQ{}, shape_Q) : p.dQ;
-      auto stride_k = is_var_len ? cutlass::make_cute_packed_stride(StrideK{}, shape_K) : p.dK;
-      auto stride_v = is_var_len ? cutlass::make_cute_packed_stride(StrideV{}, shape_V) : p.dV;
-      auto stride_o = is_var_len ? cutlass::make_cute_packed_stride(StrideO{}, shape_O) : p.dO;
-      auto stride_k_cache = is_var_len ? cutlass::make_cute_packed_stride(StrideK{}, shape_K_cache) : p.dK_cache;
-      auto stride_v_cache = is_var_len ? cutlass::make_cute_packed_stride(StrideV{}, shape_V_cache) : p.dV_cache;
+      StrideQ stride_q = p.dQ;
+      StrideK stride_k = p.dK;
+      StrideV stride_v = p.dV;
+      StrideO stride_o = p.dO;
+      StrideK stride_k_cache = p.dK_cache;
+      StrideV stride_v_cache = p.dV_cache;
+      if constexpr (is_var_len) {
+        stride_q = cutlass::make_cute_packed_stride(StrideQ{}, shape_Q);
+        stride_k = cutlass::make_cute_packed_stride(StrideK{}, shape_K);
+        stride_v = cutlass::make_cute_packed_stride(StrideV{}, shape_V);
+        stride_o = cutlass::make_cute_packed_stride(StrideO{}, shape_O);
+        stride_k_cache = cutlass::make_cute_packed_stride(StrideK{}, shape_K_cache);
+        stride_v_cache = cutlass::make_cute_packed_stride(StrideV{}, shape_V_cache);
+      }
 
       Tensor Q = make_tensor(make_gmem_ptr(dcQ), make_layout(shape_Q, stride_q));
       Tensor K = make_tensor(make_gmem_ptr(dcK), make_layout(shape_K, stride_k));
@@ -297,7 +317,6 @@ public:
       FragARow tA_max, tA_sum;
 
       // Main loop
-      int l_coord = is_var_len ? 0 : idx_b;
       CollectiveMainloop mainloop(params.mainloop, shared_storage.mainloop);
       if constexpr (UseScale) {
         auto scale_q = cute::ceil_div(s.head_size_qk, p.group_size);
@@ -308,6 +327,9 @@ public:
         auto shape_scale_K = make_shape(seq_len_kv, scale_k, s.num_heads_kv, batch_dim);
         auto shape_scale_V = make_shape(s.head_size_vo, scale_v, s.num_heads_kv, batch_dim);
         int offset_scaleQ = 0; int offset_scaleK = 0; int offset_scaleV = 0;
+        StrideScaleQ stride_scaleQ = p.dScaleQ;
+        StrideScaleK stride_scaleK = p.dScaleK;
+        StrideScaleV stride_scaleV = p.dScaleV;
         if constexpr (is_var_len) {
           auto qo_cumulative = s.seq_len_qo.cumulative_length;
           auto kv_cumulative = s.seq_len_kv.cumulative_length;
@@ -315,11 +337,10 @@ public:
           offset_scaleQ = s.num_heads_q * scale_q * qo_cumulative[idx_b];
           offset_scaleK = s.num_heads_kv * scale_k * kv_cumulative[idx_b];
           offset_scaleV = s.num_heads_kv * kv_scale_cumulative[idx_b];
+          stride_scaleQ = cutlass::make_cute_packed_stride(StrideScaleQ{}, shape_scale_Q);
+          stride_scaleK = cutlass::make_cute_packed_stride(StrideScaleK{}, shape_scale_K);
+          stride_scaleV = cutlass::make_cute_packed_stride(StrideScaleV{}, shape_scale_V);
         }
-
-        auto stride_scaleQ = is_var_len ? cutlass::make_cute_packed_stride(StrideScaleQ{}, shape_scale_Q) : p.dScaleQ;
-        auto stride_scaleK = is_var_len ? cutlass::make_cute_packed_stride(StrideScaleK{}, shape_scale_K) : p.dScaleK;
-        auto stride_scaleV = is_var_len ? cutlass::make_cute_packed_stride(StrideScaleV{}, shape_scale_V) : p.dScaleV;
 
         auto dcScaleQ = const_cast<ElementScale*>(p.scaleQ + offset_scaleQ);
         auto dcScaleK = const_cast<ElementScale*>(p.scaleK + offset_scaleK);
