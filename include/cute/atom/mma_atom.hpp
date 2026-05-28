@@ -86,7 +86,8 @@ struct MMA_Atom<MMA_Traits<MMAOperation, Args...>>
   //
 
   // Cast, check, and call fma
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+            class TD, class DLayout,
             class TA, class ALayout,
             class TB, class BLayout,
             class TC, class CLayout>
@@ -102,7 +103,7 @@ struct MMA_Atom<MMA_Traits<MMAOperation, Args...>>
     static_assert(BLayout::rank == 1, "Expected rank-1 B tensor");
     static_assert(CLayout::rank == 1, "Expected rank-1 C tensor");
 
-    return mma_unpack(static_cast<Traits const&>(*this), D, A, B, C);
+    return mma_unpack<NoAcc>(static_cast<Traits const&>(*this), D, A, B, C);
   }
 
   // Three arguments reproduces C

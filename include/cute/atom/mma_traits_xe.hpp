@@ -101,7 +101,8 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
   using MMAOp = XE_BDPAS_TT<M, TD, TA, TB, TC>;
   using BaseOp = XE_DPAS_TT<M, TD, TA, TB, TC>;
 
-  template <class TD1, class DLayout,
+  template <bool NoAcc = false,
+            class TD1, class DLayout,
             class TA1, class ALayout,
             class TB1, class BLayout,
             class TC1, class CLayout>
@@ -140,6 +141,9 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
     // The zip arity is set by the mainloop (xe_blockscaled_mma vs xe_fp8_blockscaled_mma)
     using AValType = typename remove_cvref_t<decltype(A_zipped)>::value_type;
     constexpr bool is_zip_input = is_tuple<AValType>::value;
+    // TODO: support scaled DPAS with null src0.
+    static_assert(!(NoAcc && is_zip_input),
+                  "NoAcc (null src0) is not supported for scaled BDPAS paths");
 
     if constexpr (!is_zip_input) {
       // === Plain DPAS path (no scaling) ===
@@ -149,7 +153,7 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
       CUTE_STATIC_ASSERT_V(size(rA) == Int<RegNumA>{});
       CUTE_STATIC_ASSERT_V(size(rB) == Int<RegNumB>{});
 
-      cute::detail::explode_mma<BaseOp>(
+      cute::detail::explode_mma<BaseOp, NoAcc>(
               rD, make_int_sequence<RegNumD>{},
               rA, make_int_sequence<RegNumA>{},
               rB, make_int_sequence<RegNumB>{},

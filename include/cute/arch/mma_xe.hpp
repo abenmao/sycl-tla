@@ -96,10 +96,20 @@ template <int M> struct XE_DPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::T
   using BVector = typename Base::BVector; \
   using CVector = typename Base::CVector; \
   using DVector = typename Base::DVector; \
-  template <typename CVector_ = CVector> \
+  template <bool NoAcc = false, typename CVector_ = CVector> \
   CUTE_DEVICE static void \
   fma(DVector& d, AVector const& a, BVector const& b, CVector_ const& c) { \
-    if constexpr (std::is_same_v<CVector_, DVector>) { \
+    if constexpr (NoAcc) { \
+      asm ( \
+        "{\n" \
+        ".decl DST     v_type=G type=" #TD " num_elts=%5 alias=<%0,0>\n" \
+        ".decl SRC1_UD v_type=G type=UD num_elts=128 alias=<%2,0>\n" \
+        ".decl SRC2_UD v_type=G type=UD num_elts=%4 alias=<%1,0>\n" \
+        "dpas." #TB "." #TA ".8.%3 (M1, 16) DST.0 %%null.0 SRC1_UD.0 SRC2_UD(0,0)\n" \
+        "}\n" \
+        : "=rw"(d) : "rw"(a), "rw"(b), "P"(M), "P"(M*8), "P"(M*16) \
+      ); \
+    } else if constexpr (std::is_same_v<CVector_, DVector>) { \
       d = c; \
       asm ( \
         "{\n" \
@@ -182,8 +192,9 @@ template <int M> struct XE_DPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::T
   using BVector = typename Base::BVector; \
   using CVector = typename Base::CVector; \
   using DVector = typename Base::DVector; \
+  template <bool NoAcc = false, typename CVector_ = CVector> \
   CUTE_HOST_DEVICE static void \
-  fma(DVector& d, AVector const& a, BVector const& b, CVector const& c) { \
+  fma(DVector& d, AVector const& a, BVector const& b, CVector_ const& c) { \
     CUTE_INVALID_CONTROL_PATH("Cannot use Xe DPAS MMA atom on non-Xe hardware"); \
   } \
 };
