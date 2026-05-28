@@ -52,7 +52,59 @@ template <int Stages> class XeDefault {};   // Default FMHA mainloop, P in regis
 namespace cutlass::fmha::collective {
 
 using namespace cute;
+#if defined(__SYCL_DEVICE_ONLY__) && defined(SYCL_INTEL_TARGET)
+CUTE_DEVICE
+void
+cvt_f32x2_to_bf16x2_bias(float                  const& src0,
+                         float                  const& src1,
+                         cute::intel::uint2          & tmp)
+{
+  asm (
+    "{\n"
+    ".decl IN_UD0 v_type=G type=UD num_elts=16 alias=<%1,0>\n"
+    ".decl IN_UD1 v_type=G type=UD num_elts=16 alias=<%2,0>\n"
+    ".decl TMP_UD v_type=G type=UD num_elts=32 alias=<%0,0>\n"
+    "add (M1_NM, 16) TMP_UD(0,0)<1> IN_UD0(0,0)<1;1,0> 0x8000:uw\n"
+    "add (M1_NM, 16) TMP_UD(1,0)<1> IN_UD1(0,0)<1;1,0> 0x8000:uw\n"
+    "}\n"
+    : "=rw"(tmp)
+    : "rw"(src0), "rw"(src1)
+  );
+}
 
+CUTE_DEVICE
+void
+cvt_f32x2_to_bf16x2_pack(cute::intel::uint2     const& tmp,
+                         cute::intel::ushort2        & dst)
+{
+  asm (
+    "{\n"
+    ".decl TMP_UD v_type=G type=UD num_elts=32 alias=<%1,0>\n"
+    ".decl TMP_UW v_type=G type=UW num_elts=64 alias=<TMP_UD,0>\n"
+    ".decl OUT_UW v_type=G type=UW num_elts=32 alias=<%0,0>\n"
+    "mov (M1_NM, 32) OUT_UW(0,0)<1> TMP_UW(0,1)<2;1,0>\n"
+    "}\n"
+    : "=rw"(dst)
+    : "rw"(tmp)
+  );
+}
+#else
+CUTE_DEVICE
+void
+cvt_f32x2_to_bf16x2_bias(float                  const& /*src0*/,
+                         float                  const& /*src1*/,
+                         cute::intel::uint2          & /*tmp*/)
+{
+  CUTE_INVALID_CONTROL_PATH("cvt_f32x2_to_bf16x2_bias requires Intel Xe SYCL device target");
+}
+CUTE_DEVICE
+void
+cvt_f32x2_to_bf16x2_pack(cute::intel::uint2     const& /*tmp*/,
+                         cute::intel::ushort2        & /*dst*/)
+{
+  CUTE_INVALID_CONTROL_PATH("cvt_f32x2_to_bf16x2_pack requires Intel Xe SYCL device target");
+}
+#endif
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <class DispatchPolicy_,
@@ -607,7 +659,25 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
 
       /* Apply softmax and scaling (tA rescaling fused into GEMM2 VTile loop) */
       auto rescale = softmax(K == blk_k0, tSrS, tA_max, tA_sum);
-      reorder(tSrS, tArP);
+      using ElementP = typename TiledMMAPV::ValTypeA;
+      if constexpr (std::is_same_v<ElementP, bfloat16_t>) {
+        static_assert(decltype(tArP.size())::value % 2 == 0,
+                      "tArP per-WI element count must be even for f32x2->bf16x2 packing");
+        constexpr int kCvtPairs = decltype(tSrS.size())::value / 2;
+        cute::intel::uint2 cvt_tmp[kCvtPairs];
+        CUTLASS_PRAGMA_UNROLL
+        for (int p = 0; p < kCvtPairs; p++) {
+          cvt_f32x2_to_bf16x2_bias(tSrS(2 * p), tSrS(2 * p + 1), cvt_tmp[p]);
+        }
+        CUTLASS_PRAGMA_UNROLL
+        for (int p = 0; p < kCvtPairs; p++) {
+          cvt_f32x2_to_bf16x2_pack(cvt_tmp[p],
+              reinterpret_cast<cute::intel::ushort2&>(tArP(2 * p)));
+        }
+      }
+      else {
+        reorder(tSrS, tArP);
+      }
 
       /* GEMM 2: A += P * V, split in v dimension.
         tArA rescaling is fused to per-VTile */
