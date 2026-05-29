@@ -43,3 +43,9 @@ target_include_directories(xe4_gemm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_options(xe4_gemm PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)
+
+add_xe4_test(xe4_gemm_fp8_rowscale gemm_fp8_rowscale.cpp)
+target_include_directories(xe4_gemm_fp8_rowscale PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(xe4_gemm_fp8_rowscale PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)

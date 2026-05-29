@@ -57,6 +57,90 @@ using Xe4AccFetch = Sm90AccFetch;
 template <class Element>
 using Xe4SrcFetch = Sm90SrcFetch<Element>;
 
+// D = scale_a[m] * scale_b[n] * acc + bias[m]
+template<
+  class CtaTileShapeMNK,
+  class ElementOutput,
+  class ElementCompute,
+  class ElementScale = ElementCompute,
+  class ElementBias = ElementCompute,
+  int AlignmentScale = 128 / sizeof_bits_v<ElementScale>,
+  int AlignmentBias = 128 / sizeof_bits_v<ElementBias>,
+  FloatRoundStyle RoundStyle = FloatRoundStyle::round_to_nearest
+>
+using Xe4ScaledMM =
+  Xe4EVT<Xe4Compute<cutlass::plus, ElementOutput, ElementCompute, RoundStyle>,
+    Xe4EVT<Xe4Compute<cutlass::multiplies, ElementCompute, ElementCompute, RoundStyle>,
+      Xe4ColBroadcast<0, CtaTileShapeMNK, ElementScale, ElementCompute, Stride<_1,_0,int64_t>, AlignmentScale>,
+      Xe4EVT<Xe4Compute<cutlass::multiplies, ElementCompute, ElementCompute, RoundStyle>,
+        Xe4RowBroadcast<0, CtaTileShapeMNK, ElementScale, ElementCompute, Stride<_0,_1,int64_t>, AlignmentScale>,
+        Xe4AccFetch
+      >
+    >,
+    Xe4ColBroadcast<0, CtaTileShapeMNK, ElementBias, ElementCompute, Stride<_1,_0,int64_t>, AlignmentBias>
+  >;
+
+template <
+  int StagesC,
+  int StagesD,
+  int FragmentSize,
+  bool ReuseSmemC,
+  bool DelayTmaStore,
+  class ElementOutput,
+  class ElementCompute,
+  class ElementScale,
+  class ElementBias,
+  int AlignmentScale,
+  int AlignmentBias,
+  FloatRoundStyle RoundStyle,
+  class CtaTileShapeMNK,
+  class EpilogueTile
+>
+struct FusionCallbacks<
+    epilogue::Xe4TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
+    fusion::ScaledMM<ElementOutput, ElementCompute, ElementScale, ElementBias, AlignmentScale, AlignmentBias, RoundStyle>,
+    CtaTileShapeMNK,
+    EpilogueTile
+> : Xe4ScaledMM<
+      CtaTileShapeMNK, ElementOutput, ElementCompute, ElementScale, ElementBias, AlignmentScale, AlignmentBias, RoundStyle> {
+  using Impl = Xe4ScaledMM<
+    CtaTileShapeMNK, ElementOutput, ElementCompute, ElementScale, ElementBias, AlignmentScale, AlignmentBias, RoundStyle>;
+  using Operation = fusion::ScaledMM<
+    ElementOutput, ElementCompute, ElementScale, ElementBias, AlignmentScale, AlignmentBias, RoundStyle>;
+
+  struct Arguments {
+    using StrideScale = Stride<_1,_0,int64_t>;
+    using StrideBias = Stride<_1,_0,int64_t>;
+    using StrideScaleB = Stride<_0,_1,int64_t>;
+    ElementScale const* scale_a_ptr = nullptr;
+    StrideScale dScaleA = {};
+    ElementScale const* scale_b_ptr = nullptr;
+    StrideScaleB dScaleB = {};
+    ElementBias const* bias_ptr = nullptr;
+    StrideBias dBias = {};
+
+    operator typename Impl::Arguments() const {
+      return
+        {     // binary op : (...) + bias[m]
+          {                                            // binary op: scale_a * (...)
+            {scale_a_ptr, ElementScale(0), dScaleA},       // leaf: scale_a ColBroadcast
+            {                                              // binary op: scale_b * acc
+              {scale_b_ptr, ElementScale(0), dScaleB},     // leaf: scale_b RowBroadcast
+              {},                                          // leaf: AccFetch
+              {}                                           // binary args: multiplies
+            },
+            {}                                             // binary args: multiplies
+          },
+          {bias_ptr, ElementBias(0), dBias},               // leaf: bias ColBroadcast
+          {}                                               // binary args: plus
+        };   // end binary op
+    }
+  };
+
+  // Ctor inheritance
+  using Impl::Impl;
+};
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 // D = activation(acc)
@@ -298,9 +382,66 @@ struct FusionCallbacks<
   using Impl::Impl;
 };
 
+// D = acc + per-col bias (M-dimension broadcast, i.e. bias[m])
+template<
+  class CtaTileShapeMNK,
+  class ElementOutput,
+  class ElementCompute,
+  class ElementBias = ElementOutput,
+  int AlignmentBias = 128 / sizeof_bits_v<ElementBias>,
+  FloatRoundStyle RoundStyle = FloatRoundStyle::round_to_nearest
+>
+using Xe4PerRowBias =
+  Xe4EVT<Xe4Compute<plus, ElementOutput, ElementCompute, RoundStyle>, // acc + bias[m]
+    Xe4AccFetch, // acc
+    Xe4ColBroadcast<0, CtaTileShapeMNK, ElementBias, ElementCompute, Stride<_1,_0,int64_t>, AlignmentBias> // bias[m]
+  >;
+
+template <
+  int StagesC,
+  int StagesD,
+  int FragmentSize,
+  bool ReuseSmemC,
+  bool DelayTmaStore,
+  class ElementOutput,
+  class ElementCompute,
+  class ElementBias,
+  int AlignmentBias,
+  FloatRoundStyle RoundStyle,
+  class CtaTileShapeMNK,
+  class EpilogueTile
+>
+struct FusionCallbacks<
+    epilogue::Xe4TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
+    fusion::PerRowBias<ElementOutput, ElementCompute, ElementBias, AlignmentBias, RoundStyle>,
+    CtaTileShapeMNK,
+    EpilogueTile
+> : Xe4PerRowBias<
+      CtaTileShapeMNK, ElementOutput, ElementCompute, ElementBias, AlignmentBias, RoundStyle> {
+  using Impl = Xe4PerRowBias<
+    CtaTileShapeMNK, ElementOutput, ElementCompute, ElementBias, AlignmentBias, RoundStyle>;
+  using Operation = fusion::PerRowBias<
+    ElementOutput, ElementCompute, ElementBias, AlignmentBias, RoundStyle>;
+
+  struct Arguments {
+    using StrideBias = Stride<_1,_0,int64_t>;
+    ElementBias const* bias_ptr = nullptr;
+    StrideBias dBias = {};
+
+    operator typename Impl::Arguments() const {
+      return
+        {     // binary op : acc + bias[m]
+          {},                     // leaf args : acc
+          {bias_ptr, ElementBias(0), dBias}, // leaf args : bias[m]
+          {} // binary args : plus
+        };   // end binary op
+    }
+  };
+
+  // Ctor inheritance
+  using Impl::Impl;
+};
+
 } // namespace cutlass::epilogue::fusion
-
-/////////////////////////////////////////////////////////////////////////////////////////////////
-
 
 /////////////////////////////////////////////////////////////////////////////////////////////////

@@ -192,6 +192,43 @@ struct PerColBias : FusionOperation {
   static constexpr bool IsPerColBiasSupported = true;
 };
 
+// D = acc + bias[m]
+template<
+  class ElementOutput_,
+  class ElementCompute_,
+  class ElementBias_ = ElementOutput_,
+  int AlignmentBias_ = 128 / cute::sizeof_bits_v<ElementBias_>,
+  FloatRoundStyle RoundStyle_ = FloatRoundStyle::round_to_nearest
+>
+struct PerRowBias : FusionOperation {
+  using ElementOutput = ElementOutput_;
+  using ElementCompute = ElementCompute_;
+  using ElementBias = ElementBias_;
+  static constexpr auto RoundStyle = RoundStyle_;
+  static constexpr int AlignmentBias = AlignmentBias_;
+  static constexpr bool IsPerRowBiasSupported = true;
+};
+
+// D = scale_a[m] * scale_b[n] * acc + bias[m]
+template<
+  class ElementOutput_,
+  class ElementCompute_,
+  class ElementScale_ = ElementCompute_,
+  class ElementBias_ = ElementCompute_,
+  int AlignmentScale_ = 128 / cute::sizeof_bits_v<ElementScale_>,
+  int AlignmentBias_ = 128 / cute::sizeof_bits_v<ElementBias_>,
+  FloatRoundStyle RoundStyle_ = FloatRoundStyle::round_to_nearest
+>
+struct ScaledMM : FusionOperation {
+  using ElementOutput = ElementOutput_;
+  using ElementCompute = ElementCompute_;
+  using ElementScale = ElementScale_;
+  using ElementBias = ElementBias_;
+  static constexpr auto RoundStyle = RoundStyle_;
+  static constexpr int AlignmentScale = AlignmentScale_;
+  static constexpr int AlignmentBias = AlignmentBias_;
+};
+
 // D = softmax(top_k(alpha * acc + beta * C))
 template<
   int TopK,
