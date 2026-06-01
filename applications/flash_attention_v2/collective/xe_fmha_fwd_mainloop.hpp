@@ -685,11 +685,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       for (int VV = 0; VV < VTiles; VV++) {
         copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
         reorder(tVrV, tArV);
-        if (K != blk_k0) {
-          CUTLASS_PRAGMA_UNROLL
-          for (int i = 0; i < tArA.size() / VTiles; i++)
-            tArA(_,_,_,VV)(i) *= broadcast<0>(rescale, tArA, i);
-        }
+        CUTLASS_PRAGMA_UNROLL
+        for (int i = tArA.size() / VTiles - 1; i >= 0; i--)
+          tArA(_,_,_,VV)(i) *= broadcast<0>(rescale, tArA, i);
         if constexpr (UseScale && !FP4Input) {
           const int v_coord = get<1>(blk_qv) * VTiles * BLK_V + VV * BLK_V + (subgroup_id % ATOM_V) * SG_V;
           auto& tiled_copy_scaleP = get<0>(get<0>(scale_context_pv));
@@ -799,7 +797,11 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
     /* Scale S and subtract maxima, then exponentiate */
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < tS.size(); i++)
-      tS(i) = sycl::native::exp2(params.scale * tS(i) - broadcast<0>(tS_max, tS, i));
+      tS(i) = params.scale * tS(i) - broadcast<0>(tS_max, tS, i);
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < tS.size(); i++)
+      tS(i) = sycl::native::exp2(tS(i));
 
     /* Rescale existing S sums */
     if (!first_block) {
