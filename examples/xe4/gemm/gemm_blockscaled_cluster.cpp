@@ -87,7 +87,7 @@ struct ClusterConfig {
   using LayoutA            = cutlass::layout::RowMajor;
   using LayoutB            = cutlass::layout::RowMajor;
   static constexpr cute::array<int, 4> ProblemShape_MNKL = {512, 512, 1024, 1};
-  using CtaTileShape_MNK   = Shape<_128, _256, _64>;
+  using CtaTileShape_MNK   = Shape<_128, _256, _256>;
   using ClusterShape_MNK   = Shape<cute::Int<ClusterM_>, cute::Int<ClusterN_>, _1>;
   static constexpr int  PipelineStages       = 4;
   static constexpr bool EnableCooperativeSF  = false;

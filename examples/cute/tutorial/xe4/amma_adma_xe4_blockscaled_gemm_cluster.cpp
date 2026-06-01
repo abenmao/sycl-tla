@@ -239,7 +239,7 @@ int run_gemm_config(const std::string& output_type,
 
 // Run all valid {input_type, SFVecSize, output_type, cluster_m, cluster_n} combos
 // in a single process. This keeps the SYCL runtime/simulator alive across all configs.
-// When coop_sf=false: Non-cooperative SF, TileK=64 for all VS.
+// When coop_sf=false: Non-cooperative SF, TileK=256 for all VS.
 // When coop_sf=true:  Cooperative SF, TileK=256 for VS=16, TileK=512 for VS=32.
 //                     MXFP8 is skipped (max atom K=256 < required 512).
 int run_all_configs(int m, int n, int k, char transA, char transB, bool coop_sf)
@@ -345,12 +345,12 @@ int run_all_configs(int m, int n, int k, char transA, char transB, bool coop_sf)
 #undef DISPATCH_COOP_K16
 #undef DISPATCH_COOP_K32
       } else {
-        // Non-cooperative: TileK=64 for all VS
+        // Non-cooperative: TileK=256 for all VS
 #define DISPATCH_NONCOOP(cm_, cn_, ElemA, ElemB, ElemSF, svs)                      \
         if (cfg.cm == cm_ && cfg.cn == cn_) {                                       \
           rc = run_gemm_config<ElemA, ElemB, ElemSF,                                \
                 svs, BlockScaleTypeMap<ElemSF, svs>::value,                          \
-                128, 256, 64, cm_, cn_, false>(ot, m, n, k, transA, transB);          \
+                128, 256, 256, cm_, cn_, false>(ot, m, n, k, transA, transB);          \
         }
 
         if (it == "NVFP4") {
@@ -415,7 +415,7 @@ void print_usage(const char* prog) {
             << "  cluster_n     : Cluster size along N, 1 or 2 (default: 2)\n"
             << "\n"
             << "  TileK selection (automatic based on coop_sf and SFVecSize):\n"
-            << "    Non-cooperative (default): TileK=64 for all VS (padding handles cm_8x32B)\n"
+            << "    Non-cooperative (default): TileK=256 for all VS (padding handles cm_8x32B)\n"
             << "    Cooperative (coop_sf=1):   VS=16 -> TileK=256, VS=32 -> TileK=512\n"
             << "\n"
             << "  BlockScaleType (auto-selected from input_type + SFVecSize):\n"
@@ -561,7 +561,7 @@ int main(int argc, char** argv)
   // Cluster shape dispatch uses a macro to avoid repetitive template instantiation.
   // For each (cluster_m, cluster_n) combo, instantiate with the correct tile shape.
   //
-  // Non-cooperative (default): TileK=64 for both VS=16 and VS=32.
+  // Non-cooperative (default): TileK=256 for both VS=16 and VS=32.
   //   SF SMEM padding (sf_bK = max(bK/VS, 8)) handles the cm_8x32B constraint,
   //   allowing any TileK/VS combo to work safely.
   //
@@ -578,7 +578,7 @@ int main(int argc, char** argv)
             output_type, m, n, k, transA, transB);                                    \
       else                                                                            \
         return run_gemm_config<ElementA, ElementB, ElementSF,                         \
-          16, BlockScaleTypeMap<ElementSF, 16>::value, 128, 256, 64, cm, cn, false>(  \
+          16, BlockScaleTypeMap<ElementSF, 16>::value, 128, 256, 128, cm, cn, false>(  \
             output_type, m, n, k, transA, transB);                                    \
     } else {                                                                          \
       if (coop_sf)                                                                    \
@@ -587,7 +587,7 @@ int main(int argc, char** argv)
             output_type, m, n, k, transA, transB);                                    \
       else                                                                            \
         return run_gemm_config<ElementA, ElementB, ElementSF,                         \
-          32, BlockScaleTypeMap<ElementSF, 32>::value, 128, 256, 64, cm, cn, false>(  \
+          32, BlockScaleTypeMap<ElementSF, 32>::value, 128, 256, 256, cm, cn, false>(  \
             output_type, m, n, k, transA, transB);                                    \
     }                                                                                 \
   }
