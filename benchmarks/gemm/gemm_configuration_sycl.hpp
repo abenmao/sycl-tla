@@ -47,6 +47,8 @@
 
 #include "cutlass/epilogue/collective/default_epilogue.hpp"
 #include "cutlass/epilogue/thread/linear_combination.h"
+#include "cutlass/gemm/kernel/tile_scheduler.hpp"
+#include "cutlass/gemm/kernel/xe_persistent_tile_scheduler_params_streamk.hpp"
 
 using namespace cute;
 
@@ -98,7 +100,13 @@ struct GemmConfiguration<
       GmemTiledCopyA, GmemTiledCopyB, EpilogueOp>
 {
   static constexpr int PipelineStages = 2;
-  using GEMMDispatchPolicy = cutlass::gemm::MainloopXeL1Staged<PipelineStages>;
+  // Match example 03_bmg_gemm_streamk: use KernelXeCooperative schedule + StreamKScheduler
+  // tag for StreamK/SplitK decompositions; default KernelXe for vanilla GEMM.
+  static constexpr bool UseStreamK =
+      (TileScheduler == Scheduler::GemmStreamK) || (TileScheduler == Scheduler::GemmSplitK);
+  using KernelScheduleType = std::conditional_t<UseStreamK,
+      cutlass::gemm::KernelXeCooperative, cutlass::gemm::KernelXe>;
+  using GEMMDispatchPolicy = cutlass::gemm::MainloopXeL1Staged<PipelineStages, KernelScheduleType>;
   using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
 
   // Configurations in benchmarks.hpp can pass either a layout tag (e.g. RowMajor) or a Stride directly
@@ -130,10 +138,13 @@ struct GemmConfiguration<
           FusionCallbacks,
           void,                 // The copy atom used to load matrix C  (void = automatic)
           void>;                // The copy atom used to store matrix D (void = automatic)
+  using TileSchedulerTag = std::conditional_t<UseStreamK,
+      cutlass::gemm::StreamKScheduler, void>;
     using GemmKernel = kernel::GemmUniversal<
     Shape<int, int, int, int>,
     CollectiveMainloop,
-    CollectiveEpilogue
+    CollectiveEpilogue,
+    TileSchedulerTag
   >;
 
   using Gemm = GemmUniversalAdapter<GemmKernel>;
