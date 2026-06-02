@@ -237,7 +237,7 @@ template <bool Persistent>
 struct ShapeConfig<FMHAMode::Decode, 96, Persistent> {
   using num_sg = cute::conditional_t<Persistent, _16, _8>;
   using kv_tile_size = cute::conditional_t<Persistent, _256, _512>;
-  using ShapeQK = Shape<_1, kv_tile_size, _64>;
+  using ShapeQK = Shape<_1, kv_tile_size, _32>;
   using ShapePV = Shape<_1, _32, kv_tile_size>;
   using ShapeOutput = Shape<_1, _96>;
   using SubgroupLayout = Layout<Shape<_1, num_sg, _1>>;

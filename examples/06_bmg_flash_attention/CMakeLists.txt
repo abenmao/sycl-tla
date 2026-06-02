@@ -41,6 +41,12 @@ endif()
 
 foreach(HEAD_DIM 64 96 128 192)
   foreach(INPUT_TYPE ${INPUT_TYPES})
+    # FP4 (e2m1) DPAS atom has K=64, so head dim must be a multiple of 64.
+    # hdim96 is not divisible by 64 and is therefore unsupported for FP4 inputs.
+    if (HEAD_DIM EQUAL 96 AND (INPUT_TYPE STREQUAL "float_e2m1_t" OR INPUT_TYPE STREQUAL "mx_float_e2m1_t"))
+      continue()
+    endif()
+
     if (CUTLASS_TEST_FOR_CRI)
       set(TEST_BASE "--batch=1 --num_heads_q=4 --num_heads_kv=4 --seq_len_kv=256 --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
       set(PAGED_ARGS "--seq_len_kv_cache=64 --page_size=64 --use_paged_kv")

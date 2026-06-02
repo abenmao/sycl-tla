@@ -144,7 +144,7 @@ int main(int argc, const char **argv) {
     using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 96
-    using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
+    using ShapeQK = Shape<_1, KV_TILE_SIZE, _32>;
     using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
     using ShapeOut = Shape<_1, _96>;
     using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;

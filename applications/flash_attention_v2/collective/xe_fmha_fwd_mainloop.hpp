@@ -158,6 +158,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
   using TileShapeQK = decltype(TiledMMAQK{}.tile_mnk());
   using TileShapePV = decltype(TiledMMAPV{}.tile_mnk());
   static constexpr int VTiles = VTiles_;
+  static_assert((VTiles * decltype(get<1>(TileShapePV{}))::value)
+                    % decltype(get<2>(TileShapeQK{}))::value == 0,
+                "Head size (VTiles * PV N-tile) must be divisible by the QK K-tile (BLK_QK_D); "
+                "check the ShapeQK/ShapePV tile configuration for this head dimension.");
+  static constexpr int DTiles = VTiles * decltype(get<1>(TileShapePV{}))::value
+                            / decltype(get<2>(TileShapeQK{}))::value;
   using SubgroupLayoutQK = decltype(TiledMMAQK{}.get_atom_layout_mnk());
   using SGPerWG = decltype(product(take<1,4>(shape(typename TiledMMAQK::ThrLayoutVMNK{}))));
 
@@ -394,7 +400,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
 
     /* Create register fragments for MMA and copies */
     auto tQrQ = thr_copy_q.partition_sg_fragment_D(gQ(_,_,0));
-    auto tSrQ = thr_mma_qk.partition_sg_fragment_A(gQ(_,_,0));
+    [[maybe_unused]] auto tSrQ = thr_mma_qk.partition_sg_fragment_A(gQ(_,_,0));
+    std::array<decltype(tSrQ), DTiles> tSrQ_arr;
 
     auto tKrK = thr_copy_k.partition_sg_fragment_D(gK(_,_,0,0));
     auto tSrK = thr_mma_qk.partition_sg_fragment_B(gK(_,_,0,0));
@@ -472,9 +479,13 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
     /* Initialization steps for first block: Q/K prefetch, O init */
     /* TODO: limit D prefetch for large head size, and reorder K prefetches */
     int kblocks_cache = ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{}));
-    for (int D = 0; D < size<3>(pQgQ); D++) {
-      prefetch(prefetch_q, pQgQ(_,_,_,D));
+    /* Preload + reorder Q once; reused across all K iterations. */
+    CUTLASS_PRAGMA_UNROLL
+    for (int d = 0; d < DTiles; d++) {
+      copy(copy_q, tQgQ(_,_,_,d), tQrQ);
+      reorder(tQrQ, tSrQ_arr[d]);
     }
+
     for (int D = 0; D < size<4>(pKgK); D++) {
       CUTLASS_PRAGMA_UNROLL
       for (int K = 0; K < Stages; K++) {
@@ -514,7 +525,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       fill(tA_max, cutlass::platform::numeric_limits<ElementA>::lowest());
       clear(tA_sum);
     }
-
+    constexpr int kAtomsPerD = decltype(get<2>(TileShapeQK{}))::value
+                             / decltype(get<2>(typename TiledMMAQK::AtomShape_MNK{}))::value;
     /* Main loop body */
     auto mainloop_body = [&](auto cached_k, int K,
                              auto& copy_k_cur, auto& copy_v_cur,
@@ -537,12 +549,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       }
 
       /* GEMM 1: S = K * Q */
-      clear(tSrS);
       CUTLASS_PRAGMA_UNROLL
-      for (int D = 0; D < size<4>(tKgK); D++) {
-        copy(copy_q, tQgQ(_,_,_,D), tQrQ);
+      for (int D = 0; D < DTiles; D++) {
         copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
-        reorder(tQrQ, tSrQ);
         reorder(tKrK, tSrK);
 
         if constexpr (UseScale) {
@@ -572,7 +581,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
           Tensor scaleK_view = make_tensor(recast<intel::vector_t<ElementScaleK, scaleKSize::value>>(fragment_scaleK).data(),
                                            make_layout(Shape<_1, decltype(size<1>(tSrK.shape())), _1>{}, Stride<_1, _0, _0>{}));
 
-          auto zipped_q = make_zip_tensor(tSrQ, scaleQ_view, gemm_qm_offsets, gemm_qk_offsets);
+          auto zipped_q = make_zip_tensor(tSrQ_arr[D], scaleQ_view, gemm_qm_offsets, gemm_qk_offsets);
           auto zipped_k = make_zip_tensor(tSrK, scaleK_view, gemm_kn_offsets, gemm_kk_offsets);
 
           copy_iter_scaleQ.data().coord_ = {q_coord, 0, l_coord};
@@ -580,13 +589,22 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
 
           copy(tiled_copy_scaleQ, copy_iter_scaleQ(_, _, _, D), fragment_scaleQ);
           copy(tiled_copy_scaleK, copy_iter_scaleK(_, _, _, D), fragment_scaleK);
-
+          //TODO: Add src0 null support then can get acc right because we removed clear(tSrS).
           cute::gemm(mma_qk, zipped_q, zipped_k, tSrS);
         } else {
           if constexpr (F8kvF16mma) {
             dequantize(tSrK, scale_k);
           }
-          cute::gemm(mma_qk, tSrQ, tSrK, tSrS);
+          auto const& tSrQ_d = tSrQ_arr[D];
+          if (D == 0) {
+            cute::gemm<true>(mma_qk, tSrQ_d(_, _, 0), tSrK(_, _, 0), tSrS);
+            CUTLASS_PRAGMA_UNROLL
+            for (int k = 1; k < kAtomsPerD; k++) {
+              cute::gemm(mma_qk, tSrQ_d(_, _, k), tSrK(_, _, k), tSrS);
+            }
+          } else {
+            cute::gemm(mma_qk, tSrQ_d, tSrK, tSrS);
+          }
         }
       }
 
