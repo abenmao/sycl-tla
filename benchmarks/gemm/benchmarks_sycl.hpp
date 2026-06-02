@@ -76,6 +76,16 @@ using BmgGemm_BF16FP32_Tile_256_256_32 = typename TiledMMAHelper<MMA_Atom<XE_DPA
 using BmgGemmBF16BF16FP32_StreamK_TileShape_256_256_32 = Gemm_Bench_BF16FP32_RRR_StreamK<BmgGemm_BF16FP32_TileShape_256_256_32, BmgGemm_BF16FP32_Tile_256_256_32, void, void>;
 CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmBF16BF16FP32_StreamK_TileShape_256_256_32);
 
+using BmgGemm_BF16FP32_TileShape_8_128_32 = Shape<_8, _128, _32>;
+using BmgGemm_BF16FP32_Tile_8_128_32 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cute::bfloat16_t>>, Layout<BmgGemm_BF16FP32_TileShape_8_128_32>, Layout<Shape<_1, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using BmgGemmBF16BF16FP32_RRR_TileShape_8_128_32 = Gemm_Bench_BF16FP32_RRR<BmgGemm_BF16FP32_TileShape_8_128_32, BmgGemm_BF16FP32_Tile_8_128_32, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmBF16BF16FP32_RRR_TileShape_8_128_32);
+
+using BmgGemm_BF16FP32_TileShape_16_64_32 = Shape<_16, _64, _32>;
+using BmgGemm_BF16FP32_Tile_16_64_32 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cute::bfloat16_t>>, Layout<BmgGemm_BF16FP32_TileShape_16_64_32>, Layout<Shape<_2, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using BmgGemmBF16BF16FP32_RRR_TileShape_16_64_32 = Gemm_Bench_BF16FP32_RRR<BmgGemm_BF16FP32_TileShape_16_64_32, BmgGemm_BF16FP32_Tile_16_64_32, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmBF16BF16FP32_RRR_TileShape_16_64_32);
+
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
 
 using E4M3ElementType = cutlass::mx_float8_t<float_e4m3_t>;
@@ -261,6 +271,8 @@ static void register_gemm_benchmarks() {
   // TODO: support sglang cases
   CUTLASS_BENCHMARK(BmgGemmBF16BF16FP32_RRR_TileShape_512_256_32);
   CUTLASS_BENCHMARK(BmgGemmBF16BF16FP32_StreamK_TileShape_256_256_32);
+  CUTLASS_BENCHMARK(BmgGemmBF16BF16FP32_RRR_TileShape_8_128_32);
+  CUTLASS_BENCHMARK(BmgGemmBF16BF16FP32_RRR_TileShape_16_64_32);
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
   CUTLASS_BENCHMARK(CriGemmE5M2E5M2FP32_RRR_TileShape_256_256_32);
   CUTLASS_BENCHMARK(CriGemmE4M3E4M3FP32_RRR_TileShape_256_256_32);
