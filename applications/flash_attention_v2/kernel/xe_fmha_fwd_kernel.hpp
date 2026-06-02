@@ -219,7 +219,7 @@ public:
     for (; tile_scheduler.is_valid(); ++tile_scheduler) {
       auto [blk_q, blk_v, head_q, idx_b] = tile_scheduler.get_block_coord(); // (Q,V,h,b)
       auto blk_qv = make_coord(blk_q, blk_v);
-      int head = head_q / head_group_q;
+      int head = tile_scheduler.divide_head_group(head_q);
 
       auto sequence_length_shape = get_sequence_length_shape(s, idx_b);
       auto [seq_len_qo, seq_len_kv, seq_len_kv_cache] = sequence_length_shape;

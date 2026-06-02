@@ -1243,16 +1243,39 @@ struct FMHAConfig {
     >;
 
     static_assert(!(persistent & Causal), "persistent SDPA kernel not support Causal yet");
-    using FMHAKernel = conditional_t<is_same_v<Scheduler, cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>,
-      cutlass::fmha::kernel::XeFMHAFwdDynamicSplitKernel<
-        ProblemShapeType, CollectiveMainloop, CollectiveEpilogue, Scheduler>,
-        cutlass::fmha::kernel::XeFMHAFwdKernel<
-        ProblemShapeType, CollectiveMainloop, CollectiveEpilogue, Scheduler>
-        >;
 
-    ExampleRunner<FMHAKernel, isVarLen> runner;
+    cutlass::Status status;
+    if constexpr (is_same_v<Scheduler, cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>) {
+      using FMHAKernel = cutlass::fmha::kernel::XeFMHAFwdDynamicSplitKernel<
+          ProblemShapeType, CollectiveMainloop, CollectiveEpilogue, Scheduler>;
+      ExampleRunner<FMHAKernel, isVarLen> runner;
+      status = runner.run(options, hw_info);
+    } else {
+      auto run_with = [&](auto bo_t, auto hgo_t) -> cutlass::Status {
+        constexpr bool BO  = decltype(bo_t)::value;
+        constexpr bool HGO = decltype(hgo_t)::value;
+        using SchedulerSpec = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<BO, HGO>;
+        using FMHAKernel = cutlass::fmha::kernel::XeFMHAFwdKernel<
+            ProblemShapeType, CollectiveMainloop, CollectiveEpilogue, SchedulerSpec>;
+        ExampleRunner<FMHAKernel, isVarLen> runner;
+        return runner.run(options, hw_info);
+      };
 
-    CUTLASS_CHECK(runner.run(options, hw_info));
+      const bool batch_one = (options.batch == 1);
+      const bool no_gqa    = (options.num_heads_q == options.num_heads_kv);
+
+      if (batch_one && no_gqa) {
+        status = run_with(std::true_type{},  std::true_type{});
+      }
+      else if (batch_one) {
+        status = run_with(std::true_type{},  std::false_type{});
+      } else if (no_gqa) {
+        status = run_with(std::false_type{}, std::true_type{});
+      } else {
+        status = run_with(std::false_type{}, std::false_type{});
+      }
+    }
+    CUTLASS_CHECK(status);
     return 0;
   }
 };

@@ -173,7 +173,7 @@ int main(int argc, const char **argv) {
 #endif
 #if defined(IS_MX_FLOAT_E5M2) || defined(IS_MX_FLOAT_E4M3) || defined(IS_MX_FLOAT_E2M1)
   // UseScale does not support CachedKV/PagedKV
-  using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler;
+  using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
   using FMHACausal    = FMHAConfig<true, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>;
   using FMHANonCausal = FMHAConfig<false, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>;
 

@@ -156,7 +156,7 @@ struct FMHAConfig {
 
   using Scheduler = cute::conditional_t<Persistent,
       cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler,
-      cutlass::fmha::kernel::XeFHMAIndividualTileScheduler
+      cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>
   >;
   using FMHAKernel = cute::conditional_t<Persistent,
       cutlass::fmha::kernel::XeFMHAFwdDynamicSplitKernel<

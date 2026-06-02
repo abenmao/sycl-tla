@@ -174,7 +174,7 @@ int main(int argc, const char **argv) {
   // Directly instantiate only CachedKV=true, PagedKV=false kernels.
   // Causal and VarLen are dispatched at runtime.
   // UseScale (mxfp) is not supported with CachedKV.
-  using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler;
+  using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
 
   using FMHACausal    = FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV>;
   using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV>;

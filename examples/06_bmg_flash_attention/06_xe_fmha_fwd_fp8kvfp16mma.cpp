@@ -153,7 +153,7 @@ int main(int argc, const char **argv) {
   using ElementV = cutlass::float_e4m3_t;
   using ElementScale = float;
 
-  using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler;
+  using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
   using FMHACausal    = FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>;
   using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>;
 
