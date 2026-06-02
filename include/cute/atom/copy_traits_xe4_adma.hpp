@@ -580,31 +580,38 @@ struct Copy_Traits<XE4_ADMA_ROW_COPY_LINEAR_STORE, DataType, NumBytes, RowSizeT,
   // Arguments stored by .with() - exact args depend on addressing mode
   cute::tuple<OpArgs...> row_store_args_;
 
-  // A64 mode: .with(uint64_t offset, uint32_t size, uint64_t* abar_ptr, ...)
-  template <detail::CacheCtrl CC = detail::CacheCtrl::L2wb_L3uc>
+  // A64 mode: .with(uint64_t offset, uint32_t size, uint64_t* abar_ptr, ..., [CompletionModeHint])
+  // CompletionModeHint is optional (defaults to CM_Unspecified, which emits no `.cm` token).
+  template <detail::CacheCtrl CC = detail::CacheCtrl::L2wb_L3uc,
+            detail::CompletionMode CM = detail::CompletionMode::CM_Unspecified>
   CUTE_HOST_DEVICE constexpr
-  Copy_Traits<XE4_ADMA_ROW_COPY_LINEAR_STORE, DataType, NumBytes, RowSizeT, uint64_t, uint32_t, uint64_t*, detail::CacheHint<CC>>
+  Copy_Traits<XE4_ADMA_ROW_COPY_LINEAR_STORE, DataType, NumBytes, RowSizeT, uint64_t, uint32_t, uint64_t*, detail::CacheHint<CC>, detail::CompletionModeHint<CM>>
   with(uint64_t offset, uint32_t size, uint64_t* abar_ptr,
-       detail::CacheHint<CC> = {}) const {
-    return {cute::make_tuple(offset, size, abar_ptr, detail::CacheHint<CC>{})};
+       detail::CacheHint<CC> = {}, detail::CompletionModeHint<CM> = {}) const {
+    return {cute::make_tuple(offset, size, abar_ptr,
+                             detail::CacheHint<CC>{}, detail::CompletionModeHint<CM>{})};
   }
 
-  // A32S mode: .with(DataType* gmem_ptr, int32_t offset, uint32_t size, uint64_t* abar_ptr, ...)
-  template <detail::CacheCtrl CC = detail::CacheCtrl::L2wb_L3uc>
+  // A32S mode: .with(DataType* gmem_ptr, int32_t offset, uint32_t size, uint64_t* abar_ptr, ..., [CompletionModeHint])
+  template <detail::CacheCtrl CC = detail::CacheCtrl::L2wb_L3uc,
+            detail::CompletionMode CM = detail::CompletionMode::CM_Unspecified>
   CUTE_HOST_DEVICE constexpr
-  Copy_Traits<XE4_ADMA_ROW_COPY_LINEAR_STORE, DataType, NumBytes, RowSizeT, DataType*, int32_t, uint32_t, uint64_t*, detail::CacheHint<CC>>
+  Copy_Traits<XE4_ADMA_ROW_COPY_LINEAR_STORE, DataType, NumBytes, RowSizeT, DataType*, int32_t, uint32_t, uint64_t*, detail::CacheHint<CC>, detail::CompletionModeHint<CM>>
   with(DataType* gmem_ptr, int32_t offset, uint32_t size, uint64_t* abar_ptr,
-       detail::CacheHint<CC> = {}) const {
-    return {cute::make_tuple(gmem_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{})};
+       detail::CacheHint<CC> = {}, detail::CompletionModeHint<CM> = {}) const {
+    return {cute::make_tuple(gmem_ptr, offset, size, abar_ptr,
+                             detail::CacheHint<CC>{}, detail::CompletionModeHint<CM>{})};
   }
 
-  // A32U mode: .with(DataType* gmem_ptr, uint32_t offset, uint32_t size, uint64_t* abar_ptr, ...)
-  template <detail::CacheCtrl CC = detail::CacheCtrl::L2wb_L3uc>
+  // A32U mode: .with(DataType* gmem_ptr, uint32_t offset, uint32_t size, uint64_t* abar_ptr, ..., [CompletionModeHint])
+  template <detail::CacheCtrl CC = detail::CacheCtrl::L2wb_L3uc,
+            detail::CompletionMode CM = detail::CompletionMode::CM_Unspecified>
   CUTE_HOST_DEVICE constexpr
-  Copy_Traits<XE4_ADMA_ROW_COPY_LINEAR_STORE, DataType, NumBytes, RowSizeT, DataType*, uint32_t, uint32_t, uint64_t*, detail::CacheHint<CC>>
+  Copy_Traits<XE4_ADMA_ROW_COPY_LINEAR_STORE, DataType, NumBytes, RowSizeT, DataType*, uint32_t, uint32_t, uint64_t*, detail::CacheHint<CC>, detail::CompletionModeHint<CM>>
   with(DataType* gmem_ptr, uint32_t offset, uint32_t size, uint64_t* abar_ptr,
-       detail::CacheHint<CC> = {}) const {
-    return {cute::make_tuple(gmem_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{})};
+       detail::CacheHint<CC> = {}, detail::CompletionModeHint<CM> = {}) const {
+    return {cute::make_tuple(gmem_ptr, offset, size, abar_ptr,
+                             detail::CacheHint<CC>{}, detail::CompletionModeHint<CM>{})};
   }
 
   template <class TS, class SLayout,
@@ -618,50 +625,80 @@ struct Copy_Traits<XE4_ADMA_ROW_COPY_LINEAR_STORE, DataType, NumBytes, RowSizeT,
     static_assert(is_gmem<TD>::value, "Expected gmem dst for XE4_ADMA_ROW_COPY_LINEAR_STORE");
     static_assert(std::is_same_v<typename TS::value_type, DataType>,
                   "ADMA row store requires smem element type to match gmem DataType");
-
-    if constexpr (sizeof...(OpArgs) == 4) {
-      // A64 mode: (offset, size, abar_ptr, CacheHint)
+    //   - A64:           5-tuple (offset, size, abar, CacheHint, CompletionModeHint)
+    //   - A32S / A32U:   6-tuple (gmem_ptr, offset, size, abar, CacheHint, CompletionModeHint)
+    if constexpr (sizeof...(OpArgs) == 5) {
       using OffsetType = cute::tuple_element_t<0, cute::tuple<OpArgs...>>;
       if constexpr (std::is_same_v<OffsetType, uint64_t>) {
         using CacheHintType = decltype(get<3>(traits.row_store_args_));
+        using CMHintType    = decltype(get<4>(traits.row_store_args_));
         constexpr auto CC = CacheHintType::value;
-        XE4_ADMA_ROW_COPY_LINEAR_STORE::template copy<AddressingMode::A64, kRowSize, DataType, CC>(
-            const_cast<DataType*>(raw_pointer_cast(src.data())),
-            nullptr,  // gmem_ptr unused in A64 mode
-            get<0>(traits.row_store_args_),  // offset (uint64_t)
-            get<1>(traits.row_store_args_),  // size
-            get<2>(traits.row_store_args_),  // abar_ptr
-            get<3>(traits.row_store_args_)); // CacheHint
+        constexpr auto CM = CMHintType::value;
+        XE4_ADMA_ROW_COPY_LINEAR_STORE::template copy<AddressingMode::A64, kRowSize, DataType, CC, CM>(
+            const_cast<DataType*>(raw_pointer_cast(src.data())), nullptr,
+            get<0>(traits.row_store_args_), get<1>(traits.row_store_args_),
+            get<2>(traits.row_store_args_), get<3>(traits.row_store_args_),
+            get<4>(traits.row_store_args_));
       }
-    } else if constexpr (sizeof...(OpArgs) == 5) {
-      // A32S or A32U mode: (gmem_ptr, offset, size, abar_ptr, CacheHint)
+    } else if constexpr (sizeof...(OpArgs) == 6) {
       using OffsetType = cute::tuple_element_t<1, cute::tuple<OpArgs...>>;
       using CacheHintType = decltype(get<4>(traits.row_store_args_));
+      using CMHintType    = decltype(get<5>(traits.row_store_args_));
       constexpr auto CC = CacheHintType::value;
+      constexpr auto CM = CMHintType::value;
 
       if constexpr (std::is_same_v<OffsetType, int32_t>) {
-        // A32S mode
-        XE4_ADMA_ROW_COPY_LINEAR_STORE::template copy<AddressingMode::A32S, kRowSize, DataType, CC>(
+        XE4_ADMA_ROW_COPY_LINEAR_STORE::template copy<AddressingMode::A32S, kRowSize, DataType, CC, CM>(
             const_cast<DataType*>(raw_pointer_cast(src.data())),
-            get<0>(traits.row_store_args_),  // gmem_ptr
-            get<1>(traits.row_store_args_),  // offset (int32_t)
-            get<2>(traits.row_store_args_),  // size
-            get<3>(traits.row_store_args_),  // abar_ptr
-            get<4>(traits.row_store_args_)); // CacheHint
+            get<0>(traits.row_store_args_), get<1>(traits.row_store_args_),
+            get<2>(traits.row_store_args_), get<3>(traits.row_store_args_),
+            get<4>(traits.row_store_args_), get<5>(traits.row_store_args_));
       } else if constexpr (std::is_same_v<OffsetType, uint32_t>) {
-        // A32U mode
-        XE4_ADMA_ROW_COPY_LINEAR_STORE::template copy<AddressingMode::A32U, kRowSize, DataType, CC>(
+        XE4_ADMA_ROW_COPY_LINEAR_STORE::template copy<AddressingMode::A32U, kRowSize, DataType, CC, CM>(
             const_cast<DataType*>(raw_pointer_cast(src.data())),
-            get<0>(traits.row_store_args_),  // gmem_ptr
-            get<1>(traits.row_store_args_),  // offset (uint32_t)
-            get<2>(traits.row_store_args_),  // size
-            get<3>(traits.row_store_args_),  // abar_ptr
-            get<4>(traits.row_store_args_)); // CacheHint
+            get<0>(traits.row_store_args_), get<1>(traits.row_store_args_),
+            get<2>(traits.row_store_args_), get<3>(traits.row_store_args_),
+            get<4>(traits.row_store_args_), get<5>(traits.row_store_args_));
       }
     } else {
       static_assert(sizeof...(OpArgs) == 0, "Extra arguments not set. Set .with() before use.");
     }
   }
+};
+
+// _COLLECTIVE variants: inherit the base trait's .with() and copy_unpack; override
+// only the layout aliases.
+template <class DataType, class NumBytes, class RowSizeT, class... OpArgs>
+struct Copy_Traits<XE4_ADMA_ROW_COPY_LINEAR_LOAD_COLLECTIVE, DataType, NumBytes, RowSizeT, OpArgs...>
+    : Copy_Traits<XE4_ADMA_ROW_COPY_LINEAR_LOAD, DataType, NumBytes, RowSizeT, OpArgs...>
+{
+  using ThrID     = Layout<_32>;
+  using SrcLayout = Layout<Shape<_32, decltype(NumBytes{} * C<8>{})>,
+                           Stride<decltype(NumBytes{} * C<8>{}), _1>>;
+  using DstLayout = SrcLayout;
+  using RefLayout = SrcLayout;
+};
+
+template <class DataType, class NumBytes, class RowSizeT, class... OpArgs>
+struct Copy_Traits<XE4_ADMA_ROW_COPY_LINEAR_LOAD_MULTICAST_COLLECTIVE, DataType, NumBytes, RowSizeT, OpArgs...>
+    : Copy_Traits<XE4_ADMA_ROW_COPY_LINEAR_LOAD_MULTICAST, DataType, NumBytes, RowSizeT, OpArgs...>
+{
+  using ThrID     = Layout<_32>;
+  using SrcLayout = Layout<Shape<_32, decltype(NumBytes{} * C<8>{})>,
+                           Stride<decltype(NumBytes{} * C<8>{}), _1>>;
+  using DstLayout = SrcLayout;
+  using RefLayout = SrcLayout;
+};
+
+template <class DataType, class NumBytes, class RowSizeT, class... OpArgs>
+struct Copy_Traits<XE4_ADMA_ROW_COPY_LINEAR_STORE_COLLECTIVE, DataType, NumBytes, RowSizeT, OpArgs...>
+    : Copy_Traits<XE4_ADMA_ROW_COPY_LINEAR_STORE, DataType, NumBytes, RowSizeT, OpArgs...>
+{
+  using ThrID     = Layout<_32>;
+  using SrcLayout = Layout<Shape<_32, decltype(NumBytes{} * C<8>{})>,
+                           Stride<decltype(NumBytes{} * C<8>{}), _1>>;
+  using DstLayout = SrcLayout;
+  using RefLayout = SrcLayout;
 };
 
 template <class CopyOp, class... Args>

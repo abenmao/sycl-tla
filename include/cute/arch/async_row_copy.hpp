@@ -135,12 +135,12 @@ struct AsyncRowCopyGlobal2SLM_A64
 /// Cache policy: L2wb (write-back in L2), L3uc (uncached in L3)
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <uint32_t RowSize, int BitWidth, CacheCtrl CC = CacheCtrl::L2wb_L3uc>
+template <uint32_t RowSize, int BitWidth, CacheCtrl CC = CacheCtrl::L2wb_L3uc, CompletionMode CM = CompletionMode::CM_Unspecified>
 struct AsyncRowCopySLM2Global_A64_Impl {
   CUTE_HOST_DEVICE static void copy(uint64_t gmem_addr, void* slm_ptr, uint64_t const* abar_ptr, uint32_t size) {
 #if defined (__SYCL_DEVICE_ONLY__)
     asm volatile(
-      ("async_row_copy.global.shared_workgroup.linear."+_s<RowSize>+".a64."+_bw<BitWidth>+_cc<CC>+".abarrier [%0], [%1], [%2], %3;")
+      ("async_row_copy.global.shared_workgroup.linear."+_s<RowSize>+".a64."+_bw<BitWidth>+_cc<CC>+_cm<CM>+".abarrier [%0], [%1], [%2], %3;")
       ::"r"(gmem_addr), "r"(slm_ptr), "r"(abar_ptr), "r"(size));
 #endif
   }
@@ -149,12 +149,12 @@ struct AsyncRowCopySLM2Global_A64_Impl {
 template <uint32_t RowSize>
 struct AsyncRowCopySLM2Global_A64
 {
-  template <typename DataType, CacheCtrl CC = CacheCtrl::L2wb_L3uc>
+  template <typename DataType, CacheCtrl CC = CacheCtrl::L2wb_L3uc, CompletionMode CM = CompletionMode::CM_Unspecified>
   CUTE_HOST_DEVICE static void
   Copy(uint64_t gmem_addr, DataType* slm_ptr, uint32_t size, uint64_t const* abar_ptr,
-       CacheHint<CC> = {})
+       CacheHint<CC> = {}, CompletionModeHint<CM> = {})
   {
-    AsyncRowCopySLM2Global_A64_Impl<RowSize, sizeof_bits_v<DataType>, CC>::copy(gmem_addr, slm_ptr, abar_ptr, size);
+    AsyncRowCopySLM2Global_A64_Impl<RowSize, sizeof_bits_v<DataType>, CC, CM>::copy(gmem_addr, slm_ptr, abar_ptr, size);
   }
 };
 
@@ -234,12 +234,12 @@ struct AsyncRowCopyGlobal2SLM_A32S
 /// Addressing Mode: .a32s (32-bit base pointer + signed 32-bit offset)
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <uint32_t RowSize, int BitWidth, CacheCtrl CC = CacheCtrl::L2wb_L3uc>
+template <uint32_t RowSize, int BitWidth, CacheCtrl CC = CacheCtrl::L2wb_L3uc, CompletionMode CM = CompletionMode::CM_Unspecified>
 struct AsyncRowCopySLM2Global_A32S_Impl {
   CUTE_HOST_DEVICE static void copy(void* gmem_ptr, void* slm_ptr, uint64_t const* abar_ptr, int32_t offset, uint32_t size) {
 #if defined (__SYCL_DEVICE_ONLY__)
     asm volatile(
-      ("async_row_copy.global.shared_workgroup.linear."+_s<RowSize>+".a32s."+_bw<BitWidth>+_cc<CC>+".abarrier [%0], [%1], [%2], %3, %4;")
+      ("async_row_copy.global.shared_workgroup.linear."+_s<RowSize>+".a32s."+_bw<BitWidth>+_cc<CC>+_cm<CM>+".abarrier [%0], [%1], [%2], %3, %4;")
       ::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
 #endif
   }
@@ -248,12 +248,12 @@ struct AsyncRowCopySLM2Global_A32S_Impl {
 template <uint32_t RowSize>
 struct AsyncRowCopySLM2Global_A32S
 {
-  template <typename DataType, CacheCtrl CC = CacheCtrl::L2wb_L3uc>
+  template <typename DataType, CacheCtrl CC = CacheCtrl::L2wb_L3uc, CompletionMode CM = CompletionMode::CM_Unspecified>
   CUTE_HOST_DEVICE static void
   Copy(DataType* gmem_ptr, DataType* slm_ptr, int32_t offset, uint32_t size, uint64_t const* abar_ptr,
-       CacheHint<CC> = {})
+       CacheHint<CC> = {}, CompletionModeHint<CM> = {})
   {
-    AsyncRowCopySLM2Global_A32S_Impl<RowSize, sizeof_bits_v<DataType>, CC>::copy(gmem_ptr, slm_ptr, abar_ptr, offset, size);
+    AsyncRowCopySLM2Global_A32S_Impl<RowSize, sizeof_bits_v<DataType>, CC, CM>::copy(gmem_ptr, slm_ptr, abar_ptr, offset, size);
   }
 };
 
@@ -332,12 +332,12 @@ struct AsyncRowCopyGlobal2SLM_A32U
 /// Addressing Mode: .a32u (32-bit base pointer + unsigned 32-bit offset)
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <uint32_t RowSize, int BitWidth, CacheCtrl CC = CacheCtrl::L2wb_L3uc>
+template <uint32_t RowSize, int BitWidth, CacheCtrl CC = CacheCtrl::L2wb_L3uc, CompletionMode CM = CompletionMode::CM_Unspecified>
 struct AsyncRowCopySLM2Global_A32U_Impl {
   CUTE_HOST_DEVICE static void copy(void* gmem_ptr, void* slm_ptr, uint64_t const* abar_ptr, uint32_t offset, uint32_t size) {
 #if defined (__SYCL_DEVICE_ONLY__)
     asm volatile(
-      ("async_row_copy.global.shared_workgroup.linear."+_s<RowSize>+".a32u."+_bw<BitWidth>+_cc<CC>+".abarrier [%0], [%1], [%2], %3, %4;")
+      ("async_row_copy.global.shared_workgroup.linear."+_s<RowSize>+".a32u."+_bw<BitWidth>+_cc<CC>+_cm<CM>+".abarrier [%0], [%1], [%2], %3, %4;")
       ::"r"(gmem_ptr), "r"(slm_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
 #endif
   }
@@ -346,12 +346,12 @@ struct AsyncRowCopySLM2Global_A32U_Impl {
 template <uint32_t RowSize>
 struct AsyncRowCopySLM2Global_A32U
 {
-  template <typename DataType, CacheCtrl CC = CacheCtrl::L2wb_L3uc>
+  template <typename DataType, CacheCtrl CC = CacheCtrl::L2wb_L3uc, CompletionMode CM = CompletionMode::CM_Unspecified>
   CUTE_HOST_DEVICE static void
   Copy(DataType* gmem_ptr, DataType* slm_ptr, uint32_t offset, uint32_t size, uint64_t const* abar_ptr,
-       CacheHint<CC> = {})
+       CacheHint<CC> = {}, CompletionModeHint<CM> = {})
   {
-    AsyncRowCopySLM2Global_A32U_Impl<RowSize, sizeof_bits_v<DataType>, CC>::copy(gmem_ptr, slm_ptr, abar_ptr, offset, size);
+    AsyncRowCopySLM2Global_A32U_Impl<RowSize, sizeof_bits_v<DataType>, CC, CM>::copy(gmem_ptr, slm_ptr, abar_ptr, offset, size);
   }
 };
 

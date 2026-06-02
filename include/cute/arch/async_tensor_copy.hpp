@@ -56,12 +56,21 @@ enum FillMethod {
   Zero = 0, Nan
 };
 
+// Completion mode modifier (`<.cm>`)
+enum CompletionMode {
+  CM_Unspecified = 0, CM_Write, CM_Read
+};
+
 template <CacheCtrl CC> struct CacheHint {
   constexpr static CacheCtrl value = CC;
 };
 
 template <FillMethod FM> struct FillMode {
   constexpr static FillMethod value = FM;
+};
+
+template <CompletionMode CM> struct CompletionModeHint {
+  constexpr static CompletionMode value = CM;
 };
 }
 }
@@ -88,8 +97,17 @@ template <> struct padfill<cute::detail::FillMethod::Zero> {
 template <> struct padfill<cute::detail::FillMethod::Nan> {
   static constexpr fixstr::fixed_string value {".nan"};};
 
+template <cute::detail::CompletionMode> struct cmplmode;
+template <> struct cmplmode<cute::detail::CompletionMode::CM_Unspecified> {
+  static constexpr fixstr::fixed_string value {""};};
+template <> struct cmplmode<cute::detail::CompletionMode::CM_Write> {
+  static constexpr fixstr::fixed_string value {".write"};};
+template <> struct cmplmode<cute::detail::CompletionMode::CM_Read> {
+  static constexpr fixstr::fixed_string value {".read"};};
+
 template <cute::detail::CacheCtrl CC> constexpr auto _cc = cachectrl<CC>::value;
 template <cute::detail::FillMethod FM> constexpr auto _fl = padfill<FM>::value;
+template <cute::detail::CompletionMode CM> constexpr auto _cm = cmplmode<CM>::value;
 
 namespace cute {
 namespace detail {

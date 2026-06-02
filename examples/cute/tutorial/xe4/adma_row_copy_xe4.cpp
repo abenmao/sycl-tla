@@ -72,9 +72,11 @@ inline void xe4_syncthreads(sycl::nd_item<3>& item) {
 template <AddressingMode Mode, uint32_t RowSize, typename T,
           typename LoadOp, typename StoreOp,
           typename SmemLayout,
+          typename TiledCopyLoad, typename TiledCopyStore,
           detail::CacheCtrl LoadCC = detail::CacheCtrl::L2c_L3uc,
           detail::FillMethod LoadFM = detail::FillMethod::Zero,
-          detail::CacheCtrl StoreCC = detail::CacheCtrl::L2wb_L3uc>
+          detail::CacheCtrl StoreCC = detail::CacheCtrl::L2wb_L3uc,
+          detail::CompletionMode StoreCM = detail::CompletionMode::CM_Unspecified>
 SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
     sycl::nd_item<3> item,
     T const* src_ptr,
@@ -82,6 +84,8 @@ SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
     uint32_t prob_size,
     SmemLayout sL)
 {
+  TiledCopyLoad  adma_load{};
+  TiledCopyStore adma_store{};
   // Bit-based math so sub-byte types (e.g., fp4 = 4 bits) compute element counts correctly.
   constexpr uint32_t kTBits = cute::sizeof_bits_v<T>;
   static_assert((RowSize * 8) % kTBits == 0, "RowSize (in bits) must be a multiple of element bits");
@@ -90,18 +94,14 @@ SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
   constexpr uint32_t kCtaBytes     = kNumThreadsPerWarp * RowSize;
   constexpr uint32_t kCopyElements = kNumThreadsPerWarp * kRowElements;
 
-  // 1. Problem in bytes. For sub-byte T, prob_size*bits may round up.
-  uint32_t total_bytes = (prob_size * kTBits + 7u) / 8u;
-
-  // 2. This CTA's byte span. Last CTA may be partial.
-  uint32_t cta_base_bytes = BlockIdxX() * kCtaBytes;
+  // 1. This CTA's byte span. Last CTA may be partial — clamp against problem size.
   uint32_t cta_bytes = kCtaBytes;
-
-  if (BlockIdxX() == GridDimX() - 1){
-    cta_bytes = total_bytes - cta_base_bytes;
+  if (BlockIdxX() == GridDimX() - 1) {
+    uint32_t total_bytes = (prob_size * kTBits + 7u) / 8u;
+    cta_bytes = total_bytes - BlockIdxX() * kCtaBytes;
   }
 
-  // 3. Divide CTA bytes by RowSize -> full-row lanes + optional partial lane.
+  // 2. Divide CTA bytes by RowSize -> full-row lanes + optional partial lane.
   uint32_t full_rows    = cta_bytes / RowSize;
   uint32_t tail_bytes   = cta_bytes % RowSize;
   uint32_t active_lanes = full_rows + (tail_bytes > 0 ? 1u : 0u);
@@ -110,10 +110,10 @@ SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
   auto sg = item.get_sub_group();
   uint32_t lane_id = sg.get_local_id();
 
-  // 4. Per-lane role.
+  // 3. Per-lane role. Active lanes have lane_id < active_lanes; the partial lane
+  //    (if any) is exactly lane_id == full_rows and uses tail_bytes < RowSize.
   bool     lane_active       = (lane_id < active_lanes);
-  bool     is_partial_lane   = (tail_bytes > 0) && (lane_id == full_rows);
-  uint32_t lane_bytes        = is_partial_lane ? tail_bytes : uint32_t(RowSize);
+  uint32_t lane_bytes        = (lane_id < full_rows) ? uint32_t(RowSize) : tail_bytes;
   uint32_t lane_elem_offset  = BlockIdxX() * kCopyElements + lane_id * kRowElements;
   uint32_t barrier_txn_bytes = active_lanes * uint32_t(RowSize);
 
@@ -125,10 +125,10 @@ SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
 
   Tensor sL_local = make_tensor(make_smem_ptr(smem.smem_A.begin()), sL);
 
-  using GmemTiledCopyLoad  = cute::Copy_Traits<LoadOp,  T, cute::Int<RowSize>, cute::Int<RowSize>>;
-  using GmemTiledCopyStore = cute::Copy_Traits<StoreOp, T, cute::Int<RowSize>, cute::Int<RowSize>>;
-  auto adma_load  = make_tiled_copy(Copy_Atom<GmemTiledCopyLoad,  T>{}, Layout<_1>{}, Layout<Int<kRowElements>>{});
-  auto adma_store = make_tiled_copy(Copy_Atom<GmemTiledCopyStore, T>{}, Layout<_1>{}, Layout<Int<kRowElements>>{});
+  constexpr bool kIsCollective = std::is_same_v<LoadOp, cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD_COLLECTIVE>;
+  static_assert(kIsCollective ==
+                std::is_same_v<StoreOp, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE_COLLECTIVE>,
+                "LoadOp and StoreOp must both be collective or both be non-collective.");
 
   uint32_t elect_one_thr = cute::elect_one_sync();
   auto load_abar  = allocate_abar<0>();
@@ -141,21 +141,39 @@ SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
   }
   sycl::group_barrier(sg);
 
-  auto mSrc = make_tensor(make_gmem_ptr(src_ptr), make_layout(make_shape(prob_size)));
-  auto mDst = make_tensor(make_gmem_ptr(dst_ptr), make_layout(make_shape(prob_size)));
+  uint32_t num_rows = (prob_size + kRowElements - 1) / kRowElements;
+  auto mSrc = make_tensor(make_gmem_ptr(src_ptr),
+                          make_layout(make_shape(Int<kRowElements>{}, num_rows),
+                                      make_stride(_1{}, Int<kRowElements>{})));
+  auto mDst = make_tensor(make_gmem_ptr(dst_ptr),
+                          make_layout(make_shape(Int<kRowElements>{}, num_rows),
+                                      make_stride(_1{}, Int<kRowElements>{})));
 
-  constexpr auto lane_tile_size = Int<kRowElements>{};
-  auto lane_coord = make_coord(lane_id);
+  auto cta_coord = make_coord(_0{}, BlockIdxX());
+  auto gSrc_cta = local_tile(mSrc, make_shape(Int<kRowElements>{}, Int<kNumThreadsPerWarp>{}), cta_coord);
+  auto gDst_cta = local_tile(mDst, make_shape(Int<kRowElements>{}, Int<kNumThreadsPerWarp>{}), cta_coord);
 
-  auto tGsrc  = coalesce(local_tile(mSrc,     make_shape(lane_tile_size), lane_coord, Step<_1>{}));
-  auto tGdst  = coalesce(local_tile(mDst,     make_shape(lane_tile_size), lane_coord, Step<_1>{}));
-  auto tSmem  = coalesce(local_tile(sL_local, make_shape(lane_tile_size), lane_coord, Step<_1>{}));
+  // Collective ops (ThrLayoutCopy=Layout<_32>) drive one ADMA atom across all 32 lanes,
+  // so per-lane tensors come from the tiled-copy thread slice over a coalesced 1D view.
+  // Non-collective ops (ThrLayoutCopy=Layout<_1>) issue one atom per lane, so each lane
+  // simply takes its own column of the (kRowElements, 32) CTA tile.
+  auto [tGsrc, tGdst, tSmem] = [&] {
+    if constexpr (kIsCollective) {
+      auto thr_copy_load  = adma_load.get_thread_slice(lane_id);
+      auto thr_copy_store = adma_store.get_thread_slice(lane_id);
+      return cute::make_tuple(thr_copy_load.partition_S(coalesce(gSrc_cta)),
+                              thr_copy_store.partition_D(coalesce(gDst_cta)),
+                              thr_copy_load.partition_D(coalesce(sL_local)));
+    } else {
+      return cute::make_tuple(gSrc_cta(_, lane_id),
+                              gDst_cta(_, lane_id),
+                              sL_local(_, lane_id));
+    }
+  }();
 
   // Byte offset for this lane's row. For sub-byte types, sizeof(T) is the storage
   // size (e.g. fp4 has sizeof==1 but packs 2 elements/byte), so use bit-based math.
   uint32_t lane_byte_offset = (lane_elem_offset * kTBits) / 8u;
-  auto     src_ptr_u8       = reinterpret_cast<uint8_t const*>(src_ptr);
-  auto     dst_ptr_u8       = reinterpret_cast<uint8_t*>(dst_ptr);
 
   // WARP 0: LOAD. Partial lane uses size < RowSize; others use size = RowSize.
   if (warp_idx == 0) {
@@ -163,14 +181,15 @@ SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
       xe4_set_barrier_transaction_bytes(load_abar[0], barrier_txn_bytes);
     }
     if (lane_active) {
-      if constexpr (std::is_same_v<OffsetType, uint64_t>) {
-        uint64_t gmem_load_addr = reinterpret_cast<uint64_t>(src_ptr_u8 + lane_byte_offset);
+      if constexpr (Mode == AddressingMode::A64) {
+        auto gmem_load_addr =
+            reinterpret_cast<uint64_t>(reinterpret_cast<uint8_t const*>(src_ptr) + lane_byte_offset);
         auto load_atom = adma_load.with(gmem_load_addr, lane_bytes, &load_abar[0],
                                         detail::CacheHint<LoadCC>{},
                                         detail::FillMode<LoadFM>{});
         copy(load_atom, tGsrc, tSmem);
       } else {
-        OffsetType byte_offset = static_cast<OffsetType>(lane_byte_offset);
+        auto byte_offset = static_cast<OffsetType>(lane_byte_offset);
         auto load_atom = adma_load.with(const_cast<T*>(src_ptr), byte_offset, lane_bytes, &load_abar[0],
                                         detail::CacheHint<LoadCC>{},
                                         detail::FillMode<LoadFM>{});
@@ -188,15 +207,18 @@ SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
       xe4_set_barrier_transaction_bytes(store_abar[0], barrier_txn_bytes);
     }
     if (lane_active) {
-      if constexpr (std::is_same_v<OffsetType, uint64_t>) {
-        uint64_t gmem_store_addr = reinterpret_cast<uint64_t>(dst_ptr_u8 + lane_byte_offset);
+      if constexpr (Mode == AddressingMode::A64) {
+        auto gmem_store_addr =
+            reinterpret_cast<uint64_t>(reinterpret_cast<uint8_t*>(dst_ptr) + lane_byte_offset);
         auto store_atom = adma_store.with(gmem_store_addr, lane_bytes, &store_abar[0],
-                                          detail::CacheHint<StoreCC>{});
+                                          detail::CacheHint<StoreCC>{},
+                                          detail::CompletionModeHint<StoreCM>{});
         copy(store_atom, tSmem, tGdst);
       } else {
-        OffsetType byte_offset = static_cast<OffsetType>(lane_byte_offset);
+        auto byte_offset = static_cast<OffsetType>(lane_byte_offset);
         auto store_atom = adma_store.with(dst_ptr, byte_offset, lane_bytes, &store_abar[0],
-                                          detail::CacheHint<StoreCC>{});
+                                          detail::CacheHint<StoreCC>{},
+                                          detail::CompletionModeHint<StoreCM>{});
         copy(store_atom, tSmem, tGdst);
       }
     }
@@ -211,7 +233,8 @@ SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
 template <AddressingMode Mode, typename LoadOp, typename StoreOp, uint32_t RowSize, typename T,
           detail::CacheCtrl LoadCC = detail::CacheCtrl::L2c_L3uc,
           detail::FillMethod LoadFM = detail::FillMethod::Zero,
-          detail::CacheCtrl StoreCC = detail::CacheCtrl::L2wb_L3uc>
+          detail::CacheCtrl StoreCC = detail::CacheCtrl::L2wb_L3uc,
+          detail::CompletionMode StoreCM = detail::CompletionMode::CM_Unspecified>
 void run_test_row_per_lane(uint32_t prob_size, sycl::queue& queue, const std::string& test_name)
 {
   constexpr uint32_t kNumControlWarps = 2;
@@ -221,8 +244,24 @@ void run_test_row_per_lane(uint32_t prob_size, sycl::queue& queue, const std::st
   constexpr uint32_t kCopyElements    = kNumThreadsPerWarp * kRowElements;   // 32 rows per CTA
   constexpr uint32_t kCtaBytes        = kNumThreadsPerWarp * RowSize;
 
-  using SmemLayout = Layout<Shape<Int<kCopyElements>>, Stride<Int<1>>>;
+  using SmemLayout = Layout<Shape<Int<kRowElements>, Int<kNumThreadsPerWarp>>,
+                            Stride<_1, Int<kRowElements>>>;
   SmemLayout sL{};
+
+  // Build TiledCopy on host — stateless types, captured by value into the SYCL kernel.
+  constexpr bool kLoadIsCollective  = std::is_same_v<LoadOp,  cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD_COLLECTIVE>;
+  constexpr bool kStoreIsCollective = std::is_same_v<StoreOp, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE_COLLECTIVE>;
+  static_assert(kLoadIsCollective == kStoreIsCollective,
+                "LoadOp and StoreOp must both be collective or both be non-collective.");
+  constexpr bool kIsCollective = kLoadIsCollective && kStoreIsCollective;
+  using ThrLayoutCopy = std::conditional_t<kIsCollective, Layout<_32>, Layout<_1>>;
+
+  using GmemTiledCopyLoad  = cute::Copy_Traits<LoadOp,  T, cute::Int<RowSize>, cute::Int<RowSize>>;
+  using GmemTiledCopyStore = cute::Copy_Traits<StoreOp, T, cute::Int<RowSize>, cute::Int<RowSize>>;
+  auto adma_load  = make_tiled_copy(Copy_Atom<GmemTiledCopyLoad,  T>{},
+                                    ThrLayoutCopy{}, Layout<Int<kRowElements>>{});
+  auto adma_store = make_tiled_copy(Copy_Atom<GmemTiledCopyStore, T>{},
+                                    ThrLayoutCopy{}, Layout<Int<kRowElements>>{});
 
   auto src     = make_shared_usm_tensor<T, 'R'>(queue, 1, prob_size);
   auto dst     = make_shared_usm_tensor<T, 'R'>(queue, 1, prob_size);
@@ -259,7 +298,9 @@ void run_test_row_per_lane(uint32_t prob_size, sycl::queue& queue, const std::st
   syclexp::submit_with_event(queue, [&](sycl::handler &handler) {
     syclexp::nd_launch(handler, launch_cfg, [=](sycl::nd_item<3> item) ALWAYS_INLINE {
       adma_row_per_lane_kernel<Mode, RowSize, T,
-                               LoadOp, StoreOp, SmemLayout, LoadCC, LoadFM, StoreCC>(
+                               LoadOp, StoreOp, SmemLayout,
+                               decltype(adma_load), decltype(adma_store),
+                               LoadCC, LoadFM, StoreCC, StoreCM>(
           item, src_ptr, dst_ptr, prob_size, sL);
     });
   }).wait();
@@ -306,7 +347,7 @@ void run_test_row_per_lane(uint32_t prob_size, sycl::queue& queue, const std::st
 /// Test Suite Runner
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <AddressingMode Mode>
+template <AddressingMode Mode, typename LoadOp, typename StoreOp>
 void run_test_suite(sycl::queue& queue, const std::string& mode_name, uint32_t& test_offset) {
   try {
     // -------- Row-per-lane kernel test suite --------
@@ -314,76 +355,100 @@ void run_test_suite(sycl::queue& queue, const std::string& mode_name, uint32_t& 
 
     // A. Single CTA, all 32 lanes full. fp16 RowSize=128 -> kCtaBytes=4096=2048 fp16. 1 CTA.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | RowSize=128, 1 CTA, 32 full lanes" << std::endl;
-    run_test_row_per_lane<Mode, cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE, 128, fp16>(
+    run_test_row_per_lane<Mode, LoadOp, StoreOp, 128, fp16>(
       2048, queue, mode_name + "/fp16/row_per_lane_RS128");
 
     // B. Multi-CTA, int8. RowSize=32 -> kCtaBytes=1024=1024 int8. prob_size=2048 -> 2 full CTAs.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | int8 | row-per-lane | RowSize=32, 2 full CTAs" << std::endl;
-    run_test_row_per_lane<Mode, cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE, 32, int8_t>(
+    run_test_row_per_lane<Mode, LoadOp, StoreOp, 32, int8_t>(
       2048, queue, mode_name + "/int8/row_per_lane_RS32");
 
     // C. Single partial CTA, large RowSize. fp16 RowSize=1024 -> kCtaBytes=32768.
     // prob_size=2048 fp16 = 4096 B -> 1 CTA: 4 full lanes + 28 inactive.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | RowSize=1024, 1 CTA: 4 full + 28 inactive" << std::endl;
-    run_test_row_per_lane<Mode, cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE, 1024, fp16>(
+    run_test_row_per_lane<Mode, LoadOp, StoreOp, 1024, fp16>(
       2048, queue, mode_name + "/fp16/row_per_lane_RS1024");
 
     // D. Min-aligned RowSize=16, single full CTA. kCtaBytes=512=256 fp16. prob_size=256 -> 1 CTA.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | RowSize=16 (min aligned), 1 full CTA" << std::endl;
-    run_test_row_per_lane<Mode, cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE, 16, fp16>(
+    run_test_row_per_lane<Mode, LoadOp, StoreOp, 16, fp16>(
       256, queue, mode_name + "/fp16/row_per_lane_RS16");
 
     // E. Very large RowSize, tiny problem. fp16 RowSize=2048, prob_size=256 = 512 B.
     // 1 CTA: cta_bytes=512 -> 0 full + 1 partial lane (size=512 < 2048) + 31 inactive.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | RowSize=2048, 1 partial lane (size=512B<2048B), 31 inactive" << std::endl;
-    run_test_row_per_lane<Mode, cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE, 2048, fp16>(
+    run_test_row_per_lane<Mode, LoadOp, StoreOp, 2048, fp16>(
       256, queue, mode_name + "/fp16/row_per_lane_RS2048_tiny");
 
     // F. Non-default cache policy (same shape as E). Load:L2uc_L3c, Store:L2wb_L3wb.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | Load:L2uc_L3c, Store:L2wb_L3wb" << std::endl;
-    run_test_row_per_lane<Mode, cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE, 2048, fp16,
+    run_test_row_per_lane<Mode, LoadOp, StoreOp, 2048, fp16,
              detail::CacheCtrl::L2uc_L3c, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3wb>(
       256, queue, mode_name + "/fp16/row_per_lane_l2uc_l3c");
 
     // G. Multi-CTA with mixed partial in last CTA. prob_size=23424 fp16 = 46848 B -> 3 CTAs.
     // CTA 0, CTA 1: full (32 lanes each). CTA 2: 27 full + 1 partial (256B) + 4 inactive.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | 3 CTAs: 2 full + 1 mixed partial CTA" << std::endl;
-    run_test_row_per_lane<Mode, cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE, 512, fp16>(
+    run_test_row_per_lane<Mode, LoadOp, StoreOp, 512, fp16>(
       23424, queue, mode_name + "/fp16/row_per_lane_3ctas_mixed");
 
     // H. 2 CTAs, last CTA has 4 full + 1 partial (96B) + 27 inactive.
     // fp16 RowSize=256, prob_size=4656 fp16 = 9312 B. kCtaBytes=8192.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | 2 CTAs, last CTA 4 full + 1 partial (96B<256B) + 27 inactive" << std::endl;
-    run_test_row_per_lane<Mode, cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE, 256, fp16>(
+    run_test_row_per_lane<Mode, LoadOp, StoreOp, 256, fp16>(
       4656, queue, mode_name + "/fp16/row_per_lane_partial_cta_mixed");
 
     // I. 2 CTAs, last CTA has a single partial lane only.
     // fp16 RowSize=256, prob_size=4144 fp16 = 8288 B -> CTA 0 full, CTA 1 cta_bytes=96 -> 1 partial + 31 inactive.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | 2 CTAs, last CTA single partial (96B<256B) + 31 inactive" << std::endl;
-    run_test_row_per_lane<Mode, cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE, 256, fp16>(
+    run_test_row_per_lane<Mode, LoadOp, StoreOp, 256, fp16>(
       4144, queue, mode_name + "/fp16/row_per_lane_single_partial");
 
     // J. FillMethod::Nan on partial-lane CTA. Same shape as H, FM=Nan (non-default).
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | FM:Nan  | last-CTA partial (96B<256B)" << std::endl;
-    run_test_row_per_lane<Mode, cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE, 256, fp16,
+    run_test_row_per_lane<Mode, LoadOp, StoreOp, 256, fp16,
              detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Nan, detail::CacheCtrl::L2wb_L3uc>(
       4656, queue, mode_name + "/fp16/row_per_lane_FMNan");
 
     // K. fp4 (e2m1, 4-bit packed). RowSize=16B holds 32 fp4 elements/row.
     // kCtaBytes = 32*16 = 512B = 1024 fp4. prob_size=1024 -> 1 full CTA.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp4 | row-per-lane | RowSize=16, 1 full CTA (packed)" << std::endl;
-    run_test_row_per_lane<Mode, cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE, 16, cute::float_e2m1_t>(
+    run_test_row_per_lane<Mode, LoadOp, StoreOp, 16, cute::float_e2m1_t>(
       1024, queue, mode_name + "/fp4/row_per_lane_RS16_packed");
 
     // L. fp4 multi-CTA. RowSize=32B -> 64 fp4/row, kCtaBytes=1024B=2048 fp4.
     // prob_size=4096 fp4 = 2048 B -> 2 full CTAs.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp4 | row-per-lane | RowSize=32, 2 full CTAs (packed)" << std::endl;
-    run_test_row_per_lane<Mode, cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE, 32, cute::float_e2m1_t>(
+    run_test_row_per_lane<Mode, LoadOp, StoreOp, 32, cute::float_e2m1_t>(
       4096, queue, mode_name + "/fp4/row_per_lane_RS32_packed");
+
+    // M. CompletionMode=Write on the S2G store — adds the `.write` suffix on the row-copy
+    std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | StoreCM:Write | RowSize=128, 1 CTA, 32 full lanes" << std::endl;
+    run_test_row_per_lane<Mode, LoadOp, StoreOp, 128, fp16,
+             detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3uc,
+             detail::CompletionMode::CM_Write>(
+      2048, queue, mode_name + "/fp16/row_per_lane_RS128_StoreCMWrite");
   } catch (const std::exception& e) {
     std::cout << "\n❌ Test suite failed for " << mode_name << ": " << e.what() << std::endl;
     throw;
   }
+}
+
+template <AddressingMode Mode>
+void run_test_suite_all_variants(sycl::queue& queue, const std::string& mode_name, uint32_t& test_offset) {
+  // Run the full test suite twice: once with single-thread (ThrLayoutCopy=Layout<_1>)
+  // ops, once with COLLECTIVE (ThrLayoutCopy=Layout<_32>) ops.
+  std::cout << "\n--- " << mode_name << " | non-collective (ThrLayoutCopy=Layout<_1>) ---" << std::endl;
+  run_test_suite<Mode,
+                 cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD,
+                 cute::XE4_ADMA_ROW_COPY_LINEAR_STORE>(
+      queue, mode_name + "/single", test_offset);
+
+  std::cout << "\n--- " << mode_name << " | collective (ThrLayoutCopy=Layout<_32>) ---" << std::endl;
+  run_test_suite<Mode,
+                 cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD_COLLECTIVE,
+                 cute::XE4_ADMA_ROW_COPY_LINEAR_STORE_COLLECTIVE>(
+      queue, mode_name + "/collective", test_offset);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -406,19 +471,19 @@ int main(int argc, char** argv)
     std::cout << "║   .a64 Mode (uint64_t)                 ║" << std::endl;
     std::cout << "╚════════════════════════════════════════╝\n" << std::endl;
     uint32_t total_tests = 1;
-    run_test_suite<AddressingMode::A64>(queue, "A64", total_tests);
+    run_test_suite_all_variants<AddressingMode::A64>(queue, "A64", total_tests);
 
     // .a32u mode
     std::cout << "\n╔════════════════════════════════════════╗" << std::endl;
     std::cout << "║   .a32u Mode (uint32_t)                ║" << std::endl;
     std::cout << "╚════════════════════════════════════════╝\n" << std::endl;
-    run_test_suite<AddressingMode::A32U>(queue, "A32U", total_tests);
+    run_test_suite_all_variants<AddressingMode::A32U>(queue, "A32U", total_tests);
 
     // .a32s mode
     std::cout << "\n╔════════════════════════════════════════╗" << std::endl;
     std::cout << "║   .a32s Mode (int32_t)                 ║" << std::endl;
     std::cout << "╚════════════════════════════════════════╝\n" << std::endl;
-    run_test_suite<AddressingMode::A32S>(queue, "A32S", total_tests);
+    run_test_suite_all_variants<AddressingMode::A32S>(queue, "A32S", total_tests);
 
     std::cout << "\n============================================" << std::endl;
     std::cout << "✅ ALL TESTS PASSED!" << std::endl;

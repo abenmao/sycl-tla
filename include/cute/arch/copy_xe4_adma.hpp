@@ -55,13 +55,13 @@ struct AsyncRowCopySelector {
       DataType* slm_ptr, DataType* gmem_ptr, OffsetType<Mode> offset,
       uint32_t size, uint64_t const* abar_ptr) {
     if constexpr (Mode == AddressingMode::A64) {
-      detail::AsyncRowCopyGlobal2SLM_A64<RowSize>::template Copy<DataType>(
+      detail::AsyncRowCopyGlobal2SLM_A64<RowSize>::template Copy<DataType, CC, FM>(
           slm_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
     } else if constexpr (Mode == AddressingMode::A32S) {
-      detail::AsyncRowCopyGlobal2SLM_A32S<RowSize>::template Copy<DataType>(
+      detail::AsyncRowCopyGlobal2SLM_A32S<RowSize>::template Copy<DataType, CC, FM>(
           slm_ptr, gmem_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
     } else {  // A32U
-      detail::AsyncRowCopyGlobal2SLM_A32U<RowSize>::template Copy<DataType>(
+      detail::AsyncRowCopyGlobal2SLM_A32U<RowSize>::template Copy<DataType, CC, FM>(
           slm_ptr, gmem_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
     }
   }
@@ -73,35 +73,36 @@ struct AsyncRowCopySelector {
       DataType* slm_ptr, DataType* gmem_ptr, OffsetType<Mode> offset,
       uint32_t size, uint64_t const* abar_ptr, uint32_t wg_mask) {
     if constexpr (Mode == AddressingMode::A64) {
-      detail::AsyncRowCopyGlobal2SLM_A64<RowSize>::template Copy<DataType>(
+      detail::AsyncRowCopyGlobal2SLM_A64<RowSize>::template Copy<DataType, CC, FM>(
           slm_ptr, offset, size, abar_ptr, wg_mask, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
     } else if constexpr (Mode == AddressingMode::A32S) {
-      detail::AsyncRowCopyGlobal2SLM_A32S<RowSize>::template Copy<DataType>(
+      detail::AsyncRowCopyGlobal2SLM_A32S<RowSize>::template Copy<DataType, CC, FM>(
           slm_ptr, gmem_ptr, offset, size, abar_ptr, wg_mask, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
     } else {  // A32U
-      detail::AsyncRowCopyGlobal2SLM_A32U<RowSize>::template Copy<DataType>(
+      detail::AsyncRowCopyGlobal2SLM_A32U<RowSize>::template Copy<DataType, CC, FM>(
           slm_ptr, gmem_ptr, offset, size, abar_ptr, wg_mask, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
     }
   }
 
   // Store variant (S2G)
   template <typename DataType,
-            detail::CacheCtrl CC>
+            detail::CacheCtrl CC,
+            detail::CompletionMode CM = detail::CompletionMode::CM_Unspecified>
   CUTE_HOST_DEVICE static void store(
       DataType* slm_ptr, DataType* gmem_ptr, OffsetType<Mode> offset,
       uint32_t size, uint64_t const* abar_ptr) {
     if constexpr (Mode == AddressingMode::A64) {
       // A64: Copy(gmem_addr, slm_ptr, size, abar_ptr)
-      detail::AsyncRowCopySLM2Global_A64<RowSize>::template Copy<DataType>(
-          offset, slm_ptr, size, abar_ptr, detail::CacheHint<CC>{});
+      detail::AsyncRowCopySLM2Global_A64<RowSize>::template Copy<DataType, CC, CM>(
+          offset, slm_ptr, size, abar_ptr, detail::CacheHint<CC>{}, detail::CompletionModeHint<CM>{});
     } else if constexpr (Mode == AddressingMode::A32S) {
       // A32S: Copy(gmem_ptr, slm_ptr, offset, size, abar_ptr)
-      detail::AsyncRowCopySLM2Global_A32S<RowSize>::template Copy<DataType>(
-          gmem_ptr, slm_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{});
+      detail::AsyncRowCopySLM2Global_A32S<RowSize>::template Copy<DataType, CC, CM>(
+          gmem_ptr, slm_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{}, detail::CompletionModeHint<CM>{});
     } else {  // A32U
       // A32U: Copy(gmem_ptr, slm_ptr, offset, size, abar_ptr)
-      detail::AsyncRowCopySLM2Global_A32U<RowSize>::template Copy<DataType>(
-          gmem_ptr, slm_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{});
+      detail::AsyncRowCopySLM2Global_A32U<RowSize>::template Copy<DataType, CC, CM>(
+          gmem_ptr, slm_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{}, detail::CompletionModeHint<CM>{});
     }
   }
 };
@@ -233,17 +234,28 @@ struct XE4_ADMA_ROW_COPY_LINEAR_LOAD_MULTICAST {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 struct XE4_ADMA_ROW_COPY_LINEAR_STORE {
   template <AddressingMode Mode, uint32_t RowSize, typename DataType,
-            detail::CacheCtrl CC = detail::CacheCtrl::L2wb_L3uc>
+            detail::CacheCtrl CC = detail::CacheCtrl::L2wb_L3uc,
+            detail::CompletionMode CM = detail::CompletionMode::CM_Unspecified>
   CUTE_HOST_DEVICE static void
   copy(DataType* slm_ptr, DataType* gmem_ptr, OffsetType<Mode> offset,
        uint32_t size, uint64_t *abar_ptr,
-       detail::CacheHint<CC> = {}) {
+       detail::CacheHint<CC> = {}, detail::CompletionModeHint<CM> = {}) {
     static_assert(is_valid_row_size_v<RowSize>,
                   "RowSize must be a power of 2 in [16, 2048]");
-    detail::AsyncRowCopySelector<Mode, RowSize>::template store<DataType, CC>(
+    detail::AsyncRowCopySelector<Mode, RowSize>::template store<DataType, CC, CM>(
         slm_ptr, gmem_ptr, offset, size, abar_ptr);
   }
 };
+
+// Warp-collective variants.
+struct XE4_ADMA_ROW_COPY_LINEAR_LOAD_COLLECTIVE
+    : XE4_ADMA_ROW_COPY_LINEAR_LOAD {};
+
+struct XE4_ADMA_ROW_COPY_LINEAR_LOAD_MULTICAST_COLLECTIVE
+    : XE4_ADMA_ROW_COPY_LINEAR_LOAD_MULTICAST {};
+
+struct XE4_ADMA_ROW_COPY_LINEAR_STORE_COLLECTIVE
+    : XE4_ADMA_ROW_COPY_LINEAR_STORE {};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 /// ASYNC_TENSOR_LOAD: Initiates a async tensor copy from global memory to shared memory
