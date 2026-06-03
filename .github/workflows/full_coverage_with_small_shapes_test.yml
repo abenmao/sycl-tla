@@ -2,11 +2,11 @@ name: "Full Coverage with Small Shapes Test"
 
 on:
   push:
-    branches: [ "cri","cri_pathfinding","v0.1.0_next" ]
+    branches: [ "cri","cri_pathfinding","v0.1.0_next", "public-main" ]
   pull_request:
-    branches: [ "cri","cri_pathfinding","v0.1.0_next" ]
+    branches: [ "cri","cri_pathfinding","v0.1.0_next", "public-main" ]
   merge_group:
-    branches: [ "cri","cri_pathfinding","v0.1.0_next" ]
+    branches: [ "cri","cri_pathfinding","v0.1.0_next", "public-main" ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
