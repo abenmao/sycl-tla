@@ -215,14 +215,19 @@ public:
       auto sA_coords = make_layout(append(SGTileShapeO{}, shape(ReduceSGLayout{})),
                                    append(basis2, product_each(zip(SGTileShapeO{}, basis2))));
 
+      auto basis1 = make_basis_like(take<0,1>(SGTileShapeO{}));
+      auto sA_row_coords = make_layout(
+          append(take<0,1>(SGTileShapeO{}), shape(ReduceSGLayout{})),
+          append(basis1, make_stride(get<0>(product_each(zip(take<0,1>(SGTileShapeO{}), basis1))), _0{})));
+
       auto sA     = make_tensor(make_smem_ptr<ElementA>(&shared.a_data),     sA_layout);      // (q,v,rblk_dst,rblk_src,a_tile)
       auto sA_max = make_tensor(make_smem_ptr<ElementA>(&shared.a_max_data), sA_row_layout);  // (q,rblk_dst,rblk_src,a_tile)
       auto sA_sum = make_tensor(make_smem_ptr<ElementA>(&shared.a_sum_data), sA_row_layout);  // (q,rblk_dst,rblk_src,a_tile)
 
       /* Write my contributions to SLM. */
-      copy_block_r2s(tA_max, sA_max(_,_,k_blk,a_tile));
+      copy_block_r2s(tA_max, sA_max(_,_,k_blk,a_tile), sA_row_coords);
       barrier_arrive(ScopeWorkgroup, SemanticsRelease | SemanticsWGMemory);
-      copy_block_r2s(tA_sum, sA_sum(_,_,k_blk,a_tile));
+      copy_block_r2s(tA_sum, sA_sum(_,_,k_blk,a_tile), sA_row_coords);
       copy_block_r2s(tArA, sA(_,_,_,k_blk,a_tile), sA_coords);
 
       bool active = (k_blk      < size(ReduceSGLayout{}))
@@ -239,18 +244,21 @@ public:
         /* Read A_max back from SLM and reduce. */
         CUTLASS_PRAGMA_UNROLL
         for (int kr = 0; kr < ReduceK{}; kr++) {
-          copy_block_s2r(sA_max(_,k_blk,kr,a_tile), rA_kmax[kr]);
+          copy_block_s2r(sA_max(_,k_blk,kr,a_tile), sA_row_coords(_,0), rA_kmax[kr]);
         }
 
         rA_max = rA_kmax[0];
-        for (int kr = 1; kr < ReduceK{}; kr++)
-          cute::transform(rA_max, rA_kmax[kr], rA_max, cute::max_fn{});
+        for (int kr = 1; kr < ReduceK{}; kr++) {
+          CUTLASS_PRAGMA_UNROLL
+          for (int i = 0; i < rA_max.size(); i++)
+            rA_max(i) = sycl::max(rA_max(i), rA_kmax[kr](i));
+        }
 
         /* Calculate scale factors for aligning per-block maxima. */
         for (int kr = 0; kr < ReduceK{}; kr++) {
-          cute::transform(rA_max, rA_kmax[kr], rA_kmax[kr], [](auto gmax, auto kmax) {
-            return sycl::native::exp2(kmax - gmax);
-          });
+          CUTLASS_PRAGMA_UNROLL
+          for (int i = 0; i < rA_max.size(); i++)
+            rA_kmax[kr](i) = sycl::native::exp2(rA_kmax[kr](i) - rA_max(i));
         }
       }
 
@@ -264,7 +272,7 @@ public:
         CUTLASS_PRAGMA_UNROLL
         for (int kr = 0; kr < ReduceK{}; kr++) {
           ReduceFragARow rA_sum_read;
-          copy_block_s2r(sA_sum(_,k_blk,kr,a_tile), rA_sum_read);
+          copy_block_s2r(sA_sum(_,k_blk,kr,a_tile), sA_row_coords(_,0), rA_sum_read);
 
           CUTLASS_PRAGMA_UNROLL
           for (int i = 0; i < rA_sum_read.size(); i++) {

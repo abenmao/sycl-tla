@@ -80,6 +80,7 @@ using uchar64 = vector_t<uchar, 64>;
 using float2 = vector_t<float, 2>;
 using float4 = vector_t<float, 4>;
 using float8 = vector_t<float, 8>;
+using float64 = vector_t<float, 64>;
 
 #ifndef __SYCL_DEVICE_ONLY__
 using half = sycl::half;
