@@ -355,5 +355,250 @@ struct AsyncRowCopySLM2Global_A32U
   }
 };
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Asynchronous Tiled Row Copy: Global Memory → Shared Local Memory (Load)
+/// Addressing Mode: .a64
+////////////////////////////////////////////////////////////////////////////////////////////////////
+template <typename DataType, uint32_t RowSize, int BitWidth, CacheCtrl CC = CacheCtrl::L2c_L3uc, FillMethod FM = FillMethod::Zero>
+struct AsyncRowCopyGlobal2SLM_Tiled_A64_Impl {
+  CUTE_HOST_DEVICE static void copy(uint32_t mat_desc, uint64_t gmem_addr, uint64_t const* abar_ptr, uint32_t size) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    asm volatile(
+      ("async_row_copy.shared_workgroup.global.tiled."+_s<RowSize>+".a64."+_bw<BitWidth>+_dt<DataType>+_fl<FM>+_cc<CC>+".abarrier %0, [%1], [%2], %3;")
+      ::"r"(mat_desc), "r"(gmem_addr), "r"(abar_ptr), "r"(size));
+#endif
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Asynchronous Tiled Row Copy with Cluster Multicast: Global Memory → Shared Local Memory
+/// Addressing Mode: .a64 with cluster multicast (.shared_cluster)
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <typename DataType, uint32_t RowSize, int BitWidth, CacheCtrl CC = CacheCtrl::L2c_L3uc, FillMethod FM = FillMethod::Zero>
+struct AsyncRowCopyGlobal2SLM_Tiled_A64_Multicast_Impl {
+  CUTE_HOST_DEVICE static void copy(uint32_t mat_desc, uint64_t gmem_addr, uint64_t const* abar_ptr, uint32_t size, uint32_t wg_mask) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    asm volatile(
+      ("async_row_copy.shared_cluster.global.tiled."+_s<RowSize>+".a64."+_bw<BitWidth>+_dt<DataType>+_fl<FM>+_cc<CC>+".abarrier %0, [%1], [%2], %3, %4;")
+      ::"r"(mat_desc), "r"(gmem_addr), "r"(abar_ptr), "r"(size), "r"(wg_mask));
+#endif
+  }
+};
+
+template <uint32_t RowSize>
+struct AsyncRowCopyGlobal2SLM_Tiled_A64
+{
+  // Standard workgroup-local copy
+  template <typename DataType, CacheCtrl CC = CacheCtrl::L2c_L3uc, FillMethod FM = FillMethod::Zero>
+  CUTE_HOST_DEVICE static void
+  Copy(uint32_t mat_desc, uint64_t gmem_addr, uint32_t size, uint64_t const* abar_ptr,
+       CacheHint<CC> = {}, FillMode<FM> = {})
+  {
+    AsyncRowCopyGlobal2SLM_Tiled_A64_Impl<DataType, RowSize, sizeof_bits_v<DataType>, CC, FM>::copy(mat_desc, gmem_addr, abar_ptr, size);
+  }
+
+  // Cluster multicast variant
+  template <typename DataType, CacheCtrl CC = CacheCtrl::L2c_L3uc, FillMethod FM = FillMethod::Zero>
+  CUTE_HOST_DEVICE static void
+  Copy(uint32_t mat_desc, uint64_t gmem_addr, uint32_t size, uint64_t const* abar_ptr, uint32_t wg_mask,
+       CacheHint<CC> = {}, FillMode<FM> = {})
+  {
+    AsyncRowCopyGlobal2SLM_Tiled_A64_Multicast_Impl<DataType, RowSize, sizeof_bits_v<DataType>, CC, FM>::copy(mat_desc, gmem_addr, abar_ptr, size, wg_mask);
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Asynchronous Tiled Row Copy: Shared Local Memory → Global Memory (Store)
+/// Addressing Mode: .a64
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <uint32_t RowSize, int BitWidth, CacheCtrl CC = CacheCtrl::L2wb_L3uc, CompletionMode CM = CompletionMode::CM_Unspecified>
+struct AsyncRowCopySLM2Global_Tiled_A64_Impl {
+  CUTE_HOST_DEVICE static void copy(uint64_t gmem_addr, uint32_t mat_desc, uint64_t const* abar_ptr, uint32_t size) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    asm volatile(
+      ("async_row_copy.global.shared_workgroup.tiled."+_s<RowSize>+".a64."+_bw<BitWidth>+_cc<CC>+_cm<CM>+".abarrier [%0], %1, [%2], %3;")
+      ::"r"(gmem_addr), "r"(mat_desc), "r"(abar_ptr), "r"(size));
+#endif
+  }
+};
+
+template <uint32_t RowSize>
+struct AsyncRowCopySLM2Global_Tiled_A64
+{
+  template <typename DataType, CacheCtrl CC = CacheCtrl::L2wb_L3uc, CompletionMode CM = CompletionMode::CM_Unspecified>
+  CUTE_HOST_DEVICE static void
+  Copy(uint64_t gmem_addr, uint32_t mat_desc, uint32_t size, uint64_t const* abar_ptr,
+       CacheHint<CC> = {}, CompletionModeHint<CM> = {})
+  {
+    AsyncRowCopySLM2Global_Tiled_A64_Impl<RowSize, sizeof_bits_v<DataType>, CC, CM>::copy(gmem_addr, mat_desc, abar_ptr, size);
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Asynchronous Tiled Row Copy: Global Memory → Shared Local Memory (Load)
+/// Addressing Mode: .a32s
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <typename DataType, uint32_t RowSize, int BitWidth, CacheCtrl CC = CacheCtrl::L2c_L3uc, FillMethod FM = FillMethod::Zero>
+struct AsyncRowCopyGlobal2SLM_Tiled_A32S_Impl {
+  CUTE_HOST_DEVICE static void copy(uint32_t mat_desc, void* gmem_ptr, uint64_t const* abar_ptr, int32_t offset, uint32_t size) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    asm volatile(
+      ("async_row_copy.shared_workgroup.global.tiled."+_s<RowSize>+".a32s."+_bw<BitWidth>+_dt<DataType>+_fl<FM>+_cc<CC>+".abarrier %0, [%1], [%2], %3, %4;")
+      ::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+#endif
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Asynchronous Tiled Row Copy with Cluster Multicast: Global Memory → Shared Local Memory
+/// Addressing Mode: .a32s with cluster multicast (.shared_cluster)
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <typename DataType, uint32_t RowSize, int BitWidth, CacheCtrl CC = CacheCtrl::L2c_L3uc, FillMethod FM = FillMethod::Zero>
+struct AsyncRowCopyGlobal2SLM_Tiled_A32S_Multicast_Impl {
+  CUTE_HOST_DEVICE static void copy(uint32_t mat_desc, void* gmem_ptr, uint64_t const* abar_ptr, int32_t offset, uint32_t size, uint32_t wg_mask) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    asm volatile(
+      ("async_row_copy.shared_cluster.global.tiled."+_s<RowSize>+".a32s."+_bw<BitWidth>+_dt<DataType>+_fl<FM>+_cc<CC>+".abarrier %0, [%1], [%2], %3, %4, %5;")
+      ::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size), "r"(wg_mask));
+#endif
+  }
+};
+
+template <uint32_t RowSize>
+struct AsyncRowCopyGlobal2SLM_Tiled_A32S
+{
+  // Standard workgroup-local copy
+  template <typename DataType, CacheCtrl CC = CacheCtrl::L2c_L3uc, FillMethod FM = FillMethod::Zero>
+  CUTE_HOST_DEVICE static void
+  Copy(uint32_t mat_desc, DataType* gmem_ptr, int32_t offset, uint32_t size, uint64_t const* abar_ptr,
+       CacheHint<CC> = {}, FillMode<FM> = {})
+  {
+    AsyncRowCopyGlobal2SLM_Tiled_A32S_Impl<DataType, RowSize, sizeof_bits_v<DataType>, CC, FM>::copy(mat_desc, gmem_ptr, abar_ptr, offset, size);
+  }
+
+  // Cluster multicast variant
+  template <typename DataType, CacheCtrl CC = CacheCtrl::L2c_L3uc, FillMethod FM = FillMethod::Zero>
+  CUTE_HOST_DEVICE static void
+  Copy(uint32_t mat_desc, DataType* gmem_ptr, int32_t offset, uint32_t size, uint64_t const* abar_ptr, uint32_t wg_mask,
+       CacheHint<CC> = {}, FillMode<FM> = {})
+  {
+    AsyncRowCopyGlobal2SLM_Tiled_A32S_Multicast_Impl<DataType, RowSize, sizeof_bits_v<DataType>, CC, FM>::copy(mat_desc, gmem_ptr, abar_ptr, offset, size, wg_mask);
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Asynchronous Tiled Row Copy: Shared Local Memory → Global Memory (Store)
+/// Addressing Mode: .a32s
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <uint32_t RowSize, int BitWidth, CacheCtrl CC = CacheCtrl::L2wb_L3uc, CompletionMode CM = CompletionMode::CM_Unspecified>
+struct AsyncRowCopySLM2Global_Tiled_A32S_Impl {
+  CUTE_HOST_DEVICE static void copy(void* gmem_ptr, uint32_t mat_desc, uint64_t const* abar_ptr, int32_t offset, uint32_t size) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    asm volatile(
+      ("async_row_copy.global.shared_workgroup.tiled."+_s<RowSize>+".a32s."+_bw<BitWidth>+_cc<CC>+_cm<CM>+".abarrier [%0], %1, [%2], %3, %4;")
+      ::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+#endif
+  }
+};
+
+template <uint32_t RowSize>
+struct AsyncRowCopySLM2Global_Tiled_A32S
+{
+  template <typename DataType, CacheCtrl CC = CacheCtrl::L2wb_L3uc, CompletionMode CM = CompletionMode::CM_Unspecified>
+  CUTE_HOST_DEVICE static void
+  Copy(DataType* gmem_ptr, uint32_t mat_desc, int32_t offset, uint32_t size, uint64_t const* abar_ptr,
+       CacheHint<CC> = {}, CompletionModeHint<CM> = {})
+  {
+    AsyncRowCopySLM2Global_Tiled_A32S_Impl<RowSize, sizeof_bits_v<DataType>, CC, CM>::copy(gmem_ptr, mat_desc, abar_ptr, offset, size);
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Asynchronous Tiled Row Copy: Global Memory → Shared Local Memory (Load)
+/// Addressing Mode: .a32u
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <typename DataType, uint32_t RowSize, int BitWidth, CacheCtrl CC = CacheCtrl::L2c_L3uc, FillMethod FM = FillMethod::Zero>
+struct AsyncRowCopyGlobal2SLM_Tiled_A32U_Impl {
+  CUTE_HOST_DEVICE static void copy(uint32_t mat_desc, void* gmem_ptr, uint64_t const* abar_ptr, uint32_t offset, uint32_t size) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    asm volatile(
+      ("async_row_copy.shared_workgroup.global.tiled."+_s<RowSize>+".a32u."+_bw<BitWidth>+_dt<DataType>+_fl<FM>+_cc<CC>+".abarrier %0, [%1], [%2], %3, %4;")
+      ::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size));
+#endif
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Asynchronous Tiled Row Copy with Cluster Multicast: Global Memory → Shared Local Memory
+/// Addressing Mode: .a32u with cluster multicast (.shared_cluster)
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <typename DataType, uint32_t RowSize, int BitWidth, CacheCtrl CC = CacheCtrl::L2c_L3uc, FillMethod FM = FillMethod::Zero>
+struct AsyncRowCopyGlobal2SLM_Tiled_A32U_Multicast_Impl {
+  CUTE_HOST_DEVICE static void copy(uint32_t mat_desc, void* gmem_ptr, uint64_t const* abar_ptr, uint32_t offset, uint32_t size, uint32_t wg_mask) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    asm volatile(
+      ("async_row_copy.shared_cluster.global.tiled."+_s<RowSize>+".a32u."+_bw<BitWidth>+_dt<DataType>+_fl<FM>+_cc<CC>+".abarrier %0, [%1], [%2], %3, %4, %5;")
+      ::"r"(mat_desc), "r"(gmem_ptr), "r"(abar_ptr), "r"(offset), "r"(size), "r"(wg_mask));
+#endif
+  }
+};
+
+template <uint32_t RowSize>
+struct AsyncRowCopyGlobal2SLM_Tiled_A32U
+{
+  // Standard workgroup-local copy
+  template <typename DataType, CacheCtrl CC = CacheCtrl::L2c_L3uc, FillMethod FM = FillMethod::Zero>
+  CUTE_HOST_DEVICE static void
+  Copy(uint32_t mat_desc, DataType* gmem_ptr, uint32_t offset, uint32_t size, uint64_t const* abar_ptr,
+       CacheHint<CC> = {}, FillMode<FM> = {})
+  {
+    AsyncRowCopyGlobal2SLM_Tiled_A32U_Impl<DataType, RowSize, sizeof_bits_v<DataType>, CC, FM>::copy(mat_desc, gmem_ptr, abar_ptr, offset, size);
+  }
+
+  // Cluster multicast variant
+  template <typename DataType, CacheCtrl CC = CacheCtrl::L2c_L3uc, FillMethod FM = FillMethod::Zero>
+  CUTE_HOST_DEVICE static void
+  Copy(uint32_t mat_desc, DataType* gmem_ptr, uint32_t offset, uint32_t size, uint64_t const* abar_ptr, uint32_t wg_mask,
+       CacheHint<CC> = {}, FillMode<FM> = {})
+  {
+    AsyncRowCopyGlobal2SLM_Tiled_A32U_Multicast_Impl<DataType, RowSize, sizeof_bits_v<DataType>, CC, FM>::copy(mat_desc, gmem_ptr, abar_ptr, offset, size, wg_mask);
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Asynchronous Tiled Row Copy: Shared Local Memory → Global Memory (Store)
+/// Addressing Mode: .a32u
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <uint32_t RowSize, int BitWidth, CacheCtrl CC = CacheCtrl::L2wb_L3uc, CompletionMode CM = CompletionMode::CM_Unspecified>
+struct AsyncRowCopySLM2Global_Tiled_A32U_Impl {
+  CUTE_HOST_DEVICE static void copy(void* gmem_ptr, uint32_t mat_desc, uint64_t const* abar_ptr, uint32_t offset, uint32_t size) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    asm volatile(
+      ("async_row_copy.global.shared_workgroup.tiled."+_s<RowSize>+".a32u."+_bw<BitWidth>+_cc<CC>+_cm<CM>+".abarrier [%0], %1, [%2], %3, %4;")
+      ::"r"(gmem_ptr), "r"(mat_desc), "r"(abar_ptr), "r"(offset), "r"(size));
+#endif
+  }
+};
+
+template <uint32_t RowSize>
+struct AsyncRowCopySLM2Global_Tiled_A32U
+{
+  template <typename DataType, CacheCtrl CC = CacheCtrl::L2wb_L3uc, CompletionMode CM = CompletionMode::CM_Unspecified>
+  CUTE_HOST_DEVICE static void
+  Copy(DataType* gmem_ptr, uint32_t mat_desc, uint32_t offset, uint32_t size, uint64_t const* abar_ptr,
+       CacheHint<CC> = {}, CompletionModeHint<CM> = {})
+  {
+    AsyncRowCopySLM2Global_Tiled_A32U_Impl<RowSize, sizeof_bits_v<DataType>, CC, CM>::copy(gmem_ptr, mat_desc, abar_ptr, offset, size);
+  }
+};
+
 }  // namespace detail
 }  // namespace cute

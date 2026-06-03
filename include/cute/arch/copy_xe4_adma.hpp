@@ -107,6 +107,73 @@ struct AsyncRowCopySelector {
   }
 };
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// AsyncRowCopyTiledSelector: Unified interface for TILED row copy operations.
+///
+/// Issues the .tiled variant of the async_row_copy instruction
+/// Supports .a64, .a32s, and .a32u addressing modes.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <AddressingMode Mode, uint32_t RowSize>
+struct AsyncRowCopyTiledSelector {
+  // Load variant (G2S)
+  template <typename DataType,
+            detail::CacheCtrl CC, detail::FillMethod FM>
+  CUTE_HOST_DEVICE static void load(
+      uint32_t mat_desc, DataType* gmem_ptr, OffsetType<Mode> offset,
+      uint32_t size, uint64_t const* abar_ptr) {
+    if constexpr (Mode == AddressingMode::A64) {
+      detail::AsyncRowCopyGlobal2SLM_Tiled_A64<RowSize>::template Copy<DataType>(
+          mat_desc, offset, size, abar_ptr, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
+    } else if constexpr (Mode == AddressingMode::A32S) {
+      detail::AsyncRowCopyGlobal2SLM_Tiled_A32S<RowSize>::template Copy<DataType>(
+          mat_desc, gmem_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
+    } else {  // A32U
+      detail::AsyncRowCopyGlobal2SLM_Tiled_A32U<RowSize>::template Copy<DataType>(
+          mat_desc, gmem_ptr, offset, size, abar_ptr, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
+    }
+  }
+
+  // Load multicast variant (G2S with multicast)
+  template <typename DataType,
+            detail::CacheCtrl CC, detail::FillMethod FM>
+  CUTE_HOST_DEVICE static void load_multicast(
+      uint32_t mat_desc, DataType* gmem_ptr, OffsetType<Mode> offset,
+      uint32_t size, uint64_t const* abar_ptr, uint32_t wg_mask) {
+    if constexpr (Mode == AddressingMode::A64) {
+      detail::AsyncRowCopyGlobal2SLM_Tiled_A64<RowSize>::template Copy<DataType>(
+          mat_desc, offset, size, abar_ptr, wg_mask, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
+    } else if constexpr (Mode == AddressingMode::A32S) {
+      detail::AsyncRowCopyGlobal2SLM_Tiled_A32S<RowSize>::template Copy<DataType>(
+          mat_desc, gmem_ptr, offset, size, abar_ptr, wg_mask, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
+    } else {  // A32U
+      detail::AsyncRowCopyGlobal2SLM_Tiled_A32U<RowSize>::template Copy<DataType>(
+          mat_desc, gmem_ptr, offset, size, abar_ptr, wg_mask, detail::CacheHint<CC>{}, detail::FillMode<FM>{});
+    }
+  }
+
+  // Store variant (S2G)
+  template <typename DataType,
+            detail::CacheCtrl CC,
+            detail::CompletionMode CM = detail::CompletionMode::CM_Unspecified>
+  CUTE_HOST_DEVICE static void store(
+      uint32_t mat_desc, DataType* gmem_ptr, OffsetType<Mode> offset,
+      uint32_t size, uint64_t const* abar_ptr) {
+    if constexpr (Mode == AddressingMode::A64) {
+      // A64: Copy(gmem_addr, mat_desc, size, abar_ptr)
+      detail::AsyncRowCopySLM2Global_Tiled_A64<RowSize>::template Copy<DataType>(
+          offset, mat_desc, size, abar_ptr, detail::CacheHint<CC>{}, detail::CompletionModeHint<CM>{});
+    } else if constexpr (Mode == AddressingMode::A32S) {
+      // A32S: Copy(gmem_ptr, mat_desc, offset, size, abar_ptr)
+      detail::AsyncRowCopySLM2Global_Tiled_A32S<RowSize>::template Copy<DataType>(
+          gmem_ptr, mat_desc, offset, size, abar_ptr, detail::CacheHint<CC>{}, detail::CompletionModeHint<CM>{});
+    } else {  // A32U
+      detail::AsyncRowCopySLM2Global_Tiled_A32U<RowSize>::template Copy<DataType>(
+          gmem_ptr, mat_desc, offset, size, abar_ptr, detail::CacheHint<CC>{}, detail::CompletionModeHint<CM>{});
+    }
+  }
+};
+
 }  // namespace detail
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -256,6 +323,66 @@ struct XE4_ADMA_ROW_COPY_LINEAR_LOAD_MULTICAST_COLLECTIVE
 
 struct XE4_ADMA_ROW_COPY_LINEAR_STORE_COLLECTIVE
     : XE4_ADMA_ROW_COPY_LINEAR_STORE {};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// XE4_ADMA_ROW_COPY_TILED_LOAD: Async tiled row copy G2S (non-multicast)
+///
+/// Same RowSize / DataType constraints as the LINEAR variant. The SLM destination
+/// is identified by a matrix descriptor (uint32_t) instead of a raw pointer.
+/// Supported addressing modes: A64, A32S.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+struct XE4_ADMA_ROW_COPY_TILED_LOAD {
+  template <AddressingMode Mode, uint32_t RowSize, typename DataType,
+            detail::CacheCtrl CC = detail::CacheCtrl::L2c_L3uc,
+            detail::FillMethod FM = detail::FillMethod::Zero>
+  CUTE_HOST_DEVICE static void
+  copy(uint32_t mat_desc, DataType* gmem_ptr, OffsetType<Mode> offset,
+       uint32_t size, uint64_t *abar_ptr,
+       detail::CacheHint<CC> = {}, detail::FillMode<FM> = {}) {
+    static_assert(is_valid_row_size_v<RowSize>,
+                  "RowSize must be a power of 2 in [16, 2048]");
+    detail::AsyncRowCopyTiledSelector<Mode, RowSize>::template load<DataType, CC, FM>(
+        mat_desc, gmem_ptr, offset, size, abar_ptr);
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// XE4_ADMA_ROW_COPY_TILED_LOAD_MULTICAST: Async tiled row copy G2S with cluster multicast.
+/// Supported addressing modes: A64, A32S.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+struct XE4_ADMA_ROW_COPY_TILED_LOAD_MULTICAST {
+  template <AddressingMode Mode, uint32_t RowSize, typename DataType,
+            detail::CacheCtrl CC = detail::CacheCtrl::L2c_L3uc,
+            detail::FillMethod FM = detail::FillMethod::Zero>
+  CUTE_HOST_DEVICE static void
+  copy(uint32_t mat_desc, DataType* gmem_ptr, OffsetType<Mode> offset,
+       uint32_t size, uint64_t *abar_ptr, uint32_t wg_mask,
+       detail::CacheHint<CC> = {}, detail::FillMode<FM> = {}) {
+    static_assert(is_valid_row_size_v<RowSize>,
+                  "RowSize must be a power of 2 in [16, 2048]");
+    detail::AsyncRowCopyTiledSelector<Mode, RowSize>::template load_multicast<DataType, CC, FM>(
+        mat_desc, gmem_ptr, offset, size, abar_ptr, wg_mask);
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// XE4_ADMA_ROW_COPY_TILED_STORE: Async tiled row copy S2G.
+/// Supported addressing modes: A64, A32S.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+struct XE4_ADMA_ROW_COPY_TILED_STORE {
+  template <AddressingMode Mode, uint32_t RowSize, typename DataType,
+            detail::CacheCtrl CC = detail::CacheCtrl::L2wb_L3uc,
+            detail::CompletionMode CM = detail::CompletionMode::CM_Unspecified>
+  CUTE_HOST_DEVICE static void
+  copy(uint32_t mat_desc, DataType* gmem_ptr, OffsetType<Mode> offset,
+       uint32_t size, uint64_t *abar_ptr,
+       detail::CacheHint<CC> = {}, detail::CompletionModeHint<CM> = {}) {
+    static_assert(is_valid_row_size_v<RowSize>,
+                  "RowSize must be a power of 2 in [16, 2048]");
+    detail::AsyncRowCopyTiledSelector<Mode, RowSize>::template store<DataType, CC, CM>(
+        mat_desc, gmem_ptr, offset, size, abar_ptr);
+  }
+};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 /// ASYNC_TENSOR_LOAD: Initiates a async tensor copy from global memory to shared memory

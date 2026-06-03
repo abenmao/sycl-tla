@@ -72,8 +72,15 @@ set(ADMA_ROW_COPY_TARGET xe4_adma_row_copy)
 add_xe4_test(${ADMA_ROW_COPY_TARGET} adma_row_copy_xe4.cpp)
 target_include_directories(${ADMA_ROW_COPY_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_options(${ADMA_ROW_COPY_TARGET} PUBLIC
-	-Xsycl-target-backend=spir64_gen
-	-device\ jgs-a0)
+    -Xsycl-target-backend=spir64_gen
+        -device\ jgs-a0)
+
+set(ADMA_ROW_COPY_TILED_TARGET xe4_adma_row_copy_tiled)
+add_xe4_test(${ADMA_ROW_COPY_TILED_TARGET} adma_row_copy_tiled_xe4.cpp)
+target_include_directories(${ADMA_ROW_COPY_TILED_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(${ADMA_ROW_COPY_TILED_TARGET} PUBLIC
+    -Xsycl-target-backend=spir64_gen
+        -device\ jgs-a0)
 
 ######################## EU_COPY_TARGET ########################################
 # Check if the environment variable is specified
