@@ -257,16 +257,17 @@ compute_cluster_masks(ClusterShape_MNK cluster_shape)
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <class Config, class ClusterShape,
-          class ProblemShape, class CtaTiler, class TileShape,
+          class ProblemShape, class CtaTilerAB, class CtaTilerSF, class TileShape,
           class SmemLayoutA, class SmemLayoutC, class ADMA_A,
           class SmemLayoutB, class ADMA_B, class ADMA_C,
           class CStride,
           class SmemLayoutSFA, class SmemLayoutSFB,
           class ADMA_SFA, class ADMA_SFB,
           class TiledMma,
-          class Alpha, class Beta>
+          class Alpha, class Beta,
+          bool LoadSfAllAtOnce>
 void
-gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape,
+gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTilerAB cta_tiler_AB, CtaTilerSF cta_tiler_SF, TileShape tile_shape,
                                 ClusterShape cluster_shape,
                                 typename Config::ElementA const* A,
                                 SmemLayoutA sA_layout, SmemLayoutC sC_layout, ADMA_A adma_load_a,
@@ -287,15 +288,15 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTiler cta_tiler, Tile
 
   // Preconditions
   static_assert(rank(ProblemShape{}) == 3);
-  static_assert(rank(CtaTiler{}) == 3);
+  static_assert(rank(CtaTilerAB{}) == 3);
 
   static_assert(is_static<SmemLayoutA>::value);
   static_assert(is_static<SmemLayoutB>::value);
 
-  static_assert(size<0>(SmemLayoutA{}) == size<0>(CtaTiler{}));  // BLK_M
-  static_assert(size<0>(SmemLayoutB{}) == size<1>(CtaTiler{}));  // BLK_N
-  static_assert(size<1>(SmemLayoutA{}) == size<2>(CtaTiler{}));  // BLK_K
-  static_assert(size<1>(SmemLayoutB{}) == size<2>(CtaTiler{}));  // BLK_K
+  static_assert(size<0>(SmemLayoutA{}) == size<0>(CtaTilerAB{}));  // BLK_M
+  static_assert(size<0>(SmemLayoutB{}) == size<1>(CtaTilerAB{}));  // BLK_N
+  static_assert(size<1>(SmemLayoutA{}) == size<2>(CtaTilerAB{}));  // BLK_K
+  static_assert(size<1>(SmemLayoutB{}) == size<2>(CtaTilerAB{}));  // BLK_K
 
   // ---- Allocate tensor descriptors for ADMA Copy ----
   auto tdesc_a   = allocate_tdesc<0>();
@@ -352,12 +353,12 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTiler cta_tiler, Tile
   //   BlockIdxX() = get_group(2) = N tile index (global)
   auto cta_coord = make_coord(BlockIdxY(), BlockIdxX(), _);
 
-  Tensor gA = local_tile(mA, cta_tiler, cta_coord, Step<_1,  X, _1>{});
-  Tensor gB = local_tile(mB, cta_tiler, cta_coord, Step< X, _1, _1>{});
-  Tensor gC = local_tile(mC, cta_tiler, cta_coord, Step<_1, _1,  X>{});
+  Tensor gA = local_tile(mA, cta_tiler_AB, cta_coord, Step<_1,  X, _1>{});
+  Tensor gB = local_tile(mB, cta_tiler_AB, cta_coord, Step< X, _1, _1>{});
+  Tensor gC = local_tile(mC, cta_tiler_AB, cta_coord, Step<_1, _1,  X>{});
 
-  Tensor gSFA = local_tile(mSFA, cta_tiler, cta_coord, Step<_1,  X, _1>{});
-  Tensor gSFB = local_tile(mSFB, cta_tiler, cta_coord, Step< X, _1, _1>{});
+  Tensor gSFA = local_tile(mSFA, cta_tiler_SF, cta_coord, Step<_1,  X, _1>{});
+  Tensor gSFB = local_tile(mSFB, cta_tiler_SF, cta_coord, Step< X, _1, _1>{});
 
   // ---- Cluster-aware TMA partition (cooperative loading for A/B) ----
   //
@@ -391,6 +392,18 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTiler cta_tiler, Tile
   // SF partitions: cooperative or non-cooperative based on Config::EnableCooperativeSF.
   static constexpr bool EnableCoopSF = Config::EnableCooperativeSF;
 
+  // When LoadSfAllAtOnce=true the wide copy atom covers all bP pipeline stages in one
+  // DMA, so cta_tiler_SF has K=bK*bP.  group_modes<0,2>(gSFA/gSFB) therefore produces a
+  // mode-0 size of bM * bK*bP (wide), while the SF SMEM layout is rank-2 with:
+  //   mode-0 = per-stage data  (size = bM * bK/SFVecSize)
+  //   mode-1 = PIPE dimension  (size = bP)
+  // group_modes<0,3> on a rank-2 layout leaves it unchanged (no 3rd mode to absorb),
+  // giving size<0>(stensor) = bM * bK/SFVecSize — which does NOT match the wide GMEM.
+  // group_modes<0,4> collapses both modes into one flat mode, giving
+  // size<0>(stensor) = bM * bK/SFVecSize * bP — which matches the wide GMEM tile.
+  // When LoadSfAllAtOnce=false the narrow tiler is used and group_modes<0,3> is correct.
+  constexpr int sf_smem_modes = LoadSfAllAtOnce ? 4 : 3;
+
   auto [tSFAgSFA, tSFAsSFA] = [&]() {
     if constexpr (EnableCoopSF) {
       // SF cooperative via standard tma_partition (same as SM100).
@@ -400,12 +413,12 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTiler cta_tiler, Tile
       // SFA projects along N-modes (same as data A).
       return tma_partition(adma_load_sfa,
                            get<2>(cta_coord_vmnk), make_layout(size<2>(cluster_layout_vmnk)),
-                           group_modes<0,3>(sSFA), group_modes<0,2>(gSFA));
+                           group_modes<0, sf_smem_modes>(sSFA), group_modes<0,2>(gSFA));
     } else {
       // Non-cooperative (3-arg tma_partition).
       // Each CTA independently loads the full SF tile.
       return tma_partition(adma_load_sfa,
-                           group_modes<0,3>(sSFA), group_modes<0,2>(gSFA));
+                           group_modes<0, sf_smem_modes>(sSFA), group_modes<0,2>(gSFA));
     }
   }();
 
@@ -414,19 +427,21 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTiler cta_tiler, Tile
       // SFB projects along M-modes (same as data B).
       return tma_partition(adma_load_sfb,
                            get<1>(cta_coord_vmnk), make_layout(size<1>(cluster_layout_vmnk)),
-                           group_modes<0,3>(sSFB), group_modes<0,2>(gSFB));
+                           group_modes<0, sf_smem_modes>(sSFB), group_modes<0,2>(gSFB));
     } else {
       // Non-cooperative (3-arg tma_partition).
       // Each CTA independently loads the full SF tile.
       return tma_partition(adma_load_sfb,
-                           group_modes<0,3>(sSFB), group_modes<0,2>(gSFB));
+                           group_modes<0, sf_smem_modes>(sSFB), group_modes<0,2>(gSFB));
     }
   }();
 
   // ---- Pipeline configuration ----
   auto K_PIPE_MAX = size<1>(tAsA);
   int  K_TILE_MAX = size<1>(tAgA);
+  int  K_GROUP_MAX = size<1>(tSFAgSFA);   // SF groups = K_TILE_MAX / bP when LoadSfAllAtOnce
   int  k_tile = 0;
+  int  k_group = 0;
 
   constexpr int dma_bytes_A   = (cosize(SmemLayoutA{}) * sizeof_bits_v<ElementA> / 8) / decltype(K_PIPE_MAX)::value;
   constexpr int dma_bytes_B   = (cosize(SmemLayoutB{}) * sizeof_bits_v<ElementB> / 8) / decltype(K_PIPE_MAX)::value;
@@ -434,9 +449,14 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTiler cta_tiler, Tile
   // SF barrier bytes use the actual ADMA transfer size (bMN * bK/SFVecSize), not the
   // padded SmemLayout cosize.  When sf_bK_actual < 8, the padded layout has gaps between
   // pipeline stages; those gaps are not part of the DMA transfer.
-  constexpr int dma_sf_bK_actual = size<2>(CtaTiler{}) / SFVecSize;
-  constexpr int dma_bytes_SFA = size<0>(CtaTiler{}) * dma_sf_bK_actual * static_cast<int>(sizeof(ElementSF));
-  constexpr int dma_bytes_SFB = size<1>(CtaTiler{}) * dma_sf_bK_actual * static_cast<int>(sizeof(ElementSF));
+  constexpr int dma_sf_bK_actual   = size<2>(CtaTilerAB{}) / SFVecSize;
+  // SF bytes per pipeline stage — used with stage-by-stage copy atom.
+  constexpr int dma_bytes_SFA      = size<0>(CtaTilerAB{}) * dma_sf_bK_actual * static_cast<int>(sizeof(ElementSF));
+  constexpr int dma_bytes_SFB      = size<1>(CtaTilerAB{}) * dma_sf_bK_actual * static_cast<int>(sizeof(ElementSF));
+  // Total SF bytes for all bP pipeline stages — used with all-stages-at-once copy atom.
+  constexpr int dma_bytes_SFA_wide = dma_bytes_SFA * decltype(K_PIPE_MAX)::value;
+  constexpr int dma_bytes_SFB_wide = dma_bytes_SFB * decltype(K_PIPE_MAX)::value;
+  constexpr int SF_barriers_needed = LoadSfAllAtOnce ? 1 : decltype(K_PIPE_MAX)::value;
 
   // ---- Compute multicast masks based on 2D cluster position ----
   auto [mcast_mask_a, mcast_mask_b] = compute_cluster_masks(cluster_shape);
@@ -446,9 +466,9 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTiler cta_tiler, Tile
 
   // ---- Allocate asynchronous barriers ----
   auto load_a_abar   = allocate_abar<0, K_PIPE_MAX>();
-  auto load_sfa_abar = allocate_abar<1, K_PIPE_MAX>();
+  auto load_sfa_abar = allocate_abar<1, SF_barriers_needed>();
   auto load_b_abar   = allocate_abar<2, K_PIPE_MAX>();
-  auto load_sfb_abar = allocate_abar<3, K_PIPE_MAX>();
+  auto load_sfb_abar = allocate_abar<3, SF_barriers_needed>();
   auto mma_abar      = allocate_abar<4, K_PIPE_MAX>();
   auto store_c_abar  = allocate_abar<5>();
 
@@ -456,8 +476,15 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTiler cta_tiler, Tile
     for (int i = 0; i < K_PIPE_MAX; ++i) {
       xe4_initialize_barrier(load_a_abar[i], 1);
       xe4_initialize_barrier(load_b_abar[i], 1);
-      xe4_initialize_barrier(load_sfa_abar[i], 1);
-      xe4_initialize_barrier(load_sfb_abar[i], 1);
+    }
+    if constexpr (LoadSfAllAtOnce) {
+      xe4_initialize_barrier(load_sfa_abar[0], 1);
+      xe4_initialize_barrier(load_sfb_abar[0], 1);
+    } else {
+      for (int i = 0; i < K_PIPE_MAX; ++i) {
+        xe4_initialize_barrier(load_sfa_abar[i], 1);
+        xe4_initialize_barrier(load_sfb_abar[i], 1);
+      }
     }
   } else if (elect_one_thr && warp_idx == 1) {
      for (int i = 0; i < K_PIPE_MAX; ++i) {
@@ -525,16 +552,28 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTiler cta_tiler, Tile
       {
         xe4_set_barrier_transaction_bytes(load_a_abar[pipe], dma_bytes_A);
         xe4_set_barrier_transaction_bytes(load_b_abar[pipe], dma_bytes_B);
-        xe4_set_barrier_transaction_bytes(load_sfa_abar[pipe], dma_bytes_SFA);
-        xe4_set_barrier_transaction_bytes(load_sfb_abar[pipe], dma_bytes_SFB);
 
         copy(adma_load_a.with(&load_a_abar[pipe], mcast_mask_a),       tAgA(_, k_tile),     tAsA(_, pipe));
-        copy(adma_load_sfa.with(&load_sfa_abar[pipe], mcast_mask_a),   tSFAgSFA(_, k_tile), tSFAsSFA(_, pipe));
         copy(adma_load_b.with(&load_b_abar[pipe], mcast_mask_b),       tBgB(_, k_tile),     tBsB(_, pipe));
-        copy(adma_load_sfb.with(&load_sfb_abar[pipe], mcast_mask_b),   tSFBgSFB(_, k_tile), tSFBsSFB(_, pipe));
+
+        if constexpr (LoadSfAllAtOnce) {
+          if (pipe == 0 && k_tile == 0) {
+            xe4_set_barrier_transaction_bytes(load_sfa_abar[0], dma_bytes_SFA_wide);
+            xe4_set_barrier_transaction_bytes(load_sfb_abar[0], dma_bytes_SFB_wide);
+            copy(adma_load_sfa.with(&load_sfa_abar[0], mcast_mask_a),   tSFAgSFA(_, k_group), tSFAsSFA(_));
+            copy(adma_load_sfb.with(&load_sfb_abar[0], mcast_mask_b),   tSFBgSFB(_, k_group), tSFBsSFB(_));
+            ++k_group;
+          }
+        } else {
+          xe4_set_barrier_transaction_bytes(load_sfa_abar[pipe], dma_bytes_SFA);
+          xe4_set_barrier_transaction_bytes(load_sfb_abar[pipe], dma_bytes_SFB);
+          copy(adma_load_sfa.with(&load_sfa_abar[pipe], mcast_mask_a),   tSFAgSFA(_, k_tile), tSFAsSFA(_, pipe));
+          copy(adma_load_sfb.with(&load_sfb_abar[pipe], mcast_mask_b),   tSFBgSFB(_, k_tile), tSFBsSFB(_, pipe));
+        }
         ++k_tile;
       }
 
+      int used_ab_count = 0;
       // ---- Mainloop: Wait for MMA to consume, then refill freed stage ----
       for (; k_tile < K_TILE_MAX; ++k_tile)
       {
@@ -544,13 +583,26 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTiler cta_tiler, Tile
 
         xe4_set_barrier_transaction_bytes(load_a_abar[pipe], dma_bytes_A);
         xe4_set_barrier_transaction_bytes(load_b_abar[pipe], dma_bytes_B);
-        xe4_set_barrier_transaction_bytes(load_sfa_abar[pipe], dma_bytes_SFA);
-        xe4_set_barrier_transaction_bytes(load_sfb_abar[pipe], dma_bytes_SFB);
 
         copy(adma_load_a.with(&load_a_abar[pipe], mcast_mask_a),       tAgA(_, k_tile),     tAsA(_, pipe));
-        copy(adma_load_sfa.with(&load_sfa_abar[pipe], mcast_mask_a),   tSFAgSFA(_, k_tile), tSFAsSFA(_, pipe));
         copy(adma_load_b.with(&load_b_abar[pipe], mcast_mask_b),       tBgB(_, k_tile),     tBsB(_, pipe));
-        copy(adma_load_sfb.with(&load_sfb_abar[pipe], mcast_mask_b),   tSFBgSFB(_, k_tile), tSFBsSFB(_, pipe));
+
+        if constexpr (LoadSfAllAtOnce) {
+          ++used_ab_count;
+          if (used_ab_count == int(K_PIPE_MAX) && k_group < K_GROUP_MAX) {
+            xe4_set_barrier_transaction_bytes(load_sfa_abar[0], dma_bytes_SFA_wide);
+            xe4_set_barrier_transaction_bytes(load_sfb_abar[0], dma_bytes_SFB_wide);
+            copy(adma_load_sfa.with(&load_sfa_abar[0], mcast_mask_a), tSFAgSFA(_, k_group), tSFAsSFA(_));
+            copy(adma_load_sfb.with(&load_sfb_abar[0], mcast_mask_b), tSFBgSFB(_, k_group), tSFBsSFB(_));
+            ++k_group;
+            used_ab_count = 0;
+          }
+        } else {
+          xe4_set_barrier_transaction_bytes(load_sfa_abar[pipe], dma_bytes_SFA);
+          xe4_set_barrier_transaction_bytes(load_sfb_abar[pipe], dma_bytes_SFB);
+          copy(adma_load_sfa.with(&load_sfa_abar[pipe], mcast_mask_a),   tSFAgSFA(_, k_tile), tSFAsSFA(_, pipe));
+          copy(adma_load_sfb.with(&load_sfb_abar[pipe], mcast_mask_b),   tSFBgSFB(_, k_tile), tSFBsSFB(_, pipe));
+        }
 
         ++write_state;
       }
@@ -564,6 +616,8 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTiler cta_tiler, Tile
   {
     if (elect_one_thr)
     {
+      int read_state_phase_sf = 0;
+
       // Mainloop: Wait for loads, execute MMA, signal producer
       // Unroll the K mode manually so we can set mma_ctrl and barrier tracking
       for (int k_tile_next = 0; k_tile_next < K_TILE_MAX; ++k_tile_next)
@@ -572,8 +626,20 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTiler cta_tiler, Tile
 
         xe4_wait_barrier(load_a_abar[read_pipe], read_state.phase());
         xe4_wait_barrier(load_b_abar[read_pipe], read_state.phase());
-        xe4_wait_barrier(load_sfa_abar[read_pipe], read_state.phase());
-        xe4_wait_barrier(load_sfb_abar[read_pipe], read_state.phase());
+
+        if constexpr (LoadSfAllAtOnce) {
+          // SF barrier: wait once at the start of each K_PIPE_MAX group.
+          // The wide atom fills all pipeline stages in one DMA, so a single
+          // barrier covers the entire group.
+          if (k_tile_next % int(K_PIPE_MAX) == 0) {
+            xe4_wait_barrier(load_sfa_abar[0], read_state_phase_sf);
+            xe4_wait_barrier(load_sfb_abar[0], read_state_phase_sf);
+            read_state_phase_sf ^= 1;
+          }
+        } else {
+          xe4_wait_barrier(load_sfa_abar[read_pipe], read_state.phase());
+          xe4_wait_barrier(load_sfb_abar[read_pipe], read_state.phase());
+        }
 
         // Set barrier expected bytes ONCE for all k_blocks in this pipeline stage.
         // All k_blocks signal AB (2 bytes each) to mma_abar.
@@ -678,6 +744,7 @@ gemm_tn_blockscaled_cluster(int m, int n, int k,
                             TensorC& C,
                             TensorSFA const& SFA,
                             TensorSFB const& SFB,
+                            bool decoupleSFLoad,
                             sycl::queue& queue)
 {
   using ElementA  = typename Config::ElementA;
@@ -722,7 +789,6 @@ gemm_tn_blockscaled_cluster(int m, int n, int k,
   constexpr auto bM = get<0>(TileShape_MNK{});
   constexpr auto bN = get<1>(TileShape_MNK{});
   constexpr auto bK = get<2>(TileShape_MNK{});
-  auto cta_tiler = make_shape(bM, bN, bK);
   constexpr auto bP = Int<PipelineStages>{};
 
   // ---- SMEM layouts ----
@@ -859,15 +925,52 @@ gemm_tn_blockscaled_cluster(int m, int n, int k,
     }
   }();
 
-  auto adma_load_sfa = make_adma_atom_A_xe4(
-    GmemTiledCopySF{}, mSFA,
-    SmemLayoutSFA{}(_, _, _, cute::Int<0>{}),
-    TileShape_MNK{}, TiledMma{}, sf_cluster_layout_vmnk);
+  auto cta_tiler_AB = make_shape(bM, bN, bK);
 
-  auto adma_load_sfb = make_adma_atom_B_xe4(
-    GmemTiledCopySF{}, mSFB,
-    SmemLayoutSFB{}(_, _, _, cute::Int<0>{}),
-    TileShape_MNK{}, TiledMma{}, sf_cluster_layout_vmnk);
+  // ---- CTA Tiler for scale factors ----
+  auto make_cta_tiler_SF = [&](auto wide_tag) {
+    constexpr bool Wide = decltype(wide_tag)::value;
+    if constexpr (Wide) {
+      return make_shape(bM, bN, bK * bP);  // K widened by bP — one copy() loads all stages
+    } else {
+      return make_shape(bM, bN, bK);       // atom footprint spans one stage
+    }
+  };
+
+  // ---- ADMA copy atoms for scale factors ----
+  auto make_adma_sf_A = [&](auto wide_tag) {
+    constexpr bool Wide = decltype(wide_tag)::value;
+    if constexpr (Wide) {
+      return make_adma_atom_A_xe4(
+        GmemTiledCopySF{}, mSFA,
+        SmemLayoutSFA{},                   // full multi-stage layout (all bP pipeline stages)
+        make_cta_tiler_SF(wide_tag),
+        TiledMma{}, sf_cluster_layout_vmnk);
+    } else {
+      return make_adma_atom_A_xe4(
+        GmemTiledCopySF{}, mSFA,
+        SmemLayoutSFA{}(_, _, _, cute::Int<0>{}),
+        TileShape_MNK{},
+        TiledMma{}, sf_cluster_layout_vmnk);
+    }
+  };
+
+  auto make_adma_sf_B = [&](auto wide_tag) {
+    constexpr bool Wide = decltype(wide_tag)::value;
+    if constexpr (Wide) {
+      return make_adma_atom_B_xe4(
+        GmemTiledCopySF{}, mSFB,
+        SmemLayoutSFB{},                   // full multi-stage layout (all bP pipeline stages)
+        make_cta_tiler_SF(wide_tag),
+        TiledMma{}, sf_cluster_layout_vmnk);
+    } else {
+      return make_adma_atom_B_xe4(
+        GmemTiledCopySF{}, mSFB,
+        SmemLayoutSFB{}(_, _, _, cute::Int<0>{}),
+        TileShape_MNK{},
+        TiledMma{}, sf_cluster_layout_vmnk);
+    }
+  };
 
   // ---- Launch configuration ----
   // SYCL dimension mapping: dim-0=K, dim-1=M, dim-2=N (N-fast)
@@ -885,29 +988,63 @@ gemm_tn_blockscaled_cluster(int m, int n, int k,
   sycl::range<3> group_range(1, get<0>(num_groups), get<1>(num_groups));
   sycl::nd_range<3> Range(group_range * local_range, local_range);
 
+  if (decoupleSFLoad) {
+    if (sf_bK_actual < 8) {
+      std::cout << "[GEMM-MX-CLUSTER] Warning: K length of SF block i.e. sf_bK_actual (" << sf_bK_actual
+                << ") is less than 8, which is not supported in current all-stage SF loading.\n";
+      std::cout << "[GEMM-MX-CLUSTER] Falling back to per-stage SF loading with ADMA. \n";
+      decoupleSFLoad = false;
+    }
+    if (K % (int(bK) * int(bP)) != 0) {
+      std::cout << "[GEMM-MX-CLUSTER] Warning: K (" << K << ") must be divisible by bK * PipelineStages ("
+                << int(bK) << " * " << int(bP) << " = " << int(bK) * int(bP)
+                << ") for single-DMA SF loading for all pipeline stages.\n";
+      std::cout << "[GEMM-MX-CLUSTER] Falling back to per-stage SF loading with ADMA. \n";
+      decoupleSFLoad = false;
+    }
+  }
+
   // ---- Launch kernel ----
   auto launch_cfg = syclexp::launch_config(Range, Props);
-  syclexp::submit_with_event(queue, [&](sycl::handler& handler) {
-    syclexp::nd_launch(handler, launch_cfg, [=](sycl::nd_item<3> item) ALWAYS_INLINE {
-      gemm_device_blockscaled_cluster<Config, decltype(ClusterShape_MNK{}),
-                       decltype(prob_shape), decltype(cta_tiler), decltype(TileShape_MNK{}),
-                       decltype(sA), decltype(sC), decltype(adma_load_a),
-                       decltype(sB), decltype(adma_load_b), decltype(adma_store_c),
-                       decltype(dC),
-                       decltype(sSFA), decltype(sSFB),
-                       decltype(adma_load_sfa), decltype(adma_load_sfb),
-                       TiledMma,
-                       Alpha, Beta>(
-                       prob_shape, cta_tiler, TileShape_MNK{}, ClusterShape_MNK{},
-                       A_ptr, sA, sC, adma_load_a,
-                       B_ptr, sB, adma_load_b, adma_store_c,
-                       C_ptr, dC,
-                       SFA_ptr, sSFA, adma_load_sfa,
-                       SFB_ptr, sSFB, adma_load_sfb,
-                       alpha, beta,
-                       item);
-    });
-  }).wait();
+
+  // Single compile-time-parameterized launch lambda — Wide=false: per-stage SF load,
+  // Wide=true: all-stages-at-once SF load. Selected at runtime by decoupleSFLoad.
+  auto do_launch = [&](auto wide_tag) {
+    constexpr bool Wide = decltype(wide_tag)::value;
+    auto adma_load_sfa = make_adma_sf_A(wide_tag);
+    auto adma_load_sfb = make_adma_sf_B(wide_tag);
+    auto cta_tiler_SF  = make_cta_tiler_SF(wide_tag);
+    syclexp::submit_with_event(queue, [&](sycl::handler& handler) {
+      syclexp::nd_launch(handler, launch_cfg, [=](sycl::nd_item<3> item) ALWAYS_INLINE {
+        gemm_device_blockscaled_cluster<Config, decltype(ClusterShape_MNK{}),
+                         decltype(prob_shape), decltype(cta_tiler_AB), decltype(cta_tiler_SF), decltype(TileShape_MNK{}),
+                         decltype(sA), decltype(sC), decltype(adma_load_a),
+                         decltype(sB), decltype(adma_load_b), decltype(adma_store_c),
+                         decltype(dC),
+                         decltype(sSFA), decltype(sSFB),
+                         decltype(adma_load_sfa), decltype(adma_load_sfb),
+                         TiledMma,
+                         Alpha, Beta,
+                         Wide>(
+                         prob_shape, cta_tiler_AB, cta_tiler_SF, TileShape_MNK{}, ClusterShape_MNK{},
+                         A_ptr, sA, sC, adma_load_a,
+                         B_ptr, sB, adma_load_b, adma_store_c,
+                         C_ptr, dC,
+                         SFA_ptr, sSFA, adma_load_sfa,
+                         SFB_ptr, sSFB, adma_load_sfb,
+                         alpha, beta,
+                         item);
+      });
+    }).wait();
+  };
+
+  if (decoupleSFLoad) {
+    std::cout << "[GEMM-MX-CLUSTER] launch: decoupleSFLoad: true\n";
+    do_launch(std::true_type{});
+  } else {
+    std::cout << "[GEMM-MX-CLUSTER] launch: decoupleSFLoad: false\n";
+    do_launch(std::false_type{});
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -927,22 +1064,23 @@ gemm_dispatch(char transA, char transB, int m, int n, int k,
               Beta beta,
               TensorC& C,
               TensorSFA const& SFA, TensorSFB const& SFB,
+              bool decoupleSFLoad,
               sycl::queue& queue)
 {
   if (transA == 'T' && transB == 'N') {
-    return gemm_tn_blockscaled_cluster<Config>(m, n, k, alpha, A, B, beta, C, SFA, SFB, queue);
+    return gemm_tn_blockscaled_cluster<Config>(m, n, k, alpha, A, B, beta, C, SFA, SFB, decoupleSFLoad, queue);
   }
   assert(false && "Not implemented");
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
-// Entry Point: run_blockscaled_gemm_cluster<Config>(m, n, k, transA, transB)
+// Entry Point: run_blockscaled_gemm_cluster<Config>(m, n, k, transA, transB, decoupleSFLoad)
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <class Config>
-int run_blockscaled_gemm_cluster(int m, int n, int k, char transA, char transB)
+int run_blockscaled_gemm_cluster(int m, int n, int k, char transA, char transB, bool decoupleSFLoad)
 {
   using ElementA  = typename Config::ElementA;
   using ElementB  = typename Config::ElementB;
@@ -1010,7 +1148,7 @@ int run_blockscaled_gemm_cluster(int m, int n, int k, char transA, char transB)
   subbyte_pack(B);
 
   // ---- Run Block-Scaled GEMM with Cluster ----
-  gemm_dispatch<Config>(transA, transB, m, n, k, alpha, A, B, beta, C, SFA, SFB, queue);
+  gemm_dispatch<Config>(transA, transB, m, n, k, alpha, A, B, beta, C, SFA, SFB, decoupleSFLoad, queue);
   queue.wait_and_throw();
 
   // ---- Validate ----
@@ -1048,7 +1186,7 @@ int run_blockscaled_gemm_cluster_defaults()
 {
   return run_blockscaled_gemm_cluster<Config>(
     Config::DefaultM, Config::DefaultN, Config::DefaultK,
-    Config::DefaultTransA, Config::DefaultTransB);
+    Config::DefaultTransA, Config::DefaultTransB, true /*decoupleSFLoad*/);
 }
 
 } // namespace xe4_blockscaled_gemm_cluster

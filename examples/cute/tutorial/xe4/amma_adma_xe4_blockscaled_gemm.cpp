@@ -45,6 +45,7 @@
 //   argv[6]  : input_type (default: "NVFP4", valid: NVFP4/NVFP4+/MXFP4/MXFP8/ALL)
 //   argv[7]  : SFVecSize  (default: 16, valid: 16 or 32; ignored when input_type=ALL)
 //   argv[8]  : output_type(default: "FP32",  valid: FP32/FP16/BF16; ignored when input_type=ALL)
+//   argv[9]  : decouple_sf_load (default: 1, valid: 0 or 1)
 //
 // Element type mapping:
 //   NVFP4  : A/B = float_e2m1_t (4-bit), SF = float_ue4m3_t, BlockScaleType = 5
@@ -155,7 +156,7 @@ template <> struct BlockScaleTypeMap<cutlass::float_ue8m0_t, 32> { static conste
 template <class ElementA, class ElementB, class ElementSF,
           int SVS, int BST, int TM, int TN, int TK>
 int run_gemm_config(const std::string& output_type,
-                    int m, int n, int k, char transA, char transB)
+                    int m, int n, int k, char transA, char transB, bool decouple_sf_load)
 {
   // Guard: FP8 types (float_e4m3_t) only support SFVecSize=32.
   // Prevent instantiation of invalid ADMA copy atoms at compile-time.
@@ -165,15 +166,15 @@ int run_gemm_config(const std::string& output_type,
   } else {
     if (output_type == "FP32") {
       using Cfg = GenericBlockScaledConfig<ElementA, ElementB, float, ElementSF, SVS, BST, TM, TN, TK>;
-      return xe4_blockscaled_gemm::run_blockscaled_gemm<Cfg>(m, n, k, transA, transB);
+      return xe4_blockscaled_gemm::run_blockscaled_gemm<Cfg>(m, n, k, transA, transB, decouple_sf_load);
     }
     if (output_type == "FP16") {
       using Cfg = GenericBlockScaledConfig<ElementA, ElementB, sycl::half, ElementSF, SVS, BST, TM, TN, TK>;
-      return xe4_blockscaled_gemm::run_blockscaled_gemm<Cfg>(m, n, k, transA, transB);
+      return xe4_blockscaled_gemm::run_blockscaled_gemm<Cfg>(m, n, k, transA, transB, decouple_sf_load);
     }
     if (output_type == "BF16") {
       using Cfg = GenericBlockScaledConfig<ElementA, ElementB, sycl::ext::oneapi::bfloat16, ElementSF, SVS, BST, TM, TN, TK>;
-      return xe4_blockscaled_gemm::run_blockscaled_gemm<Cfg>(m, n, k, transA, transB);
+      return xe4_blockscaled_gemm::run_blockscaled_gemm<Cfg>(m, n, k, transA, transB, decouple_sf_load);
     }
     std::cerr << "Error: Unsupported output type: " << output_type << std::endl;
     return 1;
@@ -184,7 +185,7 @@ int run_gemm_config(const std::string& output_type,
 
 // Run all valid {input_type, SFVecSize, output_type} combos in a single process.
 // This keeps the SYCL runtime/simulator alive across all configs.
-int run_all_configs(int m, int n, int k, char transA, char transB)
+int run_all_configs(int m, int n, int k, char transA, char transB, bool decouple_sf_load)
 {
   using namespace cutlass;
 
@@ -225,27 +226,27 @@ int run_all_configs(int m, int n, int k, char transA, char transB)
       if (it == "NVFP4") {
         rc = run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue4m3_t,
                              16, BlockScaleTypeMap<float_ue4m3_t, 16>::value,
-                             128, 256, 128>(ot, m, n, k, transA, transB);
+                             128, 256, 128>(ot, m, n, k, transA, transB, decouple_sf_load);
       } else if (it == "NVFP4+" && cfg.sfvec == 16) {
         rc = run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue5m3_t,
                              16, BlockScaleTypeMap<float_ue5m3_t, 16>::value,
-                             128, 256, 128>(ot, m, n, k, transA, transB);
+                             128, 256, 128>(ot, m, n, k, transA, transB, decouple_sf_load);
       } else if (it == "NVFP4+" && cfg.sfvec == 32) {
         rc = run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue5m3_t,
                              32, BlockScaleTypeMap<float_ue5m3_t, 32>::value,
-                             128, 256, 256>(ot, m, n, k, transA, transB);
+                             128, 256, 256>(ot, m, n, k, transA, transB, decouple_sf_load);
       } else if (it == "MXFP4" && cfg.sfvec == 16) {
         rc = run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue8m0_t,
                              16, BlockScaleTypeMap<float_ue8m0_t, 16>::value,
-                             128, 256, 128>(ot, m, n, k, transA, transB);
+                             128, 256, 128>(ot, m, n, k, transA, transB, decouple_sf_load);
       } else if (it == "MXFP4" && cfg.sfvec == 32) {
         rc = run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue8m0_t,
                              32, BlockScaleTypeMap<float_ue8m0_t, 32>::value,
-                             128, 256, 256>(ot, m, n, k, transA, transB);
+                             128, 256, 256>(ot, m, n, k, transA, transB, decouple_sf_load);
       } else if (it == "MXFP8") {
         rc = run_gemm_config<float_e4m3_t, float_e4m3_t, float_ue8m0_t,
                              32, BlockScaleTypeMap<float_ue8m0_t, 32>::value,
-                             128, 256, 256>(ot, m, n, k, transA, transB);
+                             128, 256, 256>(ot, m, n, k, transA, transB, decouple_sf_load);
       }
     } catch (const std::exception& e) {
       std::cerr << "EXCEPTION: " << e.what() << std::endl;
@@ -265,7 +266,7 @@ int run_all_configs(int m, int n, int k, char transA, char transB)
 void print_usage(const char* prog) {
   std::cout << "Usage: " << prog
             << " [M] [N] [K] [transA] [transB] [input_type] [SFVecSize]"
-            << " [output_type] \n"
+            << " [output_type] [decouple_sf_load]\n"
             << "\n"
             << "  M, N, K       : Problem dimensions (default: 512 1024 2048)\n"
             << "  transA/transB : Transpose flags, 'T' or 'N' (default: T N)\n"
@@ -274,6 +275,7 @@ void print_usage(const char* prog) {
             << "                  (remaining args ignored when ALL is specified)\n"
             << "  SFVecSize     : Scale factor block size, 16 or 32 (default: 16)\n"
             << "  output_type   : FP32, FP16, BF16 (default: FP32)\n"
+            << "  decouple_sf_load : Whether to decouple scale factor load from data load (default: 1)\n"
             << "\n"
             << "  BlockScaleType (auto-selected from input_type + SFVecSize):\n"
             << "    NVFP4              + SFVecSize=16 -> ue4m3k16 (type 5)\n"
@@ -283,10 +285,10 @@ void print_usage(const char* prog) {
             << "\n"
             << "Examples:\n"
             << "  # Single config: NVFP4+ with SFVecSize=16, FP16 output\n"
-            << "  " << prog << " 512 512 512 T N NVFP4+ 16 FP16\n"
+            << "  " << prog << " 512 512 512 T N NVFP4+ 16 FP16 1\n"
             << "\n"
             << "  # Single config: MXFP8 with SFVecSize=32, FP32 output\n"
-            << "  " << prog << " 512 512 512 T N MXFP8 32 FP32\n"
+            << "  " << prog << " 512 512 512 T N MXFP8 32 FP32 0\n"
             << "\n"
             << "  # Run ALL 18 valid configs in a single process (keeps simulator alive):\n"
             << "  " << prog << " 512 512 512 T N ALL\n"
@@ -297,22 +299,27 @@ void print_usage(const char* prog) {
 
 int main(int argc, char** argv)
 {
-  // ---- Parse command-line arguments ----
-
+  // ---- Set default values ----
   int m = 512;
-  if (argc >= 2) sscanf(argv[1], "%d", &m);
   int n = 1024;
-  if (argc >= 3) sscanf(argv[2], "%d", &n);
   int k = 2048;
-  if (argc >= 4) sscanf(argv[3], "%d", &k);
-
   char transA = 'T';
-  if (argc >= 5) sscanf(argv[4], "%c", &transA);
   char transB = 'N';
-  if (argc >= 6) sscanf(argv[5], "%c", &transB);
-
   std::string input_type = "NVFP4";
+  int SFVecSize = 16;
+  std::string output_type = "FP32";
+  bool decouple_sf_load = true;
+
+  // ---- Parse command-line arguments ----
+  if (argc >= 2) sscanf(argv[1], "%d", &m);
+  if (argc >= 3) sscanf(argv[2], "%d", &n);
+  if (argc >= 4) sscanf(argv[3], "%d", &k);
+  if (argc >= 5) sscanf(argv[4], "%c", &transA);
+  if (argc >= 6) sscanf(argv[5], "%c", &transB);
   if (argc >= 7) input_type = argv[6];
+  if (argc >= 8) sscanf(argv[7], "%d", &SFVecSize);
+  if (argc >= 9) output_type = argv[8];
+  if (argc >= 10) decouple_sf_load = (std::string(argv[9]) != "0");
 
   // ---- Validate input datatype ----
   if (input_type != "NVFP4" && input_type != "NVFP4+" && input_type != "MXFP4" && input_type != "MXFP8" && input_type != "ALL") {
@@ -325,14 +332,8 @@ int main(int argc, char** argv)
   // ---- ALL mode: run all 18 valid configs in a single process ----
   // When ALL is specified, remaining args (SFVecSize, output_type) are ignored.
   if (input_type == "ALL") {
-    return run_all_configs(m, n, k, transA, transB);
+    return run_all_configs(m, n, k, transA, transB, decouple_sf_load);
   }
-
-  int SFVecSize = 16;
-  if (argc >= 8) sscanf(argv[7], "%d", &SFVecSize);
-
-  std::string output_type = "FP32";
-  if (argc >= 9) output_type = argv[8];
 
   // ---- Validate SFVecSize: must be 16 or 32 ----
   if (SFVecSize != 16 && SFVecSize != 32) {
@@ -372,27 +373,37 @@ int main(int argc, char** argv)
   std::cout << "  Problem shape : M=" << m << " N=" << n << " K=" << k << std::endl;
   std::cout << "  Transpose     : A=" << transA << " B=" << transB << std::endl;
   std::cout << "  SFVecSize     : " << SFVecSize << std::endl;
+  std::cout << "  Load SF all stages at once: " << (decouple_sf_load ? "Yes" : "No") << std::endl;
   std::cout << "======================================" << std::endl;
   
   using namespace cutlass;
 
-  if (input_type == "NVFP4") {
-    return run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue4m3_t, 16, BlockScaleTypeMap<float_ue4m3_t, 16>::value, 128, 256, 128>(output_type, m, n, k, transA, transB);
-  } else if (input_type == "NVFP4+") {
-    if (SFVecSize == 16)
-      return run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue5m3_t, 16, BlockScaleTypeMap<float_ue5m3_t, 16>::value, 128, 256, 128>(output_type, m, n, k, transA, transB);
-    else
-      return run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue5m3_t, 32, BlockScaleTypeMap<float_ue5m3_t, 32>::value, 128, 256, 256>(output_type, m, n, k, transA, transB);
-  } else if (input_type == "MXFP4") {
-    if (SFVecSize == 16)
-      return run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue8m0_t, 16, BlockScaleTypeMap<float_ue8m0_t, 16>::value, 128, 256, 128>(output_type, m, n, k, transA, transB);
-    else
-      return run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue8m0_t, 32, BlockScaleTypeMap<float_ue8m0_t, 32>::value, 128, 256, 256>(output_type, m, n, k, transA, transB);
-  } else {
-    return run_gemm_config<float_e4m3_t, float_e4m3_t, float_ue8m0_t, 32, BlockScaleTypeMap<float_ue8m0_t, 32>::value, 128, 256, 256>(output_type, m, n, k, transA, transB);
+  if (input_type == "NVFP4")
+  {
+    return run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue4m3_t, 16, BlockScaleTypeMap<float_ue4m3_t, 16>::value, 128, 256, 128>
+                          (output_type, m, n, k, transA, transB, decouple_sf_load);
   }
-
-  std::cerr << "Error: Unsupported input type: " << input_type << std::endl;
-  print_usage(argv[0]);
-  return 1;
+  else if (input_type == "NVFP4+")
+  {
+    if (SFVecSize == 16)
+      return run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue5m3_t, 16, BlockScaleTypeMap<float_ue5m3_t, 16>::value, 128, 256, 128>
+                          (output_type, m, n, k, transA, transB, decouple_sf_load);
+    else
+      return run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue5m3_t, 32, BlockScaleTypeMap<float_ue5m3_t, 32>::value, 128, 256, 256>
+                          (output_type, m, n, k, transA, transB, decouple_sf_load);
+  }
+  else if (input_type == "MXFP4")
+  {
+    if (SFVecSize == 16)
+      return run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue8m0_t, 16, BlockScaleTypeMap<float_ue8m0_t, 16>::value, 128, 256, 128>
+                          (output_type, m, n, k, transA, transB, decouple_sf_load);
+    else
+      return run_gemm_config<float_e2m1_t, float_e2m1_t, float_ue8m0_t, 32, BlockScaleTypeMap<float_ue8m0_t, 32>::value, 128, 256, 256>
+                          (output_type, m, n, k, transA, transB, decouple_sf_load);
+  }
+  else
+  {
+    return run_gemm_config<float_e4m3_t, float_e4m3_t, float_ue8m0_t, 32, BlockScaleTypeMap<float_ue8m0_t, 32>::value, 128, 256, 256>
+                         (output_type, m, n, k, transA, transB, decouple_sf_load);
+  }
 }

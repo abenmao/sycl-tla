@@ -38,16 +38,17 @@
 //
 // CLI Arguments (all positional, all optional):
 //   argv[1]  : M            (default: 512)
-//   argv[2]  : N            (default: 1024)
+//   argv[2]  : N            (default: 512)
 //   argv[3]  : K            (default: 2048)
 //   argv[4]  : transA       (default: 'T')
 //   argv[5]  : transB       (default: 'N')
 //   argv[6]  : input_type   (default: "NVFP4", valid: NVFP4/NVFP4+/MXFP4/MXFP8/ALL)
-//   argv[7]  : coop_sf      (default: 0, valid: 0=disabled, 1=enabled)
+//   argv[7]  : coop_sf      (default: 1, valid: 0=disabled, 1=enabled)
 //   argv[8]  : SFVecSize    (default: 16, valid: 16 or 32; ignored when input_type=ALL)
 //   argv[9]  : output_type  (default: "FP32",  valid: FP32/FP16/BF16; ignored when input_type=ALL)
 //   argv[10] : cluster_m    (default: 2; ignored when input_type=ALL)
 //   argv[11] : cluster_n    (default: 2; ignored when input_type=ALL)
+//   argv[12] : decouple_sf_load (default: 1, valid: 0 or 1)
 //
 // Element type mapping:
 //   NVFP4  : A/B = float_e2m1_t (4-bit), SF = float_ue4m3_t, BlockScaleType = 5
@@ -57,17 +58,17 @@
 //
 // All GEMM infrastructure (device kernel, host setup, dispatch, validation)
 // lives in amma_adma_xe4_blockscaled_gemm_cluster_base.hpp.
-// Default (cooperative SF disabled):
-//./blockscaled_gemm_cluster 512 512 512 T N NVFP4 0 16 FP32 2 2
+// Default (cooperative SF enabled):
+//./blockscaled_gemm_cluster 512 512 2048 T N NVFP4 1 16 FP32 2 2
 //
 // Cooperative SF enabled:
-//./blockscaled_gemm_cluster 512 512 512 T N NVFP4 1 16 FP32 2 2
+//./blockscaled_gemm_cluster 512 512 2048 T N NVFP4 1 16 FP32 2 2
 //
 // ALL configs (non-cooperative):
-//./blockscaled_gemm_cluster 512 512 512 T N ALL
+//./blockscaled_gemm_cluster 512 512 2048 T N ALL
 //
 // ALL configs (cooperative):
-//./blockscaled_gemm_cluster 512 512 512 T N ALL 1
+//./blockscaled_gemm_cluster 512 512 2048 T N ALL 1
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -174,7 +175,7 @@ struct GenericBlockScaledClusterConfig {
 
   // ---- Default problem shape (used by backward-compat wrapper) ----
   static constexpr int  DefaultM      = 512;
-  static constexpr int  DefaultN      = 1024;
+  static constexpr int  DefaultN      = 512;
   static constexpr int  DefaultK      = 2048;
   static constexpr char DefaultTransA = 'T';
   static constexpr char DefaultTransB = 'N';
@@ -210,7 +211,7 @@ template <> struct BlockScaleTypeMap<cutlass::float_ue8m0_t, 32> { static conste
 template <class ElementA, class ElementB, class ElementSF,
           int SVS, int BST, int TM, int TN, int TK, int CM, int CN, bool CoopSF>
 int run_gemm_config(const std::string& output_type,
-                    int m, int n, int k, char transA, char transB)
+                    int m, int n, int k, char transA, char transB, bool decouple_sf_load)
 {
   // Guard: FP8 types (float_e4m3_t) only support SFVecSize=32.
   // Prevent instantiation of invalid ADMA copy atoms at compile-time.
@@ -220,15 +221,15 @@ int run_gemm_config(const std::string& output_type,
   } else {
     if (output_type == "FP32") {
       using Cfg = GenericBlockScaledClusterConfig<ElementA, ElementB, float, ElementSF, SVS, BST, TM, TN, TK, CM, CN, CoopSF>;
-      return xe4_blockscaled_gemm_cluster::run_blockscaled_gemm_cluster<Cfg>(m, n, k, transA, transB);
+      return xe4_blockscaled_gemm_cluster::run_blockscaled_gemm_cluster<Cfg>(m, n, k, transA, transB, decouple_sf_load);
     }
     if (output_type == "FP16") {
       using Cfg = GenericBlockScaledClusterConfig<ElementA, ElementB, sycl::half, ElementSF, SVS, BST, TM, TN, TK, CM, CN, CoopSF>;
-      return xe4_blockscaled_gemm_cluster::run_blockscaled_gemm_cluster<Cfg>(m, n, k, transA, transB);
+      return xe4_blockscaled_gemm_cluster::run_blockscaled_gemm_cluster<Cfg>(m, n, k, transA, transB, decouple_sf_load);
     }
     if (output_type == "BF16") {
       using Cfg = GenericBlockScaledClusterConfig<ElementA, ElementB, sycl::ext::oneapi::bfloat16, ElementSF, SVS, BST, TM, TN, TK, CM, CN, CoopSF>;
-      return xe4_blockscaled_gemm_cluster::run_blockscaled_gemm_cluster<Cfg>(m, n, k, transA, transB);
+      return xe4_blockscaled_gemm_cluster::run_blockscaled_gemm_cluster<Cfg>(m, n, k, transA, transB, decouple_sf_load);
     }
     std::cerr << "Error: Unsupported output type: " << output_type << std::endl;
     return 1;
@@ -242,7 +243,7 @@ int run_gemm_config(const std::string& output_type,
 // When coop_sf=false: Non-cooperative SF, TileK=256 for all VS.
 // When coop_sf=true:  Cooperative SF, TileK=256 for VS=16, TileK=512 for VS=32.
 //                     MXFP8 is skipped (max atom K=256 < required 512).
-int run_all_configs(int m, int n, int k, char transA, char transB, bool coop_sf)
+int run_all_configs(int m, int n, int k, char transA, char transB, bool coop_sf, bool decouple_sf_load)
 {
   using namespace cutlass;
 
@@ -312,13 +313,15 @@ int run_all_configs(int m, int n, int k, char transA, char transB, bool coop_sf)
         if (cfg.cm == cm_ && cfg.cn == cn_) {                                       \
           rc = run_gemm_config<ElemA, ElemB, ElemSF,                                \
                 16, BlockScaleTypeMap<ElemSF, 16>::value,                            \
-                128, 256, 256, cm_, cn_, true>(ot, m, n, k, transA, transB);        \
+                128, 256, 256, cm_, cn_, true>(ot, m, n, k, transA, transB,         \
+                decouple_sf_load);                                                  \
         }
 #define DISPATCH_COOP_K32(cm_, cn_, ElemA, ElemB, ElemSF)                          \
         if (cfg.cm == cm_ && cfg.cn == cn_) {                                       \
           rc = run_gemm_config<ElemA, ElemB, ElemSF,                                \
                 32, BlockScaleTypeMap<ElemSF, 32>::value,                            \
-                128, 256, 512, cm_, cn_, true>(ot, m, n, k, transA, transB);        \
+                128, 256, 512, cm_, cn_, true>(ot, m, n, k, transA, transB,         \
+                decouple_sf_load);                                                  \
         }
 
         if (it == "NVFP4") {
@@ -350,7 +353,8 @@ int run_all_configs(int m, int n, int k, char transA, char transB, bool coop_sf)
         if (cfg.cm == cm_ && cfg.cn == cn_) {                                       \
           rc = run_gemm_config<ElemA, ElemB, ElemSF,                                \
                 svs, BlockScaleTypeMap<ElemSF, svs>::value,                          \
-                128, 256, 256, cm_, cn_, false>(ot, m, n, k, transA, transB);          \
+                128, 256, 256, cm_, cn_, false>(ot, m, n, k, transA, transB,         \
+                decouple_sf_load);                                                   \
         }
 
         if (it == "NVFP4") {
@@ -400,19 +404,20 @@ int run_all_configs(int m, int n, int k, char transA, char transB, bool coop_sf)
 void print_usage(const char* prog) {
   std::cout << "Usage: " << prog
             << " [M] [N] [K] [transA] [transB] [input_type] [coop_sf]"
-            << " [SFVecSize] [output_type] [cluster_m] [cluster_n]\n"
+            << " [SFVecSize] [output_type] [cluster_m] [cluster_n] [decouple_sf_load]\n"
             << "\n"
-            << "  M, N, K       : Problem dimensions (default: 512 1024 2048)\n"
+            << "  M, N, K       : Problem dimensions (default: 512 512 2048)\n"
             << "  transA/transB : Transpose flags, 'T' or 'N' (default: T N)\n"
             << "  input_type    : NVFP4, NVFP4+, MXFP4, MXFP8, ALL (default: NVFP4)\n"
             << "                  ALL runs all valid combos in a single process\n"
             << "                  (remaining args except coop_sf ignored when ALL)\n"
-            << "  coop_sf       : Cooperative SF loading, 0=disabled 1=enabled (default: 0)\n"
+            << "  coop_sf       : Cooperative SF loading, 0=disabled 1=enabled (default: 1)\n"
             << "                  coop_sf=1 NOT supported for MXFP8 (max atom K=256)\n"
             << "  SFVecSize     : Scale factor block size, 16 or 32 (default: 16)\n"
             << "  output_type   : FP32, FP16, BF16 (default: FP32)\n"
             << "  cluster_m     : Cluster size along M, 1 or 2 (default: 2)\n"
             << "  cluster_n     : Cluster size along N, 1 or 2 (default: 2)\n"
+            << "  decouple_sf_load : Whether to decouple scale factor load from data load (default: 1)\n"
             << "\n"
             << "  TileK selection (automatic based on coop_sf and SFVecSize):\n"
             << "    Non-cooperative (default): TileK=256 for all VS (padding handles cm_8x32B)\n"
@@ -426,19 +431,19 @@ void print_usage(const char* prog) {
             << "\n"
             << "Examples:\n"
             << "  # Single config: NVFP4+ with SFVecSize=16, FP16 output, cluster <2,1,1>\n"
-            << "  " << prog << " 512 512 512 T N NVFP4+ 0 16 FP16 2 1\n"
+            << "  " << prog << " 512 512 2048 T N NVFP4+ 0 16 FP16 2 1 1\n"
             << "\n"
             << "  # Single config: MXFP4 with SFVecSize=32, FP32 output, cluster <2,2,1>\n"
-            << "  " << prog << " 512 512 512 T N MXFP4 0 32 FP32 2 2\n"
+            << "  " << prog << " 512 512 2048 T N MXFP4 0 32 FP32 2 2 0\n"
             << "\n"
             << "  # Single config with cooperative SF: NVFP4 cluster <1,2,1>\n"
-            << "  " << prog << " 512 512 512 T N NVFP4 1 16 FP32 1 2\n"
+            << "  " << prog << " 512 512 2048 T N NVFP4 1 16 FP32 1 2 1\n"
             << "\n"
             << "  # Run ALL configs non-cooperative (keeps simulator alive):\n"
-            << "  " << prog << " 512 512 512 T N ALL\n"
+            << "  " << prog << " 512 512 2048 T N ALL 0 16 FP32 2 2 1\n"
             << "\n"
             << "  # Run ALL configs with cooperative SF (MXFP8 auto-skipped):\n"
-            << "  " << prog << " 512 512 512 T N ALL 1\n"
+            << "  " << prog << " 512 512 2048 T N ALL 1 16 FP32 2 2 0\n"
             << std::endl;
 }
 
@@ -446,9 +451,21 @@ void print_usage(const char* prog) {
 
 int main(int argc, char** argv)
 {
-  // ---- Parse command-line arguments ----
-
+  // ---- Set default values ----
   int m = 512;
+  int n = 512;
+  int k = 2048;
+  char transA = 'T';
+  char transB = 'N';
+  std::string input_type = "NVFP4";
+  int coop_sf = 1;
+  int SFVecSize = 16;
+  std::string output_type = "FP32";
+  int cluster_m = 2;
+  int cluster_n = 2;
+  bool decouple_sf_load = true;
+
+  // ---- Parse command-line arguments ----
   if (argc >= 2) {
     if (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help") {
       print_usage(argv[0]);
@@ -456,18 +473,17 @@ int main(int argc, char** argv)
     }
     sscanf(argv[1], "%d", &m);
   }
-  int n = 512;
   if (argc >= 3) sscanf(argv[2], "%d", &n);
-  int k = 512;
   if (argc >= 4) sscanf(argv[3], "%d", &k);
-
-  char transA = 'T';
   if (argc >= 5) sscanf(argv[4], "%c", &transA);
-  char transB = 'N';
   if (argc >= 6) sscanf(argv[5], "%c", &transB);
-
-  std::string input_type = "NVFP4";
   if (argc >= 7) input_type = argv[6];
+  if (argc >= 8) sscanf(argv[7], "%d", &coop_sf);
+  if (argc >= 9) sscanf(argv[8], "%d", &SFVecSize);
+  if (argc >= 10) output_type = argv[9];
+  if (argc >= 11) sscanf(argv[10], "%d", &cluster_m);
+  if (argc >= 12) sscanf(argv[11], "%d", &cluster_n);
+  if (argc >= 13) decouple_sf_load = (std::string(argv[12]) != "0");
 
   // ---- Validate input datatype: must be NVFP4, NVFP4+, MXFP4, MXFP8, or ALL ----
   if (input_type != "NVFP4"  && input_type != "NVFP4+" && input_type != "MXFP4" && input_type != "MXFP8" && input_type != "ALL") {
@@ -476,9 +492,6 @@ int main(int argc, char** argv)
     print_usage(argv[0]);
     return 1;
   }
-
-  int coop_sf = 0;
-  if (argc >= 8) sscanf(argv[7], "%d", &coop_sf);
 
   // ---- Validate coop_sf: must be 0 or 1 ----
   if (coop_sf != 0 && coop_sf != 1) {
@@ -490,19 +503,10 @@ int main(int argc, char** argv)
   // ---- ALL mode: run all valid configs in a single process ----
   // When ALL is specified, remaining args (SFVecSize, output_type, cluster shape) are ignored.
   if (input_type == "ALL") {
-    return run_all_configs(m, n, k, transA, transB, coop_sf != 0);
+    std::cout << "=== Block-Scaled GEMM with all Cluster Configurations ===" << std::endl;
+    std::cout << "  Load SF all stages at once: " << (decouple_sf_load ? "Yes" : "No") << std::endl;
+    return run_all_configs(m, n, k, transA, transB, coop_sf != 0, decouple_sf_load);
   }
-
-  int SFVecSize = 16;
-  if (argc >= 9) sscanf(argv[8], "%d", &SFVecSize);
-
-  std::string output_type = "FP32";
-  if (argc >= 10) output_type = argv[9];
-
-  int cluster_m = 2;
-  if (argc >= 11) sscanf(argv[10], "%d", &cluster_m);
-  int cluster_n = 2;
-  if (argc >= 12) sscanf(argv[11], "%d", &cluster_n);
 
   // ---- Validate SFVecSize: must be 16 or 32 ----
   if (SFVecSize != 16 && SFVecSize != 32) {
@@ -553,6 +557,7 @@ int main(int argc, char** argv)
   std::cout << "  SFVecSize     : " << SFVecSize << std::endl;
   std::cout << "  Cluster shape : <" << cluster_m << ", " << cluster_n << ", 1>" << std::endl;
   std::cout << "  Coop SF load  : " << (coop_sf ? "enabled" : "disabled") << std::endl;
+  std::cout << "  Load SF all stages at once: " << (decouple_sf_load ? "Yes" : "No") << std::endl;
   std::cout << "====================================================" << std::endl;
 
   using namespace cutlass;
@@ -575,20 +580,20 @@ int main(int argc, char** argv)
       if (coop_sf)                                                                    \
         return run_gemm_config<ElementA, ElementB, ElementSF,                         \
           16, BlockScaleTypeMap<ElementSF, 16>::value, 128, 256, 256, cm, cn, true>(  \
-            output_type, m, n, k, transA, transB);                                    \
+            output_type, m, n, k, transA, transB, decouple_sf_load);                  \
       else                                                                            \
         return run_gemm_config<ElementA, ElementB, ElementSF,                         \
-          16, BlockScaleTypeMap<ElementSF, 16>::value, 128, 256, 128, cm, cn, false>(  \
-            output_type, m, n, k, transA, transB);                                    \
+          16, BlockScaleTypeMap<ElementSF, 16>::value, 128, 256, 128, cm, cn, false>( \
+            output_type, m, n, k, transA, transB, decouple_sf_load);                  \
     } else {                                                                          \
       if (coop_sf)                                                                    \
         return run_gemm_config<ElementA, ElementB, ElementSF,                         \
           32, BlockScaleTypeMap<ElementSF, 32>::value, 128, 256, 512, cm, cn, true>(  \
-            output_type, m, n, k, transA, transB);                                    \
+            output_type, m, n, k, transA, transB, decouple_sf_load);                  \
       else                                                                            \
         return run_gemm_config<ElementA, ElementB, ElementSF,                         \
-          32, BlockScaleTypeMap<ElementSF, 32>::value, 128, 256, 256, cm, cn, false>(  \
-            output_type, m, n, k, transA, transB);                                    \
+          32, BlockScaleTypeMap<ElementSF, 32>::value, 128, 256, 256, cm, cn, false>( \
+            output_type, m, n, k, transA, transB, decouple_sf_load);                  \
     }                                                                                 \
   }
 
