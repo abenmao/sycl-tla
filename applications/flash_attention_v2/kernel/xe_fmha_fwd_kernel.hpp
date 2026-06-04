@@ -95,6 +95,7 @@ public:
 
   using FragA = typename CollectiveMainloop::FragA;
   using FragARow = typename CollectiveMainloop::FragARow;
+  using FragSPartialRow = typename CollectiveMainloop::FragSPartialRow;
 
   // Tile scheduler derived types
   using TileScheduler = TileScheduler_;
@@ -314,7 +315,8 @@ public:
 
       // O accumulator types
       FragA tArA;
-      FragARow tA_max, tA_sum;
+      FragARow tA_max;
+      FragSPartialRow tA_sum;
 
       // Main loop
       CollectiveMainloop mainloop(params.mainloop, shared_storage.mainloop);
@@ -424,6 +426,7 @@ public:
   using FragA = typename CollectiveMainloop::FragA;
   using SingleFragA = typename CollectiveMainloop::SingleFragA;
   using FragARow = typename CollectiveMainloop::FragARow;
+  using FragSPartialRow = typename CollectiveMainloop::FragSPartialRow;
   // element dtype for MmaPV results
   using ElementA = typename CollectiveMainloop::ElementA;
 
@@ -663,6 +666,7 @@ public:
       // O accumulator types
       FragA tArA;
       FragARow tA_max, tA_sum;
+      FragSPartialRow tA_sum_partial;
 
       // compute num computed blocks for start batch head id
       int num_computed_blocks = (start_batch_head_id == 0) ? (wg_id * num_blocks_per_wg) : (wg_id * num_blocks_per_wg - start_batch_head_id * local_k_blocks);
@@ -715,9 +719,11 @@ public:
         mainloop(Q(_,_,head_q,idx_b),
               K(_,_,head_kv,idx_b),
               V(_,_,head_kv,idx_b),
-              tArA, tA_max, tA_sum,
+              tArA, tA_max, tA_sum_partial,
               blk_qv, start_blk, end_blk, local_k_blocks,
               thr_id, s.seq_len_kv, 0, 0, 0, 0);
+
+        tA_sum = reduce<0, cute::ReduceMode::Horizontal>(tA_sum_partial, sycl::plus<void>{});
 
         // partition id of start batch head id in current wg
         int partition_id = get_partition_id(wg_id, batch_head_id, num_blocks_per_wg, local_k_blocks);
@@ -820,7 +826,7 @@ public:
 
         // Epilogue
         CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
-        epilogue(O(_,_,head_q,idx_b),
+        epilogue.template operator()<true>(O(_,_,head_q,idx_b),
                 tArA, tA_max, tA_sum,
                 blk_qv, thr_id);
       }

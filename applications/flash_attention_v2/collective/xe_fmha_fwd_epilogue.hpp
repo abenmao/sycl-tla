@@ -135,21 +135,27 @@ public:
   CUTLASS_HOST_DEVICE
   FMHAFwdEpilogue(Params const&, SharedStorage& shared_) : shared(shared_) {}
 
-  template <typename QVCoord>
+  template <bool SumIsReduced = false, typename QVCoord, typename FragSPRow>
   CUTLASS_DEVICE
   void
   operator()(TensorO2D const& O,        // Global O tensor: (q,v)
              FragA          & tArA,     // O accumulator:   (q,v)
              FragARow       & tA_max,   // Softmax row-wise max accumulator
-             FragARow       & tA_sum,   // Softmax row-wise sum accumulator
+             FragSPRow      & tA_sum,   // Softmax row-wise partial sum (per-lane, deferred hreduce)
              QVCoord          blk_qv,   // WG tile indices: (q,v)
              int              thr_id) { // Work-item ID
 
     using namespace cute;
     using ElementA = typename FragA::element_type;
+    auto tA_sum_full = [&]() -> decltype(auto) {
+      if constexpr (SumIsReduced)
+        return (tA_sum);
+      else
+        return reduce<0, ReduceMode::Horizontal>(tA_sum, sycl::plus<void>{});
+    }();
 
     // Reduce k-blocks of A and A_sum across WG, if needed.
-    auto [rA, rA_sum, active] = reduce_A(tArA, tA_max, tA_sum, thr_id);
+    auto [rA, rA_sum, active] = reduce_A(tArA, tA_max, tA_sum_full, thr_id);
 
     /* Some subgroups may not have any work to do; if so, quit early. */
     if (!active) return;
@@ -158,10 +164,6 @@ public:
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < rA_sum.size(); i++)
       rA_sum(i) = ElementA(1) / rA_sum(i);
-
-    CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < rA.size(); i++)
-      rA(i) *= broadcast<0>(rA_sum, rA, i);
 
     /* Tile output */
     Tensor cO = make_identity_tensor(O.shape());          // (q,v)
@@ -174,20 +176,22 @@ public:
     auto tOrO = thr_copy_o.partition_sg_fragment_S(gO);
     auto tOgO = thr_copy_o.partition_D(gO);
 
-    /* Reorder tile and write out */
-    reorder(rA, tOrO);
+    /* Fused rescale + reorder*/
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < rA.size(); i++)
+      tOrO(i) = rA(i) * broadcast<0>(rA_sum, rA, i);
     copy(copy_o, tOrO, tOgO);
   }
 
   // Reduce k-blocks of A and A_sum across WG, if needed.
   // Note that each k block has its own scale factor based on A_max,
   //   so A/A_sum contributions need to be rescaled to match.
-  template <typename FragA, typename FragARow>
+  template <typename FragA, typename FragARow, typename FragSPRow>
   CUTLASS_DEVICE
   decltype(auto)
   reduce_A(FragA        & tArA,     // O accumulator:   (q,v)
            FragARow     & tA_max,   // Softmax row-wise max accumulator
-           FragARow     & tA_sum,   // Softmax row-wise sum accumulator
+           FragSPRow    & tA_sum,   // Softmax row-wise partial sum (per-lane)
            int            thr_id) { // Work-item ID
 
     using namespace sycl::ext::oneapi::this_work_item;

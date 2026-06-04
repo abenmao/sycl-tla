@@ -218,6 +218,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
 
   using FragS = FragC<TiledMMAQK>;
   using FragSRow = decltype(reduce<1>(FragS{}, sycl::plus<void>{}));
+  using FragSPartialRow = decltype(reduce<1, ReduceMode::Vertical>(FragS{}, sycl::plus<void>{}));
   using ElementS = typename TiledMMAQK::ValTypeD;
 
   using SingleFragA = FragC<TiledMMAPV>;                          // (atom val,q',v')
@@ -322,7 +323,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
              TensorV2D const& V_2D,     // (d,k)
              FragA          & tArA,     // Output accumulator (q,v)
              FragARow       & tA_max,   // Softmax row-wise max accumulator
-             FragARow       & tA_sum,   // Softmax row-wise sum accumulator
+             FragSPartialRow & tA_sum,   // Softmax row-wise sum accumulator
              QVCoord          blk_qv,   // WG tile indices: (Q,V)
              int              blk_k0,   // K block range: [K0,K1)
              int              blk_k1,
@@ -674,9 +675,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
           }
         }
       }
-
+      auto [rescale, tS_partial_sum] = softmax(tSrS, tA_max, tA_sum);
+      auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+      constexpr int kSumSize = decltype(tA_sum.size())::value;
+      constexpr bool kSumDivVT = (kSumSize % VTiles == 0);
+      constexpr int kSumPerVT = kSumDivVT ? (kSumSize / VTiles) : 0;
       /* Apply softmax and scaling (tA rescaling fused into GEMM2 VTile loop) */
-      auto rescale = softmax(K == blk_k0, tSrS, tA_max, tA_sum);
       using ElementP = typename TiledMMAPV::ValTypeA;
       if constexpr (std::is_same_v<ElementP, bfloat16_t>) {
         static_assert(decltype(tArP.size())::value % 2 == 0,
@@ -703,9 +707,18 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       for (int VV = 0; VV < VTiles; VV++) {
         copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
         reorder(tVrV, tArV);
+
         CUTLASS_PRAGMA_UNROLL
         for (int i = tArA.size() / VTiles - 1; i >= 0; i--)
           tArA(_,_,_,VV)(i) *= broadcast<0>(rescale, tArA, i);
+        
+        if constexpr (kSumDivVT) {
+          CUTLASS_PRAGMA_UNROLL
+          for (int j = 0; j < kSumPerVT; j++) {
+            int const i = VV * kSumPerVT + j;
+            tA_sum(i) = tA_sum(i) * group_broadcast(sg, rescale(0), i) + tS_partial_sum(i);
+          }
+        }
         if constexpr (UseScale && !FP4Input) {
           const int v_coord = get<1>(blk_qv) * VTiles * BLK_V + VV * BLK_V + (subgroup_id % ATOM_V) * SG_V;
           auto& tiled_copy_scaleP = get<0>(get<0>(scale_context_pv));
@@ -796,46 +809,47 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
 
   // Single step of blocked softmax.
   CUTLASS_DEVICE
-  FragSRow
-  softmax(bool       first_block, // First softmax block?
-          FragS    & tS,          // Softmax src/dst block
-          FragSRow & tS_max,      // Softmax row-wise max accumulator
-          FragSRow & tS_sum) {    // Softmax row-wise sum accumulator
+  auto
+  softmax(FragS          & tS,        // Softmax src/dst block
+          FragARow       & tA_max,    // Softmax row-wise max accumulator
+          FragSPartialRow& tA_sum) {  // Softmax row-wise partial sum (per-lane)
     /* Compute row-wise maxima for this block */
-    auto tS_bmax = reduce<1>(tS, sycl::maximum{});
+    auto tS_bmax = reduce<1, ReduceMode::Full, /*EnableFast64Rows=*/!CausalMask>(tS, sycl::maximum<void>{});
 
-    FragSRow rescale;
+    FragARow rescale;
     CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < tS_max.size(); i++) {
-      ElementS new_max = sycl::max(tS_max(i), params.scale * tS_bmax(i));
-      rescale(i) = sycl::native::exp2(tS_max(i) - new_max);
-      tS_max(i) = new_max;
+    for (int i = 0; i < tA_max.size(); i++) {
+      ElementS new_max = sycl::max(tA_max(i), params.scale * tS_bmax(i));
+      rescale(i) = sycl::native::exp2(tA_max(i) - new_max);
+      tA_max(i) = new_max;
     }
 
     /* Scale S and subtract maxima, then exponentiate */
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < tS.size(); i++)
-      tS(i) = params.scale * tS(i) - broadcast<0>(tS_max, tS, i);
+      tS(i) = params.scale * tS(i) - broadcast<0>(tA_max, tS, i);
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < tS.size(); i++)
       tS(i) = sycl::native::exp2(tS(i));
 
-    /* Rescale existing S sums */
-    if (!first_block) {
+    /* Per-lane vertical partial sum (deferred horizontal reduction) */
+    auto tS_partial_sum = reduce<1, ReduceMode::Vertical>(tS, sycl::plus<void>{});
+
+    constexpr int kSumSize = decltype(tA_sum.size())::value;
+    constexpr bool kSumDivVT = (kSumSize % VTiles == 0);
+
+    // When tA_sum.size() does not divide VTiles (e.g. decode with q=1),
+    // rescale + accumulate sums once here instead of fusing per VTile.
+    if constexpr (!kSumDivVT) {
+      auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
       CUTLASS_PRAGMA_UNROLL
-      for (int i = 0; i < tS_sum.size(); i++) {
-        tS_sum(i) *= rescale(i);
+      for (int i = 0; i < kSumSize; i++) {
+        tA_sum(i) = tA_sum(i) * group_broadcast(sg, rescale(0), i) + tS_partial_sum(i);
       }
     }
 
-    /* Update sums */
-    auto tS_bsum = reduce<1>(tS, sycl::plus<void>{});
-    CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < tS_sum.size(); i++)
-      tS_sum(i) += tS_bsum(i);
-
-    return rescale;
+    return cute::make_tuple(rescale, tS_partial_sum);
   }
 };
 
