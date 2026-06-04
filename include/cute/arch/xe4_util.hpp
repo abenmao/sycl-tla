@@ -245,6 +245,21 @@ constexpr cm_size_t get_core_matrix_size() {
   }
 }
 
+// Runtime overload of get_core_matrix_size (accepts elem_bits and desc_type at runtime).
+inline constexpr cm_size_t get_core_matrix_size(int elem_bits, int desc_type) {
+  if (desc_type == 0) { // Type1
+    return cm_size_t::cm_32x32B;
+  }
+  if (desc_type == 1) { // Type2
+    if (elem_bits <= 8)  return cm_size_t::cm_32x32B;
+    if (elem_bits == 16) return cm_size_t::cm_16x64B;
+    if (elem_bits == 32) return cm_size_t::cm_8x128B;
+    return cm_size_t::cm_4x256B; // 64-bit
+  }
+  // Type3
+  return cm_size_t::cm_8x32B;
+}
+
 template <typename T>
 constexpr data_type get_dtype() {
   if constexpr (std::is_same<std::remove_cv_t<T>, uint8_t>::value) {

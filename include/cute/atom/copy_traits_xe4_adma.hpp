@@ -4,12 +4,15 @@
 
 #include <cute/arch/mma_xe4_desc.hpp>
 #include <cute/arch/copy_xe4_adma.hpp>
+#include <cute/arch/xe4_util.hpp>
 #include <cute/atom/copy_traits.hpp>
 #include <cute/atom/copy_atom.hpp>
 
 #include <cute/atom/copy_traits_xe4_tma.hpp>
 
 #include <cute/layout.hpp>
+#include <stdexcept>
+#include <cstdio>
 
 namespace cute {
 
@@ -1610,6 +1613,57 @@ struct Copy_Traits<XE4_ADMA_STORE_REDUCE_OP<T, Rop, BType>, T, NumBitsPerADMA>
 
 namespace detail {
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Validate that ADMA box dimensions after cluster truncation still meet
+// Core Matrix alignment requirements. Only checks data descriptors (Type1/Type2);
+// SF Type3 is handled via SMEM padding at the layout level.
+template <class InternalType>
+CUTE_HOST_RTC
+void validate_cm_alignment_after_truncation(
+    const cute::array<uint16_t, 5>& smem_box_shape,
+    uint32_t matrix_desc,
+    uint32_t num_multicast)
+{
+  constexpr int elem_bits = cutlass::sizeof_bits<InternalType>::value;
+  int desc_type = (matrix_desc >> 28) & 0x3;
+  if (desc_type == MatrixDescriptor::Type3) return;
+
+  cm_size_t cm = get_core_matrix_size(elem_bits, desc_type);
+  int y_min = 0, x_min_bytes = 0;
+  switch (cm) {
+    case cm_size_t::cm_32x32B: y_min = 32; x_min_bytes = 32; break;
+    case cm_size_t::cm_16x64B: y_min = 16; x_min_bytes = 64; break;
+    case cm_size_t::cm_8x128B: y_min = 8;  x_min_bytes = 128; break;
+    case cm_size_t::cm_4x256B: y_min = 4;  x_min_bytes = 256; break;
+    default: break;
+  }
+  // For 6-bit elements, width_bytes*8/6 = 42 which is wrong because 6 doesn't
+  // divide evenly into a byte. HW spec says D6 aligns same as D8 (32 elements)
+  // since 6-bit elements are byte-padded in the core matrix.
+  int x_min = x_min_bytes * 8 / ((elem_bits == 6) ? 8 : elem_bits);
+  const char* type_name = (desc_type == 0) ? "Type1" : (desc_type == 1) ? "Type2" : "Type3";
+
+  if (smem_box_shape[0] < static_cast<uint16_t>(x_min)) {
+    fprintf(stderr, "ERROR: ADMA box X-dimension (dim0=%u) after cluster truncation "
+            "violates Core Matrix alignment (min=%d, elem_bits=%d, desc_type=%d(%s), "
+            "num_multicast=%u)\n",
+            static_cast<unsigned int>(smem_box_shape[0]), x_min, elem_bits, desc_type, type_name, num_multicast);
+    throw std::runtime_error("ADMA box X-dimension after cluster truncation "
+                             "violates Core Matrix alignment");
+  }
+  if (smem_box_shape[1] < static_cast<uint16_t>(y_min)) {
+    fprintf(stderr, "ERROR: ADMA box Y-dimension (dim1=%u) after cluster truncation "
+            "violates Core Matrix alignment (min=%d, elem_bits=%d, desc_type=%d(%s), "
+            "num_multicast=%u)\n",
+            static_cast<unsigned int>(smem_box_shape[1]), y_min, elem_bits, desc_type, type_name, num_multicast);
+    throw std::runtime_error("ADMA box Y-dimension after cluster truncation "
+                             "violates Core Matrix alignment");
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
 // Use a sidx2gmode to read through the GMEM tensor
 //   and construct a TMA Descriptor for the resulting instruction
 // At the same time, construct the Tma Tensor's Stride to generate
@@ -1700,6 +1754,11 @@ make_adma_copy_desc(
     uint32_t new_mult = ceil_div(multicast, smem_box_shape[i]);
     smem_box_shape[i] = ceil_div(smem_box_shape[i], multicast);
     multicast = new_mult;
+  }
+
+  // Validate Core Matrix alignment after cluster truncation (A/B data only, skip SF Type3 as its handled by padding).
+  if (num_multicast > 1) {
+    validate_cm_alignment_after_truncation<InternalType>(smem_box_shape, matrix_desc, num_multicast);
   }
 
 #if 0
