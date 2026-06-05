@@ -1,4 +1,3 @@
-# Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
 # Copyright (C) 2025 - 2026 Intel Corporation, All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 #
@@ -27,5 +26,9 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-add_subdirectory(legacy)
-add_subdirectory(decode_dynamic_split)
+set(CUTLASS_APPLICATIONS_DIR ${CUTLASS_DIR}/applications)
+
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_flash_attention_decode_dynamic_split_xe
+  xe_fmha_fwd_max_num_partitions.cpp
+)

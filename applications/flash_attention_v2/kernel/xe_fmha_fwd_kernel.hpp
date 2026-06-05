@@ -394,6 +394,14 @@ public:
   }
 };
 
+// Compute the maximum number of partitions (WGs) that can contribute to a single
+// batch_head. This depends on sm_count and num_batch_heads at runtime.
+// Free function (template-independent) so it can be unit-tested without
+// instantiating the full kernel type.
+inline int compute_max_num_partitions(int sm_count, int num_batch_heads) {
+  return cute::ceil_div(sm_count, cute::max(1, num_batch_heads)) + 1;
+}
+
 template <class ProblemShape_, class CollectiveMainloop_, class CollectiveEpilogue_, class TileScheduler_>
 class XeFMHAFwdDynamicSplitKernel {
 
@@ -460,7 +468,6 @@ public:
   // Important: make sure multiple of 16 element for each copy
   // this is for storing partial results from different KV partitions
   static constexpr int num_elem_per_thread = (size(FragA{}.shape()) + 2 * size(FragARow{}.shape()) + 15) / 16 * 16;
-  static const int max_num_partitions = 8;
 
   // Device side arguments
   struct KernelArguments {
@@ -497,6 +504,8 @@ public:
     ElementA *partial_results_ptr = nullptr;
     // for atomic add
     int32_t *atomic_reduce_cnt_ptr = nullptr;
+    // max partitions per batch_head (computed from sm_count)
+    int max_num_partitions = 0;
   };
 
   //
@@ -505,13 +514,14 @@ public:
 
   static Params to_underlying_arguments(Arguments const &args, void *workspace) {
     int num_batch_heads = args.kernel.shape.batch * args.kernel.shape.num_heads_q;
+    int max_parts = compute_max_num_partitions(args.hw_info.sm_count, num_batch_heads);
     int32_t *atomic_reduce_cnt_ptr = reinterpret_cast<int32_t *>(workspace);
     ElementA *partial_results_ptr = reinterpret_cast<ElementA *>(atomic_reduce_cnt_ptr + num_batch_heads);
     return {args.kernel,
             CollectiveMainloop::to_underlying_arguments(args.mainloop, workspace),
             CollectiveEpilogue::to_underlying_arguments(args.epilogue, workspace),
             TileScheduler::to_underlying_arguments(args.kernel.shape, args.hw_info, TileShapeO{}),
-            partial_results_ptr, atomic_reduce_cnt_ptr
+            partial_results_ptr, atomic_reduce_cnt_ptr, max_parts
           };
   }
 
@@ -531,10 +541,11 @@ public:
   static int get_workspace_size(Arguments const &args) {
     int ws_size = 0;
     int num_batch_heads = args.kernel.shape.batch * args.kernel.shape.num_heads_q;
+    int max_parts = compute_max_num_partitions(args.hw_info.sm_count, num_batch_heads);
     const int wg_size = SGPerWG::value * intel::sg_size;
 
     // partial attn outputs, exp sum and max logits
-    ws_size += (max_num_partitions * num_batch_heads) * wg_size * num_elem_per_thread * sizeof(ElementA);
+    ws_size += (max_parts * num_batch_heads) * wg_size * num_elem_per_thread * sizeof(ElementA);
     // atomic counter
     ws_size += num_batch_heads * sizeof(int32_t);
     return ws_size;
@@ -729,7 +740,7 @@ public:
         int partition_id = get_partition_id(wg_id, batch_head_id, num_blocks_per_wg, local_k_blocks);
 
         // store partial result: tArA, tA_max and tA_sum
-        int offset = batch_head_id * max_num_partitions * num_elem_per_thread * SGPerWG::value * intel::sg_size
+        int offset = batch_head_id * params.max_num_partitions * num_elem_per_thread * SGPerWG::value * intel::sg_size
                     + partition_id * num_elem_per_thread * SGPerWG::value * intel::sg_size
                     + sg_id * intel::sg_size * num_elem_per_thread
                     + tid_in_sg * num_elem_per_thread;
@@ -776,7 +787,7 @@ public:
         clear(tA_sum);
 
         for (int i = 0; i < num_partitions; ++i) {
-          int offset = wg_id * max_num_partitions * SGPerWG::value * intel::sg_size * num_elem_per_thread
+          int offset = wg_id * params.max_num_partitions * SGPerWG::value * intel::sg_size * num_elem_per_thread
                      + i * SGPerWG::value * intel::sg_size * num_elem_per_thread
                      + sg_id * intel::sg_size * num_elem_per_thread
                      + tid_in_sg * num_elem_per_thread;
