@@ -30,7 +30,7 @@
  **************************************************************************************************/
 
 #pragma once
-
+#include <array>
 #include <type_traits>
 
 #include "cutlass/cutlass.h"
@@ -367,7 +367,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
     Tensor gK       = local_tile(cK, TileShapeQK{}, make_coord(_,_,_),            Step<X,_1,_1>{});   // (k,d,K,D)
     Tensor gV       = local_tile(cV, tile_shape_v,  make_coord(get<1>(blk_qv),_));                    // (v,k,K)
     Tensor gV_split = local_tile(gV, TileShapePV{}, make_coord(_,_,0),            Step<X,_1,_1>{});   // (v,k,VV,K)
-
+    
+    auto tile_shape_k = make_shape(get<1>(TileShapeQK{}), get<2>(TileShapeQK{}) * C<DTiles>{});
+    Tensor gK_prefetch = local_tile(cK, tile_shape_k, make_coord(_,0));                                  // (k,d,K)
     Tensor gK_cache       = local_tile(cK_cache, TileShapeQK{}, make_coord(_,_,_),            Step<X,_1,_1>{});   // (k,d,K,D)
     Tensor gV_cache       = local_tile(cV_cache, tile_shape_v,  make_coord(get<1>(blk_qv),_));                    // (v,k,K)
     Tensor gV_cache_split = local_tile(gV_cache, TileShapePV{}, make_coord(_,_,0),            Step<X,_1,_1>{});   // (v,k,VV,K)
@@ -414,16 +416,14 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
     auto tArV = thr_mma_pv.partition_sg_fragment_B(gV_split(_,_,0,0));
 
     /* Create TiledCopy objects for prefetches */
-    auto prefetch_q = make_block_2d_prefetch(copy_q);
-    auto prefetch_k = make_block_2d_prefetch(copy_k);
-    auto prefetch_v = make_block_2d_prefetch(copy_v);
+    auto prefetch_k = make_block_2d_prefetch<SGPerWG{}>(tile_shape_k, K_2D);
+    auto prefetch_v = make_block_2d_prefetch<SGPerWG{}>(tile_shape_v, V_2D);
     auto prefetch_k_cache = make_block_2d_prefetch(copy_k_cache);
     auto prefetch_v_cache = make_block_2d_prefetch(copy_v_cache);
 
     /* Partition global tensors for prefetch */
-    auto pQgQ = prefetch_q.get_slice(thr_id).partition_S(gQ);
-    auto pKgK = prefetch_k.get_slice(thr_id).partition_S(gK);
-    auto pVgV = prefetch_v.get_slice(thr_id).partition_S(gV_split);
+    auto pKgK = prefetch_k.get_slice(thr_id).partition_S(gK_prefetch);
+    auto pVgV = prefetch_v.get_slice(thr_id).partition_S(gV);
     auto pKgK_cache = prefetch_k_cache.get_slice(thr_id).partition_S(gK_cache);
     auto pVgV_cache = prefetch_v_cache.get_slice(thr_id).partition_S(gV_cache_split);
     const auto subgroup_id = thr_id / intel::sg_size;
@@ -479,7 +479,13 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
 
     /* Initialization steps for first block: Q/K prefetch, O init */
     /* TODO: limit D prefetch for large head size, and reorder K prefetches */
+    using PreparedK_t = decltype(prepare_payloads(copy_k, tKgK(_,_,_,0,0), tKrK));
+    using PreparedV_t = decltype(prepare_payloads(copy_v, tVgV(_,_,_,0,0), tVrV));
+    std::array<PreparedK_t, DTiles> prepared_k;
+    std::array<PreparedV_t, VTiles> prepared_v;
+
     int kblocks_cache = ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{}));
+
     /* Preload + reorder Q once; reused across all K iterations. */
     CUTLASS_PRAGMA_UNROLL
     for (int d = 0; d < DTiles; d++) {
@@ -487,18 +493,58 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       reorder(tQrQ, tSrQ_arr[d]);
     }
 
-    for (int D = 0; D < size<4>(pKgK); D++) {
+    CUTLASS_PRAGMA_UNROLL
+    for (int d = 0; d < DTiles; d++) {
+      prepared_k[d] = prepare_payloads(copy_k, tKgK(_,_,_,0,d), tKrK);
+    }
+    CUTLASS_PRAGMA_UNROLL
+    for (int VV = 0; VV < VTiles; VV++) {
+      prepared_v[VV] = prepare_payloads(copy_v, tVgV(_,_,_,VV,0), tVrV);
+    }
+
+    auto prepared_pk  = prepare_payloads(prefetch_k, pKgK(_,_,_,0), pKgK(_,_,_,0));
+    auto prepared_pv  = prepare_payloads(prefetch_v, pVgV(_,_,_,0), pVgV(_,_,_,0));
+    constexpr int kv_stride = get<1>(TileShapeQK{});
+
+    const int k_start = (blk_k0 > kblocks_cache ? blk_k0 : kblocks_cache) - kblocks_cache;
+    if (k_start > 0) {
+      const int k_start_delta = k_start * kv_stride;
       CUTLASS_PRAGMA_UNROLL
-      for (int K = 0; K < Stages; K++) {
-        if (K < kblocks_cache) {
-          if constexpr (PagedKV) {
-            int physical_K_tile = get_physical_k_tile(K, l_coord, seq_len_kv_cache);
-            prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_tile,D));
-          } else {
-            prefetch(prefetch_k_cache, pKgK_cache(_,_,_,K,D));
+      for (int d = 0; d < DTiles; d++) {
+        update_payloads(prepared_k[d], k_start_delta);
+      }
+      CUTLASS_PRAGMA_UNROLL
+      for (int VV = 0; VV < VTiles; VV++) {
+        update_payloads(prepared_v[VV], k_start_delta);
+      }
+      update_payloads(prepared_pk, k_start_delta);
+      update_payloads(prepared_pv, k_start_delta);
+    }
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int K = 0; K < Stages; K++) {
+      prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
+      update_payloads(prepared_pk, kv_stride);
+    }
+    CUTLASS_PRAGMA_UNROLL
+    for (int K = 0; K < Stages; K++) {
+      prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
+      update_payloads(prepared_pv, kv_stride);
+    }
+
+    // Cache K prefetch init, still uses legacy API.
+    if constexpr (CachedKV) {
+      for (int D = 0; D < size<4>(pKgK_cache); D++) {
+        CUTLASS_PRAGMA_UNROLL
+        for (int K = 0; K < Stages; K++) {
+          if (K < kblocks_cache) {
+            if constexpr (PagedKV) {
+              int physical_K_tile = get_physical_k_tile(K, l_coord, seq_len_kv_cache);
+              prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_tile,D));
+            } else {
+              prefetch(prefetch_k_cache, pKgK_cache(_,_,_,K,D));
+            }
           }
-        } else {
-          prefetch(prefetch_k, pKgK(_,_,_,K - kblocks_cache,D));
         }
       }
     }
@@ -509,14 +555,14 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       auto& tiled_prefetch_scaleK = get<0>(get<3>(scale_context_qk));
       auto  prefetch_iter_scaleK = get<1>(get<3>(scale_context_qk));
       prefetch_iter_scaleQ.data().coord_ = {q_coord, 0, l_coord};
-      for (int D = 0; D < size<3>(pQgQ); D++) {
+      for (int D = 0; D < DTiles; D++) {
         prefetch(tiled_prefetch_scaleQ, prefetch_iter_scaleQ(_, _, _, D));
       }
 
       for (int K = 0; K < Stages; K++) {
         const int k_coord = K * BLK_K + (subgroup_id % ATOM_K)  * SG_K;
         prefetch_iter_scaleK.data().coord_ = {k_coord, 0, l_coord};
-        for (int D = 0; D < size<4>(pKgK); D++) {
+        for (int D = 0; D < DTiles; D++) {
           prefetch(tiled_prefetch_scaleK, prefetch_iter_scaleK(_, _, _, D));
         }
       }
@@ -548,11 +594,22 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
       } else {
         k_idx = K - kblocks_cache;
       }
-
+      // V prefetch for next iteration (non-cache only; cache prefetch lives below).
+      if constexpr (!is_cache) {
+        prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
+        update_payloads(prepared_pv, kv_stride);
+      }
       /* GEMM 1: S = K * Q */
       CUTLASS_PRAGMA_UNROLL
+
       for (int D = 0; D < DTiles; D++) {
-        copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
+        if constexpr (is_cache) {
+          copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
+        } else {
+          copy_with_multi_payloads(copy_k, prepared_k[D], tKrK);
+          update_payloads(prepared_k[D], kv_stride);
+        }
+
         reorder(tKrK, tSrK);
 
         if constexpr (UseScale) {
@@ -609,10 +666,15 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
         }
       }
 
-      /* V prefetch for GEMM 2 */
-      CUTLASS_PRAGMA_UNROLL
-      for (int VV = 0; VV < VTiles; VV++) {
-        prefetch(prefetch_v_cur, pVgV_cur(_,_,_,VV,k_idx));
+      /* K prefetch for next iteration */
+      if constexpr (is_cache) {
+        CUTLASS_PRAGMA_UNROLL
+        for (int VV = 0; VV < VTiles; VV++) {
+          prefetch(prefetch_v_cache, pVgV_cache(_,_,_,VV,k_idx));
+        }
+      } else {
+        prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
+        update_payloads(prepared_pk, kv_stride);
       }
       // Prefetch V scale
       if constexpr (UseScale) {
@@ -705,7 +767,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
         tArA rescaling is fused to per-VTile */
       CUTLASS_PRAGMA_UNROLL
       for (int VV = 0; VV < VTiles; VV++) {
-        copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
+        if constexpr (is_cache) {
+          copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
+        } else {
+          copy_with_multi_payloads(copy_v, prepared_v[VV], tVrV);
+          update_payloads(prepared_v[VV], kv_stride);
+        }
         reorder(tVrV, tArV);
 
         CUTLASS_PRAGMA_UNROLL
@@ -756,22 +823,15 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
 
       /* K prefetch */
       int K_next = K + Stages;
-      for (int D = 0; D < size<4>(pKgK); D++) {
-        if constexpr (is_cache) {
-          bool is_cache_next = K_next < kblocks_cache;
+      if constexpr (is_cache) {
+        if (K_next < kblocks_cache) {
           int physical_K_next = K_next;
           if constexpr (PagedKV) {
-            if (is_cache_next) {
-              physical_K_next = get_physical_k_tile(K_next, l_coord, seq_len_kv_cache);
-            }
+            physical_K_next = get_physical_k_tile(K_next, l_coord, seq_len_kv_cache);
           }
-          if (is_cache_next) {
+          for (int D = 0; D < size<4>(pKgK_cache); D++) {
             prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_next,D));
-          } else {
-            prefetch(prefetch_k, pKgK(_,_,_,K_next-kblocks_cache,D));
           }
-        } else {
-          prefetch(prefetch_k, pKgK(_,_,_,K_next-kblocks_cache,D));
         }
       }
       // Prefetch K scale
@@ -780,7 +840,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
         auto  prefetch_iter_scaleK = get<1>(get<3>(scale_context_qk));
         const int k_coord_next = (K_next-kblocks_cache) * BLK_K + (subgroup_id % ATOM_K) * SG_K;
         prefetch_iter_scaleK.data().coord_ = {k_coord_next, 0, l_coord};
-        for (int D = 0; D < size<4>(pKgK); D++) {
+        for (int D = 0; D < DTiles; D++) {
           prefetch(tiled_prefetch_scaleK, prefetch_iter_scaleK(_, _, _, D));
         }
       }
