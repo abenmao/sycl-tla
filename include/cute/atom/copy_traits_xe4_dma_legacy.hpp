@@ -140,6 +140,13 @@ struct Xe4DmaCache {
     tdesc_ptr_ = tensor_desc;
   }
 
+  CUTE_DEVICE void
+  update_gmem_details_and_params(GmemDetails gmem_details_new, AuxParams aux_params_new, GmemPtr gmem_ptr_new) const {
+    gmem_details_ = gmem_details_new;
+    aux_params_ = aux_params_new;
+    gmem_ptr_ = gmem_ptr_new;
+  }
+
   CUTE_HOST_DEVICE constexpr
   auto get_tensor_desc() const {
     return tdesc_ptr_;
@@ -158,9 +165,9 @@ struct Xe4DmaCache {
     return make_tuple(tdesc_ptr_, gmem_ptr_, static_cast<Args&&>(args)...);
   }
 
-  GmemDetails gmem_details_;
-  AuxParams aux_params_;
-  GmemPtr gmem_ptr_ {nullptr};
+  mutable GmemDetails gmem_details_;
+  mutable AuxParams aux_params_;
+  mutable GmemPtr gmem_ptr_ {nullptr};
   mutable TmaDescriptor tdesc_ptr_ { nullptr };
 };
 
@@ -173,6 +180,20 @@ struct Copy_Traits<Xe4CopyOp<CopyOperation>, NumBitsPerTMA, DmaCache>
   using RefLayout = SrcLayout;
 
   DmaCache cache_;
+
+  CUTE_DEVICE void
+  set_tensor_desc(TmaDescriptor tensor_desc) const {
+    cache_.set_tensor_desc(tensor_desc);
+  }
+
+  template <class GmemDetails, class AuxParams, class GmemPtr>
+  CUTE_DEVICE void
+  update_gmem_details_and_params(
+      GmemDetails const& gmem_details,
+      AuxParams const& aux_params,
+      GmemPtr gmem_ptr) const {
+    cache_.update_gmem_details_and_params(gmem_details, aux_params, gmem_ptr);
+  }
 
   template<class ABarrier>
   CUTE_HOST_DEVICE constexpr
@@ -238,8 +259,21 @@ struct Copy_Traits<Xe4CopyOp<xe4::ASYNC_TENSOR_LOAD_MULTICAST<cm_type, stride>>,
   using SrcLayout = Layout<Shape<_1, NumBitsPerTMA>>;
   using DstLayout = SrcLayout;
   using RefLayout = SrcLayout;
-
   DmaCache cache_;
+
+  CUTE_DEVICE void
+  set_tensor_desc(TmaDescriptor tensor_desc) const {
+    cache_.set_tensor_desc(tensor_desc);
+  }
+
+  template <class GmemDetails, class AuxParams, class GmemPtr>
+  CUTE_DEVICE void
+  update_gmem_details_and_params(
+      GmemDetails const& gmem_details,
+      AuxParams const& aux_params,
+      GmemPtr gmem_ptr) const {
+    cache_.update_gmem_details_and_params(gmem_details, aux_params, gmem_ptr);
+  }
 
   template<class ABarrier>
   CUTE_HOST_DEVICE constexpr

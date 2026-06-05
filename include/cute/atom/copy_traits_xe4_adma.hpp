@@ -1148,15 +1148,59 @@ struct Copy_Traits<XE4_ADMA_LOAD, T, NumBitsPerADMA, AuxParams_>
   // Reference map from (thr,val) to bit
   using RefLayout = SrcLayout;
 
-  TensorDescriptor<T> tensorDesc_;
+  mutable TensorDescriptor<T> tensorDesc_;
   using AuxParams = AuxParams_;
-  AuxParams aux_params_;
+  mutable AuxParams aux_params_;
   mutable uint64_t* tdesc_ptr_ { nullptr };
 
   CUTE_DEVICE void
   set_tensor_desc(uint64_t* tensor_desc) const {
     dupTensorPayload(tensor_desc, (uint64_t *)&tensorDesc_.payload);
     tdesc_ptr_ = tensor_desc;
+  }
+
+  CUTE_DEVICE void
+  update_gmem_details_and_params(TensorDescriptor<T> tensor_desc, AuxParams aux_params) const {
+    tensorDesc_ = tensor_desc;
+    aux_params_ = aux_params;
+  }
+
+  template <class GmemLayout, class SBoxLayout>
+  CUTE_DEVICE void
+  update_gmem_details_and_params(
+        TensorDescriptor<T> tensor_desc,
+        AuxParams aux_params,
+        GmemLayout const& gmem_layout,
+        SBoxLayout const& sbox_layout
+  ) const {
+    static_assert(is_layout<GmemLayout>::value && is_layout<SBoxLayout>::value,
+                  "GmemLayout and SBoxLayout must be valid CuTe layout types.");
+    constexpr int t_dim = rank_v<GmemLayout>;
+    static_assert(rank_v<SBoxLayout> == t_dim,
+                  "GmemLayout and SBoxLayout must have equal rank.");
+    // gmem_layout stride is expected to include the contiguous innermost stride at index 0.
+    tensorDesc_ = tensor_desc;
+    aux_params_ = aux_params;
+    auto gmem_shape = to_array<uint32_t>(shape(gmem_layout));
+    auto gmem_stride = to_array<uint64_t>(stride(gmem_layout));
+    auto sbox_shape = to_array<uint32_t>(shape(sbox_layout));
+    auto sbox_stride = to_array<uint32_t>(stride(sbox_layout));
+    auto* payload = reinterpret_cast<TensorPayload *>(&tensorDesc_.payload);
+    for (int i = 0; i < t_dim; ++i) {
+      payload->DimSize[i] = gmem_shape[i] - 1;
+      payload->ROITensorDimSize[i] = sbox_shape[i] - 1;
+    }
+    for (int i = 0; i < t_dim - 1; ++i) {
+      // DimStride omits the innermost dimension (always contiguous stride-1).
+      // The input layout stride includes that innermost stride at index 0,
+      // so DimStride[i] maps to gmem_stride[i + 1].
+      payload->DimStride[i] = gmem_stride[i + 1];
+    }
+    payload->ElementStride0 = sbox_stride[0] - 1;
+    if constexpr (t_dim > 1) { payload->ElementStride1 = sbox_stride[1] - 1; }
+    if constexpr (t_dim > 2) { payload->ElementStride2 = sbox_stride[2] - 1; }
+    if constexpr (t_dim > 3) { payload->ElementStride3 = sbox_stride[3] - 1; }
+    if constexpr (t_dim > 4) { payload->ElementStride4 = sbox_stride[4] - 1; }
   }
 
   CUTE_HOST_DEVICE constexpr
@@ -1244,15 +1288,59 @@ struct Copy_Traits<XE4_ADMA_LOAD_MULTICAST, T, NumBitsPerADMA, AuxParams_>
   // Reference map from (thr,val) to bit
   using RefLayout = SrcLayout;
 
-  TensorDescriptor<T> tensorDesc_;
+  mutable TensorDescriptor<T> tensorDesc_;
   using AuxParams = AuxParams_;
-  AuxParams aux_params_;
+  mutable AuxParams aux_params_;
   mutable uint64_t* tdesc_ptr_ { nullptr };
 
   CUTE_DEVICE void
   set_tensor_desc(uint64_t* tensor_desc) const {
     dupTensorPayload(tensor_desc, (uint64_t *)&tensorDesc_.payload);
     tdesc_ptr_ = tensor_desc;
+  }
+
+  CUTE_DEVICE void
+  update_gmem_details_and_params(TensorDescriptor<T> tensor_desc, AuxParams aux_params) const {
+    tensorDesc_ = tensor_desc;
+    aux_params_ = aux_params;
+  }
+
+  template <class GmemLayout, class SBoxLayout>
+  CUTE_DEVICE void
+  update_gmem_details_and_params(
+        TensorDescriptor<T> tensor_desc,
+        AuxParams aux_params,
+        GmemLayout const& gmem_layout,
+        SBoxLayout const& sbox_layout
+  ) const {
+    static_assert(is_layout<GmemLayout>::value && is_layout<SBoxLayout>::value,
+                  "GmemLayout and SBoxLayout must be valid CuTe layout types.");
+    constexpr int t_dim = rank_v<GmemLayout>;
+    static_assert(rank_v<SBoxLayout> == t_dim,
+                  "GmemLayout and SBoxLayout must have equal rank.");
+    // gmem_layout stride is expected to include the contiguous innermost stride at index 0.
+    tensorDesc_ = tensor_desc;
+    aux_params_ = aux_params;
+    auto gmem_shape = to_array<uint32_t>(shape(gmem_layout));
+    auto gmem_stride = to_array<uint64_t>(stride(gmem_layout));
+    auto sbox_shape = to_array<uint32_t>(shape(sbox_layout));
+    auto sbox_stride = to_array<uint32_t>(stride(sbox_layout));
+    auto* payload = reinterpret_cast<TensorPayload *>(&tensorDesc_.payload);
+    for (int i = 0; i < t_dim; ++i) {
+      payload->DimSize[i] = gmem_shape[i] - 1;
+      payload->ROITensorDimSize[i] = sbox_shape[i] - 1;
+    }
+    for (int i = 0; i < t_dim - 1; ++i) {
+      // DimStride omits the innermost dimension (always contiguous stride-1).
+      // The input layout stride includes that innermost stride at index 0,
+      // so DimStride[i] maps to gmem_stride[i + 1].
+      payload->DimStride[i] = gmem_stride[i + 1];
+    }
+    payload->ElementStride0 = sbox_stride[0] - 1;
+    if constexpr (t_dim > 1) { payload->ElementStride1 = sbox_stride[1] - 1; }
+    if constexpr (t_dim > 2) { payload->ElementStride2 = sbox_stride[2] - 1; }
+    if constexpr (t_dim > 3) { payload->ElementStride3 = sbox_stride[3] - 1; }
+    if constexpr (t_dim > 4) { payload->ElementStride4 = sbox_stride[4] - 1; }
   }
 
   CUTE_HOST_DEVICE constexpr
@@ -1341,15 +1429,59 @@ struct Copy_Traits<XE4_ADMA_STORE, T, NumBitsPerADMA, AuxParams_>
   // Reference map from (thr,val) to bit
   using RefLayout = SrcLayout;
 
-  TensorDescriptor<T> tensorDesc_;
+  mutable TensorDescriptor<T> tensorDesc_;
   using AuxParams = AuxParams_;
-  AuxParams aux_params_;
+  mutable AuxParams aux_params_;
   mutable uint64_t* tdesc_ptr_ { nullptr };
 
   CUTE_DEVICE void
   set_tensor_desc(uint64_t* tensor_desc) const {
     dupTensorPayload(tensor_desc, (uint64_t *)&tensorDesc_.payload);
     tdesc_ptr_ = tensor_desc;
+  }
+
+  CUTE_DEVICE void
+  update_gmem_details_and_params(TensorDescriptor<T> tensor_desc, AuxParams aux_params) const {
+    tensorDesc_ = tensor_desc;
+    aux_params_ = aux_params;
+  }
+
+  template <class GmemLayout, class SBoxLayout>
+  CUTE_DEVICE void
+  update_gmem_details_and_params(
+        TensorDescriptor<T> tensor_desc,
+        AuxParams aux_params,
+        GmemLayout const& gmem_layout,
+        SBoxLayout const& sbox_layout
+  ) const {
+    static_assert(is_layout<GmemLayout>::value && is_layout<SBoxLayout>::value,
+                  "GmemLayout and SBoxLayout must be valid CuTe layout types.");
+    constexpr int t_dim = rank_v<GmemLayout>;
+    static_assert(rank_v<SBoxLayout> == t_dim,
+                  "GmemLayout and SBoxLayout must have equal rank.");
+    // gmem_layout stride is expected to include the contiguous innermost stride at index 0.
+    tensorDesc_ = tensor_desc;
+    aux_params_ = aux_params;
+    auto gmem_shape = to_array<uint32_t>(shape(gmem_layout));
+    auto gmem_stride = to_array<uint64_t>(stride(gmem_layout));
+    auto sbox_shape = to_array<uint32_t>(shape(sbox_layout));
+    auto sbox_stride = to_array<uint32_t>(stride(sbox_layout));
+    auto* payload = reinterpret_cast<TensorPayload *>(&tensorDesc_.payload);
+    for (int i = 0; i < t_dim; ++i) {
+      payload->DimSize[i] = gmem_shape[i] - 1;
+      payload->ROITensorDimSize[i] = sbox_shape[i] - 1;
+    }
+    for (int i = 0; i < t_dim - 1; ++i) {
+      // DimStride omits the innermost dimension (always contiguous stride-1).
+      // The input layout stride includes that innermost stride at index 0,
+      // so DimStride[i] maps to gmem_stride[i + 1].
+      payload->DimStride[i] = gmem_stride[i + 1];
+    }
+    payload->ElementStride0 = sbox_stride[0] - 1;
+    if constexpr (t_dim > 1) { payload->ElementStride1 = sbox_stride[1] - 1; }
+    if constexpr (t_dim > 2) { payload->ElementStride2 = sbox_stride[2] - 1; }
+    if constexpr (t_dim > 3) { payload->ElementStride3 = sbox_stride[3] - 1; }
+    if constexpr (t_dim > 4) { payload->ElementStride4 = sbox_stride[4] - 1; }
   }
 
   CUTE_HOST_DEVICE constexpr
@@ -1376,7 +1508,8 @@ struct Copy_Traits<XE4_ADMA_STORE, T, NumBitsPerADMA, AuxParams_>
   template <detail::CacheCtrl CC = detail::CacheCtrl::L2wb_L3uc>
   CUTE_HOST_DEVICE constexpr
   Copy_Traits<XE4_ADMA_STORE_OP, T, NumBitsPerADMA, detail::CacheHint<CC>>
-  with(uint64_t* abar_ptr, detail::CacheHint<CC> = {}) const {
+  with(uint64_t* abar_ptr, [[maybe_unused]] uint32_t const& multicast_mask = 0,
+       detail::CacheHint<CC> = {}) const {
     // Store writes to global memory (gmem_ptr first per store(gmem_ptr, desc, ...) convention).
     // TensorDescriptor::g_pointer is const T* for shared load/store descriptor representation,
     // but STORE always targets writable memory, so the cast is safe here.
@@ -1672,13 +1805,13 @@ void validate_cm_alignment_after_truncation(
 template <class InternalType,
           class GEngine, class GLayout,
           class TShape, class TStride>
-CUTE_HOST_RTC
+CUTE_HOST_DEVICE
 auto
-make_adma_copy_desc(
-    Tensor<GEngine,GLayout> const& gtensor,         // The original GMEM Tensor
-    Layout<TShape,TStride>  const& adma_gbasis,     // ADMA mode -> GMEM mode mapping
+make_adma_copy_desc_common(
+    Tensor<GEngine,GLayout> const& gtensor,
+    Layout<TShape,TStride>  const& adma_gbasis,
     uint32_t                       matrix_desc,
-    uint32_t                       num_multicast)   // The number of CTAs in multicasting
+    uint32_t                       num_multicast)
 {
   //
   // Tensor desc creation
@@ -1785,59 +1918,11 @@ make_adma_copy_desc(
   assert(smem_box_stride[4] <= (uint32_t(8)));               // Stride must be max 2^3 = 8
 #endif
 
-    //
-    // Construct the descriptor
-    //
+  //
+  // Construct the descriptor
+  //
 
-    TensorDescriptor<InternalType> tensor_desc{};
-
-    //
-    // TMA general info
-    //
-
-#if 0
-
-    CUtensorMapDataType     tma_format      = TMA::to_CUtensorMapDataType<TmaInternalType>();
-    CUtensorMapInterleave   tma_interleave  = CU_TENSOR_MAP_INTERLEAVE_NONE;
-    CUtensorMapL2promotion  tma_l2Promotion = CU_TENSOR_MAP_L2_PROMOTION_L2_128B;
-    CUtensorMapFloatOOBfill tma_oobFill     = CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE;
-
-    // TMA smem swizzle type
-    TMA::SmemSwizzleBits swizzle_bits = get_tma_swizzle_bits(swizzle);
-    TMA::SmemSwizzleBase swizzle_base = get_tma_swizzle_base(swizzle);
-    CUtensorMapSwizzle smem_swizzle = TMA::to_CUtensorMapSwizzle(swizzle_bits, swizzle_base);
-    CUresult result = CUTLASS_CUDA_DRIVER_WRAPPER_CALL(cuTensorMapEncodeTiled)(
-        &tma_desc,
-        tma_format,
-        t_dim,
-        gmem_address,
-        gmem_prob_shape.data(),
-        gmem_prob_stride.data() + 1,  // gmem_prob_stride[0] implicitly 1
-        smem_box_shape.data(),
-        smem_box_stride.data(),
-        tma_interleave,
-        smem_swizzle,
-        tma_l2Promotion,
-        tma_oobFill);
-
-    if (result != CUDA_SUCCESS) {
-      std::cerr << "TMA Desc Addr:   " << &tma_desc
-                << "\nformat         " << tma_format
-                << "\ndim            " << t_dim
-                << "\ngmem_address   " << gmem_address
-                << "\nglobalDim      " << gmem_prob_shape
-                << "\nglobalStrides  " << gmem_prob_stride
-                << "\nboxDim         " << smem_box_shape
-                << "\nelementStrides " << smem_box_stride
-                << "\ninterleave     " << tma_interleave
-                << "\nswizzle        " << smem_swizzle
-                << "\nl2Promotion    " << tma_l2Promotion
-                << "\noobFill        " << tma_oobFill << std::endl;
-      std::cerr << "Error: Failed to initialize the TMA descriptor " << result << std::endl;
-      assert(false);
-    }
-
-#endif // (__CUDACC_VER_MAJOR__ >= 12) && !defined(__CUDACC_RTC__)
+  TensorDescriptor<InternalType> tensor_desc{};
 
   auto recast_ratio = cute::trait_ratio(sizeof_bits<typename GEngine::value_type>{},
                                         sizeof_bits<InternalType>{});
@@ -1852,9 +1937,10 @@ make_adma_copy_desc(
       return Int<0>{};                  // If size-1 or stride-0, return arithmetic identity -- no contribution to the TMA
     } else {
       auto tma_gmem_basis_stride = stride(adma_gbasis);
-      // Find j such that E<i> is in stride<j>(adma_gbasis)
       using EI = decltype(ei);
-      [[maybe_unused]] auto j = find_if(tma_gmem_basis_stride, [&](auto tma_stride_j) { return any_of(tma_stride_j, [&](auto dj) { return dj == EI{}; }); });
+      [[maybe_unused]] auto j = find_if(tma_gmem_basis_stride, [&](auto tma_stride_j) {
+        return any_of(tma_stride_j, [&](auto dj) { return dj == EI{}; });
+      });
       if constexpr (decltype(j == rank(tma_gmem_basis_stride))::value) {
         return Int<0>{};               // If not-found, return arithmetic identity -- no contribution to the TMA
       } else
@@ -1884,22 +1970,185 @@ make_adma_copy_desc(
   for_each(make_seq<t_dim>{}, [&](auto i) {gmem_shape[i] = gmem_prob_shape[i];});
   cute::array<uint64_t, t_dim-1> gmem_stride;
   for_each(make_seq<t_dim-1>{}, [&](auto i) {gmem_stride[i] = gmem_prob_stride[i+1];});
-  cute::array<uint16_t, t_dim> sbox_shape;
+  cute::array<uint32_t, t_dim> sbox_shape;
   for_each(make_seq<t_dim>{}, [&](auto i) {sbox_shape[i] = smem_box_shape[i];});
   cute::array<uint32_t, t_dim> sbox_stride;
   for_each(make_seq<t_dim>{}, [&](auto i) {sbox_stride[i] = smem_box_stride[i];});
 
-  fillTensorDescriptorDimSize((uint64_t *)&tensor_desc, gmem_shape);
-  fillTensorDescriptorDimStride((uint64_t *)&tensor_desc, gmem_stride);
-  fillTensorDescriptorROI((uint64_t *)&tensor_desc, sbox_shape);
-  fillTensorDescriptorElementStride((uint64_t *)&tensor_desc, sbox_stride);
   tensor_desc.matrix_desc = matrix_desc;
   tensor_desc.g_pointer = sycl::address_space_cast<
     sycl::access::address_space::global_space,
     sycl::access::decorated::yes
   >(gmem_address).get();
 
-  return cute::make_tuple(tensor_desc, AuxParams{gmem_tma_basis_stride});
+  return cute::make_tuple(tensor_desc, AuxParams{gmem_tma_basis_stride}, adma_gbasis,
+                          gmem_shape, gmem_stride, sbox_shape, sbox_stride);
+}
+
+// Use a sidx2gmode to read through the GMEM tensor
+//   and construct a TMA Descriptor for the resulting instruction
+// At the same time, construct the Tma Tensor's Stride to generate
+//   the TMA coordinates that the instruction consumes.
+//
+template <class InternalType,
+          class GEngine, class GLayout,
+          class TShape, class TStride>
+CUTE_HOST_RTC
+auto
+make_adma_copy_desc(
+    Tensor<GEngine,GLayout> const& gtensor,         // The original GMEM Tensor
+    Layout<TShape,TStride>  const& adma_gbasis,     // ADMA mode -> GMEM mode mapping
+    uint32_t                       matrix_desc,
+    uint32_t                       num_multicast)   // The number of CTAs in multicasting
+{
+  auto [tensor_desc, aux_params, common_gbasis, gmem_shape, gmem_stride, sbox_shape_u32, sbox_stride] =
+    make_adma_copy_desc_common<InternalType>(gtensor, adma_gbasis, matrix_desc, num_multicast);
+  constexpr int t_dim = decltype(rank(common_gbasis))::value;
+
+  cute::array<uint16_t, t_dim> sbox_shape;
+  for_each(make_seq<t_dim>{}, [&](auto i) {sbox_shape[i] = sbox_shape_u32[i];});
+
+  fillTensorDescriptorDimSize((uint64_t *)&tensor_desc, gmem_shape);
+  fillTensorDescriptorDimStride((uint64_t *)&tensor_desc, gmem_stride);
+  fillTensorDescriptorROI((uint64_t *)&tensor_desc, sbox_shape);
+  fillTensorDescriptorElementStride((uint64_t *)&tensor_desc, sbox_stride);
+
+  return cute::make_tuple(tensor_desc, aux_params);
+}
+
+template <class InternalType,
+          class GEngine, class GLayout,
+          class TShape, class TStride>
+CUTE_HOST_DEVICE
+auto
+make_adma_copy_desc_device(
+    Tensor<GEngine,GLayout> const& gtensor,
+    Layout<TShape,TStride>  const& adma_gbasis,
+    uint32_t                       matrix_desc,
+    uint32_t                       num_multicast)
+{
+  return make_adma_copy_desc_common<InternalType>(gtensor, adma_gbasis, matrix_desc, num_multicast);
+}
+
+template <class SLayout>
+CUTE_HOST_DEVICE
+auto
+make_adma_matrix_descriptor(SLayout const& slayout, bool is_A_matrix = false) {
+  auto slayout_2d = [&]() {
+    if constexpr (decltype(rank(slayout))::value >= 3) {
+      return layout<0>(slayout);
+    } else {
+      return coalesce(slayout);
+    }
+  }();
+
+  auto strides = slayout_2d.stride();
+
+  MatrixDescriptor matrix_desc{};
+  if (is_A_matrix) {
+    matrix_desc.Type = get<1>(strides) == 1 ?
+      MatrixDescriptor::Type1 : MatrixDescriptor::Type2;
+  } else {
+    matrix_desc.Type = MatrixDescriptor::Type1;
+  }
+
+  matrix_desc.Pitch = get<1>(strides) == 1 ?
+    get<0>(strides) >> 2 : get<1>(strides) >> 2;
+
+  return matrix_desc.raw_;
+}
+
+template <class InternalType = void,
+          class GEngine, class GLayout,
+          class SLayout,
+          class CtaVTile,
+          class NumMulticast>
+CUTE_DEVICE
+auto
+make_gmem_details_params(
+    Tensor<GEngine, GLayout> const& gtensor,
+    SLayout const& slayout,
+    CtaVTile const& cta_v_tile,
+    uint32_t matrix_desc,
+    NumMulticast const& num_multicast)
+{
+  using AmmaType = conditional_t<is_same<void, InternalType>::value, typename GEngine::value_type, InternalType>;
+
+  auto smem_layout = get_nonswizzle_portion(slayout);
+  auto adma_gbasis = construct_tma_gbasis<AmmaType>(gtensor, smem_layout, cta_v_tile);
+
+  return make_adma_copy_desc_device<AmmaType>(
+      gtensor, adma_gbasis, matrix_desc, num_multicast);
+}
+
+template <class InternalType = void,
+          class CopyOp,
+          class GEngine, class GLayout,
+          class SLayout,
+          class TiledMma,
+          class TileShape,
+          class ClusterLayout,
+          class IsAMatrix>
+CUTE_DEVICE
+auto
+make_gmem_details_params(
+    CopyOp,
+    Tensor<GEngine, GLayout> const& gtensor,
+    SLayout const& slayout,
+    TiledMma const& tiled_mma,
+    TileShape const& tile_shape,
+    ClusterLayout const& cluster_layout,
+    IsAMatrix)
+{
+  constexpr bool is_A_matrix = bool(IsAMatrix::value);
+
+  auto mma_tiler = [&]() {
+    if constexpr (is_A_matrix) {
+      return remove<1>(tile_shape);
+    } else {
+      return remove<0>(tile_shape);
+    }
+  }();
+
+  auto g_tile = make_identity_layout(shape(gtensor)).compose(mma_tiler);
+  auto cta_v_tile = [&]() {
+    if constexpr (is_A_matrix) {
+      return cute::layout<1>(tiled_mma.thrfrg_A(g_tile))(_, repeat<rank(g_tile)>(_));
+    } else {
+      return cute::layout<1>(tiled_mma.thrfrg_B(g_tile))(_, repeat<rank(g_tile)>(_));
+    }
+  }();
+  auto matrix_desc = make_adma_matrix_descriptor(slayout, is_A_matrix);
+  auto num_multicast = [&]() {
+    if constexpr (is_same_v<CopyOp, XE4_ADMA_LOAD_MULTICAST>) {
+      if constexpr (is_A_matrix) {
+        return size<2>(cluster_layout);
+      } else {
+        return size<1>(cluster_layout);
+      }
+    } else {
+      return Int<1>{};
+    }
+  }();
+
+  return make_gmem_details_params<InternalType>(gtensor, slayout, cta_v_tile, matrix_desc, num_multicast);
+}
+
+template <class InternalType = void,
+          class GEngine, class GLayout,
+          class SmemLayoutOutput,
+          class TileShape>
+CUTE_DEVICE
+auto
+make_gmem_details_params(
+    Tensor<GEngine, GLayout> const& gtensor,
+    SmemLayoutOutput const& smem_layout_output,
+    TileShape const& tile_shape)
+{
+  auto slayout = smem_layout_output(_, _, Int<0>{});
+  auto cta_v_tile = make_identity_layout(shape(gtensor)).compose(select<0, 1>(tile_shape));
+  auto matrix_desc = make_adma_matrix_descriptor(slayout, false);
+  return make_gmem_details_params<InternalType>(gtensor, slayout, cta_v_tile, matrix_desc, Int<1>{});
 }
 
 template <class InternalType,
@@ -2034,6 +2283,125 @@ make_adma_copy_tiled(
 }
 
 }
+template <class AdmaCopy,
+          class CopyOp,
+          class GEngine, class GLayout,
+          class SLayout,
+          class TiledMma,
+          class TileShape,
+          class ClusterLayout,
+          class IsAMatrix>
+CUTE_DEVICE void
+update_gmem_details_and_params(
+    AdmaCopy const& adma_copy,
+    CopyOp const& copy_op,
+    Tensor<GEngine, GLayout> const& gtensor,
+    SLayout const& slayout,
+    TiledMma const& tiled_mma,
+    TileShape const& tile_shape,
+    ClusterLayout const& cluster_layout,
+    IsAMatrix const& is_a_matrix) {
+  auto [tma_details, aux_params, adma_gbasis, gmem_shape, gmem_stride, sbox_shape, sbox_stride] =
+    detail::make_gmem_details_params(copy_op, gtensor, slayout, tiled_mma, tile_shape, cluster_layout, is_a_matrix);
+  constexpr int t_dim = decltype(rank(adma_gbasis))::value;
+  static_assert(tuple_size<decltype(gmem_stride)>::value == t_dim - 1,
+                "gmem_stride tuple size must be t_dim-1 (excludes innermost contiguous dimension).");
+  // ADMA DimStride stores strides starting from dimension-1; prepend dimension-0's contiguous stride.
+  auto gmem_layout = make_layout(gmem_shape, prepend<t_dim>(gmem_stride, uint64_t{1}));
+  auto sbox_layout = make_layout(sbox_shape, sbox_stride);
+  adma_copy.update_gmem_details_and_params(tma_details, aux_params, gmem_layout, sbox_layout);
+}
+
+template <class AdmaCopy,
+          class GEngine, class GLayout,
+          class SLayout,
+          class CtaVTile,
+          class NumMulticast>
+CUTE_DEVICE void
+update_gmem_details_and_params(
+    AdmaCopy const& adma_copy,
+    Tensor<GEngine, GLayout> const& gtensor,
+    SLayout const& slayout,
+    CtaVTile const& cta_v_tile,
+    uint32_t matrix_desc,
+    NumMulticast const& num_multicast) {
+  auto [tma_details, aux_params, adma_gbasis, gmem_shape, gmem_stride, sbox_shape, sbox_stride] =
+    detail::make_gmem_details_params(gtensor, slayout, cta_v_tile, matrix_desc, num_multicast);
+  constexpr int t_dim = decltype(rank(adma_gbasis))::value;
+  static_assert(tuple_size<decltype(gmem_stride)>::value == t_dim - 1,
+                "gmem_stride tuple size must be t_dim-1 (excludes innermost contiguous dimension).");
+  // ADMA DimStride stores strides starting from dimension-1; prepend dimension-0's contiguous stride.
+  auto gmem_layout = make_layout(gmem_shape, prepend<t_dim>(gmem_stride, uint64_t{1}));
+  auto sbox_layout = make_layout(sbox_shape, sbox_stride);
+  adma_copy.update_gmem_details_and_params(tma_details, aux_params, gmem_layout, sbox_layout);
+}
+
+template <class AdmaCopy,
+          class GEngine, class GLayout,
+          class SLayout,
+          class TiledMma,
+          class TileShape,
+          class IsAMatrix>
+CUTE_DEVICE void
+update_gmem_details_and_params(
+    AdmaCopy const& adma_copy,
+    Tensor<GEngine, GLayout> const& gtensor,
+    SLayout const& slayout,
+    TiledMma const& tiled_mma,
+    TileShape const& tile_shape,
+    IsAMatrix const& is_a_matrix) {
+  constexpr bool is_A_matrix = bool(IsAMatrix::value);
+
+  auto mma_tiler = [&]() {
+    if constexpr (is_A_matrix) {
+      return remove<1>(tile_shape);
+    } else {
+      return remove<0>(tile_shape);
+    }
+  }();
+
+  auto g_tile = make_identity_layout(shape(gtensor)).compose(mma_tiler);
+  auto cta_v_tile = [&]() {
+    if constexpr (is_A_matrix) {
+      return cute::layout<1>(tiled_mma.thrfrg_A(g_tile))(_, repeat<rank(g_tile)>(_));
+    } else {
+      return cute::layout<1>(tiled_mma.thrfrg_B(g_tile))(_, repeat<rank(g_tile)>(_));
+    }
+  }();
+
+  MatrixDescriptor matrix_desc{};
+  matrix_desc.Type = MatrixDescriptor::Type3;
+  if constexpr (is_A_matrix) {
+    matrix_desc.Pitch = get<0>(tile_shape) >> 2;
+  } else {
+    matrix_desc.Pitch = get<1>(tile_shape) >> 2;
+  }
+
+  cute::update_gmem_details_and_params(
+    adma_copy, gtensor, slayout, cta_v_tile, matrix_desc.raw_, cute::Int<1>{});
+}
+
+template <class AdmaCopy,
+          class GEngine, class GLayout,
+          class SmemLayoutOutput,
+          class TileShape>
+CUTE_DEVICE void
+update_gmem_details_and_params(
+    AdmaCopy const& adma_copy,
+    Tensor<GEngine, GLayout> const& gtensor,
+    SmemLayoutOutput const& smem_layout_output,
+    TileShape const& tile_shape) {
+  auto [tma_details, aux_params, adma_gbasis, gmem_shape, gmem_stride, sbox_shape, sbox_stride] =
+    detail::make_gmem_details_params(gtensor, smem_layout_output, tile_shape);
+  constexpr int t_dim = decltype(rank(adma_gbasis))::value;
+  static_assert(tuple_size<decltype(gmem_stride)>::value == t_dim - 1,
+                "gmem_stride tuple size must be t_dim-1 (excludes innermost contiguous dimension).");
+  // ADMA DimStride stores strides starting from dimension-1; prepend dimension-0's contiguous stride.
+  auto gmem_layout = make_layout(gmem_shape, prepend<t_dim>(gmem_stride, uint64_t{1}));
+  auto sbox_layout = make_layout(sbox_shape, sbox_stride);
+  adma_copy.update_gmem_details_and_params(tma_details, aux_params, gmem_layout, sbox_layout);
+}
+
 
 template <class InternalType = void,
          class CopyOp,

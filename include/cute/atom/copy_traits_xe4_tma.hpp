@@ -465,6 +465,33 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
   return cute::make_tuple(tma_desc_details, AuxParams{gmem_tma_basis_stride});
 }
 
+template <class TmaInternalType = void,
+          class GEngine, class GLayout,
+          class SLayout,
+          class CTA_Tiler,
+          class Cluster_Size>
+CUTE_DEVICE
+auto
+make_gmem_details_params(
+              Tensor<GEngine,GLayout> const& gtensor,
+              SLayout                 const& slayout,
+              CTA_Tiler               const& cta_tiler,
+              Cluster_Size            const& cluster_size)
+{
+    auto cta_v_tile = make_identity_layout(shape(gtensor)).compose(cta_tiler);
+    auto cta_t_tile = make_layout(cluster_size);
+    using TmaType = conditional_t<is_same<void, TmaInternalType>::value, typename GEngine::value_type, TmaInternalType>;
+    auto num_multicast = cosize(cta_t_tile);
+    auto smem_swizzle = get_swizzle_portion(slayout);
+    auto smem_layout  = get_nonswizzle_portion(slayout);
+    auto tma_gbasis = detail::construct_tma_gbasis<TmaType>(gtensor, smem_layout, cta_v_tile);
+    auto [tma_details, aux_params] = detail::make_tma_copy_desc<TmaType>(gtensor,
+                                                                         tma_gbasis,
+                                                                         smem_swizzle,
+                                                                         num_multicast);
+    return cute::make_tuple(tma_details, aux_params);
+}
+
 template <class TmaInternalType,
           class CopyOp,
           class GEngine, class GLayout,
@@ -571,6 +598,27 @@ make_tma_copy_tiled(CopyOp                  const& copy_op,
 }
 
 } // end namespace detail
+
+template <class TmaInternalType = void,
+          class TmaCopy,
+          class GEngine, class GLayout,
+          class SLayout,
+          class CTA_Tiler,
+          class Cluster_Size>
+CUTE_DEVICE void
+update_gmem_details_and_params(
+          TmaCopy const& tma_copy,
+          Tensor<GEngine,GLayout> const& gtensor,
+          SLayout                 const& slayout,
+          CTA_Tiler               const& cta_tiler,
+          Cluster_Size            const& cluster_size)
+{
+  using TmaType = conditional_t<is_same<void, TmaInternalType>::value, typename GEngine::value_type, TmaInternalType>;
+  auto [gmem_details, aux_params] = detail::make_gmem_details_params<TmaType>(
+      gtensor, slayout, cta_tiler, cluster_size);
+  auto gmem_ptr = cute::raw_pointer_cast(recast<TmaType>(gtensor).data());
+  tma_copy.update_gmem_details_and_params(gmem_details, aux_params, gmem_ptr);
+}
 
 /** Make a CuTe CTA-collective TiledCopy for a TMA operation.
  *
