@@ -70,13 +70,14 @@ inline void xe4_syncthreads(sycl::nd_item<3>& item) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <AddressingMode Mode, uint32_t RowSize, typename T,
-          typename LoadOp, typename StoreOp,
+          bool IsPerWarp,
           typename SmemLayout,
           typename TiledCopyLoad, typename TiledCopyStore,
           detail::CacheCtrl LoadCC = detail::CacheCtrl::L2c_L3uc,
           detail::FillMethod LoadFM = detail::FillMethod::Zero,
           detail::CacheCtrl StoreCC = detail::CacheCtrl::L2wb_L3uc,
-          detail::CompletionMode StoreCM = detail::CompletionMode::CM_Unspecified>
+          detail::CompletionMode StoreCM = detail::CompletionMode::CM_Unspecified,
+          bool EnablePrefetch = false>
 SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
     sycl::nd_item<3> item,
     T const* src_ptr,
@@ -125,11 +126,6 @@ SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
 
   Tensor sL_local = make_tensor(make_smem_ptr(smem.smem_A.begin()), sL);
 
-  constexpr bool kIsCollective = std::is_same_v<LoadOp, cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD_COLLECTIVE>;
-  static_assert(kIsCollective ==
-                std::is_same_v<StoreOp, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE_COLLECTIVE>,
-                "LoadOp and StoreOp must both be collective or both be non-collective.");
-
   uint32_t elect_one_thr = cute::elect_one_sync();
   auto load_abar  = allocate_abar<0>();
   auto store_abar = allocate_abar<1>();
@@ -153,12 +149,12 @@ SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
   auto gSrc_cta = local_tile(mSrc, make_shape(Int<kRowElements>{}, Int<kNumThreadsPerWarp>{}), cta_coord);
   auto gDst_cta = local_tile(mDst, make_shape(Int<kRowElements>{}, Int<kNumThreadsPerWarp>{}), cta_coord);
 
-  // Collective ops (ThrLayoutCopy=Layout<_32>) drive one ADMA atom across all 32 lanes,
+  // Per-warp atoms (ThrLayoutCopy=Layout<_32>) drive one ADMA atom across all 32 lanes,
   // so per-lane tensors come from the tiled-copy thread slice over a coalesced 1D view.
-  // Non-collective ops (ThrLayoutCopy=Layout<_1>) issue one atom per lane, so each lane
+  // Per-lane atoms (ThrLayoutCopy=Layout<_1>) issue one atom per lane, so each lane
   // simply takes its own column of the (kRowElements, 32) CTA tile.
   auto [tGsrc, tGdst, tSmem] = [&] {
-    if constexpr (kIsCollective) {
+    if constexpr (IsPerWarp) {
       auto thr_copy_load  = adma_load.get_thread_slice(lane_id);
       auto thr_copy_store = adma_store.get_thread_slice(lane_id);
       return cute::make_tuple(thr_copy_load.partition_S(coalesce(gSrc_cta)),
@@ -177,6 +173,42 @@ SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
 
   // WARP 0: LOAD. Partial lane uses size < RowSize; others use size = RowSize.
   if (warp_idx == 0) {
+    if constexpr (EnablePrefetch) {
+      using ThrLayoutPrefetch = std::conditional_t<IsPerWarp, Layout<_32>, Layout<_1>>;
+      using GmemTiledCopyPrefetch = cute::Copy_Traits<cute::XE4_ADMA_ROW_PREFETCH,
+                                                      cute::Int<RowSize>, cute::Int<RowSize>,
+                                                      cute::C<IsPerWarp>, cute::C<Mode>>;
+      auto adma_prefetch = make_tiled_copy(
+          Copy_Atom<GmemTiledCopyPrefetch, T>{}, ThrLayoutPrefetch{}, Layout<Int<kRowElements>>{});
+
+      // Per-warp: drive one warp-wide atom via partition_S/_D over the CTA tile.
+      // Per-lane: each lane gets its own row column.
+      auto [pf_src, pf_dst] = [&] {
+        if constexpr (IsPerWarp) {
+          auto thr_copy_pref = adma_prefetch.get_thread_slice(lane_id);
+          return cute::make_tuple(thr_copy_pref.partition_S(coalesce(gSrc_cta)),
+                                  thr_copy_pref.partition_D(coalesce(sL_local)));
+        } else {
+          return cute::make_tuple(gSrc_cta(_, lane_id), sL_local(_, lane_id));
+        }
+      }();
+
+      if (lane_active) {
+        if constexpr (std::is_same_v<OffsetType, uint64_t>) {
+          // A64: prefetch takes void* absolute gmem ptr + size.
+          void* pf_ptr = const_cast<void*>(static_cast<const void*>(
+              reinterpret_cast<uint8_t const*>(src_ptr) + lane_byte_offset));
+          auto pf_atom = adma_prefetch.with(pf_ptr, lane_bytes);
+          copy(pf_atom, pf_src, pf_dst);
+        } else {
+          // A32S/A32U: prefetch takes void* base ptr + offset + size.
+          OffsetType byte_offset = static_cast<OffsetType>(lane_byte_offset);
+          void* pf_base = const_cast<void*>(static_cast<const void*>(src_ptr));
+          auto pf_atom = adma_prefetch.with(pf_base, byte_offset, lane_bytes);
+          copy(pf_atom, pf_src, pf_dst);
+        }
+      }
+    }
     if (elect_one_thr) {
       xe4_set_barrier_transaction_bytes(load_abar[0], barrier_txn_bytes);
     }
@@ -230,11 +262,12 @@ SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
 /// Test Runner - Row-per-lane kernel (active_lanes = CTA_bytes / RowSize; tail lane size<RowSize)
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <AddressingMode Mode, typename LoadOp, typename StoreOp, uint32_t RowSize, typename T,
+template <AddressingMode Mode, bool IsPerWarp, uint32_t RowSize, typename T,
           detail::CacheCtrl LoadCC = detail::CacheCtrl::L2c_L3uc,
           detail::FillMethod LoadFM = detail::FillMethod::Zero,
           detail::CacheCtrl StoreCC = detail::CacheCtrl::L2wb_L3uc,
-          detail::CompletionMode StoreCM = detail::CompletionMode::CM_Unspecified>
+          detail::CompletionMode StoreCM = detail::CompletionMode::CM_Unspecified,
+          bool EnablePrefetch = false>
 void run_test_row_per_lane(uint32_t prob_size, sycl::queue& queue, const std::string& test_name)
 {
   constexpr uint32_t kNumControlWarps = 2;
@@ -249,15 +282,14 @@ void run_test_row_per_lane(uint32_t prob_size, sycl::queue& queue, const std::st
   SmemLayout sL{};
 
   // Build TiledCopy on host — stateless types, captured by value into the SYCL kernel.
-  constexpr bool kLoadIsCollective  = std::is_same_v<LoadOp,  cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD_COLLECTIVE>;
-  constexpr bool kStoreIsCollective = std::is_same_v<StoreOp, cute::XE4_ADMA_ROW_COPY_LINEAR_STORE_COLLECTIVE>;
-  static_assert(kLoadIsCollective == kStoreIsCollective,
-                "LoadOp and StoreOp must both be collective or both be non-collective.");
-  constexpr bool kIsCollective = kLoadIsCollective && kStoreIsCollective;
-  using ThrLayoutCopy = std::conditional_t<kIsCollective, Layout<_32>, Layout<_1>>;
+  using ThrLayoutCopy = std::conditional_t<IsPerWarp, Layout<_32>, Layout<_1>>;
 
-  using GmemTiledCopyLoad  = cute::Copy_Traits<LoadOp,  T, cute::Int<RowSize>, cute::Int<RowSize>>;
-  using GmemTiledCopyStore = cute::Copy_Traits<StoreOp, T, cute::Int<RowSize>, cute::Int<RowSize>>;
+  using GmemTiledCopyLoad  = cute::Copy_Traits<cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD,
+                                               T, cute::Int<RowSize>, cute::Int<RowSize>,
+                                               cute::C<IsPerWarp>, cute::C<Mode>>;
+  using GmemTiledCopyStore = cute::Copy_Traits<cute::XE4_ADMA_ROW_COPY_LINEAR_STORE,
+                                               T, cute::Int<RowSize>, cute::Int<RowSize>,
+                                               cute::C<IsPerWarp>, cute::C<Mode>>;
   auto adma_load  = make_tiled_copy(Copy_Atom<GmemTiledCopyLoad,  T>{},
                                     ThrLayoutCopy{}, Layout<Int<kRowElements>>{});
   auto adma_store = make_tiled_copy(Copy_Atom<GmemTiledCopyStore, T>{},
@@ -298,9 +330,10 @@ void run_test_row_per_lane(uint32_t prob_size, sycl::queue& queue, const std::st
   syclexp::submit_with_event(queue, [&](sycl::handler &handler) {
     syclexp::nd_launch(handler, launch_cfg, [=](sycl::nd_item<3> item) ALWAYS_INLINE {
       adma_row_per_lane_kernel<Mode, RowSize, T,
-                               LoadOp, StoreOp, SmemLayout,
+                               IsPerWarp, SmemLayout,
                                decltype(adma_load), decltype(adma_store),
-                               LoadCC, LoadFM, StoreCC, StoreCM>(
+                               LoadCC, LoadFM, StoreCC, StoreCM,
+                               EnablePrefetch>(
           item, src_ptr, dst_ptr, prob_size, sL);
     });
   }).wait();
@@ -347,108 +380,177 @@ void run_test_row_per_lane(uint32_t prob_size, sycl::queue& queue, const std::st
 /// Test Suite Runner
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <AddressingMode Mode, typename LoadOp, typename StoreOp>
+template <AddressingMode Mode, bool IsPerWarp, bool EnablePrefetch>
 void run_test_suite(sycl::queue& queue, const std::string& mode_name, uint32_t& test_offset) {
+  // Suffix appended to each test_name so prefetch/non-prefetch passes are distinguishable.
+  const std::string pf_suffix = EnablePrefetch ? "_pf" : "";
+
   try {
     // -------- Row-per-lane kernel test suite --------
     // CTA is fixed at 32 rows: kCtaBytes = 32 * RowSize.
 
     // A. Single CTA, all 32 lanes full. fp16 RowSize=128 -> kCtaBytes=4096=2048 fp16. 1 CTA.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | RowSize=128, 1 CTA, 32 full lanes" << std::endl;
-    run_test_row_per_lane<Mode, LoadOp, StoreOp, 128, fp16>(
-      2048, queue, mode_name + "/fp16/row_per_lane_RS128");
+    run_test_row_per_lane<Mode, IsPerWarp, 128, fp16,
+             detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3uc,
+             detail::CompletionMode::CM_Unspecified, EnablePrefetch>(
+      2048, queue, mode_name + "/fp16/row_per_lane_RS128" + pf_suffix);
 
     // B. Multi-CTA, int8. RowSize=32 -> kCtaBytes=1024=1024 int8. prob_size=2048 -> 2 full CTAs.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | int8 | row-per-lane | RowSize=32, 2 full CTAs" << std::endl;
-    run_test_row_per_lane<Mode, LoadOp, StoreOp, 32, int8_t>(
-      2048, queue, mode_name + "/int8/row_per_lane_RS32");
+    run_test_row_per_lane<Mode, IsPerWarp, 32, int8_t,
+             detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3uc,
+             detail::CompletionMode::CM_Unspecified, EnablePrefetch>(
+      2048, queue, mode_name + "/int8/row_per_lane_RS32" + pf_suffix);
 
     // C. Single partial CTA, large RowSize. fp16 RowSize=1024 -> kCtaBytes=32768.
     // prob_size=2048 fp16 = 4096 B -> 1 CTA: 4 full lanes + 28 inactive.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | RowSize=1024, 1 CTA: 4 full + 28 inactive" << std::endl;
-    run_test_row_per_lane<Mode, LoadOp, StoreOp, 1024, fp16>(
-      2048, queue, mode_name + "/fp16/row_per_lane_RS1024");
+    run_test_row_per_lane<Mode, IsPerWarp, 1024, fp16,
+             detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3uc,
+             detail::CompletionMode::CM_Unspecified, EnablePrefetch>(
+      2048, queue, mode_name + "/fp16/row_per_lane_RS1024" + pf_suffix);
 
     // D. Min-aligned RowSize=16, single full CTA. kCtaBytes=512=256 fp16. prob_size=256 -> 1 CTA.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | RowSize=16 (min aligned), 1 full CTA" << std::endl;
-    run_test_row_per_lane<Mode, LoadOp, StoreOp, 16, fp16>(
-      256, queue, mode_name + "/fp16/row_per_lane_RS16");
+    run_test_row_per_lane<Mode, IsPerWarp, 16, fp16,
+             detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3uc,
+             detail::CompletionMode::CM_Unspecified, EnablePrefetch>(
+      256, queue, mode_name + "/fp16/row_per_lane_RS16" + pf_suffix);
 
     // E. Very large RowSize, tiny problem. fp16 RowSize=2048, prob_size=256 = 512 B.
     // 1 CTA: cta_bytes=512 -> 0 full + 1 partial lane (size=512 < 2048) + 31 inactive.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | RowSize=2048, 1 partial lane (size=512B<2048B), 31 inactive" << std::endl;
-    run_test_row_per_lane<Mode, LoadOp, StoreOp, 2048, fp16>(
-      256, queue, mode_name + "/fp16/row_per_lane_RS2048_tiny");
+    run_test_row_per_lane<Mode, IsPerWarp, 2048, fp16,
+             detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3uc,
+             detail::CompletionMode::CM_Unspecified, EnablePrefetch>(
+      256, queue, mode_name + "/fp16/row_per_lane_RS2048_tiny" + pf_suffix);
 
     // F. Non-default cache policy (same shape as E). Load:L2uc_L3c, Store:L2wb_L3wb.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | Load:L2uc_L3c, Store:L2wb_L3wb" << std::endl;
-    run_test_row_per_lane<Mode, LoadOp, StoreOp, 2048, fp16,
-             detail::CacheCtrl::L2uc_L3c, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3wb>(
-      256, queue, mode_name + "/fp16/row_per_lane_l2uc_l3c");
+    run_test_row_per_lane<Mode, IsPerWarp, 2048, fp16,
+             detail::CacheCtrl::L2uc_L3c, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3wb,
+             detail::CompletionMode::CM_Unspecified, EnablePrefetch>(
+      256, queue, mode_name + "/fp16/row_per_lane_l2uc_l3c" + pf_suffix);
 
     // G. Multi-CTA with mixed partial in last CTA. prob_size=23424 fp16 = 46848 B -> 3 CTAs.
     // CTA 0, CTA 1: full (32 lanes each). CTA 2: 27 full + 1 partial (256B) + 4 inactive.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | 3 CTAs: 2 full + 1 mixed partial CTA" << std::endl;
-    run_test_row_per_lane<Mode, LoadOp, StoreOp, 512, fp16>(
-      23424, queue, mode_name + "/fp16/row_per_lane_3ctas_mixed");
+    run_test_row_per_lane<Mode, IsPerWarp, 512, fp16,
+             detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3uc,
+             detail::CompletionMode::CM_Unspecified, EnablePrefetch>(
+      23424, queue, mode_name + "/fp16/row_per_lane_3ctas_mixed" + pf_suffix);
 
     // H. 2 CTAs, last CTA has 4 full + 1 partial (96B) + 27 inactive.
     // fp16 RowSize=256, prob_size=4656 fp16 = 9312 B. kCtaBytes=8192.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | 2 CTAs, last CTA 4 full + 1 partial (96B<256B) + 27 inactive" << std::endl;
-    run_test_row_per_lane<Mode, LoadOp, StoreOp, 256, fp16>(
-      4656, queue, mode_name + "/fp16/row_per_lane_partial_cta_mixed");
+    run_test_row_per_lane<Mode, IsPerWarp, 256, fp16,
+             detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3uc,
+             detail::CompletionMode::CM_Unspecified, EnablePrefetch>(
+      4656, queue, mode_name + "/fp16/row_per_lane_partial_cta_mixed" + pf_suffix);
 
     // I. 2 CTAs, last CTA has a single partial lane only.
     // fp16 RowSize=256, prob_size=4144 fp16 = 8288 B -> CTA 0 full, CTA 1 cta_bytes=96 -> 1 partial + 31 inactive.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | 2 CTAs, last CTA single partial (96B<256B) + 31 inactive" << std::endl;
-    run_test_row_per_lane<Mode, LoadOp, StoreOp, 256, fp16>(
-      4144, queue, mode_name + "/fp16/row_per_lane_single_partial");
+    run_test_row_per_lane<Mode, IsPerWarp, 256, fp16,
+             detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3uc,
+             detail::CompletionMode::CM_Unspecified, EnablePrefetch>(
+      4144, queue, mode_name + "/fp16/row_per_lane_single_partial" + pf_suffix);
 
     // J. FillMethod::Nan on partial-lane CTA. Same shape as H, FM=Nan (non-default).
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | FM:Nan  | last-CTA partial (96B<256B)" << std::endl;
-    run_test_row_per_lane<Mode, LoadOp, StoreOp, 256, fp16,
-             detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Nan, detail::CacheCtrl::L2wb_L3uc>(
-      4656, queue, mode_name + "/fp16/row_per_lane_FMNan");
+    run_test_row_per_lane<Mode, IsPerWarp, 256, fp16,
+             detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Nan, detail::CacheCtrl::L2wb_L3uc,
+             detail::CompletionMode::CM_Unspecified, EnablePrefetch>(
+      4656, queue, mode_name + "/fp16/row_per_lane_FMNan" + pf_suffix);
 
     // K. fp4 (e2m1, 4-bit packed). RowSize=16B holds 32 fp4 elements/row.
     // kCtaBytes = 32*16 = 512B = 1024 fp4. prob_size=1024 -> 1 full CTA.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp4 | row-per-lane | RowSize=16, 1 full CTA (packed)" << std::endl;
-    run_test_row_per_lane<Mode, LoadOp, StoreOp, 16, cute::float_e2m1_t>(
-      1024, queue, mode_name + "/fp4/row_per_lane_RS16_packed");
+    run_test_row_per_lane<Mode, IsPerWarp, 16, cute::float_e2m1_t,
+             detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3uc,
+             detail::CompletionMode::CM_Unspecified, EnablePrefetch>(
+      1024, queue, mode_name + "/fp4/row_per_lane_RS16_packed" + pf_suffix);
 
     // L. fp4 multi-CTA. RowSize=32B -> 64 fp4/row, kCtaBytes=1024B=2048 fp4.
     // prob_size=4096 fp4 = 2048 B -> 2 full CTAs.
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp4 | row-per-lane | RowSize=32, 2 full CTAs (packed)" << std::endl;
-    run_test_row_per_lane<Mode, LoadOp, StoreOp, 32, cute::float_e2m1_t>(
-      4096, queue, mode_name + "/fp4/row_per_lane_RS32_packed");
+    run_test_row_per_lane<Mode, IsPerWarp, 32, cute::float_e2m1_t,
+             detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3uc,
+             detail::CompletionMode::CM_Unspecified, EnablePrefetch>(
+      4096, queue, mode_name + "/fp4/row_per_lane_RS32_packed" + pf_suffix);
 
     // M. CompletionMode=Write on the S2G store — adds the `.write` suffix on the row-copy
     std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | row-per-lane | StoreCM:Write | RowSize=128, 1 CTA, 32 full lanes" << std::endl;
-    run_test_row_per_lane<Mode, LoadOp, StoreOp, 128, fp16,
+    run_test_row_per_lane<Mode, IsPerWarp, 128, fp16,
              detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3uc,
-             detail::CompletionMode::CM_Write>(
-      2048, queue, mode_name + "/fp16/row_per_lane_RS128_StoreCMWrite");
+             detail::CompletionMode::CM_Write, EnablePrefetch>(
+      2048, queue, mode_name + "/fp16/row_per_lane_RS128_StoreCMWrite" + pf_suffix);
   } catch (const std::exception& e) {
     std::cout << "\n❌ Test suite failed for " << mode_name << ": " << e.what() << std::endl;
     throw;
   }
 }
 
-template <AddressingMode Mode>
-void run_test_suite_all_variants(sycl::queue& queue, const std::string& mode_name, uint32_t& test_offset) {
-  // Run the full test suite twice: once with single-thread (ThrLayoutCopy=Layout<_1>)
-  // ops, once with COLLECTIVE (ThrLayoutCopy=Layout<_32>) ops.
-  std::cout << "\n--- " << mode_name << " | non-collective (ThrLayoutCopy=Layout<_1>) ---" << std::endl;
-  run_test_suite<Mode,
-                 cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD,
-                 cute::XE4_ADMA_ROW_COPY_LINEAR_STORE>(
-      queue, mode_name + "/single", test_offset);
+// Smoke suite — minimal coverage for non-A64 addressing modes. Confirms each mode wires up
+// correctly across (IsPerWarp × EnablePrefetch) without re-running the full shape matrix
+// (already covered in A64).
+template <AddressingMode Mode, bool IsPerWarp, bool EnablePrefetch>
+void run_smoke_suite(sycl::queue& queue, const std::string& mode_name, uint32_t& test_offset) {
+  const std::string pf_suffix = EnablePrefetch ? "_pf" : "";
 
-  std::cout << "\n--- " << mode_name << " | collective (ThrLayoutCopy=Layout<_32>) ---" << std::endl;
-  run_test_suite<Mode,
-                 cute::XE4_ADMA_ROW_COPY_LINEAR_LOAD_COLLECTIVE,
-                 cute::XE4_ADMA_ROW_COPY_LINEAR_STORE_COLLECTIVE>(
-      queue, mode_name + "/collective", test_offset);
+  try {
+    // Full CTA. fp16 RowSize=128 -> kCtaBytes=4096=2048 fp16. 1 CTA.
+    std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | smoke | RowSize=128, 1 CTA, 32 full lanes" << std::endl;
+    run_test_row_per_lane<Mode, IsPerWarp, 128, fp16,
+             detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3uc,
+             detail::CompletionMode::CM_Unspecified, EnablePrefetch>(
+      2048, queue, mode_name + "/fp16/smoke_RS128" + pf_suffix);
+
+    // Multi-CTA partial last CTA. RowSize=256, prob=4656 fp16. Exercises tail-lane path.
+    std::cout << "\nTest " << (test_offset++) << ": " << mode_name << " | fp16 | smoke | 2 CTAs, last CTA 4 full + 1 partial (96B<256B) + 27 inactive" << std::endl;
+    run_test_row_per_lane<Mode, IsPerWarp, 256, fp16,
+             detail::CacheCtrl::L2c_L3uc, detail::FillMethod::Zero, detail::CacheCtrl::L2wb_L3uc,
+             detail::CompletionMode::CM_Unspecified, EnablePrefetch>(
+      4656, queue, mode_name + "/fp16/smoke_partial_cta" + pf_suffix);
+  } catch (const std::exception& e) {
+    std::cout << "\n❌ Smoke suite failed for " << mode_name << ": " << e.what() << std::endl;
+    throw;
+  }
+}
+
+// Full coverage — runs the 13-test suite across all 4 (IsPerWarp × EnablePrefetch) combinations.
+// Used for A64 mode.
+template <AddressingMode Mode>
+void run_test_suite_all_variants_full(sycl::queue& queue, const std::string& mode_name, uint32_t& test_offset) {
+  std::cout << "\n--- " << mode_name << " | per-lane (ThrLayoutCopy=Layout<_1>) | no prefetch ---" << std::endl;
+  run_test_suite<Mode, /*IsPerWarp=*/false, /*EnablePrefetch=*/false>(queue, mode_name + "/per_lane", test_offset);
+
+  std::cout << "\n--- " << mode_name << " | per-lane (ThrLayoutCopy=Layout<_1>) | prefetch ---" << std::endl;
+  run_test_suite<Mode, /*IsPerWarp=*/false, /*EnablePrefetch=*/true >(queue, mode_name + "/per_lane", test_offset);
+
+  std::cout << "\n--- " << mode_name << " | per-warp (ThrLayoutCopy=Layout<_32>) | no prefetch ---" << std::endl;
+  run_test_suite<Mode, /*IsPerWarp=*/true,  /*EnablePrefetch=*/false>(queue, mode_name + "/per_warp", test_offset);
+
+  std::cout << "\n--- " << mode_name << " | per-warp (ThrLayoutCopy=Layout<_32>) | prefetch ---" << std::endl;
+  run_test_suite<Mode, /*IsPerWarp=*/true,  /*EnablePrefetch=*/true >(queue, mode_name + "/per_warp", test_offset);
+}
+
+// Smoke coverage — minimal 2-test suite across all 4 (IsPerWarp × EnablePrefetch) combinations.
+// Used for A32U/A32S modes (full shape matrix already covered by A64).
+template <AddressingMode Mode>
+void run_test_suite_all_variants_smoke(sycl::queue& queue, const std::string& mode_name, uint32_t& test_offset) {
+  std::cout << "\n--- " << mode_name << " | smoke | per-lane | no prefetch ---" << std::endl;
+  run_smoke_suite<Mode, /*IsPerWarp=*/false, /*EnablePrefetch=*/false>(queue, mode_name + "/per_lane", test_offset);
+
+  std::cout << "\n--- " << mode_name << " | smoke | per-lane | prefetch ---" << std::endl;
+  run_smoke_suite<Mode, /*IsPerWarp=*/false, /*EnablePrefetch=*/true >(queue, mode_name + "/per_lane", test_offset);
+
+  std::cout << "\n--- " << mode_name << " | smoke | per-warp | no prefetch ---" << std::endl;
+  run_smoke_suite<Mode, /*IsPerWarp=*/true,  /*EnablePrefetch=*/false>(queue, mode_name + "/per_warp", test_offset);
+
+  std::cout << "\n--- " << mode_name << " | smoke | per-warp | prefetch ---" << std::endl;
+  run_smoke_suite<Mode, /*IsPerWarp=*/true,  /*EnablePrefetch=*/true >(queue, mode_name + "/per_warp", test_offset);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -466,24 +568,24 @@ int main(int argc, char** argv)
   std::cout << "============================================\n" << std::endl;
 
   try {
-    // .a64 mode
+    // .a64 mode — full shape × (IsPerWarp × EnablePrefetch) matrix.
     std::cout << "\n╔════════════════════════════════════════╗" << std::endl;
     std::cout << "║   .a64 Mode (uint64_t)                 ║" << std::endl;
     std::cout << "╚════════════════════════════════════════╝\n" << std::endl;
     uint32_t total_tests = 1;
-    run_test_suite_all_variants<AddressingMode::A64>(queue, "A64", total_tests);
+    run_test_suite_all_variants_full<AddressingMode::A64>(queue, "A64", total_tests);
 
-    // .a32u mode
+    // .a32u mode — smoke (mode wiring only; shape coverage handled by A64).
     std::cout << "\n╔════════════════════════════════════════╗" << std::endl;
-    std::cout << "║   .a32u Mode (uint32_t)                ║" << std::endl;
+    std::cout << "║   .a32u Mode (uint32_t) — smoke        ║" << std::endl;
     std::cout << "╚════════════════════════════════════════╝\n" << std::endl;
-    run_test_suite_all_variants<AddressingMode::A32U>(queue, "A32U", total_tests);
+    run_test_suite_all_variants_smoke<AddressingMode::A32U>(queue, "A32U", total_tests);
 
-    // .a32s mode
+    // .a32s mode — smoke (mode wiring only; shape coverage handled by A64).
     std::cout << "\n╔════════════════════════════════════════╗" << std::endl;
-    std::cout << "║   .a32s Mode (int32_t)                 ║" << std::endl;
+    std::cout << "║   .a32s Mode (int32_t) — smoke         ║" << std::endl;
     std::cout << "╚════════════════════════════════════════╝\n" << std::endl;
-    run_test_suite_all_variants<AddressingMode::A32S>(queue, "A32S", total_tests);
+    run_test_suite_all_variants_smoke<AddressingMode::A32S>(queue, "A32S", total_tests);
 
     std::cout << "\n============================================" << std::endl;
     std::cout << "✅ ALL TESTS PASSED!" << std::endl;

@@ -600,5 +600,106 @@ struct AsyncRowCopySLM2Global_Tiled_A32U
   }
 };
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Asynchronous Row Prefetch:
+///
+/// Addressing Mode: .a64 (64-bit absolute address)
+///
+/// Instruction format:
+///   async_row_prefetch.<RowSize>.a64.<CacheCtrl>.global [gmem_addr], size
+///
+/// Parameters:
+///   RowSize  - Row size in bytes (16, 32, 64, 128, 256, 512, 1024, 2048)
+///   CacheCtrl - Cache policy (.L2c.L3uc, .L2c.L3c, .L2uc.L3uc, .L2uc.L3c)
+///   gmem_addr - Source 64-bit absolute address in global memory
+///   size      - Number of bytes to prefetch
+///
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <uint32_t RowSize, CacheCtrl CC = CacheCtrl::L2c_L3uc>
+struct AsyncRowPrefetch_A64_Impl {
+  CUTE_HOST_DEVICE static void prefetch(uint64_t gmem_addr, uint32_t size) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    asm volatile(
+      ("async_row_prefetch."+_s<RowSize>+".a64"+_cc<CC>+".global [%0], %1;")
+      ::"r"(gmem_addr), "r"(size));
+#endif
+  }
+};
+
+template <uint32_t RowSize>
+struct AsyncRowPrefetch_A64
+{
+  template <CacheCtrl CC = CacheCtrl::L2c_L3uc>
+  CUTE_HOST_DEVICE static void
+  Prefetch(void* gmem_ptr, uint32_t size, CacheHint<CC> = {})
+  {
+    AsyncRowPrefetch_A64_Impl<RowSize, CC>::prefetch(
+        reinterpret_cast<uint64_t>(gmem_ptr), size);
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Asynchronous Row Prefetch:
+///
+/// Addressing Mode: .a32s (32-bit base pointer + signed 32-bit offset)
+///
+/// Instruction format:
+///   async_row_prefetch.<RowSize>.a32s.<CacheCtrl>.global [gmem_ptr], offset, size
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <uint32_t RowSize, CacheCtrl CC = CacheCtrl::L2c_L3uc>
+struct AsyncRowPrefetch_A32S_Impl {
+  CUTE_HOST_DEVICE static void prefetch(void* gmem_ptr, int32_t offset, uint32_t size) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    asm volatile(
+      ("async_row_prefetch."+_s<RowSize>+".a32s"+_cc<CC>+".global [%0], %1, %2;")
+      ::"r"(gmem_ptr), "r"(offset), "r"(size));
+#endif
+  }
+};
+
+template <uint32_t RowSize>
+struct AsyncRowPrefetch_A32S
+{
+  template <CacheCtrl CC = CacheCtrl::L2c_L3uc>
+  CUTE_HOST_DEVICE static void
+  Prefetch(void* gmem_ptr, int32_t offset, uint32_t size, CacheHint<CC> = {})
+  {
+    AsyncRowPrefetch_A32S_Impl<RowSize, CC>::prefetch(gmem_ptr, offset, size);
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Asynchronous Row Prefetch:
+///
+/// Addressing Mode: .a32u (32-bit base pointer + unsigned 32-bit offset)
+///
+/// Instruction format:
+///   async_row_prefetch.<RowSize>.a32u.<CacheCtrl>.global [gmem_ptr], offset, size
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <uint32_t RowSize, CacheCtrl CC = CacheCtrl::L2c_L3uc>
+struct AsyncRowPrefetch_A32U_Impl {
+  CUTE_HOST_DEVICE static void prefetch(void* gmem_ptr, uint32_t offset, uint32_t size) {
+#if defined (__SYCL_DEVICE_ONLY__)
+    asm volatile(
+      ("async_row_prefetch."+_s<RowSize>+".a32u"+_cc<CC>+".global [%0], %1, %2;")
+      ::"r"(gmem_ptr), "r"(offset), "r"(size));
+#endif
+  }
+};
+
+template <uint32_t RowSize>
+struct AsyncRowPrefetch_A32U
+{
+  template <CacheCtrl CC = CacheCtrl::L2c_L3uc>
+  CUTE_HOST_DEVICE static void
+  Prefetch(void* gmem_ptr, uint32_t offset, uint32_t size, CacheHint<CC> = {})
+  {
+    AsyncRowPrefetch_A32U_Impl<RowSize, CC>::prefetch(gmem_ptr, offset, size);
+  }
+};
+
 }  // namespace detail
 }  // namespace cute
