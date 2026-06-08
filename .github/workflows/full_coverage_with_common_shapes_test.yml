@@ -219,6 +219,18 @@ jobs:
           echo "::error::Remote compilation failed due to a code error (not infrastructure). Review the 'Remote Build' step logs."
           exit 1
 
+      # ---- Refresh Intel GPU packages for fallback local build ----
+      # The system ocloc (/usr/bin/ocloc) on runners with limited RAM (use_remote=true)
+      # can be out-of-sync with the oneAPI compiler version, causing IGC interface
+      # incompatibilities (e.g., IGC_OCL_TRAC) during SYCL AOT compilation.
+      # Reinstalling from the ROLLING PPA ensures ocloc and IGC are version-matched.
+      - name: Refresh Intel Graphics for Fallback Build
+        if: steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outcome != 'success' && steps.remote-build.outputs.failure_type != 'compile'
+        uses: ./.github/actions/install-intel-graphics
+        with:
+          GPU: ${{ matrix.gpu }}
+          IGC: ${{ matrix.intel_graphics }}
+
       - name: Fallback Local Build
         if: steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outcome != 'success' && steps.remote-build.outputs.failure_type != 'compile'
         shell: bash
