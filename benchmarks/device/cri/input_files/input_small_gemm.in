@@ -4,7 +4,6 @@
 
 # disable 2K and 4K cases for CRI simulator
 
-CriGemmFP32FP32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=1024 --n=1024 --k=1024
 
 CriGemmFP16FP16FP32_RRR_TileShape_512_256_32 --bm_name=cri_gemm --m=1024 --n=1024 --k=1024
 #CriGemmFP16FP16FP32_RRR_TileShape_512_256_32 --bm_name=cri_gemm --m=2048 --n=2048 --k=2048
