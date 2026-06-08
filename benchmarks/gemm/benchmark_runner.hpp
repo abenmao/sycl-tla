@@ -54,6 +54,7 @@
 
 #include "../common.hpp"
 #include <benchmark/benchmark.h>
+#include <chrono>
 
 using namespace cute;
 
@@ -674,6 +675,7 @@ struct BenchmarkRunnerGemm {
   }
 
   void run(::benchmark::State& state, const GEMMOptions& options, const KernelHardwareInfo& hw_info) {
+    auto wall_start = std::chrono::steady_clock::now();
     ProblemShapeType problem_size = ProblemShapeType{options.m, options.n, options.k, options.l};
 
     initialize(state, problem_size);
@@ -803,7 +805,10 @@ struct BenchmarkRunnerGemm {
       update_counters(state, ms_elapsed);
       state.SetIterationTime(ms_elapsed / 1000);
     }
+    auto wall_end = std::chrono::steady_clock::now();
     finalize_counters(state, gflop, mega_bytes_transferred);
+    state.counters["execution_time_s"] =
+        (std::chrono::duration<double, std::milli>(wall_end - wall_start).count())/1000;
   }
 
 private:
