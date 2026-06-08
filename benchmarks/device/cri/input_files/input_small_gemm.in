@@ -16,19 +16,6 @@
 #CriGemmFP16FP16FP32_RRR_TileShape_512_256_32 --bm_name=cri_gemm --m=8192 --n=384 --k=3584
 #CriGemmFP16FP16FP32_RRR_TileShape_512_256_32 --bm_name=cri_gemm --m=8192 --n=4096 --k=1536
 
-#CriGemmFP32FP32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=1024 --n=1024 --k=1024
-#CriGemmFP32FP32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=2048 --n=2048 --k=2048 
-#CriGemmFP32FP32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=4096 --n=4096 --k=4096
-#CriGemmFP32FP32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=512 --n=256 --k=8192
-#CriGemmFP32FP32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=1 --n=8192 --k=1024
-#CriGemmFP32FP32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=32 --n=4096 --k=4096
-#CriGemmFP32FP32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=1024 --n=8192 --k=1024
-#CriGemmFP32FP32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=3200 --n=4096 --k=4096
-#CriGemmFP32FP32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=4096 --n=384 --k=3584
-#CriGemmFP32FP32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=8192 --n=384 --k=3584
-#CriGemmFP32FP32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=8192 --n=4096 --k=1536
-
-
 #CriGemmTF32TF32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=1024 --n=1024 --k=1024
 #CriGemmTF32TF32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=2048 --n=2048 --k=2048 
 #CriGemmTF32TF32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=4096 --n=4096 --k=4096
@@ -40,7 +27,6 @@
 #CriGemmTF32TF32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=4096 --n=384 --k=3584
 #CriGemmTF32TF32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=8192 --n=384 --k=3584
 #CriGemmTF32TF32FP32_RRR_TileShape_512_256_16 --bm_name=cri_gemm --m=8192 --n=4096 --k=1536
-
 
 #BmgGemmBF16BF16FP32_RRR_TileShape_512_256_32 --bm_name=cri_gemm --m=1024 --n=1024 --k=1024
 #BmgGemmBF16BF16FP32_RRR_TileShape_512_256_32 --bm_name=cri_gemm --m=2048 --n=2048 --k=2048 
@@ -90,7 +76,6 @@
 #CriGemmE2M1E2M1FP32_RCR_TileShape_512_256_128 --bm_name=cri_gemm --m=8192 --n=384 --k=3584
 #CriGemmE2M1E2M1FP32_RCR_TileShape_512_256_128 --bm_name=cri_gemm --m=8192 --n=4096 --k=1536
 
-
 #CriBLockScalingGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=1024 --n=1024 --k=1024
 #CriBLockScalingGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=2048 --n=2048 --k=2048
 #CriBLockScalingGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=4096 --n=4096 --k=4096
@@ -103,7 +88,6 @@
 #CriBLockScalingGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=8192 --n=384 --k=3584
 #CriBLockScalingGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=8192 --n=4096 --k=1536
 
-
 #CriBLockScalingGemm_E5M2E5M2FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=1024 --n=1024 --k=1024
 #CriBLockScalingGemm_E5M2E5M2FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=2048 --n=2048 --k=2048
 #CriBLockScalingGemm_E5M2E5M2FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=4096 --n=4096 --k=4096
@@ -115,7 +99,6 @@
 #CriBLockScalingGemm_E5M2E5M2FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=4096 --n=384 --k=3584
 #CriBLockScalingGemm_E5M2E5M2FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=8192 --n=384 --k=3584
 #CriBLockScalingGemm_E5M2E5M2FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=8192 --n=4096 --k=1536
-
 
 #CriBLockScalingGemm_E2M1E2M1FP32_RCR_TileShape_512_256_128 --bm_name=cri_gemm --m=1024 --n=1024 --k=1024
 #CriBLockScalingGemm_E2M1E2M1FP32_RCR_TileShape_512_256_128 --bm_name=cri_gemm --m=2048 --n=2048 --k=2048
