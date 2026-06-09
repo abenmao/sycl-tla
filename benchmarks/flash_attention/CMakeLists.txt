@@ -42,6 +42,8 @@ cutlass_benchmark_add_suite(cutlass_benchmarks_flash_attention)
 
 # Pass these configuration files for the CI
 if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
+  set(CONFIG_FILE_CRI_PREFILL_BF16 --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_flash_attention_prefill_bf16.in)
+
   # ByteDance real-scenario LLM shapes from xpu-perf/micro_perf workloads
   set(CONFIG_FILE_BYTEDANCE_DECODE_FP8 --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/bytedance/input_flash_attention_decode_fp8.in)
   set(CONFIG_FILE_BYTEDANCE_DECODE_FP8KV_FP16MMA --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/bytedance/input_flash_attention_decode_fp8kv_fp16mma.in)
@@ -56,6 +58,7 @@ if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
       CONFIG_FILE_BYTEDANCE_DECODE_FP8
       CONFIG_FILE_BYTEDANCE_DECODE_FP8KV_FP16MMA)
   set(PREFILL_TEST_COMMAND_OPTIONS
+      CONFIG_FILE_CRI_PREFILL_BF16
       CONFIG_FILE_CRI_PREFILL_FP8
       CONFIG_FILE_CRI_PREFILL_FP8KV_FP16MMA
       CONFIG_FILE_CRI_PREFILL_MXFP8

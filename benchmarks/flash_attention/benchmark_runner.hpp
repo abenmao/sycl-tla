@@ -60,13 +60,13 @@ struct FMHAOptions {
   bool error;
 
   int batch, num_heads_q, num_heads_kv, seq_len_qo, seq_len_kv, seq_len_kv_cache, head_size_qk,
-      head_size_vo, iterations, page_size;
+      head_size_vo, iterations, warmup, page_size;
   float softmax_scale;
   std::string bm_name;
 
   FMHAOptions()
       : error(false), batch(32), num_heads_q(16), num_heads_kv(16), seq_len_qo(1), head_size_qk(128),
-        seq_len_kv(512), seq_len_kv_cache(0), page_size(128), head_size_vo(128), iterations(ITERATIONS), softmax_scale(1.f), bm_name("Flash Attention v2") {}
+        seq_len_kv(512), seq_len_kv_cache(0), page_size(128), head_size_vo(128), iterations(ITERATIONS), warmup(5), softmax_scale(1.f), bm_name("Flash Attention v2") {}
 
   // Parses the command line
   void parse(int argc, char const **args) {
@@ -82,6 +82,7 @@ struct FMHAOptions {
     cmd.get_cmd_line_argument("head_size_vo", head_size_vo, 128);
     cmd.get_cmd_line_argument("head_size_qk", head_size_qk, head_size_vo);
     cmd.get_cmd_line_argument("iterations", iterations, ITERATIONS);
+    cmd.get_cmd_line_argument("warmup", warmup, 5);
     cmd.get_cmd_line_argument("bm_name", bm_name, std::string("Flash Attention v2"));
 
     softmax_scale = 1 / std::sqrt(static_cast<float>(head_size_qk));
@@ -987,7 +988,12 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
     typename FMHAKernel::Params params = FMHAKernel::to_underlying_arguments(arguments, workspace.get());
 
 #ifdef CUTLASS_TEST_FOR_CRI
-    // disable warmup run and verification for CRI simulator as it's time-consuming
+    // Skip verification on CRI simulator (time-consuming), but warm up a few
+    // times so the first timed invocation is not penalized by ICache/JIT cost.
+    for (int i = 0; i < options.warmup; ++i) {
+      run(params);
+    }
+    compat::wait();
 #else
     // Run the GEMM
     run(params);
@@ -1040,9 +1046,31 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
                      sizeof(ElementO) * options.batch * options.num_heads_q * effective_seq_len_qo * options.head_size_vo;
     double mega_bytes_transferred = (gbps_qk + gbps_pv) * (1e-6);
 
+    const int inner_iters = std::max(1, options.iterations);
+
     initialize_counters(state);
     int32_t counter = 1;
     for(auto _ : state) {
+#ifdef CUTLASS_TEST_FOR_CRI
+      // CRI: reuse the outer-scope `params`/`workspace` built once before the
+      // warmup. Re-allocating workspace and zero-filling it every state-iter
+      // (the non-CRI path below) evicts the data cache, so the first timed
+      // launch hits cold cache and inflates ms_elapsed by 20%+ on large
+      // shapes (sq>=4096). The example runner (xe_fmha_fwd_runner.hpp) only
+      // allocates workspace once; mirror that here so the two harnesses are
+      // comparable. Per-kernel host/launch overhead is amortised over
+      // kInnerIters launches + a single sync (matches example loop).
+      // Keep the inner loop count aligned with the example runner's
+      // --iterations value so cold-start/cache effects are averaged the same
+      // way on CRI.
+      GPU_Clock timer;
+      timer.start();
+      for (int i = 0; i < inner_iters; ++i) {
+        run(params);
+      }
+      compat::wait();
+      auto ms_elapsed = timer.milliseconds() / static_cast<double>(inner_iters);
+#else
       state.PauseTiming();
 
       typename FMHAKernel::Arguments arguments = [&]() {
@@ -1113,6 +1141,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
       timer.start();
       run(params);
       auto ms_elapsed = timer.milliseconds();
+#endif
       update_counters(state, ms_elapsed);
       state.SetIterationTime(ms_elapsed / 1000);
       counter++;

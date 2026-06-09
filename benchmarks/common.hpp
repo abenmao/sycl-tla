@@ -35,10 +35,12 @@
 #include <sstream>
 #include <fstream>
 
+#ifndef ITERATIONS
 #ifdef CUTLASS_TEST_FOR_CRI
 #define ITERATIONS 1
 #else
 #define ITERATIONS 100
+#endif
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

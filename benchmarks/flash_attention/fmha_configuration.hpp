@@ -310,18 +310,21 @@ struct FMHAConfigGenWithTileShape{
     _1
   >>;
 
-  // SubgroupLayoutPV: (num_sg_p = num_sg_q, 1, num_sg_k)
-  // number of subgroups in PV GEMM equals that in QK GEMM
-  using SubgroupLayoutPV = Layout<Shape<
-    Int<WgTileQ / SgTileQ>,
-    _1,
-    Int<WgTileK / SgTileK>
-  >>;
+  // SubgroupLayoutPV is intentionally NOT specified here.  FMHAConfig will
+  // derive it via `cutlass::fmha::collective::get_sg_layout_pv(SubgroupLayoutQK{})`
+  // when the template arg is `void`.  Passing an explicit
+  // `Layout<Shape<num_sg_p, _1, num_sg_k>>` here would have identical *shape* but
+  // a different stride on the size-1 middle axis (compact default `_N` vs the
+  // `_0` produced by `get_sg_layout_pv`).  That difference yields a different
+  // `TiledMMAPV` type, hence a different compiled kernel from the example
+  // runner -- which is observable as a measurable perf delta on CRI even
+  // though the math is equivalent.  Keep this `void` to ensure the bench and
+  // the example dispatch the byte-identical kernel.
 
   using type = cutlass::flash_attention::FMHAConfig<
     ElementQ, ElementK, ElementV, ElementO, LayoutQ, LayoutK, LayoutV, LayoutO, ElementScale,
     ShapeQK, ShapePV, ShapeOutput,
-    SubgroupLayoutQK, SubgroupLayoutPV,
+    SubgroupLayoutQK, void,
     Causal, VarLen, CachedKV, PagedKV, Persistent, UseScale, PipelineStagesConfig<Mode>::value>;
 };
 
