@@ -40,6 +40,63 @@ target_link_options(${AMMA_ADMA_TARGET} PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)
 
+# Drive the xe4_amma_adma tutorial executable over a matrix of input shapes
+# and the supported transpose configuration so the kernel is exercised in CI
+# rather than only via manual runs. The tutorial accepts:
+#     <executable> M N K transA transB
+# with defaults M=N=K=256, transA='T', transB='N'.
+#
+# Kernel constraints (must hold for every shape below):
+#   * BLK_M = BLK_N = BLK_K = 128, no boundary handling, so M, N, K must each
+#     be positive multiples of 128.
+#   * K_PIPE_MAX = 3 pipeline stages are statically allocated in SLM. The
+#     prologue may prefetch past the K extent when K < 3 * BLK_K, but the
+#     MMA loop only consumes the actual k_tile range so any speculatively
+#     loaded data is harmless. Therefore K only needs to be a positive
+#     multiple of BLK_K = 128.
+#   * The host dispatch in gemm() currently only implements transA='T' and
+#     transB='N'; add cases here for additional layouts once they are
+#     implemented in amma_adma_xe4.cpp.
+function(_add_xe4_amma_adma_shape_test m n k)
+  set(_test_name ctest_examples_${AMMA_ADMA_TARGET}_m${m}_n${n}_k${k}_TN)
+  add_test(
+    NAME ${_test_name}
+    COMMAND $<TARGET_FILE:${AMMA_ADMA_TARGET}> ${m} ${n} ${k} T N
+  )
+  set_tests_properties(
+    ${_test_name}
+    PROPERTIES
+      FAIL_REGULAR_EXPRESSION "FAILED;Test Failed"
+      PASS_REGULAR_EXPRESSION "Verification: PASSED"
+  )
+endfunction()
+
+# Small-K cases (K < K_PIPE_MAX * BLK_K = 384) to exercise the prologue
+# over-prefetch path.
+_add_xe4_amma_adma_shape_test(128 128 128)
+_add_xe4_amma_adma_shape_test(256 256 128)
+_add_xe4_amma_adma_shape_test(128 128 256)
+_add_xe4_amma_adma_shape_test(256 256 256)
+_add_xe4_amma_adma_shape_test(1024 1024 1024)
+
+# Square problems at and above the pipeline depth.
+_add_xe4_amma_adma_shape_test(128 128 384)
+_add_xe4_amma_adma_shape_test(256 256 384)
+_add_xe4_amma_adma_shape_test(256 256 512)
+_add_xe4_amma_adma_shape_test(512 512 512)
+
+# Rectangular M / N to exercise both M- and N-tile loop bounds.
+_add_xe4_amma_adma_shape_test(128 256 128)
+_add_xe4_amma_adma_shape_test(256 128 128)
+_add_xe4_amma_adma_shape_test(128 256 384)
+_add_xe4_amma_adma_shape_test(256 128 384)
+_add_xe4_amma_adma_shape_test(128 512 384)
+_add_xe4_amma_adma_shape_test(512 128 384)
+
+# Varying K to vary K_TILE_MAX (1, 2, 3, 4, 6, 8 tiles).
+_add_xe4_amma_adma_shape_test(256 256 768)
+_add_xe4_amma_adma_shape_test(256 256 1024)
+
 set(ADMA_LINEAR_COPY_TARGET xe4_adma_linear_copy)
 add_xe4_test(${ADMA_LINEAR_COPY_TARGET} adma_linear_copy_xe4.cpp)
 target_include_directories(${ADMA_LINEAR_COPY_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

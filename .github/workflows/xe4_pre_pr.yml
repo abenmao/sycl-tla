@@ -91,6 +91,13 @@ jobs:
           source ~/xe4_toolkit/source_oneapi_env.sh
           source ~/xe4_toolkit/source_simulator_env.sh
           echo "--------------------------------------"
+          echo "Running Xe4 CuTe AMMA+DMA GEMM Tutorial Workload (shape sweep via ctest)"
+          ninja xe4_amma_adma
+          # Drive the registered shape sweep from examples/cute/tutorial/xe4/CMakeLists.txt.
+          # Any ctest_examples_xe4_amma_adma_m*_n*_k*_TN test added there is picked up
+          # automatically here with no workflow edits required.
+          ctest -R '^ctest_examples_xe4_amma_adma_m[0-9]+_n[0-9]+_k[0-9]+_TN$' --output-on-failure
+          echo "--------------------------------------"
           echo "Running Xe4 GEMM Workload"
           ninja xe4_gemm
           ./examples/xe4/gemm/xe4_gemm
@@ -106,10 +113,7 @@ jobs:
           echo "Running Xe4 CuTe AMMA w/o DMA GEMM Tutorial Workload"
           ninja xe4_amma
           ./examples/cute/tutorial/xe4/xe4_amma
-          echo "--------------------------------------"
-          echo "Running Xe4 CuTe AMMA+DMA GEMM Tutorial Workload"
-          ninja xe4_amma_adma
-          ./examples/cute/tutorial/xe4/xe4_amma_adma
+
           echo "--------------------------------------"
           echo "Running Xe4 CuTe AMMA+DMA GEMM Cluster Tutorial Workload"
           ninja xe4_amma_adma_cluster

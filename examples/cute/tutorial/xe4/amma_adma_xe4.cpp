@@ -157,7 +157,8 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape,
   // Allocate abarrier for Load A/B, MMA and Store C.
   auto load_a_abar = allocate_abar<0, K_PIPE_MAX>();
   auto load_b_abar = allocate_abar<1, K_PIPE_MAX>();
-  auto mma_abar = allocate_abar<2,K_PIPE_MAX>();
+  auto mma_abar = allocate_abar<2>();
+  uint32_t mma_abar_phase = 0;
   auto store_c_abar = allocate_abar<3>();
   
   // Only lanes (work-items) using abarrier should initialize it.
@@ -167,9 +168,7 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape,
       xe4_initialize_barrier(load_b_abar[i], 1 /*numThreads*/);
     }
   } else if (elect_one_thr && warp_idx == 1) {
-    for (int i = 0; i < K_PIPE_MAX; ++i){
-      xe4_initialize_barrier(mma_abar[i], 1 /*numThreads*/);
-    }
+    xe4_initialize_barrier(*mma_abar, 1);
     xe4_initialize_barrier(store_c_abar[0], 1 /*numThreads*/);
   }
   xe4_syncthreads();
@@ -206,8 +205,9 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape,
   {
     if (elect_one_thr) 
     {
+      int prologue_pipe_max = std::min((int) K_PIPE_MAX, K_TILE_MAX);
       // Prologue: Fill all SLM pipes for A/B.
-      for (int pipe = 0; pipe < K_PIPE_MAX; ++pipe)
+      for (int pipe = 0; pipe < prologue_pipe_max; ++pipe)
       {
           xe4_set_barrier_transaction_bytes(load_a_abar[pipe], dma_transaction_bytesA);
           xe4_set_barrier_transaction_bytes(load_b_abar[pipe], dma_transaction_bytesB);
@@ -219,7 +219,8 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape,
       for (int k_tile_next = k_tile; k_tile_next < K_TILE_MAX; ++k_tile_next)
       {
         int write_pipe = write_state.index();
-        xe4_wait_barrier(mma_abar[write_pipe], write_state.phase());
+        xe4_wait_barrier(*mma_abar, mma_abar_phase); 
+        mma_abar_phase ^= 1;
         xe4_set_barrier_transaction_bytes(load_a_abar[write_pipe], dma_transaction_bytesA);
         xe4_set_barrier_transaction_bytes(load_b_abar[write_pipe], dma_transaction_bytesB);
         copy(adma_load_a.with(&load_a_abar[write_pipe]), tAgA(_,k_tile_next), tAsA(_,write_pipe));
@@ -239,10 +240,12 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape,
         int read_pipe = read_state.index();
         xe4_wait_barrier(load_a_abar[read_pipe], read_state.phase());
         xe4_wait_barrier(load_b_abar[read_pipe], read_state.phase());
-        xe4_set_barrier_transaction_bytes(mma_abar[read_pipe], 2);
-        auto new_mma = mma.with(AMMA::TrackMethod<AMMA::Tracking::AB>{}, mma_ctrl, &mma_abar[read_pipe], &mma_abar[read_pipe], dummy_mask, dummy_mask);
+        xe4_set_barrier_transaction_bytes(*mma_abar, 2);
+        auto new_mma = mma.with(AMMA::TrackMethod<AMMA::Tracking::AB>{}, mma_ctrl, mma_abar, mma_abar, dummy_mask, dummy_mask);
         cute::gemm(new_mma, tCrA(_,_,_,read_pipe), tCrB(_,_,_,read_pipe), tCrC);
         mma_ctrl = 0x000;
+        xe4_wait_barrier(*mma_abar, mma_abar_phase);
+        mma_abar_phase ^= 1;
         ++read_state;
       }
       // Mainloop last iteration: Only track D completion for notifying store barrier.
@@ -250,9 +253,11 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape,
         int read_pipe = read_state.index();
         xe4_wait_barrier(load_a_abar[read_pipe], read_state.phase());
         xe4_wait_barrier(load_b_abar[read_pipe], read_state.phase());
-        xe4_set_barrier_transaction_bytes(mma_abar[read_pipe], 1);
-        auto new_mma = mma.with(AMMA::TrackMethod<AMMA::Tracking::D>{}, mma_ctrl, &mma_abar[read_pipe]);
+        xe4_set_barrier_transaction_bytes(*mma_abar, 1);
+        auto new_mma = mma.with(AMMA::TrackMethod<AMMA::Tracking::D>{}, mma_ctrl, mma_abar);
         cute::gemm(new_mma, tCrA(_,_,_,read_pipe), tCrB(_,_,_,read_pipe), tCrC);
+        xe4_wait_barrier(*mma_abar, mma_abar_phase);
+        mma_abar_phase ^= 1;
       }
     }
    sycl::group_barrier(item.get_sub_group());
@@ -266,7 +271,6 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape,
     if (elect_one_thr) 
     {
       int read_pipe = read_state.index();
-      xe4_wait_barrier(mma_abar[read_pipe], read_state.phase());
       xe4_set_barrier_transaction_bytes(store_c_abar[0], dma_transaction_bytesC);
       copy(adma_store_c.with(&store_c_abar[0]), tCsC, tCgC);
       xe4_wait_barrier(store_c_abar[0], store_c_barrier_phase_bit);
