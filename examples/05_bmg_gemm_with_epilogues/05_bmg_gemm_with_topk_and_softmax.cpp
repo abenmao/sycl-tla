@@ -134,16 +134,25 @@ using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16<PipelineStages>;
 using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeXMX16;
 
 // Top-K + Softmax fusion operation
+// When TopK is enabled, pass CopyOpR2G into the fusion op (visitor does its own store).
+// The CollectiveEpilogue's store is disabled (void) when TopK is enabled.
+using CopyOpR2G_TopK = XE_2D_U32x8x16_ST_N;
 using EpilogueFusionOperation     = std::conditional_t<EnableTopKSoftmax,
-  typename cutlass::epilogue::fusion::LinCombTopKSoftmaxCol<TopK, ElementD, ElementCompute>,
+  typename cutlass::epilogue::fusion::XeLinCombTopKSoftmaxCol<TopK, ElementD, ElementCompute, CopyOpR2G_TopK>,
   typename cutlass::epilogue::fusion::LinearCombination<ElementD, ElementCompute, ElementC, ElementCompute>
 >;
 
-// The fusion op only allows for epilogue tiles matching the mainloop tile.
-using EpilogueTileType    = decltype(cute::take<0,2>(TileShape{}));
+using EpilogueTileType = Shape<_32, _64, _32>;
 
 using FusionCallBacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueFusionOperation, TileShape,
-        decltype(tile_shape(TiledMma()))>;
+  EpilogueTileType>;
+
+// When TopK is enabled, the visitor handles output store internally, so disable epilogue's CopyOpR2G.
+// Note: the visitor builds its own Xe 2D block store from (ptr_D, M, N) with pitch == N, so the TopK
+// path requires a packed RowMajor D (leading dimension == N); batched D works as long as it is packed
+// (batches stacked in M). This example allocates such a D via make_cute_packed_stride below.
+using EpilogueCopyOpR2G = std::conditional_t<EnableTopKSoftmax, void, XE_2D_U32x8x16_ST_N>;
+
 using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
       EpilogueDispatchPolicy,
       TileShape,
@@ -154,7 +163,7 @@ using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
       FusionCallBacks,
       XE_2D_U32x8x16_LD_N,
       void, void,
-      XE_2D_U32x8x16_ST_N,
+      EpilogueCopyOpR2G,
       void, void>;
 
 using CollectiveMainloop = cutlass::gemm::collective::CollectiveMma<
@@ -328,7 +337,7 @@ struct Result {
       {options.m, options.n, options.k, options.l},
       {tensor_A.device_data(), stride_A, tensor_B.device_data(), stride_B},
       {
-        {options.alpha(), 0.f}, // alpha, beta
+        {options.alpha(), 0.f, nullptr, nullptr, tensor_D.device_data()}, // alpha, beta, alpha_ptr, beta_ptr, ptr_D
         nullptr, stride_D,
         tensor_D.device_data(), stride_D
       }

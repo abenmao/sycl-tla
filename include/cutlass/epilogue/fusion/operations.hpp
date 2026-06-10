@@ -1,5 +1,6 @@
 /***************************************************************************************************
  * Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -202,6 +203,20 @@ template<
   FloatRoundStyle RoundStyle_ = FloatRoundStyle::round_to_nearest
 >
 struct LinCombTopKSoftmaxCol
+    : LinearCombination<ElementOutput_, ElementCompute_, ElementSource_, ElementScalar_, RoundStyle_> {
+};
+
+// D = softmax(top_k(alpha * acc + beta * C)), with XE visitor-owned output store
+template<
+  int TopK,
+  class ElementOutput_,
+  class ElementCompute_,
+  class CopyOpR2G_,
+  class ElementSource_ = ElementOutput_,
+  class ElementScalar_ = ElementCompute_,
+  FloatRoundStyle RoundStyle_ = FloatRoundStyle::round_to_nearest
+>
+struct XeLinCombTopKSoftmaxCol
     : LinearCombination<ElementOutput_, ElementCompute_, ElementSource_, ElementScalar_, RoundStyle_> {
 };
 
