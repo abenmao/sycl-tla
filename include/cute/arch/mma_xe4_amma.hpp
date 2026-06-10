@@ -228,6 +228,33 @@ struct XE4_AMMA_AB_CLUSTER {
   }
 };
 
+// 32-bit accum, barriers track d, b, cluster version
+template <class d_type, class a_type, class b_type, class c_type,
+  int M, int N, int K, AMMA::Major a_major, AMMA::Major b_major>
+struct XE4_AMMA_DB_CLUSTER {
+  using DRegisters = void;
+  using ARegisters = void;
+  using BRegisters = void;
+  using CRegisters = void;
+
+  CUTE_HOST_DEVICE static void fma(
+    MMAControl const& ctrl,
+    uint32_t const& desc_d, uint32_t const& desc_a,
+    uint32_t const& desc_b, uint32_t const& desc_c,
+    uint64_t* abar_d, uint64_t* abar_b,
+    uint32_t b_mask
+  ) {
+#if defined(__SYCL_DEVICE_ONLY__)
+    if (cute::elect_one_sync()) {
+      asm volatile (
+        ("async_gmma.m" + _s<M>+"n" + _s<N>+"k" + _s<K>+"." + _t<d_type>+"_" + _t<a_type>+"_" + _t<b_type>+"_" + _t<c_type>+_am<a_major>+_bk<b_major>+".dtm.btmm %0, %1, %2, %3, %4, [%5], [%6], %7;\n")
+        ::"r"(ctrl), "r"(desc_d), "r"(desc_a), "r"(desc_b), "r"(desc_c),
+        "r"(abar_d), "r"(abar_b), "r"(b_mask));
+    }
+#endif
+  }
+};
+
 // 32-bit accum, barriers track d, a, b, cluster version
 template <class d_type, class a_type, class b_type, class c_type,
          int M, int N, int K, AMMA::Major a_major, AMMA::Major b_major>

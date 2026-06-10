@@ -725,6 +725,13 @@ inline void async_linear_load(slm_dtype *slm_ptr, dtype *gmem_ptr, uint32_t size
               "r"(gmem_ptr), "r"(abar_ptr), "r"(size), "r"(wg_mask));
 }
 
+template <typename slm_dtype, typename abar_ptr_t = uint64_t *>
+inline void async_linear_push(slm_dtype *slm_dst, slm_dtype *slm_src, uint32_t size, abar_ptr_t abar_ptr,
+                              uint32_t wg_mask) {
+  INLINE_PISA("async_linear_copy.shared_cluster.shared_workgroup.abarrier [%0], [%1], [%2], %3, %4;" ::"r"(slm_dst),
+              "r"(slm_src), "r"(abar_ptr), "r"(size), "r"(wg_mask));
+}
+
 template <typename slm_dtype, typename dtype, typename abar_ptr_t = uint64_t *>
 inline void async_linear_store(dtype *gmem_ptr, slm_dtype *slm_ptr, uint32_t size, abar_ptr_t abar_ptr) {
   INLINE_PISA("async_linear_copy.global.shared_workgroup.L2wb.L3uc.abarrier [%0], [%1], [%2], %3;" ::"r"(gmem_ptr),
