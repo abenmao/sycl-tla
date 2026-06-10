@@ -313,7 +313,7 @@ explode_mma(PtrD&& d, int_sequence<Id...>,
   }
 }
 
-template <class MMA_Op,
+template <class MMA_Op, bool NoAcc = false,
           class PtrD, int... Id,
           class PtrA, int... Ia,
           class PtrB, int... Ib,
@@ -330,7 +330,7 @@ explode_mma(PtrD&& d, int_sequence<Id...>,
         PtrF&& f, int_sequence<If...>,
         uint16_t g, uint16_t h)
 {
-  return MMA_Op::fma(d[Id]..., a[Ia]..., b[Ib]..., c[Ic]..., e[Ie]..., f[If]..., g, h);
+  return MMA_Op::template fma<NoAcc>(d[Id]..., a[Ia]..., b[Ib]..., c[Ic]..., e[Ie]..., f[If]..., g, h);  
 }
 #endif
 

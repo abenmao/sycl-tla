@@ -153,14 +153,23 @@ template <int M> struct XE_BDPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::
   using BVector = typename Base::BVector; \
   using CVector = typename Base::CVector; \
   using DVector = typename Base::DVector; \
-  template <typename CVector_, \
-            typename SFAVector, \
-            typename SFBVector> \
+  template <bool NoAcc = false, \
+            typename CVector_, \
+            typename SFAVector_, \
+            typename SFBVector_> \
   CUTE_DEVICE static void \
-  fma(DVector& d, AVector const& a, BVector const& b, CVector_ const& c, SFAVector const& sfa, SFBVector const& sfb, uint16_t sfa_offset, uint16_t sfb_offset) { \
+  fma(DVector& d, AVector const& a, BVector const& b, CVector_ const& c, SFAVector_ const& sfa, SFBVector_ const& sfb, uint16_t sfa_offset, uint16_t sfb_offset) { \
     constexpr auto SFASize = sizeof(sfa); \
     constexpr auto SFBSize = sizeof(sfb); \
-    if constexpr (std::is_same_v<CVector_, DVector>) { \
+    if constexpr (NoAcc) { \
+      asm ( \
+        "{\n" \
+        DECL_BDPAS_PARAMS(TD) \
+        "bdpas." #TB "." #TA ".8.8 (M1, 16) DST.0 %%null.0 SRC1_UD.0 SRC2_UD.0 SRC3_UB(0,0) SRC4_UB(0,0)\n" \
+        "}\n" \
+        : "=rw"(d) : "rw"(a), "rw"(b), "rw"(sfa), "rw"(sfb), "P"(sfa_offset), "P"(sfb_offset), "P"(SFASize * 16), "P"(SFBSize * 16) \
+      ); \
+    } else if constexpr (std::is_same_v<CVector_, DVector>) { \
       d = c; \
       asm ( \
         "{\n" \
@@ -207,10 +216,12 @@ template <int M> struct XE_BDPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::
   using BVector = typename Base::BVector; \
   using CVector = typename Base::CVector; \
   using DVector = typename Base::DVector; \
-  template <typename SFAVector, \
-            typename SFBVector> \
+  template <bool NoAcc = false, \
+            typename CVector_ = CVector, \
+            typename SFAVector_, \
+            typename SFBVector_> \
   CUTE_HOST_DEVICE static void \
-  fma(DVector& d, AVector const& a, BVector const& b, CVector const& c, SFAVector const& sfa, SFBVector const& sfb, uint16_t sfa_offset, uint16_t sfb_offset) { \
+  fma(DVector& d, AVector const& a, BVector const& b, CVector_ const& c, SFAVector_ const& sfa, SFBVector_ const& sfb, uint16_t sfa_offset, uint16_t sfb_offset) { \
     CUTE_INVALID_CONTROL_PATH("Cannot use Xe BDPAS MMA atom on non-Xe hardware"); \
   } \
 };

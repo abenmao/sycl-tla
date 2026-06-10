@@ -416,11 +416,18 @@ gemm(MMA_Atom<MMA>       const& mma,
   CUTE_STATIC_ASSERT_V(size<2>(A) == size<2>(B));  // AK == BK
   CUTE_STATIC_ASSERT_V(size<0>(C) == size<0>(D) && size<1>(C) == size<1>(D) && size<2>(C) == size<2>(D));
   auto K = size<2>(A);
-
+#if defined(SYCL_INTEL_TARGET)
+  gemm<NoAcc>(mma, D, A(_,_,0), B(_,_,0), C);
+  CUTE_UNROLL
+  for (int k = 1; k < K; ++k) {
+      gemm<false>(mma, D, A(_,_,k), B(_,_,k), C);
+  }
+#else
   CUTE_UNROLL
   for (int k = 0; k < K; ++k) {
-    gemm<NoAcc>(mma, D, A(_,_,k), B(_,_,k), C);
+      gemm<NoAcc>(mma, D, A(_,_,k), B(_,_,k), C);
   }
+#endif
 }
 
 //
@@ -497,14 +504,30 @@ gemm(MMA_Atom<MMA>       const& mma,
 
   auto K = size<2>(A);
 
+  // NoAcc (null src0) only applies to the first inner-K MMA so that D = A[0]*B[0];
+  // subsequent iterations must accumulate (D += A[k]*B[k]) to preserve correctness.
+#if defined(SYCL_INTEL_TARGET)
+  copy(A(_,_,0), rA(_,_,0));
+  copy(B(_,_,0), rB(_,_,0));
+  // Thread-level register gemm for k
+  gemm<NoAcc>(mma, D, rA(_,_,0), rB(_,_,0), C);
   CUTE_UNROLL
-  for (int k = 0; k < K; ++k)
-  {
+  for (int k = 1; k < K; ++k) {
     copy(A(_,_,k), rA(_,_,k));
     copy(B(_,_,k), rB(_,_,k));
     // Thread-level register gemm for k
+    gemm<false>(mma, D, rA(_,_,k), rB(_,_,k), C);
+  }
+#else
+  CUTE_UNROLL
+  for (int k = 0; k < K; ++k) {
+    copy(A(_,_,k), rA(_,_,k));
+    copy(B(_,_,k), rB(_,_,k));
+    // Thread-level register gemm for k    
     gemm<NoAcc>(mma, D, rA(_,_,k), rB(_,_,k), C);
   }
+#endif
+
 }
 
 } // end namespace cute

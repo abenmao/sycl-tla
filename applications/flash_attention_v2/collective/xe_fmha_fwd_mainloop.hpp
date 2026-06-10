@@ -647,8 +647,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
 
           copy(tiled_copy_scaleQ, copy_iter_scaleQ(_, _, _, D), fragment_scaleQ);
           copy(tiled_copy_scaleK, copy_iter_scaleK(_, _, _, D), fragment_scaleK);
-          //TODO: Add src0 null support then can get acc right because we removed clear(tSrS).
-          cute::gemm(mma_qk, zipped_q, zipped_k, tSrS);
+
+          if (D == 0) {
+            cute::gemm<true>(mma_qk, zipped_q, zipped_k, tSrS);
+          } else {
+            cute::gemm(mma_qk, zipped_q, zipped_k, tSrS);
+          }
         } else {
           if constexpr (F8kvF16mma) {
             dequantize(tSrK, scale_k);
@@ -812,12 +816,22 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
           fill(fragment_scaleP, ElementScaleV(1));
           copy(tiled_copy_scaleV, copy_iter_scaleV(_, _, _, K), fragment_scaleV);
 
-          cute::gemm(mma_pv, zipped_p, zipped_v, tArA(_,_,_,VV));
+          // K==0 implies blk_k0==0 (K starts at blk_k0), so tArA was just
+          // cleared above; use null-src0 to skip the accumulator read.
+          if (K == 0) {
+            cute::gemm<true>(mma_pv, zipped_p, zipped_v, tArA(_,_,_,VV));
+          } else {
+            cute::gemm(mma_pv, zipped_p, zipped_v, tArA(_,_,_,VV));
+          }
         } else {
           if constexpr (F8kvF16mma) {
             dequantize(tArV, scale_v);
           }
-          cute::gemm(mma_pv, tArP, tArV, tArA(_,_,_,VV));
+          if (K == 0) {
+            cute::gemm<true>(mma_pv, tArP, tArV, tArA(_,_,_,VV));
+          } else {
+            cute::gemm(mma_pv, tArP, tArV, tArA(_,_,_,VV));
+          }
         }
       }
 
