@@ -105,7 +105,7 @@ if (CUTLASS_ENABLE_SYCL)
   message(STATUS "Building CUTLASS SYCL Examples")
   if (SYCL_INTEL_TARGET)
     message(STATUS "Building examples for Intel GPU targets")
-    foreach(EXAMPLE
+    set(XE_EXAMPLES
       00_bmg_gemm
       00_bmg_gemm/legacy
       01_bmg_gemm_with_collective_builder
@@ -130,6 +130,15 @@ if (CUTLASS_ENABLE_SYCL)
       50_xe35_block_scaled_gemm
       51_xe35_block_scaled_grouped_gemm
       )
+    # GDN chunkwise attention builds on CRI (Xe-3.5) and BMG (Xe20). PVC is
+    # excluded (the kernels are not validated there), so gate on CRI OR BMG
+    # rather than all Intel targets to keep it out of PVC CI.
+    if(SYCL_TARGET_INTEL_GPU_CRI OR SYCL_TARGET_INTEL_GPU_BMG)
+      list(APPEND XE_EXAMPLES
+        14_xe_gdn_attention
+      )
+    endif()
+    foreach(EXAMPLE ${XE_EXAMPLES})
       add_subdirectory(${EXAMPLE})
     endforeach()
   endif()

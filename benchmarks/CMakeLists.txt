@@ -120,6 +120,12 @@ if(SYCL_INTEL_TARGET)
   list(APPEND SUBDIRS flash_attention)
   list(APPEND SUBDIRS gemm/legacy)
   list(APPEND SUBDIRS grouped_gemm)
+  # GDN chunkwise attention builds on CRI (Xe-3.5) and BMG (Xe20). PVC is
+  # excluded (kernels not validated there), so gate on CRI OR BMG to keep
+  # cbenchmarks_gdn_xe out of PVC `ctest -R cbenchmarks` runs.
+  if(SYCL_TARGET_INTEL_GPU_CRI OR SYCL_TARGET_INTEL_GPU_BMG)
+    list(APPEND SUBDIRS gdn)
+  endif()
 endif()
 
 foreach(SUBDIR ${SUBDIRS})
