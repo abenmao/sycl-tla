@@ -1845,7 +1845,7 @@ namespace detail {
 // Core Matrix alignment requirements. Only checks data descriptors (Type1/Type2);
 // SF Type3 is handled via SMEM padding at the layout level.
 template <class InternalType>
-CUTE_HOST_RTC
+CUTE_HOST_DEVICE
 void validate_cm_alignment_after_truncation(
     const cute::array<uint16_t, 5>& smem_box_shape,
     uint32_t matrix_desc,
@@ -1868,9 +1868,17 @@ void validate_cm_alignment_after_truncation(
   // divide evenly into a byte. HW spec says D6 aligns same as D8 (32 elements)
   // since 6-bit elements are byte-padded in the core matrix.
   int x_min = x_min_bytes * 8 / ((elem_bits == 6) ? 8 : elem_bits);
+  bool invalid_x = smem_box_shape[0] < static_cast<uint16_t>(x_min);
+  bool invalid_y = smem_box_shape[1] < static_cast<uint16_t>(y_min);
+
+#if defined(__SYCL_DEVICE_ONLY__)
+  (void)num_multicast;
+  assert(!invalid_x && "ADMA box X-dimension after cluster truncation violates Core Matrix alignment");
+  assert(!invalid_y && "ADMA box Y-dimension after cluster truncation violates Core Matrix alignment");
+#else
   const char* type_name = (desc_type == 0) ? "Type1" : (desc_type == 1) ? "Type2" : "Type3";
 
-  if (smem_box_shape[0] < static_cast<uint16_t>(x_min)) {
+  if (invalid_x) {
     fprintf(stderr, "ERROR: ADMA box X-dimension (dim0=%u) after cluster truncation "
             "violates Core Matrix alignment (min=%d, elem_bits=%d, desc_type=%d(%s), "
             "num_multicast=%u)\n",
@@ -1878,7 +1886,7 @@ void validate_cm_alignment_after_truncation(
     throw std::runtime_error("ADMA box X-dimension after cluster truncation "
                              "violates Core Matrix alignment");
   }
-  if (smem_box_shape[1] < static_cast<uint16_t>(y_min)) {
+  if (invalid_y) {
     fprintf(stderr, "ERROR: ADMA box Y-dimension (dim1=%u) after cluster truncation "
             "violates Core Matrix alignment (min=%d, elem_bits=%d, desc_type=%d(%s), "
             "num_multicast=%u)\n",
@@ -1886,6 +1894,7 @@ void validate_cm_alignment_after_truncation(
     throw std::runtime_error("ADMA box Y-dimension after cluster truncation "
                              "violates Core Matrix alignment");
   }
+#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
