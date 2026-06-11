@@ -181,16 +181,6 @@ if (CUTLASS_ENABLE_SYCL)
       set(SYCL_TARGET_INTEL_GPU_CRI ON)
     endif()
 
-    # BMG (Battlemage / Xe20) discriminator, mirroring the CRI block above.
-    # Set ON only for the BMG device names so gates can include BMG while
-    # explicitly excluding PVC. Matches the BMG-in-list idiom used in
-    # benchmarks/gemm/legacy and benchmarks/flash_attention/legacy.
-    if(("intel_gpu_bmg_g21" IN_LIST DPCPP_SYCL_TARGET_LIST) OR
-       ("intel_gpu_bmg_g31" IN_LIST DPCPP_SYCL_TARGET_LIST) OR
-       ("bmg" IN_LIST DPCPP_SYCL_TARGET_LIST))
-      set(SYCL_TARGET_INTEL_GPU_BMG ON)
-    endif()
-
     option(CUTLASS_TEST_FOR_CRI "Enable CUTLASS_TEST_FOR_CRI" OFF)
     if(CUTLASS_TEST_FOR_CRI)
       add_compile_definitions(CUTLASS_TEST_FOR_CRI)

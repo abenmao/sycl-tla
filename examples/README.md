@@ -20,7 +20,6 @@ examples/
 ├── 01_bmg_gemm_with_collective_builder/
 ├── ...
 ├── 13_bmg_gemm_bias/
-├── 14_xe_gdn_attention/             # Chunkwise Gated DeltaNet attention
 ├── cute/                            # CuTe tutorial examples
 │   └── tutorial/                    
 ├── generics/                        # Device-agnostic SYCL examples
@@ -81,10 +80,6 @@ The following examples are optimized for Intel GPU architectures using SYCL:
 * [13_bmg_gemm_bias](13_bmg_gemm_bias/)
 
     Examples for testing simple GEMM with bias addition on Intel PVC/BMG
-
-* [14_xe_gdn_attention](14_xe_gdn_attention/)
-
-    Baseline Chunkwise Gated DeltaNet (GDN) attention forward pass on Intel Xe (CRI/BMG)
 
 ## Device-Agnostic SYCL Examples
 
