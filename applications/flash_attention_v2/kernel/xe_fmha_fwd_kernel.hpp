@@ -220,7 +220,7 @@ public:
       }
 #endif
       auto blk_qv = make_coord(blk_q, blk_v);
-#ifdef Q_PACKED_DECODE
+#if defined(Q_PACKED_DECODE) && defined(DECODE)
       // q_packed decode: the scheduler's head slot is the KV head. The query heads
       // [head_q_base, head_q_base + head_group_q) that share this KV head are packed
       // as the rows of the Q/O tiles (see Q_packed/O_packed construction below).
@@ -240,7 +240,7 @@ public:
       int seq_coord = cute::min(seq_len_qo, (blk_q * get<0>(TileShapeQK{}) + q_offset_sg));
 
       if (CollectiveMainloop::CausalMask && seq_coord < discard_seq_coord) continue;
-#ifdef Q_PACKED_DECODE
+#if defined(Q_PACKED_DECODE) && defined(DECODE)
       // q_packed decode: seq_len_qo == 1, so the single query token sits at the
       // last sequence position and attends to ALL kv tokens. The QK tile's M
       // dimension packs query *heads* (all at the same position), NOT sequence
@@ -309,7 +309,7 @@ public:
       // Main loop
       int l_coord = is_var_len ? 0 : idx_b;
       CollectiveMainloop mainloop(params.mainloop, shared_storage.mainloop);
-#ifdef Q_PACKED_DECODE
+#if defined(Q_PACKED_DECODE) && defined(DECODE)
       // Build packed Q/O 2D views: rows = the head_group_q query heads sharing this
       // KV head (row stride = query-head stride), cols = head dim (contiguous). This
       // reuses the QK/PV tiles as a small GEMM over heads and reads each KV head once
@@ -352,7 +352,7 @@ public:
 
       // Epilogue
       CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
-#ifdef Q_PACKED_DECODE
+#if defined(Q_PACKED_DECODE) && defined(DECODE)
       epilogue(O_in,
                tArA, tA_max, tA_sum,
                blk_qv, thr_id);

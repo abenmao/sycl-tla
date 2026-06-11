@@ -60,7 +60,7 @@ struct XeFHMAIndividualTileScheduler {
   {
     using namespace cute;
 
-#ifdef Q_PACKED_DECODE
+#if defined(Q_PACKED_DECODE) && defined(DECODE)
     // q_packed decode: one WG per (KV head, batch). The head_group_q query heads
     // that share a KV head are packed into the QK tile rows, so the grid iterates
     // over KV heads (not query heads) and divmod uses num_heads_kv.
