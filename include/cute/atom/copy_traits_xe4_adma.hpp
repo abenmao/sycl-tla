@@ -2108,7 +2108,8 @@ make_adma_copy_desc(
   constexpr int t_dim = decltype(rank(common_gbasis))::value;
 
   cute::array<uint16_t, t_dim> sbox_shape;
-  for_each(make_seq<t_dim>{}, [&](auto i) {sbox_shape[i] = sbox_shape_u32[i];});
+  auto const& sbox_shape_u32_local = sbox_shape_u32;
+  for_each(make_seq<t_dim>{}, [&](auto i) {sbox_shape[i] = sbox_shape_u32_local[i];});
 
   fillTensorDescriptorDimSize((uint64_t *)&tensor_desc, gmem_shape);
   fillTensorDescriptorDimStride((uint64_t *)&tensor_desc, gmem_stride);
