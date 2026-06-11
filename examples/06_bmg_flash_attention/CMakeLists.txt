@@ -72,3 +72,32 @@ foreach(HEAD_DIM 64 96 128 192)
     endif()
   endforeach()
 endforeach()
+
+# int8 Flash Attention prefill (int8 x int8 DPAS, static per-tensor quant of P).
+foreach(HEAD_DIM 64 128)
+  cutlass_example_add_executable(
+    06_xe_fmha_fwd_prefill_int8_t_hdim${HEAD_DIM}
+    06_xe_fmha_fwd.cpp
+  )
+  target_compile_definitions(06_xe_fmha_fwd_prefill_int8_t_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1 INPUT_TYPE=int8_t IS_INT8)
+endforeach()
+
+# int8 prefill variant: larger KV tile (128) for hdim64, exploiting int8 register headroom.
+# EXPERIMENT RESULT: regressed -18% (fp32 softmax tile grew -> 256-GRF spill). Kept for
+# reproducibility; not used by default. See copilot.md "优化实验" section.
+cutlass_example_add_executable(
+  06_xe_fmha_fwd_prefill_int8_t_hdim64_kv128
+  06_xe_fmha_fwd.cpp
+)
+target_compile_definitions(06_xe_fmha_fwd_prefill_int8_t_hdim64_kv128 PRIVATE HEAD_DIM=64 PREFILL SHOW_DIFF=1 INPUT_TYPE=int8_t IS_INT8 INT8_KV128)
+
+# int8 prefill EXPERIMENT: mimic fp8 dataflow by removing the int8-specific int32->float
+# conversions (persistent int32 PV accumulator, no per-block convert/rescale, bit_cast
+# scores). NUMERICALLY WRONG -- isolates whether those conversions are the bottleneck.
+foreach(HEAD_DIM 64 128)
+  cutlass_example_add_executable(
+    06_xe_fmha_fwd_prefill_int8_t_hdim${HEAD_DIM}_fp8mimic
+    06_xe_fmha_fwd.cpp
+  )
+  target_compile_definitions(06_xe_fmha_fwd_prefill_int8_t_hdim${HEAD_DIM}_fp8mimic PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1 INPUT_TYPE=int8_t IS_INT8 INT8_FP8_MIMIC)
+endforeach()

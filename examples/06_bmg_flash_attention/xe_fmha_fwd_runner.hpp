@@ -65,10 +65,13 @@ struct Options {
 
   int batch, num_heads_q, num_heads_kv, seq_len_qo, seq_len_kv, seq_len_kv_cache, page_size, head_size_qk, head_size_vo, iterations, warmup, verify;
   float softmax_scale;
+  // int8 per-tensor (de)quantization scales (Q/K/V). Only used for the int8 path.
+  float q_scale, k_scale, v_scale;
 
   Options()
       : help(false), error(false), is_causal(false), varlen(false), use_paged_kv(false), batch(32), num_heads_q(16), num_heads_kv(16), seq_len_qo(512), head_size_qk(128),
-        seq_len_kv(512), seq_len_kv_cache(0), page_size(128), head_size_vo(128), iterations(100), warmup(100), softmax_scale(1.f), verify(1), scheduler("Individual") {}
+        seq_len_kv(512), seq_len_kv_cache(0), page_size(128), head_size_vo(128), iterations(100), warmup(100), softmax_scale(1.f), verify(1), scheduler("Individual"),
+        q_scale(1.f), k_scale(1.f), v_scale(1.f) {}
 
   // Parses the command line
   void parse(int argc, char const **args) {
@@ -127,6 +130,11 @@ struct Options {
     }
 
     softmax_scale = 1 / sqrt(static_cast<float>(head_size_qk));
+
+    // int8 (de)quant scales: dequant(x) = x_int8 * scale. Defaults to 1.0.
+    cmd.get_cmd_line_argument("q_scale", q_scale, 1.f);
+    cmd.get_cmd_line_argument("k_scale", k_scale, 1.f);
+    cmd.get_cmd_line_argument("v_scale", v_scale, 1.f);
   }
 
   /// Prints the usage statement.
@@ -217,6 +225,9 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   StrideV stride_V_cache;
   StrideO stride_O;
   uint64_t seed = 0;
+
+  // int8 per-tensor (de)quant scales (set from Options in run()); 1.0 for non-int8.
+  float q_scale_ = 1.f, k_scale_ = 1.f, v_scale_ = 1.f;
 
   cutlass::DeviceAllocation<ElementQ> block_Q;
   cutlass::DeviceAllocation<ElementK> block_K;
@@ -493,12 +504,18 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
             }
 
             // compute exp of S
+            // For int8, the QK accumulator is in integer domain; dequant Q*K by
+            // (q_scale * k_scale) before applying the softmax scale. Note: in_memory()
+            // converts the int8 inputs to half_t, so detect int8 from the kernel's
+            // original ElementV type (int8_t), not the in-memory buffer type.
+            constexpr bool kIsInt8 = cute::is_same_v<ElementV, int8_t>;
+            const float qk_dequant = kIsInt8 ? (q_scale_ * k_scale_) : 1.0f;
             for (int row = 0; row < current_q_len; row++) {
               int idx = row * seq_len_kv_total;
               int max_idx = row;
               for (int col = 0; col < seq_len_kv_total; col++, idx++) {
                 /* FIXME: use softmax_scale instead of assuming its value here */
-                host_S[idx] = expf((host_S[idx] - max_vec[max_idx]) / sqrt(static_cast<ElementS>((head_size_qk))));
+                host_S[idx] = expf((host_S[idx] - max_vec[max_idx]) * qk_dequant / sqrt(static_cast<ElementS>((head_size_qk))));
               }
             }
 
@@ -524,34 +541,69 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
               }
             }
 
-            std::vector<ElementV_> host_P(host_S.size());
-            for (int p = 0; p < host_P.size(); p++)
-              host_P[p] = static_cast<ElementV_>(host_S[p]);
-
-            cutlass::DeviceAllocation<ElementV_> block_P;
-            block_P.reset(host_P.size());
-
-            compat::memcpy<ElementV_>(block_P.get(), host_P.data(), host_P.size());
-
-            cutlass::TensorRef ref_P(block_P.get(), LayoutQ::packed({current_q_len, seq_len_kv_total}));
-
             cutlass::DeviceAllocation<ElementS> block_acc;
             block_acc.reset(current_q_len * head_size_vo);
             cutlass::TensorRef ref_acc(block_acc.get(), LayoutO::packed({current_q_len, head_size_vo}));
 
-            // GEMM 2: O = P_chunk * V
-            cutlass::reference::device::GemmComplex({current_q_len, head_size_vo, seq_len_kv_total}, ElementS{1}, ref_P,
-                                                    cutlass::ComplexTransform::kNone, ref_V, cutlass::ComplexTransform::kNone,
-                                                    ElementS{0}, ref_acc, ref_acc, ElementS{0},
-                                                    1,                               // batch_count
-                                                    current_q_len * seq_len_kv_total,// batch_stride_P
-                                                    seq_len_kv_total * head_size_vo, // batch_stride_V
-                                                    current_q_len * head_size_vo,    // batch_stride_O
-                                                    current_q_len * head_size_vo     // batch_stride_O
-            );
+            if constexpr (kIsInt8) {
+              // int8: keep P in fp32 (P in [0,1]); convert V to fp32 so the
+              // reference GEMM2 is a pure fp32 matmul (the cutlass device
+              // GemmComplex reference does not handle int8 B operands correctly).
+              // O = (P_chunk * V_fp32) * v_scale.
+              cutlass::DeviceAllocation<ElementS> block_Pf;
+              block_Pf.reset(host_S.size());
+              compat::memcpy<ElementS>(block_Pf.get(), host_S.data(), host_S.size());
+              cutlass::TensorRef ref_Pf(block_Pf.get(), LayoutQ::packed({current_q_len, seq_len_kv_total}));
 
-            compat::wait();
-            block_P.reset();
+              std::vector<ElementV_> host_V(seq_len_kv_total * head_size_vo);
+              compat::memcpy<ElementV_>(host_V.data(), v_ptr, host_V.size());
+              std::vector<ElementS> host_Vf(host_V.size());
+              for (size_t vi = 0; vi < host_V.size(); vi++)
+                host_Vf[vi] = static_cast<ElementS>(host_V[vi]);
+              cutlass::DeviceAllocation<ElementS> block_Vf;
+              block_Vf.reset(host_Vf.size());
+              compat::memcpy<ElementS>(block_Vf.get(), host_Vf.data(), host_Vf.size());
+              cutlass::TensorRef ref_Vf(block_Vf.get(), LayoutV::packed({seq_len_kv_total, head_size_vo}));
+
+              // GEMM 2: O = (P_chunk * V) * v_scale
+              cutlass::reference::device::GemmComplex({current_q_len, head_size_vo, seq_len_kv_total}, ElementS(v_scale_), ref_Pf,
+                                                      cutlass::ComplexTransform::kNone, ref_Vf, cutlass::ComplexTransform::kNone,
+                                                      ElementS{0}, ref_acc, ref_acc, ElementS{0},
+                                                      1,                               // batch_count
+                                                      current_q_len * seq_len_kv_total,// batch_stride_P
+                                                      seq_len_kv_total * head_size_vo, // batch_stride_V
+                                                      current_q_len * head_size_vo,    // batch_stride_O
+                                                      current_q_len * head_size_vo     // batch_stride_O
+              );
+              compat::wait();
+              block_Pf.reset();
+              block_Vf.reset();
+            } else {
+              std::vector<ElementV_> host_P(host_S.size());
+              for (int p = 0; p < host_P.size(); p++)
+                host_P[p] = static_cast<ElementV_>(host_S[p]);
+
+              cutlass::DeviceAllocation<ElementV_> block_P;
+              block_P.reset(host_P.size());
+
+              compat::memcpy<ElementV_>(block_P.get(), host_P.data(), host_P.size());
+
+              cutlass::TensorRef ref_P(block_P.get(), LayoutQ::packed({current_q_len, seq_len_kv_total}));
+
+              // GEMM 2: O = P_chunk * V
+              cutlass::reference::device::GemmComplex({current_q_len, head_size_vo, seq_len_kv_total}, ElementS{1}, ref_P,
+                                                      cutlass::ComplexTransform::kNone, ref_V, cutlass::ComplexTransform::kNone,
+                                                      ElementS{0}, ref_acc, ref_acc, ElementS{0},
+                                                      1,                               // batch_count
+                                                      current_q_len * seq_len_kv_total,// batch_stride_P
+                                                      seq_len_kv_total * head_size_vo, // batch_stride_V
+                                                      current_q_len * head_size_vo,    // batch_stride_O
+                                                      current_q_len * head_size_vo     // batch_stride_O
+              );
+
+              compat::wait();
+              block_P.reset();
+            }
 
             std::vector<ElementS> vec_acc(block_acc.size());
             compat::memcpy<ElementS>(vec_acc.data(), block_acc.get(), vec_acc.size());
@@ -579,8 +631,13 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     compat::wait();
 
     // Check if output from CUTLASS kernel and reference kernel are equal or not
+    // int8 static-quant introduces extra rounding error on P and V, so use a
+    // looser relative/absolute tolerance for the int8 path.
+    constexpr bool kIsInt8Cmp = cute::is_same_v<ElementV, int8_t>;
+    const ElementO rtol = kIsInt8Cmp ? ElementO{0.10} : ElementO{0.05};
+    const ElementO atol = kIsInt8Cmp ? ElementO{0.10} : ElementO{0.05};
     bool passed = cutlass::reference::device::BlockCompareRelativelyEqual(block_ref_O.get(), block_O.get(),
-                                                                          block_O.size(), ElementO{0.05}, ElementO{0.05});
+                                                                          block_O.size(), atol, rtol);
 
     return passed;
   }
@@ -727,6 +784,11 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
 
   cutlass::Status run(const Options &options, const cutlass::KernelHardwareInfo &hw_info) {
 
+    // Stash int8 (de)quant scales for the reference path.
+    q_scale_ = options.q_scale;
+    k_scale_ = options.k_scale;
+    v_scale_ = options.v_scale;
+
     ProblemShapeType shape = initialize(options);
 
     typename FMHAKernel::Arguments arguments{
@@ -740,7 +802,12 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
         block_V_cache.get(), stride_V_cache,
       },
       {
-        options.softmax_scale,
+        // For int8, fold Q/K dequant into the softmax scale (q_scale*k_scale*softmax_scale);
+        // these are 1.0 for non-int8 so behavior is unchanged.
+        options.softmax_scale * options.q_scale * options.k_scale,
+#ifdef IS_INT8
+        options.v_scale,
+#endif
         options.use_paged_kv ? paged_kv_cache.page_table.get() : nullptr,
         options.use_paged_kv ? paged_kv_cache.page_size : 0,
         options.use_paged_kv ? paged_kv_cache.num_pages_per_seq.get() : nullptr
@@ -885,7 +952,11 @@ struct FMHAConfig {
                                            typename cute::conditional_t<
                                                cute::is_same_v<ElementQ, cutlass::float_e5m2_t> || cute::is_same_v<ElementQ, cutlass::float_e4m3_t>,
                                                XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, half_t>,
-                                               XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, ElementQ> 
+                                               cute::conditional_t<
+                                                   cute::is_same_v<ElementQ, int8_t>,
+                                                   XE_DPAS_TT<cute::gcd(SGTileQ, 8), int32_t, int8_t>,  // int8 QK/PV -> int32 accum
+                                                   XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, ElementQ>
+                                               >
                                            >,
                                            MMAOperation_>;
   using SubgroupLayoutPV = cute::conditional_t<is_void_v<SubgroupLayoutPV_>,

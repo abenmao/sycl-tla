@@ -82,10 +82,20 @@ int main(int argc, const char **argv) {
   using SubgroupLayoutQK = Layout<Shape<_1, _1, _1>>;
 
 #elif HEAD_DIM == 64
+#if defined(IS_INT8) && defined(INT8_KV128)
+  /* int8 has 1-byte inputs -> register headroom for a larger KV tile.
+     KV tile 64->128 halves the number of fp32 softmax reductions and gives the
+     fast int8 DPAS more work per tile to hide the (now-exposed) softmax latency. */
+  using ShapeQK = Shape<_128, _128, _32>;
+  using ShapePV = Shape<_128, _32, _128>;
+  using ShapeOut = Shape<_128, _64>;
+  using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
+#else
   using ShapeQK = Shape<_128, _64, _32>;
   using ShapePV = Shape<_128, _32, _64>;
   using ShapeOut = Shape<_128, _64>;
   using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
+#endif
 
 #elif HEAD_DIM == 96
   using ShapeQK = Shape<_128, _64, _32>;
@@ -94,10 +104,20 @@ int main(int argc, const char **argv) {
   using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
 
 #elif HEAD_DIM == 128
+#if defined(IS_INT8) && defined(INT8_KV128)
+  /* int8 has 1-byte inputs -> register headroom for a larger KV tile.
+     KV tile 32->64 halves the number of fp32 softmax reductions and gives the
+     fast int8 DPAS more work per tile to hide the (now-exposed) softmax latency. */
+  using ShapeQK = Shape<_256, _64, _32>;
+  using ShapePV = Shape<_256, _32, _64>;
+  using ShapeOut = Shape<_256, _128>;
+  using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
+#else
   using ShapeQK = Shape<_256, _32, _32>;
   using ShapePV = Shape<_256, _32, _32>;
   using ShapeOut = Shape<_256, _128>;
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
+#endif
 
 #elif HEAD_DIM == 192
   using ShapeQK = Shape<_256, _64, _32>;
@@ -194,6 +214,10 @@ int main(int argc, const char **argv) {
   using ElementQ = cutlass::float_e4m3_t;
   using ElementK = cutlass::float_e4m3_t;
   using ElementV = cutlass::float_e4m3_t;
+#elif defined(IS_INT8)
+  using ElementQ = int8_t;
+  using ElementK = int8_t;
+  using ElementV = int8_t;
 #else
   using ElementQ = bfloat16_t;
   using ElementK = bfloat16_t;

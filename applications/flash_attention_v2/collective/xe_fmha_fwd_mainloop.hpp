@@ -50,6 +50,15 @@ namespace cutlass::fmha::collective {
 
 using namespace cute;
 
+// Rebind the element type of a subgroup fragment while preserving its TV layout.
+// Used by the int8 FMHA path to derive a float "scores" / "output" fragment that
+// shares the layout of the int32 DPAS accumulator fragment.
+template <typename NewT, typename E, typename L, typename TV>
+CUTE_HOST_DEVICE constexpr auto
+sg_fragment_rebind(cute::SubgroupTensor<E, L, TV> const&) {
+  return cute::make_subgroup_tensor(cute::make_tensor<NewT>(L{}), TV{});
+}
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <class DispatchPolicy_,
@@ -133,6 +142,40 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
   using FragC = decltype(TiledMMA{}.get_slice(0).partition_sg_fragment_C(
                            make_identity_tensor(select<0,1>(TiledMMA{}.tile_mnk()))));
 
+#ifdef IS_INT8
+  // int8 FMHA: Q/K/V are int8 and the QK/PV DPAS accumulate to int32. Softmax and
+  // the online O accumulation are still done in fp32, so the "scores" (S) and
+  // output (A) fragments are float, derived by rebinding the int32 accumulator
+  // fragment's element type while keeping its layout. This entire block is gated
+  // behind IS_INT8 so the bf16/fp8 translation units see the pristine original
+  // definitions below (zero codegen perturbation).
+  static constexpr bool IsInt8 = cute::is_same_v<cute::remove_cv_t<typename TensorQ::value_type>, int8_t>;
+
+  using FragSAcc = FragC<TiledMMAQK>;                             // QK DPAS accumulator (int32 for int8)
+  using ElementSAcc = typename TiledMMAQK::ValTypeD;
+  using ElementS = cute::conditional_t<IsInt8, float, ElementSAcc>;
+  using FragS = cute::conditional_t<IsInt8, decltype(sg_fragment_rebind<float>(FragSAcc{})), FragSAcc>;
+  using FragSRow = decltype(reduce<1>(FragS{}, sycl::plus<void>{}));
+  using FragSCol = decltype(reduce<0>(FragS{}, sycl::plus<void>{}));
+
+  using SingleFragAAcc = FragC<TiledMMAPV>;                       // PV DPAS accumulator (int32 for int8)
+  using ElementAAcc = typename TiledMMAPV::ValTypeD;
+  using SingleFragA = cute::conditional_t<IsInt8, decltype(sg_fragment_rebind<float>(SingleFragAAcc{})), SingleFragAAcc>;
+  using FragA = expand_sg_fragment_t<SingleFragA, 1, VTiles>;     // (atom val,q',v',VV) -- fp32 O accumulator
+  using FragARow = decltype(reduce<1>(FragA{}, sycl::plus<void>{}));
+  using ElementA = cute::conditional_t<IsInt8, float, ElementAAcc>;
+  using FragAAcc = expand_sg_fragment_t<SingleFragAAcc, 1, VTiles>;  // int32 per-K-block PV partial (int8 only)
+
+  // Static quantization scale for P (softmax probabilities) before the int8 P*V GEMM.
+  // P lies in [0,1] (un-normalized exp2 values), mapped to int8 via round(P * kPQuant).
+  static constexpr float kPQuant = 127.0f;
+  // log2(kPQuant): the P-quant scale is applied by lowering the max subtracted inside
+  // exp2 (P = exp2(scale*S - max + log2(kPQuant)) = kPQuant * exp2(scale*S - max)), so P
+  // is produced already in [0,kPQuant]. This removes a separate full-tile multiply pass
+  // between softmax and the float->int8 reorder and uses the full int8 range (better
+  // quant resolution), mirroring flash-attention's fp8 "max_offset" trick.
+  static constexpr float kPQuantLog2 = 6.988684686772166f;  // log2(127)
+#else
   using FragS = FragC<TiledMMAQK>;
   using FragSRow = decltype(reduce<1>(FragS{}, sycl::plus<void>{}));
   using FragSCol = decltype(reduce<0>(FragS{}, sycl::plus<void>{}));
@@ -142,6 +185,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
   using FragA = expand_sg_fragment_t<SingleFragA, 1, VTiles>;     // (atom val,q',v',VV)
   using FragARow = decltype(reduce<1>(FragA{}, sycl::plus<void>{}));
   using ElementA = typename TiledMMAPV::ValTypeD;
+#endif
 
   static constexpr bool CausalMask = CausalMask_;
   static constexpr bool CachedKV = CachedKV_;
@@ -150,6 +194,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
   // User-facing arguments
   struct Arguments {
     ElementS const scale;
+#ifdef IS_INT8
+    float const v_scale = 1.0f;   // int8: per-tensor V dequant scale (applied via tA_sum)
+#endif
     int const* ptr_page_table = nullptr;
     int page_size = 0;
     int const* num_pages_per_seq = nullptr;
@@ -173,7 +220,11 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
   Params to_underlying_arguments(Arguments const &args, void * /* workspace */) {
     constexpr double kLog2e = 1.4426950408889634074;            // log_2(e)
     ElementS val = args.scale * static_cast<ElementS>(kLog2e);
+#ifdef IS_INT8
+    return Params{val, args.v_scale, args.ptr_page_table, args.page_size, args.num_pages_per_seq};
+#else
     return Params{val, args.ptr_page_table, args.page_size, args.num_pages_per_seq};
+#endif
   }
 
   CUTLASS_HOST_DEVICE static
@@ -326,8 +377,19 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
         }
       }
     }
+#ifdef INT8_FP8_MIMIC
+    /* EXPERIMENT (INT8_FP8_MIMIC): make int8 mimic fp8 by REMOVING the int8-specific
+       int32->float conversions. PV accumulates in a persistent int32 fragment across
+       ALL K blocks (like a plain GEMM), with no per-block dequant and no online
+       accumulator rescale; a single int32->float convert happens after the K-loop.
+       NUMERICALLY WRONG (no flash online-softmax rescale of O) -- perf measurement only. */
+    FragAAcc tArA_i32;
+#endif
     if (blk_k0 == 0) {
       clear(tArA);
+#ifdef INT8_FP8_MIMIC
+      if constexpr (IsInt8) { clear(tArA_i32); }
+#endif
       fill(tA_max, cutlass::platform::numeric_limits<ElementA>::lowest());
       clear(tA_sum);
     }
@@ -377,6 +439,107 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
       for (int VV = 0; VV < VTiles; VV++) {
         prefetch(prefetch_v_cur, pVgV_cur(_,_,_,VV,k_idx));
       }
+
+#ifdef IS_INT8
+      /* ---- int8 path ----
+         QK accumulated to int32 in tSrS; dequant of Q/K (q_scale*k_scale) is
+         folded into params.scale, so promote the raw int32 scores to fp32 and
+         run masking + softmax in fp32 exactly like the bf16 path.
+
+         Key: alias tSrS's registers as a float tile and convert IN PLACE, instead
+         of allocating a separate float tile. bf16 runs softmax in place on tSrS;
+         a separate int8 tile would keep BOTH the int32 and float S-tiles live,
+         ~doubling the largest intermediate's register footprint and pushing the
+         kernel into 256-GRF pressure (the reason int8 trailed bf16). The float
+         view and the int32 fragment share one storage, so only one S-tile is live. */
+      auto tPf = make_subgroup_tensor(
+          make_tensor(recast_ptr<float>(tSrS.data()), tSrS.layout()),
+          tSrS.tv_layout());
+#ifdef INT8_FP8_MIMIC
+      /* Model fp8: QK outputs float natively, so there is NO score conversion.
+         tPf aliases the int32 QK accumulator storage; a bit_cast loop would just
+         read and write the same 32 bits back (a redundant full-tile load/store),
+         so we skip it. The QK GEMM result is still consumed by softmax() through
+         the float alias, so it is not dead-code eliminated. NUMERICALLY WRONG. */
+#else
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < tSrS.size(); i++) {
+        tPf(i) = static_cast<float>(tSrS(i));   // read int slot i, write float slot i
+      }
+#endif
+
+      /* Causal masking — only on boundary tile in non-cache mode */
+      if constexpr (!is_cache && CausalMask && boundary) {
+        if (K == total_blk - 1) {
+          Tensor cPgP = make_identity_tensor(make_shape(seq_len, seq_len));
+          Tensor gP = local_tile(cPgP, take<0,2>(TileShapeQK{}), make_coord(get<0>(blk_qv), K));
+          auto cS_thread = thr_mma_qk.partition_C(gP);
+          CUTLASS_PRAGMA_UNROLL
+          for (int i = 0; i < tPf.size(); ++i) {
+            int row_idx = get<0>(cS_thread(i));
+            int col_idx = get<1>(cS_thread(i));
+            if (col_idx - seq_len_kv_cache - full_tile_offset > row_idx - discard_seq_coord) {
+              tPf(i) = -INFINITY;
+            }
+          }
+        }
+      }
+      /* k masking for remainder tiles — only on boundary tile */
+      if constexpr (!is_cache && boundary) {
+        if (check_remainder_k && K == total_blk - 1) {
+          FragSCol k_rem_mask;
+          int k_val = get<0>(tKgK_cur(0,0,0,k_idx,0)) + kblocks_cache * get<1>(TileShapeQK{});
+          int k = k_val + get_sub_group().get_local_id()[0];
+          CUTLASS_PRAGMA_UNROLL
+          for (int i = 0; i < k_rem_mask.size(); i++, k += intel::sg_size) {
+            k_rem_mask(i) = (k < seq_len) ? float(sycl::nan(0u)) : float(-INFINITY);
+          }
+          CUTLASS_PRAGMA_UNROLL
+          for (int i = 0; i < tPf.size(); i++) {
+            tPf(i) = sycl::fmin(tPf(i), broadcast<1>(k_rem_mask, tPf, i));
+          }
+        }
+      }
+
+      /* softmax in fp32; the static P-quant scale (kPQuant) is folded into the
+         exp2 offset inside softmax(), so P comes out already in [0,kPQuant] and is
+         cast straight to int8 by reorder(). Folding removes a separate full-tile
+         multiply pass that would otherwise sit between softmax and the cast (IGC
+         does not fuse two independent passes), keeping the cast pipeline-friendly. */
+      auto rescale = softmax(K == blk_k0, tPf, tA_max, tA_sum);
+      reorder(tPf, tArP);
+
+#ifdef INT8_FP8_MIMIC
+      /* EXPERIMENT: accumulate int8 P*V straight into a persistent int32 fragment
+         (no clear, no dequant, no rescale) -- removes the per-VTile int32->float
+         conversion + rescale-add pass that is the int8-specific overhead vs fp8. */
+      (void)rescale;
+      CUTLASS_PRAGMA_UNROLL
+      for (int VV = 0; VV < VTiles; VV++) {
+        copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
+        reorder(tVrV, tArV);
+        cute::gemm(mma_pv, tArP, tArV, tArA_i32(_,_,_,VV));
+      }
+#else
+      /* GEMM 2: int8 P*V into an int32 per-block partial, then dequant to fp32
+         and online-rescale-accumulate into the fp32 O accumulator. */
+      CUTLASS_PRAGMA_UNROLL
+      for (int VV = 0; VV < VTiles; VV++) {
+        copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
+        reorder(tVrV, tArV);
+
+        SingleFragAAcc tA_blk;             // int32 partial for this K block / VTile
+        clear(tA_blk);
+        cute::gemm(mma_pv, tArP, tArV, tA_blk);
+
+        CUTLASS_PRAGMA_UNROLL
+        for (int i = 0; i < tArA.size() / VTiles; i++) {
+          float prev = (K != blk_k0) ? (tArA(_,_,_,VV)(i) * broadcast<0>(rescale, tArA, i)) : 0.0f;
+          tArA(_,_,_,VV)(i) = prev + static_cast<float>(tA_blk(i));
+        }
+      }
+#endif
+#else
       /* Causal masking — only on boundary tile in non-cache mode */
       if constexpr (!is_cache && CausalMask && boundary) {
         if (K == total_blk - 1) {
@@ -428,6 +591,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
 
         cute::gemm(mma_pv, tArP, tArV, tArA(_,_,_,VV));
       }
+#endif
 
       /* K prefetch */
       int K_next = K + Stages;
@@ -504,11 +668,48 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
       }
 #endif
     }
+
+    /* int8: undo the V dequant scale in the normalization. tArA = sum_k (kPQuant*P)*V_i8
+       and tA_sum = sum_k (kPQuant*P) (the kPQuant factor is already baked into both by
+       the exp2 offset fold), so O = tArA / (tA_sum / v_scale) = v_scale * weighted_avg(V),
+       i.e. the kPQuant factors cancel and only the V dequant (v_scale) remains. */
+#ifdef IS_INT8
+    {
+#ifdef INT8_FP8_MIMIC
+      /* Single int32->float convert of the whole O accumulator after the K-loop
+         (replaces the per-block convert/rescale removed above). REQUIRED: this is the
+         only reader of the persistent int32 PV accumulator tArA_i32 -- without it IGC
+         dead-code-eliminates the entire P*V GEMM, invalidating the measurement. It is a
+         once-after-loop pass, mirroring real fp8's epilogue read of its float acc. */
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < tArA.size(); i++) {
+        tArA(i) = static_cast<float>(tArA_i32(i));
+      }
+#endif
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < tA_sum.size(); i++) {
+        tA_sum(i) *= (1.0f / params.v_scale);
+      }
+    }
+#endif
   }
 
 #ifdef ENABLE_FUSED_SOFTMAX
   // Fully-fused softmax: max + exp2 + sum in one function.
   // Layout reshaping done once; temp[] array reused between max and sum phases.
+#ifdef IS_INT8
+  // int8: templated on the scores tensor so it accepts an aliasing float view over
+  // the int8 path's int32 QK accumulator (in-place softmax).
+  template <class TensorS>
+  CUTLASS_DEVICE
+  FragSRow
+  softmax(bool       first_block,
+          TensorS  & tS,
+          FragSRow & tS_max,
+          FragSRow & tS_sum) {
+    using namespace cute;
+    using T = typename TensorS::element_type;
+#else
   CUTLASS_DEVICE
   FragSRow
   softmax(bool       first_block,
@@ -517,6 +718,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
           FragSRow & tS_sum) {
     using namespace cute;
     using T = typename FragS::element_type;
+#endif
     using TVLayout = decltype(tS.tv_layout());
     using TVToV = Layout<Shape<intel::_SGSize,int>, Stride<_0,_1>>;
 
@@ -584,6 +786,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
     for (int j = 0; j < size<1>(rcoord_to_v); j++) {
       int flat_idx = rcoord_to_v(0, j);
       T max_val = broadcast<0>(tS_max, tS, flat_idx);
+#ifdef IS_INT8
+      // int8: lower the subtracted max by log2(kPQuant) so exp2 yields kPQuant*P
+      // directly (P pre-scaled into [0,kPQuant] for int8 quant). tS_max is untouched,
+      // so the cross-tile rescale (exp2(old_max-new_max)) is unaffected.
+      max_val -= T(kPQuantLog2);
+#endif
 
       src_r(0, j) = sycl::native::exp2(params.scale * src_r(0, j) - max_val);
       T acc = src_r(0, j);
@@ -634,6 +842,18 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
     return rescale;
   }
 #else
+#ifdef IS_INT8
+  // int8: templated on the scores tensor so it accepts an aliasing float view over
+  // the int8 path's int32 QK accumulator (in-place softmax).
+  template <class TensorS>
+  // Single step of blocked softmax.
+  CUTLASS_DEVICE
+  FragSRow
+  softmax(bool       first_block, // First softmax block?
+          TensorS    & tS,          // Softmax src/dst block
+          FragSRow & tS_max,      // Softmax row-wise max accumulator
+          FragSRow & tS_sum) {    // Softmax row-wise sum accumulator
+#else
   // Single step of blocked softmax.
   CUTLASS_DEVICE
   FragSRow
@@ -641,6 +861,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
           FragS    & tS,          // Softmax src/dst block
           FragSRow & tS_max,      // Softmax row-wise max accumulator
           FragSRow & tS_sum) {    // Softmax row-wise sum accumulator
+#endif
     /* Compute row-wise maxima for this block */
     auto tS_bmax = reduce<1>(tS, sycl::maximum{});
 
