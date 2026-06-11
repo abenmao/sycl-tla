@@ -143,7 +143,7 @@ gemm_device(ATensor   const& A,         // (M,K)
   // Kernel
   // ------
 
-  constexpr int barrier_scope = 2;
+  constexpr auto barrier_scope = SPIRVScope::ScopeWorkgroup;
 
   int k_tile_count = ceil_div(shape<1>(A), get<2>(wg_tile));
   int k_tile_prefetch = 0;

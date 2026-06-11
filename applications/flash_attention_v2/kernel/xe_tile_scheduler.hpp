@@ -104,7 +104,7 @@ struct XeFHMAIndividualTileScheduler {
       idx_b = BlockIdxZ();
       params.divmod_num_heads(idx_b, head, idx_b);
     }
-    return make_coord(BlockIdxY(), BlockIdxX(), head, idx_b);
+    return make_coord(params.grid.y - 1 - BlockIdxY(), BlockIdxX(), head, idx_b);
   }
 
   CUTLASS_DEVICE

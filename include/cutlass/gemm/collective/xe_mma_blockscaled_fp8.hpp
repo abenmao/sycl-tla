@@ -523,7 +523,7 @@ public:
       Layout<Shape<_1, Int<ScaleAChunks>, _1>>{});
 
     // Pre-prefetch data tiles
-    constexpr int barrier_scope = 2;
+    constexpr auto barrier_scope = SPIRVScope::ScopeWorkgroup;
     int prefetch_k = k_start_idx;
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
