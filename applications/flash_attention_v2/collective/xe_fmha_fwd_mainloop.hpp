@@ -816,22 +816,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
           fill(fragment_scaleP, ElementScaleV(1));
           copy(tiled_copy_scaleV, copy_iter_scaleV(_, _, _, K), fragment_scaleV);
 
-          // K==0 implies blk_k0==0 (K starts at blk_k0), so tArA was just
-          // cleared above; use null-src0 to skip the accumulator read.
-          if (K == 0) {
-            cute::gemm<true>(mma_pv, zipped_p, zipped_v, tArA(_,_,_,VV));
-          } else {
-            cute::gemm(mma_pv, zipped_p, zipped_v, tArA(_,_,_,VV));
-          }
+          cute::gemm(mma_pv, zipped_p, zipped_v, tArA(_,_,_,VV));
         } else {
           if constexpr (F8kvF16mma) {
             dequantize(tArV, scale_v);
           }
-          if (K == 0) {
-            cute::gemm<true>(mma_pv, tArP, tArV, tArA(_,_,_,VV));
-          } else {
-            cute::gemm(mma_pv, tArP, tArV, tArA(_,_,_,VV));
-          }
+          cute::gemm(mma_pv, tArP, tArV, tArA(_,_,_,VV));
         }
       }
 
