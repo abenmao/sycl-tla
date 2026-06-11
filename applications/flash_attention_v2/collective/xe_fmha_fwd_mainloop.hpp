@@ -335,14 +335,20 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
     /* Check if */
     bool check_remainder_k = (seq_len % get<1>(TileShapeQK{}) != 0);
 
-    /* Main loop body */
-    auto mainloop_body = [&](auto cached_k, int K,
+    /* Main loop body.
+       is_boundary: compile-time flag — true only for the last K tile where
+       causal masking and k-remainder masking may apply. Splitting this out
+       eliminates masking branches from the hot inner loop, producing a
+       tighter instruction stream for the non-boundary iterations.
+       For non-causal mode, a single loop with runtime checks is used to
+       avoid the code bloat of two template instantiations. */
+    auto mainloop_body = [&](auto cached_k, auto is_boundary, int K,
                             auto& copy_k_cur, auto& copy_v_cur,
                             auto& prefetch_v_cur, auto& tKgK_cur,
                             auto& tVgV_cur, auto& pVgV_cur) {
-      /* Split barrier to keep threads together */
       barrier_arrive(ScopeWorkgroup);
       constexpr bool is_cache = decltype(cached_k)::value;
+      constexpr bool boundary = decltype(is_boundary)::value;
 
       int k_idx;
       if constexpr (is_cache) {
@@ -371,10 +377,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
       for (int VV = 0; VV < VTiles; VV++) {
         prefetch(prefetch_v_cur, pVgV_cur(_,_,_,VV,k_idx));
       }
-      /* Causal masking - only in non-cache mode */
-      if constexpr (!is_cache && CausalMask) {
+      /* Causal masking — only on boundary tile in non-cache mode */
+      if constexpr (!is_cache && CausalMask && boundary) {
         if (K == total_blk - 1) {
-          // Need to get global col and row indices to mask the elements
           Tensor cPgP = make_identity_tensor(make_shape(seq_len, seq_len));
           Tensor gP = local_tile(cPgP, take<0,2>(TileShapeQK{}), make_coord(get<0>(blk_qv), K));
           auto cS_thread = thr_mma_qk.partition_C(gP);
@@ -388,8 +393,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
           }
         }
       }
-      /* k masking for remainder tiles */
-      if constexpr (!is_cache) {
+      /* k masking for remainder tiles — only on boundary tile */
+      if constexpr (!is_cache && boundary) {
         if (check_remainder_k && K == total_blk - 1) {
           FragSCol k_rem_mask;
           int k_val = get<0>(tKgK_cur(0,0,0,k_idx,0)) + kblocks_cache * get<1>(TileShapeQK{});
@@ -450,21 +455,185 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
     /* Main loop, blocked in k. */
     if constexpr (CachedKV) {
       for (int K = blk_k0; K < kblocks_cache; K++) {
-        mainloop_body(std::bool_constant<true>{}, K,
+        mainloop_body(std::bool_constant<true>{}, std::false_type{}, K,
                       copy_k_cache, copy_v_cache,
                       prefetch_v_cache, tKgK_cache,
                       tVgV_cache, pVgV_cache);
       }
     }
 
-    for (int K = (blk_k0 > kblocks_cache ? blk_k0 : kblocks_cache); K < blk_k1; K++) {
-      mainloop_body(std::bool_constant<false>{}, K,
-                    copy_k, copy_v,
-                    prefetch_v, tKgK,
-                    tVgV, pVgV);
+    /* Non-cache K loop. */
+    {
+#ifdef ENABLE_SPLIT_BOUNDARY
+      int K_start = (blk_k0 > kblocks_cache ? blk_k0 : kblocks_cache);
+      int K_end = blk_k1;
+
+      if constexpr (CausalMask) {
+        /* Causal: split into clean inner loop + boundary tile.
+           The inner loop has zero masking code (compiled away via is_boundary=false_type),
+           giving a tighter instruction stream for the majority of iterations. */
+        for (int K = K_start; K < K_end - 1; K++) {
+          mainloop_body(std::bool_constant<false>{}, std::false_type{}, K,
+                        copy_k, copy_v,
+                        prefetch_v, tKgK,
+                        tVgV, pVgV);
+        }
+        if (K_start < K_end) {
+          mainloop_body(std::bool_constant<false>{}, std::true_type{}, K_end - 1,
+                        copy_k, copy_v,
+                        prefetch_v, tKgK,
+                        tVgV, pVgV);
+        }
+      } else {
+        /* Non-causal: single loop, single template instantiation.
+           Remainder masking uses runtime check (K == total_blk - 1). */
+        for (int K = K_start; K < K_end; K++) {
+          mainloop_body(std::bool_constant<false>{}, std::true_type{}, K,
+                        copy_k, copy_v,
+                        prefetch_v, tKgK,
+                        tVgV, pVgV);
+        }
+      }
+#else
+      for (int K = (blk_k0 > kblocks_cache ? blk_k0 : kblocks_cache); K < blk_k1; K++) {
+        mainloop_body(std::bool_constant<false>{}, std::true_type(), K,
+        //mainloop_body(std::bool_constant<false>{}, K,
+                      copy_k, copy_v,
+                      prefetch_v, tKgK,
+                      tVgV, pVgV);
+      }
+#endif
     }
   }
 
+#ifdef ENABLE_FUSED_SOFTMAX
+  // Fully-fused softmax: max + exp2 + sum in one function.
+  // Layout reshaping done once; temp[] array reused between max and sum phases.
+  CUTLASS_DEVICE
+  FragSRow
+  softmax(bool       first_block,
+          FragS    & tS,
+          FragSRow & tS_max,
+          FragSRow & tS_sum) {
+    using namespace cute;
+    using T = typename FragS::element_type;
+    using TVLayout = decltype(tS.tv_layout());
+    using TVToV = Layout<Shape<intel::_SGSize,int>, Stride<_0,_1>>;
+
+    constexpr int Mode = 1;
+    constexpr auto shape = atuple_coshape(TVLayout{});
+    constexpr auto coord_to_tv = right_inverse(project_strides(TVLayout{})).with_shape(shape);
+    constexpr auto rcoord_to_tv = make_layout(select<Mode>(coord_to_tv), remove<Mode>(coord_to_tv));
+    constexpr auto rcoord_to_v = filter(composition(TVToV{}, rcoord_to_tv), Step<_1,_1>{});
+
+    Tensor src_r = make_tensor(tS.data(), rcoord_to_v);
+
+    constexpr bool horizontal = (size<0>(rcoord_to_tv) == intel::_SGSize{} * size<0>(rcoord_to_v));
+    constexpr bool align16 = is_constant_v<0, decltype(size<1>(rcoord_to_v) % _16{})>;
+    constexpr bool align8  = is_constant_v<8, decltype(size<1>(rcoord_to_v))>;
+    constexpr bool hadd16 = horizontal && std::is_same_v<T, float> && align16;
+    constexpr bool hadd8  = horizontal && std::is_same_v<T, float> && align8;
+
+    [[maybe_unused]] T temp[size<1>(rcoord_to_v)];
+
+    // ---- Phase 1: Vertical max accumulation ----
+    CUTE_UNROLL
+    for (int j = 0; j < size<1>(rcoord_to_v); j++) {
+      T max_acc = src_r(0, j);
+      CUTE_UNROLL
+      for (int i = 1; i < size<0>(rcoord_to_v); i++) {
+        max_acc = sycl::max(max_acc, src_r(i, j));
+      }
+      if constexpr (hadd16 || hadd8)
+        temp[j] = max_acc;
+      else if constexpr (horizontal) {
+        auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+        temp[j] = reduce_over_group(sg, max_acc, sycl::maximum<void>{});
+      } else {
+        temp[j] = max_acc;
+      }
+    }
+
+    // ---- Cross-lane max reduction ----
+    FragSRow tS_bmax;
+    if constexpr (hadd16) {
+      CUTE_UNROLL
+      for (int j = 0; j < size<1>(rcoord_to_v); j += 16) {
+        tS_bmax(j/16) = hreduce16_float_max(&temp[j]);
+      }
+    } else if constexpr (hadd8) {
+      tS_bmax(0) = hreduce8_float_max(&temp[0]);
+    } else {
+      CUTE_UNROLL
+      for (int j = 0; j < size<1>(rcoord_to_v); j++) {
+        set_single_value(tS_bmax, j, temp[j]);
+      }
+    }
+
+    // ---- Update global max and compute rescale ----
+    FragSRow rescale;
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < tS_max.size(); i++) {
+      ElementS new_max = sycl::max(tS_max(i), params.scale * tS_bmax(i));
+      rescale(i) = sycl::native::exp2(tS_max(i) - new_max);
+      tS_max(i) = new_max;
+    }
+
+    // ---- Phase 2: Fused exp2 + vertical sum accumulation ----
+    CUTE_UNROLL
+    for (int j = 0; j < size<1>(rcoord_to_v); j++) {
+      int flat_idx = rcoord_to_v(0, j);
+      T max_val = broadcast<0>(tS_max, tS, flat_idx);
+
+      src_r(0, j) = sycl::native::exp2(params.scale * src_r(0, j) - max_val);
+      T acc = src_r(0, j);
+      CUTE_UNROLL
+      for (int i = 1; i < size<0>(rcoord_to_v); i++) {
+        src_r(i, j) = sycl::native::exp2(params.scale * src_r(i, j) - max_val);
+        acc += src_r(i, j);
+      }
+
+      if constexpr (hadd16 || hadd8)
+        temp[j] = acc;
+      else if constexpr (horizontal) {
+        auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+        temp[j] = reduce_over_group(sg, acc, sycl::plus<void>{});
+      } else {
+        temp[j] = acc;
+      }
+    }
+
+    // ---- Cross-lane sum reduction + update tS_sum ----
+    FragSRow tS_bsum;
+    if constexpr (hadd16) {
+      CUTE_UNROLL
+      for (int j = 0; j < size<1>(rcoord_to_v); j += 16) {
+        tS_bsum(j/16) = hreduce16_float_add(&temp[j]);
+      }
+    } else if constexpr (hadd8) {
+      tS_bsum(0) = hreduce8_float_add(&temp[0]);
+    } else {
+      CUTE_UNROLL
+      for (int j = 0; j < size<1>(rcoord_to_v); j++) {
+        set_single_value(tS_bsum, j, temp[j]);
+      }
+    }
+
+    if (!first_block) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < tS_sum.size(); i++) {
+        tS_sum(i) = tS_sum(i) * rescale(i) + tS_bsum(i);
+      }
+    } else {
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < tS_sum.size(); i++) {
+        tS_sum(i) = tS_bsum(i);
+      }
+    }
+
+    return rescale;
+  }
+#else
   // Single step of blocked softmax.
   CUTLASS_DEVICE
   FragSRow
@@ -504,6 +673,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
 
     return rescale;
   }
+#endif
 };
 
 

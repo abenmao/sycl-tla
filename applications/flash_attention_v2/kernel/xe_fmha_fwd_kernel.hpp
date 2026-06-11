@@ -210,9 +210,25 @@ public:
 
     CUTLASS_PRAGMA_NO_UNROLL
     for (; tile_scheduler.is_valid(); ++tile_scheduler) {
+      //auto [blk_q, blk_v, head_q, idx_b] = tile_scheduler.get_block_coord(); // (Q,V,h,b)
       auto [blk_q, blk_v, head_q, idx_b] = tile_scheduler.get_block_coord(); // (Q,V,h,b)
+      // Causal load balancing needs LPT (reversed Q) ordering; non-causal keeps
+      // ascending order (required for the fused-softmax codegen to reach peak).
+#ifdef NC_SCHED_FALLBACK
+      if constexpr (!CollectiveMainloop::CausalMask) {
+        blk_q = params.scheduler.grid.y - 1 - blk_q;
+      }
+#endif
       auto blk_qv = make_coord(blk_q, blk_v);
+#ifdef Q_PACKED_DECODE
+      // q_packed decode: the scheduler's head slot is the KV head. The query heads
+      // [head_q_base, head_q_base + head_group_q) that share this KV head are packed
+      // as the rows of the Q/O tiles (see Q_packed/O_packed construction below).
+      int head = head_q;
+      int head_q_base = head * head_group_q;
+#else
       int head = head_q / head_group_q;
+#endif
 
       auto sequence_length_shape = get_sequence_length_shape(s, idx_b);
       auto [seq_len_qo, seq_len_kv, seq_len_kv_cache] = sequence_length_shape;
@@ -224,7 +240,18 @@ public:
       int seq_coord = cute::min(seq_len_qo, (blk_q * get<0>(TileShapeQK{}) + q_offset_sg));
 
       if (CollectiveMainloop::CausalMask && seq_coord < discard_seq_coord) continue;
+#ifdef Q_PACKED_DECODE
+      // q_packed decode: seq_len_qo == 1, so the single query token sits at the
+      // last sequence position and attends to ALL kv tokens. The QK tile's M
+      // dimension packs query *heads* (all at the same position), NOT sequence
+      // positions, so causal masking is a no-op. The generic causal formula below
+      // adds +q_sg_tile assuming M spans q_sg_tile sequence rows, which over-counts
+      // by one fully-masked K block (e.g. 29 vs 28 tiles for seq_kv=1792/KV_TILE=64,
+      // ~3.6% wasted work). Treat causal exactly like non-causal here.
+      const int seq_len_new = seq_len_kv;
+#else
       const int seq_len_new = CollectiveMainloop::CausalMask ? full_tile_offset + cute::min(seq_len_kv, seq_coord - discard_seq_coord) + q_sg_tile : seq_len_kv;
+#endif
       const int seq_len = seq_len_new + seq_len_kv_cache;
       const int k_blocks = cute::ceil_div(seq_len, get<1>(TileShapeQK{}));
 
@@ -282,6 +309,32 @@ public:
       // Main loop
       int l_coord = is_var_len ? 0 : idx_b;
       CollectiveMainloop mainloop(params.mainloop, shared_storage.mainloop);
+#ifdef Q_PACKED_DECODE
+      // Build packed Q/O 2D views: rows = the head_group_q query heads sharing this
+      // KV head (row stride = query-head stride), cols = head dim (contiguous). This
+      // reuses the QK/PV tiles as a small GEMM over heads and reads each KV head once
+      // per WG instead of once per query head. Type matches Q(_,_,h,l): (int,_1) stride.
+      // NOTE: the named Q_in/O_in locals are intentionally confined to this decode
+      // branch. The prefill (#else) path below passes the slices inline exactly as the
+      // original code did, so its generated code stays byte-identical — introducing a
+      // named lvalue that lives across the mainloop() call perturbs IGC register
+      // allocation and slightly regresses prefill.
+      auto Q_in = make_tensor(make_gmem_ptr(dcQ + l_coord * get<3>(stride_q) + head_q_base * get<2>(stride_q)),
+                              make_layout(make_shape(head_group_q, s.head_size_qk),
+                                          make_stride(get<2>(stride_q), get<1>(stride_q))));
+      auto O_in = make_tensor(make_gmem_ptr(ptrO + l_coord * get<3>(stride_o) + head_q_base * get<2>(stride_o)),
+                              make_layout(make_shape(head_group_q, s.head_size_vo),
+                                          make_stride(get<2>(stride_o), get<1>(stride_o))));
+      mainloop(Q_in,
+               K(_,_,head,l_coord),
+               V(_,_,head,l_coord),
+               tArA, tA_max, tA_sum,
+               blk_qv, 0, k_blocks, k_blocks,
+               thr_id, seq_len, seq_len_kv_cache, idx_b,
+               full_tile_offset, discard_seq_coord,
+               K_cache(_,_,head,l_coord),
+               V_cache(_,_,head,l_coord));
+#else
       mainloop(Q(_,_,head_q,l_coord),
                K(_,_,head,l_coord),
                V(_,_,head,l_coord),
@@ -291,6 +344,7 @@ public:
                full_tile_offset, discard_seq_coord,
                K_cache(_,_,head,l_coord),
                V_cache(_,_,head,l_coord));
+#endif
 
       if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
         sycl::group_barrier(get_work_group<3>());
@@ -298,9 +352,15 @@ public:
 
       // Epilogue
       CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
+#ifdef Q_PACKED_DECODE
+      epilogue(O_in,
+               tArA, tA_max, tA_sum,
+               blk_qv, thr_id);
+#else
       epilogue(O(_,_,head_q,l_coord),
                tArA, tA_max, tA_sum,
                blk_qv, thr_id);
+#endif
     }
   }
 };

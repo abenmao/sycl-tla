@@ -112,8 +112,8 @@ int main(int argc, const char **argv) {
 #define NUM_SG _16
 #define KV_TILE_SIZE _256
 #else
-#define NUM_SG _8
-#define KV_TILE_SIZE _512
+#define NUM_SG _4
+#define KV_TILE_SIZE _256
 #endif
 
 #if HEAD_DIM == 16
@@ -124,10 +124,23 @@ int main(int argc, const char **argv) {
   using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 64
+#ifdef Q_PACKED_DECODE
+    // GQA q_packed decode: pack head_group_q query heads (sharing one KV head)
+    // as the rows of the QK tile. First dim is the packed query-head count, NOT
+    // the (=1) decode query sequence length. This turns the per-head GEMV into a
+    // small GEMM and reads each KV head once per WG instead of once per query head.
+    // Tile rows (16) are >= head_group_q (e.g. 10 for 80/8); the block-2D copies
+    // predicate rows beyond the real head_group_q (built from the runtime Q/O view).
+    using ShapeQK = Shape<_16, _64, _64>;
+    using ShapePV = Shape<_16, _32, _64>;
+    using ShapeOut = Shape<_16, _64>;
+    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
+#else
     using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
     using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
     using ShapeOut = Shape<_1, _64>;
     using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
+#endif
 
 #elif HEAD_DIM == 96
     using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
@@ -136,10 +149,23 @@ int main(int argc, const char **argv) {
     using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 128
+#ifdef Q_PACKED_DECODE
+    // GQA q_packed decode: pack head_group_q query heads (sharing one KV head)
+    // as the rows of the QK tile. First dim is the packed query-head count, NOT
+    // the (=1) decode query sequence length. This turns the per-head GEMV into a
+    // small GEMM and reads each KV head once per WG instead of once per query head.
+    // Tile rows (16) are >= head_group_q (e.g. 10 for 80/8); the block-2D copies
+    // predicate rows beyond the real head_group_q (built from the runtime Q/O view).
+    using ShapeQK = Shape<_16, _64, _64>;
+    using ShapePV = Shape<_16, _32, _64>;
+    using ShapeOut = Shape<_16, _128>;
+    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
+#else
     using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
     using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
     using ShapeOut = Shape<_1, _128>;
     using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
+#endif
 
 #elif HEAD_DIM == 192
     using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
@@ -154,7 +180,11 @@ int main(int argc, const char **argv) {
 #ifdef DECODE
   constexpr int PipelineStages = 1;
 #else
+#ifdef ENABLE_SPLIT_BOUNDARY
+  constexpr int PipelineStages = 1;
+#else
   constexpr int PipelineStages = 2;
+#endif
 #endif
 #ifdef IS_FLOAT_E5M2
   using ElementQ = cutlass::float_e5m2_t;

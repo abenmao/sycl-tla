@@ -60,11 +60,22 @@ struct XeFHMAIndividualTileScheduler {
   {
     using namespace cute;
 
+#ifdef Q_PACKED_DECODE
+    // q_packed decode: one WG per (KV head, batch). The head_group_q query heads
+    // that share a KV head are packed into the QK tile rows, so the grid iterates
+    // over KV heads (not query heads) and divmod uses num_heads_kv.
+    dim3 grid(size(ceil_div(shape.head_size_vo, get<1>(tile_shape))),     // V
+              size(ceil_div(shape.seq_len_qo,   get<0>(tile_shape))),     // Q
+              size(shape.batch * shape.num_heads_kv));                    // (h_kv,b)
+    return Params{grid, {shape.num_heads_kv}};
+#else
     dim3 grid(size(ceil_div(shape.head_size_vo, get<1>(tile_shape))),     // V
               size(ceil_div(shape.seq_len_qo,   get<0>(tile_shape))),     // Q
               size(shape.batch * shape.num_heads_q));                     // (h,b) -- split later
     return Params{grid, {shape.num_heads_q}};
+#endif
   }
+
 
   template <int Num_SGs>
   static dim3 get_grid_shape(Params const& params) {
