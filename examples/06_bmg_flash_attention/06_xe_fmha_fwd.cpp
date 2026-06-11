@@ -117,7 +117,11 @@ int main(int argc, const char **argv) {
   using ShapeOut = Shape<_256, _128>;
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 #else
+#if defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
+  using ShapeQK = Shape<_512, _64, _128>;
+#else
   using ShapeQK = Shape<_512, _64, _64>;
+#endif
   using ShapePV = Shape<_512, _64, _64>;
   using ShapeOut = Shape<_512, _128>;
   using SubgroupLayoutQK = Layout<Shape<_32, _1, _1>>;
