@@ -73,7 +73,7 @@ jobs:
         id: remote-build
         if: steps.build-strategy.outputs.use_remote == 'true'
         continue-on-error: true
-        timeout-minutes: 30
+        timeout-minutes: 60
         shell: bash
         run: |
           BUILD_ID="${{ github.run_id }}-common-${{ runner.name }}-${{ github.run_attempt }}"
@@ -177,7 +177,7 @@ jobs:
               -e DISABLE_FLASH_ATTENTION=0 \
               -e SYCL_TARGET=${{ matrix.sycl_target }} \
               -e BUILD_TARGETS=all \
-              -e NINJA_JOBS=52 \
+              -e NINJA_JOBS=32 \
               -e REMOTE_BUILD_DIR=/tmp/cutlass-build-${BUILD_ID} \
               -e REMOTE_SOURCE_DIR=${{ github.workspace }} \
               -e CMAKE_EXTRA_FLAGS='-DCUTLASS_ENABLE_BENCHMARKS=ON -DCUTLASS_SYCL_PROFILING_ENABLED=ON -DCUTLASS_SYCL_RUNNING_CI=ON' \
