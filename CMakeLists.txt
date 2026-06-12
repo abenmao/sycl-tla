@@ -122,6 +122,17 @@ option(CUTLASS_SYCL_RUNNING_CI "Enable this option when building in a CI environ
                                 disabling tests that cannot run in CI." OFF)
 option(CUTLASS_SYCL_BUILTIN_ENABLE "Enable this option to use builtin functions instead of SPIR-V for Block Copy & MMA operations" OFF)
 
+# Two-tier build parallelism (Ninja only): memory-hungry FA/FMHA translation units
+# are routed into a constrained job pool so they can't all compile at once and thrash
+# memory, while the global -j stays high to keep cheap TUs flowing. The CI build script
+# sets the depth (≈ MEM_GB/10); the global -j it passes is the larger budget (≈ MEM_GB/5).
+# 0 (default) disables the pool entirely -> fully backward compatible.
+set(CUTLASS_HEAVY_BUILD_JOBS "0" CACHE STRING "Max concurrent heavy (FA/FMHA) compile jobs via a Ninja job pool. 0 disables the pool.")
+if(CUTLASS_HEAVY_BUILD_JOBS GREATER 0)
+  set_property(GLOBAL PROPERTY JOB_POOLS heavy_compile=${CUTLASS_HEAVY_BUILD_JOBS})
+  message(STATUS "CUTLASS: heavy (FA/FMHA) compile job pool depth = ${CUTLASS_HEAVY_BUILD_JOBS}")
+endif()
+
 if (CUTLASS_ENABLE_SYCL)
   set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
