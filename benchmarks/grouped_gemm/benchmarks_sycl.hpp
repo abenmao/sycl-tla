@@ -53,6 +53,12 @@ using BmgGroupedGemm_BF16FP32_Tile_512_256_32 = typename TiledMMAHelper<MMA_Atom
 using BmgGroupedGemmBF16BF16FP32_RRR_TileShape_512_256_32 = GroupedGemm_Bench_BF16FP32_RRR<BmgGroupedGemm_BF16FP32_TileShape_512_256_32, BmgGroupedGemm_BF16FP32_Tile_512_256_32, void, void>;
 CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(BmgGroupedGemmBF16BF16FP32_RRR_TileShape_512_256_32);
 
+// TileShape aligned with example 04_bmg_grouped_gemm (Shape<_256, _256, _32>).
+using BmgGroupedGemm_BF16FP32_TileShape_256_256_32 = Shape<_256, _256, _32>;
+using BmgGroupedGemm_BF16FP32_Tile_256_256_32 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cute::bfloat16_t>>, Layout<BmgGroupedGemm_BF16FP32_TileShape_256_256_32>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using BmgGroupedGemmBF16BF16FP32_RRR_TileShape_256_256_32 = GroupedGemm_Bench_BF16FP32_RRR<BmgGroupedGemm_BF16FP32_TileShape_256_256_32, BmgGroupedGemm_BF16FP32_Tile_256_256_32, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(BmgGroupedGemmBF16BF16FP32_RRR_TileShape_256_256_32);
+
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
 
 using E4M3ElementType = cutlass::mx_float8_t<float_e4m3_t>;
@@ -81,6 +87,14 @@ using CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_256_256_32 = typename TiledMM
 using CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_32 = BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_256_256_32, CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_256_256_32, void, void>;
 
 CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_32);
+
+// TileShape matching example 51_xe35_block_scaled_grouped_gemm_e4m3 (GroupSize=32 run).
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_512_256_64 = Shape<_512, _256, _64>;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_512_256_64 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E4M3ElementInputA>>,
+        Layout<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_512_256_64>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64 = BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_512_256_64, CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_512_256_64, void, void>;
+
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64);
 
 using E5M2ElementType = cutlass::mx_float8_t<float_e5m2_t>;
 using E5M2ElementInputA = typename E5M2ElementType::DataType;
@@ -197,11 +211,13 @@ CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E2M1E2M1FP32_RCR_TileShape_
 
 static void register_grouped_gemm_benchmarks() {
   CUTLASS_BENCHMARK(BmgGroupedGemmBF16BF16FP32_RRR_TileShape_512_256_32);
+  CUTLASS_BENCHMARK(BmgGroupedGemmBF16BF16FP32_RRR_TileShape_256_256_32);
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
   CUTLASS_BENCHMARK(CriGroupedGemm_E5M2E5M2FP32_RRR_TileShape_256_256_32);
   CUTLASS_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_32);
   CUTLASS_BENCHMARK(CriGroupedGemm_E2M1E2M1FP32_RCR_TileShape_256_256_64);
   CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_32);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64);
   CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E5M2E5M2FP32_RRR_TileShape_256_256_32);
   CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_256_256_64);
 #endif

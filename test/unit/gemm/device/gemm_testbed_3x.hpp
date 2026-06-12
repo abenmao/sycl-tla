@@ -4108,8 +4108,8 @@ bool TestXe(
     max_alignment_n = std::max(max_alignment_n, Gemm::EpilogueOutputOp::AlignmentAux);
   }
 #if defined(CUTLASS_TEST_FOR_CRI)
-  std::vector<int> problem_size_m = {max_alignment_m};
-  std::vector<int> problem_size_n = {max_alignment_n};
+  std::vector<int> problem_size_m = {max_alignment_m, 2 * max_alignment_m};
+  std::vector<int> problem_size_n = {max_alignment_n, 2 * max_alignment_n};
   std::vector<int> problem_size_l = std::vector{1};
 #else
   std::vector<int> problem_size_m = {max_alignment_m, 512 - 3 * max_alignment_m};

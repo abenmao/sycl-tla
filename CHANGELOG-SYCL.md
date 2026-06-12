@@ -1,29 +1,82 @@
 # SYCL*TLA (previously referred to as cutlass-sycl) Changelog
 
-## [SYCL*TLA 0.9-jgs](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.9-jgs) (2026-04-30)
-### Architecture & APIs (XE4)
-  - Add XE4 TMMA atom and TMMA GEMM example ([#422](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/422))
-  - Add ADMA linear prefetch/reduction atoms and tutorials (G2S/S2G, `fred`/`ired`) ([#468](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/468), [#457](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/457), [#406](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/406), [#409](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/409), [#402](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/402))
-  - Add new Load/Store Matrix APIs and GEMM example with new APIs ([#416](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/416))
-  - Add Tensor Pipe downconvert APIs and examples with new APIs ([#462](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/462))
-  - Add CuTe tutorials for LinearCopy local-to-remote SLM and multi-cast/local-to-remote SLM flows ([#487](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/487))
-  - Add CuTe atoms, copy traits and tutorial for `ADMA_LINEAR_LOAD_MULTICAST` (GMEM→SLM multi-cast and local-to-remote SLM) ([#452](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/452))
-
-### GEMM & Flash Attention
-  - Add GEMM MX cluster support for XE4 ([#412](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/412))
-  - Add XE4 GEMM support for ADMA prefetch/reduce path ([#407](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/407))
-  - Add FP4xFP8 and FP4/FP8xBF16/FP16 support for XE4 block-scaled GEMM ([#424](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/424))
-
-### Validation & Tooling
-  - Add XE4 unit tests for block-scaled GEMM and scheduler behavior ([#394](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/394), [#405](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/405))
-  - Add basic Flash Attention performance tests and GEMM perf test refactor ([#425](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/425), [#403](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/403))
-  - Enable `intel_gpu_jgs_pisa` as a supported SYCL target ([#411](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/411))
+## [SYCL*TLA 0.9.1-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.9.1-cri) (2026-06-12)
+### Enhancements (Notes: all tests are based on the CRI simulator)
+  - **Flash Attention Performance Optimizations**
+    - Add FA BF16 output support ([#620](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/620))
+    - Add per tensor scale support to FA FP8 ([#627](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/627))
+    - Optimize FP8 FA QK tile depth ([#629](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/629))
+    - Optimize softmax: defer row-sum hreduce, overlap rescale with PV GEMM, fuse epilogue rescale+reorder ([#540](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/540))
+    - Preload Q once into registers to eliminate per-K-tile Q copy/reorder ([#538](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/538))
+    - Optimize GQA/batch divmod overhead and enlarge tile shape ([#542](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/542))
+    - Reorder mainloop ops to help compiler avoid spurious register reuse and movs ([#541](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/541))
+    - Hoist causal-only and var-len-only setup out of common path ([#543](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/543))
+    - Add down conversion of tSrS ([#537](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/537))
+    - Optimize reduce: ILP-friendly accumulation, fused 4x16 reduction, strided-mov hreduce ([#531](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/531))
+    - Split CachedKV kernels into separate binary ([#516](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/516))
+  - **Block Scaled GEMM Enhancements**
+    - Block Scaled GEMM epilogue support ([#587](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/587))
+    - Improve MXFP4/8 performance when M is unaligned ([#570](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/570))
+  - **CuTe / Copy API Improvements**
+    - Add multi-payload Block2D copy API and enlarge block2d load width ([#533](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/533))
+    - Support null-src0 DPAS to elide redundant accumulator initialization and reduce register read pressure ([#530](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/530))
+    - Add bdpas src0=null support in CuTe ([#597](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/597))
+    - Use uc.wb for CRI block 2D store ([#528](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/528))
+  - **Benchmarks**
+    - Support GEMM Benchmark BF16 Accumulator & Destination ([#621](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/621))
+    - Add Flash Attention benchmark for FP8 and BF16 ([#539](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/539))
+    - Add GEMV config and input file for GEMM benchmark ([#591](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/591))
+    - Explicitly specify KernelXeCooperative schedule in the benchmark ([#580](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/580))
+    - Align BlockScalingGemm's CollectiveEpilogue with example in benchmark ([#520](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/520))
+    - Align the W8A8 / FP16-MMA fast-path variants of the 08_bmg_gemm_f8 kernel pipeline and benchmark
+  - **Others**
+    - Sync upstream v0.9.1 release ([#631](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/631))
+    - Add real shape test cases ([#515](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/515))
+    - Remove code unrelated to CRI from the CRI development branch to support upstreaming CRI code to the public repo ([#574](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/574))
+    - Update docs ([#482](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/482))
 
 ### Bug Fixes
-  - Fix scheduler-order related GEMM and block-scaled GEMM test issues ([#478](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/478))
-  - Refactor XE4 GEMM path to remove older tile scheduler dependencies ([#440](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/440))
-  - Fix JGS target issues in multitarget flow ([#453](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/453))
-  - Fix block-scaled SF SMEM using padding for TileK < 8×VS ([#435](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/435))
+  - **Flash Attention**
+    - Fix persistent decode partition overflow with dynamic max_num_partitions ([#536](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/536))
+    - Fix split barrier for persistent decode split-K synchronization ([#476](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/476))
+    - Fix k_blocks computation when kv_cache is enabled ([#485](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/485))
+    - Fix XE TopK softmax epilogue ([#568](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/568))
+  - **GEMM / Epilogue**
+    - Fix DispatchPolicy alias in Xe Standard epilogues ([#584](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/584))
+    - Fix MXFP4/MXFP8 M-unaligned block scale fallback ([#549](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/549))
+    - Fix --g=0 causing division-by-zero crash in grouped gemm mixed dtype ([#514](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/514))
+  - **Build / Compilation**
+    - Fix SYCL_INTEL_TARGET macro redefinition in cutlass.h ([#552](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/552))
+    - Add noexcept for __spirv_ConvertFToBF16INTEL declaration ([#614](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/614))
+
+## [SYCL*TLA 0.9.1](https://github.com/intel/sycl-tla/releases/tag/v0.9.1) (2026-06-11)
+### Enhancements
+- **Support Stream-K GEMM ops in Python API ([#800](https://github.com/intel/sycl-tla/pull/800))**
+- **Support fast path for LinearCombination in xe_epilogue ([#802](https://github.com/intel/sycl-tla/pull/802))**
+- **Support event-less launch when profiling is disabled in GemmUniversalAdapter ([#803](https://github.com/intel/sycl-tla/pull/803))**
+- **Support subbyte reorder ([#793](https://github.com/intel/sycl-tla/pull/793))**
+- **Add Handler-less and Event-less support in launch APIs ([#794](https://github.com/intel/sycl-tla/pull/794))**
+- **Add SYCL subgroup lane index to canonical_lane_idx() ([#816](https://github.com/intel/sycl-tla/pull/816))**
+- **Add memory-budget-based bounded buffer for EventManager ([#795](https://github.com/intel/sycl-tla/pull/795))**
+- **Add more PyTorch GEMM configs ([#789](https://github.com/intel/sycl-tla/pull/789))**
+- **Reverse Q scheduling order in FMHA tile scheduler ([#814](https://github.com/intel/sycl-tla/pull/814))**
+- **Refine SLM r2s/s2r to reuse UniversalCopy without vectorization ([#776](https://github.com/intel/sycl-tla/pull/776))**
+- **Refine barrier API ([#810](https://github.com/intel/sycl-tla/pull/810))**
+- **Drop redundant __INTEL_LLVM_COMPILER checks ([#801](https://github.com/intel/sycl-tla/pull/801))**
+
+### Bug Fixes
+- **Fix shapes parameter issue in the MoE grouped GEMMs ([#820](https://github.com/intel/sycl-tla/pull/820))**
+- **Fix average runtime and GFLOPS calculation in example 10 ([#818](https://github.com/intel/sycl-tla/pull/818))**
+- **Fix rem mask of SDPA ([#813](https://github.com/intel/sycl-tla/pull/813))**
+- **Fix int32 overflow in MoE GEMM for large expert counts ([#804](https://github.com/intel/sycl-tla/pull/804))**
+- **Fix sub-byte pointer arithmetic and zero buffer allocation in grouped GEMM ([#790](https://github.com/intel/sycl-tla/pull/790))**
+- **Fix wrong constexpr/lifetime evaluation ([#799](https://github.com/intel/sycl-tla/pull/799))**
+
+### Documentation
+- **Align build commands across README ([#788](https://github.com/intel/sycl-tla/pull/788))**
+- **Update googlebenchmark to v1.9.5 ([#797](https://github.com/intel/sycl-tla/pull/797))**
+- **Update PyTorch commit for cutlass-inductor workflow ([#808](https://github.com/intel/sycl-tla/pull/808))**
+- **Update inductor workflow ([#806](https://github.com/intel/sycl-tla/pull/806))**
 
 ## [SYCL*TLA 0.9-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.9-cri) (2026-04-30)
 ### Enhancements (Notes: all the tests based on CRI simulator)

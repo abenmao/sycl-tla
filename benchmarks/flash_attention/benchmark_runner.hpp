@@ -60,13 +60,13 @@ struct FMHAOptions {
   bool error;
 
   int batch, num_heads_q, num_heads_kv, seq_len_qo, seq_len_kv, seq_len_kv_cache, head_size_qk,
-      head_size_vo, iterations, page_size;
+      head_size_vo, iterations, warmup, page_size;
   float softmax_scale;
   std::string bm_name;
 
   FMHAOptions()
       : error(false), batch(32), num_heads_q(16), num_heads_kv(16), seq_len_qo(1), head_size_qk(128),
-        seq_len_kv(512), seq_len_kv_cache(0), page_size(128), head_size_vo(128), iterations(ITERATIONS), softmax_scale(1.f), bm_name("Flash Attention v2") {}
+        seq_len_kv(512), seq_len_kv_cache(0), page_size(128), head_size_vo(128), iterations(ITERATIONS), warmup(5), softmax_scale(1.f), bm_name("Flash Attention v2") {}
 
   // Parses the command line
   void parse(int argc, char const **args) {
@@ -82,6 +82,7 @@ struct FMHAOptions {
     cmd.get_cmd_line_argument("head_size_vo", head_size_vo, 128);
     cmd.get_cmd_line_argument("head_size_qk", head_size_qk, head_size_vo);
     cmd.get_cmd_line_argument("iterations", iterations, ITERATIONS);
+    cmd.get_cmd_line_argument("warmup", warmup, 5);
     cmd.get_cmd_line_argument("bm_name", bm_name, std::string("Flash Attention v2"));
 
     softmax_scale = 1 / std::sqrt(static_cast<float>(head_size_qk));
@@ -168,7 +169,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
   static constexpr bool PagedKV = FMHAConfiguration::PagedKV;
   static constexpr bool Persistent = FMHAConfiguration::Persistent;
   // Scale-related types are only defined when !Persistent & !CachedKV & !PagedKV
-  static constexpr bool UseScale = (Persistent || CachedKV || PagedKV) ? false : FMHAKernel::UseScale;
+  static constexpr bool BlockScale = (Persistent || CachedKV || PagedKV) ? false : FMHAKernel::BlockScale;
 
   // Helper to safely extract scale-related types from FMHA kernel
   template<typename FMHAKernel, bool Enable>
@@ -259,7 +260,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
       shape.seq_len_qo = cutlass::fmha::collective::VariableLength{max_seq_len_q, cumulative_seqlen_q.data()};
       shape.seq_len_kv = cutlass::fmha::collective::VariableLength{max_seq_len_kv, cumulative_seqlen_kv.data()};
       shape.seq_len_kv_cache = cutlass::fmha::collective::VariableLength{max_seq_len_kv_cache, cumulative_seqlen_kv_cache.data()};
-      if constexpr (UseScale) {
+      if constexpr (BlockScale) {
         shape.seq_len_qo.cumulative_scale_length = cumulative_scale_q.data();
         shape.seq_len_kv.cumulative_scale_length = cumulative_scale_kv.data();
       }
@@ -272,13 +273,13 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
     auto head_size_vo = shape.head_size_vo;
     int seq_len_qo, seq_len_kv, seq_len_kv_cache;
 
-    auto block_Q_ = UseScale ? block_Q_dq : in_memory(block_Q);
-    auto block_K_ = (UseScale || F8kvF16mma) ? block_K_dq : in_memory(block_K);
-    auto block_V_ = ((UseScale && !FP4Input) || F8kvF16mma) ? block_V_dq : in_memory(block_V);
+    auto block_Q_ = BlockScale ? block_Q_dq : in_memory(block_Q);
+    auto block_K_ = (BlockScale || F8kvF16mma) ? block_K_dq : in_memory(block_K);
+    auto block_V_ = ((BlockScale && !FP4Input) || F8kvF16mma) ? block_V_dq : in_memory(block_V);
     auto block_K_cache_ = in_memory(block_K_cache);
     auto block_V_cache_ = in_memory(block_V_cache);
 
-    using ElementV_ = std::conditional_t<UseScale && !FP4Input, 
+    using ElementV_ = std::conditional_t<BlockScale && !FP4Input, 
                                     ElementPVMMAVerify,
                                     std::remove_pointer_t<decltype(block_V_.get())>>;
     using ElementK_ = std::remove_pointer_t<decltype(block_K_.get())>;
@@ -574,7 +575,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
     int max_seqlen_kv = 0;
     int max_seqlen_kv_cache = 0;
 
-    if constexpr (UseScale) {
+    if constexpr (BlockScale) {
       cumulative_scale_q = {0};
       cumulative_scale_kv = {0};
     }
@@ -596,7 +597,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
       cumulative_seqlen_q.push_back(cumulative_seqlen_q.back() + seqlen_q);
       cumulative_seqlen_kv.push_back(cumulative_seqlen_kv.back() + seqlen_kv);
       cumulative_seqlen_kv_cache.push_back(cumulative_seqlen_kv_cache.back() + seqlen_kv_cache);
-      if constexpr (UseScale) {
+      if constexpr (BlockScale) {
         int scale_len_q = cute::ceil_div(seqlen_q, GROUP_SIZE);
         int scale_len_kv = cute::ceil_div(seqlen_kv, GROUP_SIZE);
         cumulative_scale_q.push_back(cumulative_scale_q.back() + scale_len_q);
@@ -820,7 +821,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
       shape.seq_len_qo.cumulative_length = device_cumulative_seqlen_q.get();
       shape.seq_len_kv.cumulative_length = device_cumulative_seqlen_kv.get();
       shape.seq_len_kv_cache.cumulative_length = device_cumulative_seqlen_kv_cache.get();
-      if constexpr (UseScale) {
+      if constexpr (BlockScale) {
         if (!cumulative_scale_q.empty()) {
           device_cumulative_scale_q.reset(cumulative_scale_q.size());
           device_cumulative_scale_q.copy_from_host(cumulative_scale_q.data(), cumulative_scale_q.size());
@@ -847,11 +848,11 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
     if constexpr (F8kvF16mma) {
       apply_dequantization(block_K, block_K_dq, scale_k);
       apply_dequantization(block_V, block_V_dq, scale_v);
-    } else if constexpr (UseScale) {
+    } else if constexpr (BlockScale) {
       auto scale_q = cute::ceil_div(head_size_qk, GROUP_SIZE);
       auto scale_k = cute::ceil_div(head_size_qk, GROUP_SIZE);
       int scale_v = cute::ceil_div(seq_len_kv, GROUP_SIZE);
-      if constexpr (isVarLen && UseScale) { scale_v = cumulative_scale_kv.back(); }
+      if constexpr (isVarLen && BlockScale) { scale_v = cumulative_scale_kv.back(); }
 
       auto shape_scale_Q = cute::make_shape(seq_len_qo, scale_q, num_heads_q, batch);
       auto shape_scale_K = cute::make_shape(seq_len_kv, scale_k, num_heads_kv, batch);
@@ -912,9 +913,12 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
 #endif
     };
     compat::experimental::launch_policy policy{sycl_grid, sycl_block, launch_props, kernel_props};
+#if defined(CUTLASS_SYCL_PROFILING_ENABLED)
     auto event = compat::experimental::launch<cutlass::device_kernel<FMHAKernel>, FMHAKernel>(policy, params);
-
     EventManager::getInstance().addEvent(event);
+#else
+    compat::experimental::launch<cutlass::device_kernel<FMHAKernel>, FMHAKernel, false>(policy, params);
+#endif
   }
 
   void run(::benchmark::State& state, const FMHAOptions &options, const cutlass::KernelHardwareInfo &hw_info) {
@@ -953,7 +957,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
             block_scaleQ.get(), stride_SQ,
             block_scaleK.get(), stride_SK,
             block_scaleV.get(), stride_SV,
-            scale_k, scale_v,
+            scale_k, scale_v, /*scale_q*/ 1.f,
             GROUP_SIZE,
             block_K_cache.get(), stride_K_cache,
             block_V_cache.get(), stride_V_cache,
@@ -984,7 +988,12 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
     typename FMHAKernel::Params params = FMHAKernel::to_underlying_arguments(arguments, workspace.get());
 
 #ifdef CUTLASS_TEST_FOR_CRI
-    // disable warmup run and verification for CRI simulator as it's time-consuming
+    // Skip verification on CRI simulator (time-consuming), but warm up a few
+    // times so the first timed invocation is not penalized by ICache/JIT cost.
+    for (int i = 0; i < options.warmup; ++i) {
+      run(params);
+    }
+    compat::wait();
 #else
     // Run the GEMM
     run(params);
@@ -1037,9 +1046,31 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
                      sizeof(ElementO) * options.batch * options.num_heads_q * effective_seq_len_qo * options.head_size_vo;
     double mega_bytes_transferred = (gbps_qk + gbps_pv) * (1e-6);
 
+    const int inner_iters = std::max(1, options.iterations);
+
     initialize_counters(state);
     int32_t counter = 1;
     for(auto _ : state) {
+#ifdef CUTLASS_TEST_FOR_CRI
+      // CRI: reuse the outer-scope `params`/`workspace` built once before the
+      // warmup. Re-allocating workspace and zero-filling it every state-iter
+      // (the non-CRI path below) evicts the data cache, so the first timed
+      // launch hits cold cache and inflates ms_elapsed by 20%+ on large
+      // shapes (sq>=4096). The example runner (xe_fmha_fwd_runner.hpp) only
+      // allocates workspace once; mirror that here so the two harnesses are
+      // comparable. Per-kernel host/launch overhead is amortised over
+      // kInnerIters launches + a single sync (matches example loop).
+      // Keep the inner loop count aligned with the example runner's
+      // --iterations value so cold-start/cache effects are averaged the same
+      // way on CRI.
+      GPU_Clock timer;
+      timer.start();
+      for (int i = 0; i < inner_iters; ++i) {
+        run(params);
+      }
+      compat::wait();
+      auto ms_elapsed = timer.milliseconds() / static_cast<double>(inner_iters);
+#else
       state.PauseTiming();
 
       typename FMHAKernel::Arguments arguments = [&]() {
@@ -1074,7 +1105,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
               block_scaleQ.get(), stride_SQ,
               block_scaleK.get(), stride_SK,
               block_scaleV.get(), stride_SV,
-              scale_k, scale_v,
+              scale_k, scale_v, /*scale_q*/ 1.f,
               GROUP_SIZE,
               block_K_cache.get(), stride_K_cache,
               block_V_cache.get(), stride_V_cache,
@@ -1110,6 +1141,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
       timer.start();
       run(params);
       auto ms_elapsed = timer.milliseconds();
+#endif
       update_counters(state, ms_elapsed);
       state.SetIterationTime(ms_elapsed / 1000);
       counter++;

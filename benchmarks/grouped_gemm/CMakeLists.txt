@@ -30,6 +30,8 @@
 # Pass these configuration files for the CI
 if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
   set(CONFIG_FILE_CRI_GROUPED --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_small_grouped_gemm.in)
+  # ByteDance real-scenario LLM shapes from xpu-perf/micro_perf workloads
+  set(CONFIG_FILE_BYTEDANCE --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/bytedance/input_small_grouped_gemm.in)
 else()
   set(CONFIG_FILE_BMG_GROUPED --config_file=${CUTLASS_DIR}/benchmarks/device/bmg/input_files/input_small_grouped_gemm.in)
 endif()
@@ -47,6 +49,7 @@ cutlass_benchmark_add_executable(
     SUITE cutlass_benchmarks_grouped_gemm
     TEST_COMMAND_OPTIONS
     CONFIG_FILE_CRI_GROUPED
+    CONFIG_FILE_BYTEDANCE
 )
 
 endif()

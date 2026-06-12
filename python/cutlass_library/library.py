@@ -602,6 +602,8 @@ class KernelScheduleType(enum.Enum):
   BlockwiseTmaWarpSpecializedCooperativeSm120 = enum_auto()
   BlockwiseTmaWarpSpecializedPingpongSm120 = enum_auto()
 
+  XeCooperative = enum_auto()
+
 KernelScheduleTag = {
   KernelScheduleType.ScheduleAuto: 'cutlass::gemm::collective::KernelScheduleAuto',
   KernelScheduleType.Multistage: 'cutlass::gemm::KernelMultistage',
@@ -705,6 +707,8 @@ KernelScheduleTag = {
 
   KernelScheduleType.BlockwiseTmaWarpSpecializedCooperativeSm120: 'cutlass::gemm::KernelTmaWarpSpecializedBlockwiseCooperativeSm120',
   KernelScheduleType.BlockwiseTmaWarpSpecializedPingpongSm120: 'cutlass::gemm::KernelTmaWarpSpecializedBlockwisePingpongSm120',
+
+  KernelScheduleType.XeCooperative: 'cutlass::gemm::KernelXeCooperative',
 }
 
 #
@@ -810,7 +814,9 @@ KernelScheduleSuffixes = {
   KernelScheduleType.F8f6f4SparseTmaWarpSpecializedCooperativeSm120: '_q',
 
   KernelScheduleType.BlockwiseTmaWarpSpecializedCooperativeSm120: '_cooperative_q',
-  KernelScheduleType.BlockwiseTmaWarpSpecializedPingpongSm120: '_pingpong_q'
+  KernelScheduleType.BlockwiseTmaWarpSpecializedPingpongSm120: '_pingpong_q',
+
+  KernelScheduleType.XeCooperative: '_xe_cooperative',
 }
 
 class EpilogueScheduleType(enum.Enum):

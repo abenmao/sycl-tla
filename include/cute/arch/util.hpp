@@ -294,7 +294,7 @@ explode(Fn fn,
 }
 
 #if defined(CUTLASS_ENABLE_SYCL)
-template <class MMA_Op,
+template <class MMA_Op, bool NoAcc = false,
           class PtrD, int... Id,
           class PtrA, int... Ia,
           class PtrB, int... Ib,
@@ -306,10 +306,14 @@ explode_mma(PtrD&& d, int_sequence<Id...>,
         PtrB&& b, int_sequence<Ib...>,
         PtrC&& c, int_sequence<Ic...>)
 {
-  return MMA_Op::fma(d[Id]..., a[Ia]..., b[Ib]..., c[Ic]...);
+  if constexpr (NoAcc) {
+    return MMA_Op::template fma<true>(d[Id]..., a[Ia]..., b[Ib]..., c[Ic]...);
+  } else {
+    return MMA_Op::fma(d[Id]..., a[Ia]..., b[Ib]..., c[Ic]...);
+  }
 }
 
-template <class MMA_Op,
+template <class MMA_Op, bool NoAcc = false,
           class PtrD, int... Id,
           class PtrA, int... Ia,
           class PtrB, int... Ib,
@@ -326,7 +330,7 @@ explode_mma(PtrD&& d, int_sequence<Id...>,
         PtrF&& f, int_sequence<If...>,
         uint16_t g, uint16_t h)
 {
-  return MMA_Op::fma(d[Id]..., a[Ia]..., b[Ib]..., c[Ic]..., e[Ie]..., f[If]..., g, h);
+  return MMA_Op::template fma<NoAcc>(d[Id]..., a[Ia]..., b[Ib]..., c[Ic]..., e[Ie]..., f[If]..., g, h);  
 }
 #endif
 

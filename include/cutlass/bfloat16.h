@@ -53,7 +53,7 @@
 #include "cutlass/platform/platform.h"
 
 #if defined(CUTLASS_ENABLE_SYCL) && defined(__SYCL_DEVICE_ONLY__) && defined(SYCL_INTEL_TARGET)
-extern SYCL_EXTERNAL __attribute__((convergent)) uint16_t __spirv_ConvertFToBF16INTEL(float);
+extern SYCL_EXTERNAL __attribute__((convergent)) uint16_t __spirv_ConvertFToBF16INTEL(float) noexcept;
 #endif
 
 namespace cutlass {

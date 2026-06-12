@@ -38,7 +38,9 @@
 
 #if defined(SYCL_INTEL_TARGET)
 #undef SYCL_INTEL_TARGET
-#if __SYCL_TARGET_INTEL_GPU_CRI__
+#if __SYCL_TARGET_INTEL_GPU_PISA__
+#define SYCL_INTEL_TARGET 40
+#elif __SYCL_TARGET_INTEL_GPU_CRI__
 #define SYCL_INTEL_TARGET 35
 #elif __SYCL_TARGET_INTEL_GPU_JGS__
 #define SYCL_INTEL_TARGET 40
@@ -121,11 +123,29 @@ CUTLASS_HOST_DEVICE bool thread0() {
   #endif
 }
 
-/// Returns a lane index in the warp. The threads in warp may not be convergent
+#if defined(SYCL_INTEL_TARGET)
 CUTLASS_DEVICE
-int canonical_lane_idx() { 
+auto get_sub_group_id() {
+  return sycl::ext::oneapi::this_work_item::get_nd_item<3>()
+                    .get_sub_group()
+                    .get_group_id()[0];
+}
+
+CUTLASS_DEVICE
+auto get_sub_group_local_id() {
+  return sycl::ext::oneapi::this_work_item::get_nd_item<3>()
+                    .get_sub_group()
+                    .get_local_id()[0];
+}
+#endif
+
+/// Returns a lane index in the warp/subgroup. The threads in warp may not be convergent
+CUTLASS_DEVICE
+int canonical_lane_idx() {
   #if defined(__CUDA_ARCH__)
     return threadIdx.x % NumThreadsPerWarp;
+  #elif defined(SYCL_INTEL_TARGET)
+    return get_sub_group_local_id();
   #else
     return 0;
   #endif
@@ -134,7 +154,7 @@ int canonical_lane_idx() {
 /// Returns a warp-uniform value indicating the canonical warp index of the calling threads.
 /// Threads within the warp must be converged.
 CUTLASS_DEVICE
-int canonical_warp_idx_sync() { 
+int canonical_warp_idx_sync() {
   #if defined(__CUDA_ARCH__)
     return __shfl_sync(0xffffffff, threadIdx.x / NumThreadsPerWarp, 0);
   #elif defined(SYCL_INTEL_TARGET)
@@ -147,7 +167,7 @@ int canonical_warp_idx_sync() {
 /// Returns a warp index in the CTA. The threads in warp may not be convergent
 /// As it doesn't sync the warp, it faster and allows forward progress
 CUTLASS_DEVICE
-int canonical_warp_idx() { 
+int canonical_warp_idx() {
   #if defined(__CUDA_ARCH__)
     return threadIdx.x / NumThreadsPerWarp;
   #elif defined(SYCL_INTEL_TARGET)
@@ -169,22 +189,6 @@ int canonical_warp_group_idx() {
     return 0;
   #endif
 }
-
-#if defined(SYCL_INTEL_TARGET)
-CUTLASS_DEVICE
-auto get_sub_group_id() {
-  return sycl::ext::oneapi::this_work_item::get_nd_item<3>()
-                    .get_sub_group()
-                    .get_group_id()[0];
-}
-
-CUTLASS_DEVICE
-auto get_sub_group_local_id() {
-  return sycl::ext::oneapi::this_work_item::get_nd_item<3>()
-                    .get_sub_group()
-                    .get_local_id()[0];
-}
-#endif
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 }  // namespace cutlass

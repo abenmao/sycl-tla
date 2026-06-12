@@ -106,7 +106,9 @@ struct GroupedGemmConfiguration<
 
   static constexpr int PipelineStages = 2;
   using GEMMDispatchPolicy = cutlass::gemm::MainloopXeL1StagedGroup<PipelineStages>;
-  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeXMX16Group;
+  // Match example 04_bmg_grouped_gemm: use IntelXeGenericGroup epilogue policy
+  // (replaces legacy IntelXeXMX16Group). Copy atoms are picked automatically.
+  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGenericGroup;
 
   // Configurations in benchmarks.hpp can pass either a layout tag (e.g. RowMajor) or a Stride directly
   using StrideA = std::conditional_t<cute::is_tuple_v<LayoutA>, LayoutA, TagToStrideA_t<LayoutA>>;
@@ -129,15 +131,14 @@ struct GroupedGemmConfiguration<
   using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
           EpilogueDispatchPolicy,
           TileShape,
-          float,// ElementAccumulator
-          cutlass::gemm::TagToStrideC_t<LayoutC*>, // Pointer syntax for grouped
-          float,// ElementOutput
-          cutlass::gemm::TagToStrideC_t<LayoutD*>, // Pointer syntax for grouped
+          void,                                       // Epilogue tile (void = automatic)
+          float,                                      // ElementAccumulator
+          cutlass::gemm::TagToStrideC_t<LayoutC*>,    // Pointer syntax for grouped
+          float,                                      // ElementOutput
+          cutlass::gemm::TagToStrideC_t<LayoutD*>,    // Pointer syntax for grouped
           FusionCallbacks,
-          XE_2D_U32x8x16_LD_N,  // Explicit copy atoms for grouped
-          void, void,
-          XE_2D_U32x8x16_ST_N,  // Explicit copy atoms for grouped
-          void, void>;
+          void,                                       // CopyOp G2R (void = automatic)
+          void>;                                      // CopyOp R2G (void = automatic)
 
   using GemmKernel = kernel::GemmUniversal<
     ProblemShape,
@@ -184,7 +185,9 @@ struct BlockScalingGroupedGemmConfiguration<
 
   static constexpr int PipelineStages = 2;
   using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaledGroup<PipelineStages>;
-  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeXMX16Group;
+  // Match example 51_xe35_block_scaled_grouped_gemm: use IntelXeGenericGroup epilogue
+  // policy (replaces legacy IntelXeXMX16Group). Copy atoms are picked automatically.
+  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGenericGroup;
 
   // Configurations in benchmarks.hpp can pass either a layout tag (e.g. RowMajor) or a Stride directly
   using StrideA = std::conditional_t<cute::is_tuple_v<LayoutA>, LayoutA, TagToStrideA_t<LayoutA>>;
@@ -209,15 +212,14 @@ struct BlockScalingGroupedGemmConfiguration<
   using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
           EpilogueDispatchPolicy,
           TileShape,
-          float,// ElementAccumulator
-          cutlass::gemm::TagToStrideC_t<LayoutC*>, // Pointer syntax for grouped
-          float,// ElementOutput
-          cutlass::gemm::TagToStrideC_t<LayoutD*>, // Pointer syntax for grouped
+          void,                                       // Epilogue tile (void = automatic)
+          float,                                      // ElementAccumulator
+          cutlass::gemm::TagToStrideC_t<LayoutC*>,    // Pointer syntax for grouped
+          float,                                      // ElementOutput
+          cutlass::gemm::TagToStrideC_t<LayoutD*>,    // Pointer syntax for grouped
           FusionCallbacks,
-          XE_2D_U32x8x16_LD_N,
-          void, void,
-          XE_2D_U32x8x16_ST_N,
-          void, void>;
+          void,                                       // CopyOp G2R (void = automatic)
+          void>;                                      // CopyOp R2G (void = automatic)
 
   using GemmKernel = kernel::GemmUniversal<
     ProblemShape,
