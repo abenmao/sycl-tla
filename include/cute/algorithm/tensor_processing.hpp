@@ -255,26 +255,44 @@ auto tensor_pipe_exp2_reduce(Tensor<SrcEngine, SrcLayout> const &src,
   return ret_dsrc1;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
 // Tensor processing downconvert wrapper for tensor_pipe_quantize (gtp_tcvd)
 //
 // Register-to-register type downconversion via the gtp_tcvd pISA instruction.
 // Converts N source elements from a wider type (float, bf16, fp16) to a narrower
-// type (bf8, hf8, fp4_e2m1, s8, s4) in registers.
+// type (bf8, hf8, fp4_e2m1) in registers.
 //
 // Expects src to be a single row tensor per work-item: shape (N,) or (1, N)
 // User should slice the tensor before calling:
 //   tensor_pipe_quantize<bf8, bf16>(src_tensor(work_item_id, _), dst_tensor(work_item_id, _))
 //
 // Template parameters:
-//   TcvdDstType: semantic destination type (bf8, hf8, fp4_e2m1, s8, s4)
-//   TcvdSrcType: semantic source type (float, bf16, fp16)
+//   TcvdDstType: semantic destination (narrow) type — bf8, hf8, or fp4_e2m1.
+//                Selects the pISA .toty encoding.
+//   TcvdSrcType: semantic source (wide) type — fp16, bf16, or float.
+//                Selects the pISA .fromty encoding.
+//
+//   Both must be explicitly specified because:
+//   (1) The narrow-side tensor stores raw uint8_t bytes (LDSM loads/stores
+//       narrow data as raw bytes without semantic type information), so the
+//       semantic narrow type (bf8/hf8/fp4) cannot be deduced from
+//       DstEngine::value_type.
+//   (2) The wide-side tensor may use uint16_t as its storage type (LDSM
+//       loads/stores 16-bit data as raw uint16_t without distinguishing
+//       bf16 from fp16), so the semantic wide type cannot be deduced from
+//       SrcEngine::value_type either.
+//   The pISA gtp_tcvd instruction requires both types to select the correct
+//   hardware conversion micro-op.
+//
 //
 // Supported conversions (tcvd.toty.fromty.m32nN):
-//   .toty   = { .e5m2, .e4m3, .e3m2, .e2m3, .e2m1, .s8, .s4 }
+//   .toty   = { .e5m2, .e4m3, .e2m1 }
 //   .fromty = { .f16, .bf16, .f32 }
 //
 // For sub-byte types (fp4_e2m1), output bytes pack multiple elements
 // (e.g., 2 fp4 values per byte, lower nibble = even element, upper = odd).
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 template <typename TcvdDstType,
           typename TcvdSrcType,
           typename SrcEngine,
@@ -294,6 +312,22 @@ void tensor_pipe_quantize(Tensor<SrcEngine, SrcLayout> const& src,
   static_assert((N >= 1 && N <= 4) || N == 8 || N == 16 || N == 32,
                 "N must be 1, 2, 3, 4, 8, 16, or 32");
 
+   // Layouts must be compact (contiguous) for memcpy to be correct.
+  static_assert(cute::size_v<SrcLayout> == cute::cosize_v<SrcLayout>,
+                "Source tensor layout must be compact (size == cosize)");
+  static_assert(cute::size_v<DstLayout> == cute::cosize_v<DstLayout>,
+                "Destination tensor layout must be compact (size == cosize)");
+ 
+  // Number of packed narrow bytes produced by the conversion.
+  constexpr uint32_t N_dst_bytes = N * ::sizeof_bits<TcvdDstType>() / 8;
+ 
+  // Source and destination sizes must be consistent.
+  // The destination tensor stores packed narrow bytes (uint8_t). This check ensures
+  // the caller provided a correctly-sized output buffer to prevent buffer overflow
+  // in the final memcpy from the local register buffer (dst_u32) to dst.data().
+  static_assert(cute::size_v<DstLayout> == N_dst_bytes,
+                "Source and destination sizes must be consistent: size(dst) == N * sizeof_bits(TcvdDstType) / 8");
+
   static_assert(cute::is_same_v<TcvdSrcType, fp16> ||
                 cute::is_same_v<TcvdSrcType, bf16> ||
                 cute::is_same_v<TcvdSrcType, float>,
@@ -301,16 +335,13 @@ void tensor_pipe_quantize(Tensor<SrcEngine, SrcLayout> const& src,
 
   static_assert(cute::is_same_v<TcvdDstType, bf8>       ||
                 cute::is_same_v<TcvdDstType, hf8>       ||
-                cute::is_same_v<TcvdDstType, fp4_e2m1>  ||
-                cute::is_same_v<TcvdDstType, int8_t>    ||
-                cute::is_same_v<TcvdDstType, int4_t>,
-                "TcvdDstType (.toty) must be bf8 (e5m2), hf8 (e4m3), fp4_e2m1 (e2m1), int8_t (s8), or int4_t (s4)");
+                cute::is_same_v<TcvdDstType, fp4_e2m1>,
+                "TcvdDstType (.toty) must be bf8 (e5m2), hf8 (e4m3), fp4_e2m1 (e2m1)");
 
   // Number of uint32_t registers needed to hold N source elements and destination bytes.
   // uint32_t is the register-width operand format required by the pISA gtp_tcvd instruction.
   constexpr uint32_t dtype_reg_size = sizeof(uint32_t);
   constexpr uint32_t N_reg_src = round_up_<N * sizeof(src_type), dtype_reg_size>::value;
-  constexpr uint32_t N_dst_bytes = N * ::sizeof_bits<TcvdDstType>() / 8;
   constexpr uint32_t N_reg_dst = round_up_<N_dst_bytes, dtype_reg_size>::value;
 
 #if defined(__SYCL_DEVICE_ONLY__)
@@ -328,27 +359,98 @@ void tensor_pipe_quantize(Tensor<SrcEngine, SrcLayout> const& src,
 #endif
 }
 
-// Overload returning the destination tensor (allocates a stack buffer).
-// The caller is responsible for copying the result to SLM or GMEM.
-template <typename TcvdDstType,
-          typename TcvdSrcType,
-          typename DstType,
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// tensor_pipe_dequantize: Use the TensorCore TCVU instruction to upconvert
+// N narrow elements to wider representation.
+//
+// Template parameters:
+//   TcvuDstType — destination (wider) type — fp16, bf16, bf8, or hf8.
+//                 Selects the pISA .toty encoding.
+//   TcvuSrcType — source (narrower) type — bf8, hf8, or fp4_e2m1.
+//                 Selects the pISA .fromty encoding.
+//
+//   Both must be explicitly specified because:
+//   (1) The narrow-side (source) tensor stores raw uint8_t bytes (LDSM
+//       loads/stores narrow data as raw bytes without semantic type
+//       information), so the semantic narrow type (bf8/hf8/fp4) cannot be
+//       deduced from SrcEngine::value_type.
+//   (2) The wide-side (destination) tensor may use uint16_t as its storage
+//       type (LDSM loads/stores 16-bit data as raw uint16_t without
+//       distinguishing bf16 from fp16), so the semantic wide type cannot
+//       be deduced from DstEngine::value_type either.
+//   The pISA gtp_tcvu instruction requires both types to select the correct
+//   hardware conversion micro-op.
+//
+// Supported conversions (tcvu.toty.fromty.m32nN):
+//   .toty   = { .f16, .bf16, .e5m2, .e4m3 }
+//   .fromty = { .e5m2, .e4m3, .e2m1 }
+//
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <typename TcvuDstType,
+          typename TcvuSrcType,
           typename SrcEngine,
-          typename SrcLayout>
+          typename SrcLayout,
+          typename DstEngine,
+          typename DstLayout>
 CUTE_HOST_DEVICE
-auto tensor_pipe_quantize(Tensor<SrcEngine, SrcLayout> const& src)
+void tensor_pipe_dequantize(Tensor<SrcEngine, SrcLayout> const& src,
+                            Tensor<DstEngine, DstLayout>& dst)
 {
-  using src_type = typename SrcEngine::value_type;
+  using dst_type = typename DstEngine::value_type;
 
-  auto src_shape = shape(src);
-  constexpr uint32_t N = size(src_shape);
-  constexpr uint32_t N_dst_bytes = N * ::sizeof_bits<TcvdDstType>() / 8;
+  auto dst_shape = shape(dst);
+  constexpr uint32_t N = size(dst_shape);
 
-  DstType dst_buf[N_dst_bytes];
-  auto dst = make_tensor(make_rmem_ptr(dst_buf), make_shape(Int<N_dst_bytes>{}));
+  static_assert((N >= 1 && N <= 4) || N == 8 || N == 16 || N == 32,
+                "N must be 1, 2, 3, 4, 8, 16, or 32");
 
-  tensor_pipe_quantize<TcvdDstType, TcvdSrcType>(src, dst);
+  // Layouts must be compact (contiguous) for memcpy to be correct.
+  static_assert(cute::size_v<SrcLayout> == cute::cosize_v<SrcLayout>,
+                "Source tensor layout must be compact (size == cosize)");
+  static_assert(cute::size_v<DstLayout> == cute::cosize_v<DstLayout>,
+                "Destination tensor layout must be compact (size == cosize)");
+ 
+  // Number of packed narrow bytes in the source.
+  constexpr uint32_t N_src_bytes = N * ::sizeof_bits<TcvuSrcType>() / 8;
+ 
+  // Source and destination sizes must be consistent.
+  // The source tensor stores packed narrow bytes (uint8_t). This check ensures
+  // the caller provided a correctly-sized input buffer to prevent reading beyond
+  // the source tensor's allocation in the memcpy to the local register buffer (src_u32).
+  static_assert(cute::size_v<SrcLayout> == N_src_bytes,
+                "Source and destination sizes must be consistent: size(src) == N * sizeof_bits(TcvuSrcType) / 8");
+ 
 
-  return dst;
+  static_assert(cute::is_same_v<TcvuSrcType, bf8>        ||
+                cute::is_same_v<TcvuSrcType, hf8>        ||
+                cute::is_same_v<TcvuSrcType, fp4_e2m1>,
+                "TcvuSrcType (.fromty) must be bf8 (e5m2), hf8 (e4m3), fp4_e2m1 (e2m1)");
+
+  static_assert(cute::is_same_v<TcvuDstType, fp16>  ||
+                cute::is_same_v<TcvuDstType, bf16>   ||
+                cute::is_same_v<TcvuDstType, bf8>    ||
+                cute::is_same_v<TcvuDstType, hf8>,
+                "TcvuDstType (.toty) must be fp16, bf16, bf8 (e5m2), or hf8 (e4m3)");
+
+  // Number of uint32_t registers needed to hold N source narrow bytes and destination wide elements.
+  constexpr uint32_t dtype_reg_size = sizeof(uint32_t);
+  constexpr uint32_t N_reg_src = round_up_<N_src_bytes, dtype_reg_size>::value;
+  constexpr uint32_t N_dst_bytes = N * sizeof(dst_type);
+  constexpr uint32_t N_reg_dst = round_up_<N_dst_bytes, dtype_reg_size>::value;
+
+#if defined(__SYCL_DEVICE_ONLY__)
+  // Marshal src narrow bytes into uint32_t register buffers for the pISA instruction.
+  uint32_t src_u32[N_reg_src];
+  memcpy(src_u32, reinterpret_cast<const uint8_t*>(raw_pointer_cast(src.data())), N_src_bytes);
+
+  // Tensor Pipe upconvert: N narrow elements -> N wide elements.
+  uint32_t dst_u32[N_reg_dst];
+  gtp_tcvu<TcvuDstType, TcvuSrcType, N, uint32_t>(dst_u32, src_u32);
+
+  // Copy result back to the destination tensor.
+  memcpy(raw_pointer_cast(dst.data()), dst_u32, N_dst_bytes);
+#endif
 }
+
 }

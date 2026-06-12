@@ -226,24 +226,13 @@ target_include_directories(xe4_gemm_non_asymmetric PRIVATE
 )
 ################################################################################
 
-
-set(AMMA_ADMA_BLOCKSCALE_TARGET xe4_amma_adma_blockscaled_gemm)
-add_xe4_test(${AMMA_ADMA_BLOCKSCALE_TARGET} amma_adma_xe4_blockscaled_gemm.cpp)
-target_include_directories(${AMMA_ADMA_BLOCKSCALE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_options(${AMMA_ADMA_BLOCKSCALE_TARGET} PUBLIC
-       -Xsycl-target-backend=spir64_gen
-       -device\ jgs-a0)
-
-set(AMMA_ADMA_CLUSTER_TARGET xe4_amma_adma_cluster)
-add_xe4_test(${AMMA_ADMA_CLUSTER_TARGET} amma_adma_xe4_cluster.cpp)
-target_include_directories(${AMMA_ADMA_CLUSTER_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_options(${AMMA_ADMA_CLUSTER_TARGET} PUBLIC
-	-Xsycl-target-backend=spir64_gen
-	-device\ jgs-a0)
-
-set(AMMA_ADMA_BLOCKSCALE_CLUSTER_TARGET xe4_amma_adma_blockscaled_gemm_cluster)
-add_xe4_test(${AMMA_ADMA_BLOCKSCALE_CLUSTER_TARGET} amma_adma_xe4_blockscaled_gemm_cluster.cpp)
-target_include_directories(${AMMA_ADMA_BLOCKSCALE_CLUSTER_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_options(${AMMA_ADMA_BLOCKSCALE_CLUSTER_TARGET} PUBLIC
-       -Xsycl-target-backend=spir64_gen
-       -device\ jgs-a0)
+function(add_xe4_jgs_test target_name source_file)
+  add_xe4_test(${target_name} ${source_file})
+  target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_options(${target_name} PUBLIC
+         -Xsycl-target-backend=spir64_gen
+         -device\ jgs-a0)
+endfunction()
+add_xe4_jgs_test(xe4_amma_adma_blockscaled_gemm amma_adma_xe4_blockscaled_gemm.cpp)
+add_xe4_jgs_test(xe4_amma_adma_cluster amma_adma_xe4_cluster.cpp)
+add_xe4_jgs_test(xe4_amma_adma_blockscaled_gemm_cluster amma_adma_xe4_blockscaled_gemm_cluster.cpp)
