@@ -467,6 +467,82 @@ auto make_ldsm_tiled_copy(const CopyOp& Op,
     return tiled_copy;
 }
 
+// ---------------------------------------------------------------------------
+// make_ldsm_tiled_copy_noninjective — caller-supplies-TV variant
+// ---------------------------------------------------------------------------
+//
+// PURPOSE
+// -------
+// Build an LDSM `TiledCopy` from a hand-rolled `(T, V) → (M, N)` layout and
+// an explicit `Tiler_MN`, bypassing CuTe's `make_tiled_copy` (which uses
+// `raked_product → right_inverse` and rejects non-injective layouts).
+//
+// This is the public entry point that packages the
+// `make_tiled_copy_impl(atom, tv_layout, tiler)` shape used internally by
+// `make_ldsm_copy_warp_row_CD_int`.  Use it whenever the desired
+// (T, V) → (M, N) bijection is non-injective from `make_tiled_copy`'s point
+// of view but is exactly representable as a single `Layout` — e.g., the
+// FMHA softmax within-warp-row layout where row-mates must live in the
+// same warp.
+//
+// CALLER CONTRACT
+// ---------------
+//   * `tv_layout` maps `(T, V) → tile_block_linear`.  Its codomain must be
+//     bijective onto the per-call atom block; CuTe will compose it with the
+//     tile_block layout (derived from `tiler_mn`) to produce the
+//     `(T, V) → (m, n)` partition.
+//   * `tiler_mn` is the per-call `Tile<M_layout, N_layout>` whose codomain
+//     spans the rows/cols touched by one HW atom invocation.  Its
+//     `complement` in `(TileM, TileN)` becomes the `RestM/RestN` axis of
+//     `partition_S/D`.
+//   * Same descriptor / atom plumbing as the simpler `make_ldsm_tiled_copy`
+//     overloads — `slm_tensor` is recast to a 4-byte element type when the
+//     underlying SLM data is sub-32-bit (so `make_ldsm_matrix_descriptor`'s
+//     Pitch is HW-correct).
+//
+// USAGE
+// -----
+//   // Build TV layout + tiler externally (see detail::make_warp_row_tv_layout
+//   // and detail::make_warp_row_m_tiler_layout for the FMHA pattern).
+//   auto tv  = my_make_tv_layout<...>();
+//   auto m_t = my_m_tiler<...>();
+//   auto n_t = cute::make_layout(cute::Int<TileN>{}, cute::_1{});
+//   auto tlr = cute::make_tile(m_t, n_t);
+//
+//   // Pick op type (load/store, mode, Vlen, Alen) yourself.
+//   using Op = XE4_LOAD_MATRIX<ValType, RepSLayout, Mode, Vlen,
+//                              Vecdir::Vrow, Alen, Arrdir::Arow>;
+//
+//   auto tc = cute::make_ldsm_tiled_copy_noninjective(Op{}, slm_tensor, tv, tlr);
+//
+// COMPARED WITH `make_ldsm_tiled_copy(op, stensor, t_layout, v_layout, …)`:
+//   That overload computes the TV layout via `make_tiled_copy(atom, t, v)`,
+//   which fails for non-injective (T, V) layouts.  This overload skips that
+//   step — the caller has already done the (T, V) → tile_block math.
+//
+// COMPARED WITH `make_ldsm_copy_warp_row_C/D`:
+//   Those wrappers hard-code the FMHA within-warp-row formula.  This
+//   overload is the building block: any caller with a custom non-injective
+//   TV layout can call it directly.
+template <class CopyOp,
+          class GEngine, class SLayout,
+          class TVLayout, class TilerMN>
+CUTE_HOST_DEVICE
+auto
+make_ldsm_tiled_copy_noninjective(const CopyOp& /*op*/,
+                            Tensor<GEngine, SLayout> const& slm_tensor,
+                            TVLayout                        tv_layout,
+                            TilerMN                         tiler_mn,
+                            bool                            is_B_matrix = true)
+{
+  using ValType = typename GEngine::value_type;
+  MatrixDescriptor matrix_desc = make_ldsm_matrix_descriptor(slm_tensor, is_B_matrix);
+  using Traits = Copy_Traits<CopyOp, MInfo>;
+  using Atom   = Copy_Atom<Traits, ValType>;
+  Atom atom = Atom{Traits{matrix_desc}};
+  return make_tiled_copy_impl(atom, tv_layout, tiler_mn);
+}
+
 template <class CopyReduceOp,
           class GEngine,
           class SLayout>
@@ -884,6 +960,487 @@ make_ldsm_copy_D(TiledMMA<MmaArgs...> const& mma,
 {
   return make_ldsm_copy_CD_mma_impl</*IsStore=*/true, ThrGroupSize, PreferredMode>(
       mma, slm_tensor, is_B_matrix);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/// make_ldsm_copy_warp_row_CD_int  (internal — call via make_ldsm_copy_warp_row_C/D)
+///
+/// LDSM TiledCopy factory whose distinguishing functional property is that
+/// **row-mates (work-items sharing an M-coord) land within a single warp**,
+/// regardless of `NumWarps`.  This is what enables within-warp cross-lane
+/// reductions (e.g. `fred.max` with mask 0x55555555) on the loaded fragment
+/// for any thread-group size.
+///
+/// Compared with the generic `make_ldsm_copy_CD_(mma_)impl` factories:
+///   * Generic factory:  derives the TV layout from `LdsmMmaThrLayout` via
+///     `make_tiled_copy`'s `raked_product → right_inverse` chain.  The
+///     interleaved variant is non-injective for `ThrGroupSize > 4`, so the
+///     factory falls back to the ordered layout where row-mates land
+///     **cross-warp**.
+///   * `_warp_row` factory:  bypasses `make_tiled_copy` entirely and calls
+///     `make_tiled_copy_impl(atom, layout_TV, tiler)` with a hand-rolled
+///     bit-decomposed TV layout.  The (T, V) → (M, N) bijection is encoded
+///     directly using distinct power-of-2 strides, so every WI's row-mates
+///     stay inside one 32-thread warp.
+///
+/// (T, V) → (M, N) mapping baked into the returned TiledCopy:
+///
+///     m = wi_lo + RowsPerEu·eu_id + 32·eu_sg_id + RowsPerWi·iter
+///     n = wi_hi · NumValPerWIPerIter + atom_val
+///
+///   where the worker_id bit decomposition is
+///     wi_lo    = worker_id  & 1                        size 2
+///     wi_hi    = (worker_id / 2) & (NumThreadPerRow-1) size NumThreadPerRow
+///     eu_id    = (worker_id / 32) & (EuCount-1)        size EuCount
+///     eu_sg_id =  worker_id / 128                      size EuSgCount
+///
+/// This is a SPARSE iter→row mapping: iter `i` covers exactly
+/// `numRowsPerIteration = NumWarps * RowsPerWi` rows, distributed across
+/// [0, TileM) at stride 2 (interleaved with wi_lo, eu_id, eu_sg_id bits) —
+/// NOT a contiguous M-band.  The matching M-tiler in
+/// `detail::make_warp_row_m_tiler_layout` produces this scattered codomain.
+///
+/// Why this is safe for LDSM atoms specifically:
+///   Xe4LDSMTraitsBase has ThrID = Layout<Int<1>>, AtomLayoutRef =
+///   Layout<Shape<Int<1>, Int<NumValPerAtom>>>, so AtomNumThr = 1 and
+///   right_inverse(AtomLayoutRef).compose(AtomLayoutSrc) = identity.
+///   `tidfrg_S/D` then uses the supplied TiledLayout_TV verbatim — no
+///   further injectivity constraint is imposed.  The (T,V)→(M,N) bijection
+///   we encode is exact because every stride is a distinct power of 2.
+///
+/// HW path emitted:
+///   With UnorderedVector mode the HW issues
+///   `ld_matrix.unordered.al<A>.as1.arow.vl<V>.cooprow.<bw>` cohorting
+///   128 threads per atom.  When the per-WI value count or the total thread
+///   count can't satisfy cooperative-row constraints the selector falls
+///   back to per-warp `Vector` mode.  See `detail::LdsmWarpRowModeSelector`.
+///
+/// API (single function, store/load selected by template bool):
+///   auto tc = make_ldsm_copy_warp_row_CD_int<IsStore, NumWarps, EuCount,
+///                                            RowsPerWi, PreferredMode>(slm_tensor);
+/// where:
+///   IsStore       : false → S2R load (XE4_LOAD_MATRIX),
+///                   true  → R2S store (XE4_STORE_MATRIX).
+///   NumWarps      : ThrGroupSize.  Must be a multiple of EuCount.
+///   EuCount       : Xe4 type-1 CM EU count (default 4).
+///   RowsPerWi     : per-WI rows owned within a warp = 32/NumThreadPerRow
+///                   (default 2).
+///   PreferredMode : LDSMMode preference; falls back from UnorderedVector
+///                   to Vector when HW constraints can't be met.
+///
+/// USE
+/// ---
+///     // Load (S2R) — preferred public form
+///     auto tc       = cute::make_ldsm_copy_warp_row_C<NumWarps>(sX_packed);
+///     auto coord    = make_identity_tensor(make_shape(Int<TileM>{},
+///                                                      Int<TileN_packed>{}));
+///     auto thr_part = tc.get_slice(worker_id).partition_S(coord);
+///     // thr_part shape = (CPY, CPY_M=TotalRowsPerThread, CPY_N=1).
+///     for (int i = 0; i < TotalRowsPerThread; ++i)
+///         copy(tc, thr_part(_, i, _0{}), reg_slot_i);
+///
+///     // Store (R2S) — preferred public form
+///     auto tc_store = cute::make_ldsm_copy_warp_row_D<NumWarps>(sX_packed);
+///     auto thr_dst  = tc_store.get_slice(worker_id).partition_D(coord);
+///     for (int i = 0; i < TotalRowsPerThread; ++i)
+///         copy(tc_store, reg_slot_i, thr_dst(_, i, _0{}));
+///
+/// Mode selection priority:
+///   1. UnorderedVector (HW cooperative-row).  Picked when
+///      `PreferredMode == UnorderedVector`, `TotalThreads % 128 == 0`, and
+///      `NumValPerWIPerIter / coop_vlen<BitWidth>() ∈ {1, 2, 4}`.
+///   2. Vector (per-warp, non-cooperative).  Used when (1) can't apply.
+///   See `detail::LdsmWarpRowModeSelector` for the full predicate.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+namespace detail {
+
+// ---------------------------------------------------------------------------
+// LdsmWarpRowModeSelector — pick (mode, Vlen, Alen) for the per-call atom
+// ---------------------------------------------------------------------------
+//
+// Two-priority selector mirroring the legacy `cm_vrow_*_unordered` ↔
+// `cm_vrow_*` (ordered) fallback at master_next softmax_epilogue.hpp:738.
+//
+//   1. UnorderedVector (HW cooperative-row).  Requires:
+//        * `PreferredMode == UnorderedVector`.
+//        * `TotalThreads % 128 == 0`  (the 128-thread cohort fits whole).
+//        * `NumValPerWIPerIter >= coop_vlen` and `% coop_vlen == 0`.
+//        * `NumValPerWIPerIter / coop_vlen ∈ {1, 2, 4}`  (HW-legal Alen).
+//      Picks `vlen = coop_vlen<BitWidth>` and
+//            `alen = NumValPerWIPerIter / coop_vlen`.
+//
+//   2. Vector (per-warp, non-cooperative).  Used when (1) can't apply.
+//      Picks `vlen = min(NumValPerWIPerIter, ldsm_vector_row_vlen<BitWidth,
+//      Type1>)` and `alen = 0`.
+//
+// Concrete decisions for the live FMHA config (PROJECT_SPEC §5.3 table):
+//   sS  / sP   : fp16, NEPT=32, coop_vlen<16>=16  → UnorderedVector, vlen=16, alen=2
+//   sOacc      : fp32, NEPT=8,  coop_vlen<32>=8   → UnorderedVector, vlen=8,  alen=1
+//   sO  (FP16) : fp16, NEPT=8 < 16                → Vector,          vlen=8,  alen=0
+//   sO  (FP32) : fp32, NEPT=8                     → UnorderedVector, vlen=8,  alen=1
+//
+// (The same table is replayed in `make_warp_row_tv_layout`'s comment block.)
+template <int BitWidth, int NumValPerWIPerIter, LDSMMode PreferredMode,
+          int TotalThreads>
+struct LdsmWarpRowModeSelector {
+private:
+  static constexpr int coop_vlen_ = ldsm_coop_vlen<BitWidth>();
+  static constexpr int vec_vlen_  = ldsm_vector_row_vlen<BitWidth, true>();
+  static constexpr bool can_unordered_ =
+      (PreferredMode == UnorderedVector) &&
+      (TotalThreads % 128 == 0) &&
+      (NumValPerWIPerIter >= coop_vlen_) &&
+      (NumValPerWIPerIter % coop_vlen_ == 0) &&
+      (NumValPerWIPerIter / coop_vlen_ == 1 ||
+       NumValPerWIPerIter / coop_vlen_ == 2 ||
+       NumValPerWIPerIter / coop_vlen_ == 4);
+public:
+  static constexpr LDSMMode mode = can_unordered_ ? UnorderedVector : Vector;
+  static constexpr int      vlen =
+      can_unordered_ ? coop_vlen_
+                     : ((NumValPerWIPerIter < vec_vlen_) ? NumValPerWIPerIter
+                                                         : vec_vlen_);
+  static constexpr int      alen = can_unordered_ ? (NumValPerWIPerIter / coop_vlen_) : 0;
+};
+
+// ---------------------------------------------------------------------------
+// make_warp_row_tv_layout — TV (thread, value) → tile-block-linear mapping
+// ---------------------------------------------------------------------------
+//
+// CONTEXT
+// -------
+// `make_tiled_copy_impl(atom, layout_TV, tiler)` builds a TiledCopy whose
+// `partition_S(stensor)` resolves
+//
+//     (T, V, RestM, RestN) →  original (m, n)
+//
+// via two compositions:
+//   (a)  `zipped_divide(stensor, tiler)` produces a layout
+//             ((TileBlock_M, TileBlock_N), (RestM, RestN)) → (m, n)
+//        where the inside of the first mode is the tile_block layout (the
+//        per-call atom block) — its strides come from the *tilers* themselves.
+//   (b)  the TV layout maps `(T, V) → tile_block_linear` and is composed
+//        with the tile_block to give `(T, V) → (m, n)`.
+//
+// **Crucial subtlety (B4d in FINDINGS.md §7).**  The TV layout's linear value
+// is consumed *as a tile-block-linear index* — not as an original-tile linear
+// index.  That tile-block layout is **column-major by default** in CuTe.
+//
+// Within-warp-row formula (mirrors the legacy cm_vrow_*_unordered shape):
+//
+//     m = wi_lo + RowsPerEu·eu_id + 32·eu_sg_id   + RowsPerWi·iter
+//     n = wi_hi · NumValPerWIPerIter + atom_val
+//
+// where `worker_id` decomposes as
+//     wi_lo    = worker_id  & 1                        size 2
+//     wi_hi    = (worker_id / 2) & (NumThreadPerRow-1) size NumThreadPerRow
+//     eu_id    = (worker_id / 32) & (EuCount-1)        size EuCount
+//     eu_sg_id =  worker_id / 128                      size EuSgCount
+//
+// TV-LAYOUT DERIVATION (TILE-BLOCK-LINEAR)
+// ----------------------------------------
+// The m-tiler is `Layout<Shape<_RowsPerWi,_EuCount,_EuSgCount>,
+//                        Stride<_1,_RowsPerEu,_32>>` (codomain = warp-row
+// scatter pattern).  The n-tiler is `Layout<_TileN, _1>` (single contiguous
+// N-block per call).  The tile_block layout is therefore
+//
+//     ((RowsPerWi, EuCount, EuSgCount), TileN_per_call)
+//
+// with **column-major** linear strides
+//
+//     ( (1, RowsPerWi, RowsPerWi·EuCount), RowsPerWi·EuCount·EuSgCount )
+//   = ( (1, 2, 8),                          32 )                            .
+//
+// To make T-bit `b` advance the tile_block coord by the right amount we set
+// the stride in tile-block linear to the corresponding tile_block stride:
+//
+//    | T/V bit  | T-stride | size            | tile-block sub-mode advance | tile-block-linear stride |
+//    |----------|---------:|----------------:|----------------------------:|------------------------:|
+//    | wi_lo    |        1 | RowsPerWi=2     | sub_a += 1                  | 1                       |
+//    | wi_hi    |        2 | NumThrPerRow=16 | n_inner += NumVal           | 32 · NumValPerWIPerIter |
+//    | eu_id    |       32 | EuCount=4       | sub_b += 1                  | RowsPerWi=2             |
+//    | eu_sg_id |      128 | EuSgCount=4     | sub_c += 1                  | RowsPerWi·EuCount=8     |
+//    | atom_val |      V=1 | NumValPerWIPerIter | n_inner += 1             | 32                      |
+//
+// Substituting RowsPerWi=2, EuCount=4, EuSgCount=4, NumValPerWIPerIter=16:
+// the tile-block-linear strides resolve to (1, 32·16=512, 2, 8) for T-modes
+// and 32 for V — so the linear value computed for any worker_id reproduces
+// the within-warp-row `(m, n)` after composition with the tile_block layout.
+//
+// HW COHORT GEOMETRY
+// ------------------
+// The 128 threads with the same eu_sg_id together populate rows
+// [eu_sg_id·32, eu_sg_id·32 + 32) — exactly one type-1 CM block per cohort —
+// which is the geometry the `unordered.cooprow.<bw>` instruction expects.
+//
+// CONSTRUCTION-TIME PARAMETERS
+// ----------------------------
+// `RowsPerWi`         : per-WI rows owned within a warp (2 for FMHA softmax).
+// `NumThreadPerRow`   : warp lanes per row (= 32/RowsPerWi = 16 for FMHA).
+// `EuCount`, `EuSgCount` : type-1 CM cohort decomposition (4 × 4 for FMHA).
+// `NumValPerWIPerIter`: per-WI columns per copy() call (uint32 view).
+// The last template parameter is unused — kept for API stability with the
+// earlier (TileN-row-major) prototype; do not rely on it.
+template <int RowsPerWi, int NumThreadPerRow, int EuCount, int EuSgCount,
+          int NumValPerWIPerIter, int /*unused — kept for API stability*/>
+CUTE_HOST_DEVICE constexpr auto
+make_warp_row_tv_layout() {
+  // Tile-block has RowsPerWi*EuCount*EuSgCount M-cells.  The N stride per
+  // single n_inner step in tile-block linear equals that count (column-major).
+  constexpr int kMCellsPerCall = RowsPerWi * EuCount * EuSgCount;  // 32 for FMHA
+  constexpr int wi_lo_stride    = 1;
+  constexpr int eu_id_stride    = RowsPerWi;                       // 2
+  constexpr int eu_sg_id_stride = RowsPerWi * EuCount;             // 8
+  constexpr int atom_val_stride = kMCellsPerCall;                  // 32
+  constexpr int wi_hi_stride    = atom_val_stride * NumValPerWIPerIter; // 32·NumVal
+  return cute::make_layout(
+      cute::make_shape(
+          cute::make_shape(cute::Int<RowsPerWi>{},
+                           cute::Int<NumThreadPerRow>{},
+                           cute::Int<EuCount>{},
+                           cute::Int<EuSgCount>{}),
+          cute::Int<NumValPerWIPerIter>{}),
+      cute::make_stride(
+          cute::make_stride(cute::Int<wi_lo_stride>{},
+                            cute::Int<wi_hi_stride>{},
+                            cute::Int<eu_id_stride>{},
+                            cute::Int<eu_sg_id_stride>{}),
+          cute::Int<atom_val_stride>{}));
+}
+
+// ---------------------------------------------------------------------------
+// make_warp_row_m_tiler_layout — interspersed-row M-tiler for the per-call atom
+// ---------------------------------------------------------------------------
+//
+// PURPOSE
+// -------
+// The within-warp-row iter→row mapping is **non-contiguous**: iter `i`
+// covers rows
+//
+//     {wi_lo + RowsPerEu·eu_id + 32·eu_sg_id + RowsPerWi·i}
+//      = { 0,1, 8,9, 16,17, 24,25, 32,33, ..., 120,121 }   // for i=0
+//      = { 2,3, 10,11, ..., 122,123 }                       // for i=1
+//      = ...
+//
+// `Tiler_MN`'s M-mode must therefore be a **Layout** (not a Shape) whose
+// codomain is the per-call scatter set, so that
+// `complement(m_tiler, TileM)` is the iter axis at row-stride RowsPerWi.
+//
+// LAYOUT
+// ------
+// Returned shape:    `Layout<Shape<RowsPerWi, EuCount, EuSgCount>,
+//                            Stride<_1,        kRowsPerEu, _32>>`.
+// For FMHA (RowsPerWi=2, EuCount=4, EuSgCount=4):
+//     shape  = (2, 4, 4)        size 32
+//     stride = (1, 8, 32)       cosize = 1+24+96+1 = 122
+//     codomain ⊂ [0, 122) ⊂ [0, 128=TileM) — bijective with the per-call rows.
+// `complement(m_tiler, _128) = Layout<_4, _2>` — the 4 iters at row-stride 2.
+//
+// USAGE
+// -----
+// Combined with a flat n-tiler `Layout<_TileN, _1>` via `make_tile`, this is
+// passed as `Tiler_MN` to `make_tiled_copy_impl(atom, tv_layout, tiler)`.
+// `partition_S(make_identity_tensor((TileM, TileN)))` then yields
+//     (CPY = NumValPerWIPerIter, CPY_M = TotalRowsPerThread, CPY_N = 1)
+// with the CPY_M axis indexing the iter at the within-warp-row row-stride.
+template <int RowsPerWi, int EuCount, int EuSgCount>
+CUTE_HOST_DEVICE constexpr auto
+make_warp_row_m_tiler_layout() {
+  constexpr int kRowsPerEu = 32 / EuCount;  // 8 for EuCount=4
+  return cute::make_layout(
+      cute::make_shape(cute::Int<RowsPerWi>{},
+                       cute::Int<EuCount>{},
+                       cute::Int<EuSgCount>{}),
+      cute::make_stride(cute::Int<1>{},
+                        cute::Int<kRowsPerEu>{},
+                        cute::Int<32>{}));
+}
+
+}  // namespace detail
+
+// ---------------------------------------------------------------------------
+// make_ldsm_copy_warp_row_CD_int — internal TiledCopy factory whose row-mates
+// stay within a single warp (S2R load when IsStore=false, R2S store when
+// IsStore=true).  Public callers should use the make_ldsm_copy_warp_row_C
+// (load) / make_ldsm_copy_warp_row_D (store) wrappers below.
+// ---------------------------------------------------------------------------
+//
+// Builds a `TiledCopy` with a hand-rolled (T, V) → (M, N) mapping
+//
+//     m = wi_lo + RowsPerEu·eu_id + 32·eu_sg_id + RowsPerWi·iter
+//     n = wi_hi · NumValPerWIPerIter + atom_val
+//
+// — guaranteeing that 'row-mates' (threads that share an `m` after a row
+// reduction) live in the **same warp**, which is the precondition for
+// within-warp cross-lane reductions (e.g. FMHA softmax `fred.max` with
+// mask 0x55555555).
+//
+// Why this exists vs. `make_ldsm_copy_C/D`:
+//   `make_ldsm_copy_C/D` derives its thread layout via
+//   `LdsmMmaThrLayout<NumWarpsAlongM, NumWarpsAlongN, IsUnordered>`. For
+//   `ThrGroupSize > 4`, the interleaved variant is non-injective and
+//   `make_tiled_copy::right_inverse` rejects it; the factory falls back to
+//   the ordered layout where row-mates land cross-warp, breaking
+//   within-warp lane reductions.  This factory bypasses that path by
+//   calling `make_tiled_copy_impl(atom, tv_layout, tiler)` directly with a
+//   hand-rolled TV layout (see `detail::make_warp_row_tv_layout`).
+//
+// CALLER CONTRACT
+// ---------------
+//   * `slm_tensor` should be the per-stage SLM tile, **recast to a 4-byte
+//     element type** (e.g. uint32) when the underlying data is sub-32-bit.
+//     This makes `make_ldsm_matrix_descriptor`'s `Pitch = stride>>2`
+//     produce HW-correct units.  For fp32 SLM no recast is needed.
+//   * `is_B_matrix = true` (default) for row-major SLM (Type1).
+//
+// USE
+// ---
+//     // Load — preferred public form
+//     auto tc       = cute::make_ldsm_copy_warp_row_C<NumWarps>(sX_packed);
+//     auto coord    = make_identity_tensor(make_shape(Int<TileM>{},
+//                                                      Int<TileN_packed>{}));
+//     auto thr_part = tc.get_slice(worker_id).partition_S(coord);
+//     // thr_part shape = (CPY, CPY_M=TotalRowsPerThread, CPY_N=1).
+//     for (int i = 0; i < TotalRowsPerThread; ++i)
+//         copy(tc, thr_part(_, i, _0{}), reg_slot_i);
+//
+//     // Store — preferred public form
+//     auto tc_store = cute::make_ldsm_copy_warp_row_D<NumWarps>(sX_packed);
+//     auto thr_dst  = tc_store.get_slice(worker_id).partition_D(coord);
+//     for (int i = 0; i < TotalRowsPerThread; ++i)
+//         copy(tc_store, reg_slot_i, thr_dst(_, i, _0{}));
+//
+// TEMPLATE PARAMETERS
+// -------------------
+//   IsStore       : false → S2R load (XE4_LOAD_MATRIX),
+//                   true  → R2S store (XE4_STORE_MATRIX).
+//   NumWarps      : sub-group warp count = ThrGroupSize.
+//                   Must be a multiple of EuCount.
+//   EuCount       : type-1 CM cohort size in EUs (default 4 for Xe4).
+//   RowsPerWi     : per-WI rows owned within a warp = NumThrPerWarp/NumThreadPerRow
+//                   (default 2).
+//   PreferredMode : preferred LDSMMode; falls back to Vector if cooperative
+//                   constraints (NumValPerWIPerIter ≥ coop_vlen, etc.)
+//                   aren't met.  See `detail::LdsmWarpRowModeSelector`.
+template <bool IsStore,
+          int NumWarps,
+          int EuCount   = 4,
+          int RowsPerWi = 2,
+          LDSMMode PreferredMode = UnorderedVector,
+          class GEngine,
+          class SLayout>
+CUTE_HOST_DEVICE
+auto
+make_ldsm_copy_warp_row_CD_int(Tensor<GEngine, SLayout> const& slm_tensor,
+                               bool is_B_matrix = true)
+{
+  using ValType = typename GEngine::value_type;
+  constexpr int BitWidth         = sizeof_bits_v<ValType>;
+  constexpr int NumThreadsPerWarp= 32;
+  constexpr int TotalThreads     = NumWarps * NumThreadsPerWarp;
+  static_assert(NumWarps % EuCount == 0,
+                "NumWarps must be a multiple of EuCount for cooperative-row layout");
+  constexpr int EuSgCount        = NumWarps / EuCount;
+  constexpr int NumThreadPerRow  = NumThreadsPerWarp / RowsPerWi;
+  constexpr int TileM            = cute::size<0>(SLayout{});
+  constexpr int TileN            = cute::size<1>(SLayout{});
+  static_assert(TileN % NumThreadPerRow == 0,
+                "TileN must be divisible by NumThreadPerRow");
+  constexpr int NumValPerWIPerIter = TileN / NumThreadPerRow;
+  constexpr int numRowsPerIter   = RowsPerWi * NumWarps;
+  static_assert(TileM % numRowsPerIter == 0,
+                "TileM must be divisible by RowsPerWi*NumWarps (numRowsPerIter)");
+  constexpr int TotalRowsPerThread = TileM / numRowsPerIter;
+
+  (void)TotalRowsPerThread;
+  using Selector = detail::LdsmWarpRowModeSelector<
+      BitWidth, NumValPerWIPerIter, PreferredMode, TotalThreads>;
+  constexpr LDSMMode Mode = Selector::mode;
+  constexpr int      Vlen = Selector::vlen;
+  constexpr int      Alen = Selector::alen;
+
+  using RepSLayout = decltype(cute::make_layout(
+      cute::make_shape(cute::Int<numRowsPerIter>{}, cute::Int<TileN>{}),
+      cute::LayoutRight{}));
+
+  // Pick load vs. store op (with cooperative-array form when Mode admits it).
+  using OpCoop = std::conditional_t<
+      IsStore,
+      XE4_STORE_MATRIX<ValType, RepSLayout, Mode, Vlen, cute::Vecdir::Vrow,
+                       Alen, cute::Arrdir::Arow>,
+      XE4_LOAD_MATRIX<ValType, RepSLayout, Mode, Vlen, cute::Vecdir::Vrow,
+                      Alen, cute::Arrdir::Arow>>;
+  using OpVec = std::conditional_t<
+      IsStore,
+      XE4_STORE_MATRIX<ValType, RepSLayout, Mode, Vlen, cute::Vecdir::Vrow>,
+      XE4_LOAD_MATRIX <ValType, RepSLayout, Mode, Vlen, cute::Vecdir::Vrow>>;
+  using Op = std::conditional_t<
+      (Mode == UnorderedVector || Mode == CoopVector), OpCoop, OpVec>;
+
+  // Per-call TV layout encoding the within-warp-row coord formula.
+  auto tv_layout = detail::make_warp_row_tv_layout<
+      RowsPerWi, NumThreadPerRow, EuCount, EuSgCount,
+      NumValPerWIPerIter, TileM>();
+  // Tiler_MN: M is the interspersed-row layout
+  // (m = wi_lo + 8*eu_id + 32*eu_sg_id), N is the full-N range as one block.
+  // The complement of the M-tiler in (TileM, 1) is the iter axis with
+  // row-stride RowsPerWi — partition_S/D then exposes that as the outer
+  // CPY_M axis sized TotalRowsPerThread, matching `thr(_, i, _0{})` indexing.
+  auto m_tiler = detail::make_warp_row_m_tiler_layout<
+      RowsPerWi, EuCount, EuSgCount>();
+  auto n_tiler = cute::make_layout(cute::Int<TileN>{}, cute::_1{});
+  auto tiler   = cute::make_tile(m_tiler, n_tiler);
+
+  // Defer to the public make_ldsm_tiled_copy_noninjective helper so that consumers
+  // building their own non-injective TV layouts can use the same path.
+  return make_ldsm_tiled_copy_noninjective(Op{}, slm_tensor, tv_layout, tiler, is_B_matrix);
+}
+
+// ---------------------------------------------------------------------------
+// make_ldsm_copy_warp_row_C — public S2R (load) wrapper
+// ---------------------------------------------------------------------------
+// Thin wrapper over make_ldsm_copy_warp_row_CD_int<IsStore=false,...> that
+// builds a within-warp-row LDSM TiledCopy for the load (S2R) direction.
+// See the make_ldsm_copy_warp_row_CD_int comment block above for the full
+// (T, V) → (M, N) mapping, mode-selection, and caller contract.
+template <int NumWarps,
+          int EuCount   = 4,
+          int RowsPerWi = 2,
+          LDSMMode PreferredMode = UnorderedVector,
+          class GEngine,
+          class SLayout>
+CUTE_HOST_DEVICE
+auto
+make_ldsm_copy_warp_row_C(Tensor<GEngine, SLayout> const& slm_tensor,
+                           bool is_B_matrix = true)
+{
+  return make_ldsm_copy_warp_row_CD_int<
+      /*IsStore=*/false, NumWarps, EuCount, RowsPerWi, PreferredMode>(
+      slm_tensor, is_B_matrix);
+}
+
+// ---------------------------------------------------------------------------
+// make_ldsm_copy_warp_row_D — public R2S (store) wrapper
+// ---------------------------------------------------------------------------
+// Thin wrapper over make_ldsm_copy_warp_row_CD_int<IsStore=true,...> that
+// builds a within-warp-row LDSM TiledCopy for the store (R2S) direction.
+// See the make_ldsm_copy_warp_row_CD_int comment block above for the full
+// (T, V) → (M, N) mapping, mode-selection, and caller contract.
+template <int NumWarps,
+          int EuCount   = 4,
+          int RowsPerWi = 2,
+          LDSMMode PreferredMode = UnorderedVector,
+          class GEngine,
+          class SLayout>
+CUTE_HOST_DEVICE
+auto
+make_ldsm_copy_warp_row_D(Tensor<GEngine, SLayout> const& slm_tensor,
+                           bool is_B_matrix = true)
+{
+  return make_ldsm_copy_warp_row_CD_int<
+      /*IsStore=*/true, NumWarps, EuCount, RowsPerWi, PreferredMode>(
+      slm_tensor, is_B_matrix);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

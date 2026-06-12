@@ -40,6 +40,19 @@ target_link_options(${AMMA_ADMA_TARGET} PUBLIC
 	-Xsycl-target-backend=spir64_gen
 	-device\ jgs-a0)
 
+set(LDSM_WARP_ROW_GEMM_TARGET xe4_gemm_ldsm_warp_row_epilogue)
+add_xe4_test(${LDSM_WARP_ROW_GEMM_TARGET} gemm_ldsm_warp_row_epilogue_xe4.cpp)
+target_include_directories(${LDSM_WARP_ROW_GEMM_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(${LDSM_WARP_ROW_GEMM_TARGET} PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)
+
+set(GEMM_SOFTMAX_TARGET xe4_gemm_softmax)
+add_xe4_test(${GEMM_SOFTMAX_TARGET} gemm_softmax_xe4.cpp)
+target_include_directories(${GEMM_SOFTMAX_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(${GEMM_SOFTMAX_TARGET} PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)
 # Drive the xe4_amma_adma tutorial executable over a matrix of input shapes
 # and the supported transpose configuration so the kernel is exercised in CI
 # rather than only via manual runs. The tutorial accepts:

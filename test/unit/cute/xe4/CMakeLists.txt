@@ -46,6 +46,8 @@ add_custom_target(
   cutlass_test_unit_cute_xe4_tmma_atoms
   cutlass_test_unit_cute_xe4_ldsm_epilogue
   cutlass_test_unit_cute_xe4_ldsm_epilogue_mma
+  cutlass_test_unit_cute_xe4_ldsm_warp_row
+  cutlass_test_unit_cute_xe4_ldsm_tiled_copy_for_tv
   cutlass_test_unit_cute_xe4_tensor_pipe_quantize_api
 )
 
@@ -67,6 +69,8 @@ add_custom_target(
   test_unit_cute_xe4_tmma_atoms
   test_unit_cute_xe4_ldsm_epilogue
   test_unit_cute_xe4_ldsm_epilogue_mma
+  test_unit_cute_xe4_ldsm_warp_row
+  test_unit_cute_xe4_ldsm_tiled_copy_for_tv
   test_unit_cute_xe4_tensor_pipe_quantize_api
 )
 
@@ -145,6 +149,16 @@ cutlass_test_unit_add_executable(
 cutlass_test_unit_add_executable(
   cutlass_test_unit_cute_xe4_ldsm_epilogue_mma
   ldsm_epilogue_mma.cpp
+)
+
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_ldsm_warp_row
+  ldsm_warp_row.cpp
+)
+
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_cute_xe4_ldsm_tiled_copy_for_tv
+  ldsm_tiled_copy_for_tv.cpp
 )
 
 cutlass_test_unit_add_executable(
