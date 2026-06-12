@@ -124,6 +124,20 @@ swap_coord_for_ldsm(cute::ArithmeticTuple<T0, T1> const& t) {
   return sycl::marray<uint16_t, 2>{x, y};
 }
 
+// Overload for flattened hierarchical coordinates.
+// When make_ldsm_copy_C is used with ThrGroupSize > 1 (multi-warp), the identity
+// tensor partition produces coordinates of type:
+//   ArithmeticTuple<ArithmeticTuple<row, row_offset>, ArithmeticTuple<col, col_offset>>
+// After flatten_to_tuple, this becomes cute::tuple<row, row_offset, col, col_offset>.
+// We reconstruct the 2D coordinate by summing each pair: row = get<0>+get<1>, col = get<2>+get<3>.
+template <class T0, class T1, class T2, class T3>
+sycl::marray<uint16_t, 2>
+swap_coord_for_ldsm(cute::tuple<T0, T1, T2, T3> const& t) {
+  uint16_t x = static_cast<uint16_t>(cute::get<2>(t) + cute::get<3>(t));
+  uint16_t y = static_cast<uint16_t>(cute::get<0>(t) + cute::get<1>(t));
+  return sycl::marray<uint16_t, 2>{x, y};
+}
+
 template<typename T, class SrLayout, LDSMMode Mode, uint32_t Vlen,
          cute::Vecdir Vdir, class MatInfo,
 	 uint32_t Alen, cute::Arrdir Adir>

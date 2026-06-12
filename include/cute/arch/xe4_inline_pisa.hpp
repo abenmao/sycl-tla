@@ -4220,6 +4220,10 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
         INLINE_PISA("tcvd.e5m2.f32.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 8) {
         INLINE_PISA("tcvd.e5m2.f32.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvd.e5m2.f32.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvd.e5m2.f32.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 1) {
         INLINE_PISA("tcvd.e5m2.f32.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
@@ -4230,6 +4234,14 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
         INLINE_PISA("tcvd.e4m3.f32.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvd.e4m3.f32.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvd.e4m3.f32.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvd.e4m3.f32.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvd.e4m3.f32.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvd.e4m3.f32.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -4238,6 +4250,12 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
         INLINE_PISA("tcvd.e2m1.f32.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvd.e2m1.f32.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvd.e2m1.f32.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvd.e2m1.f32.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvd.e2m1.f32.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -4252,6 +4270,12 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
         INLINE_PISA("tcvd.e5m2.f16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 8) {
         INLINE_PISA("tcvd.e5m2.f16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvd.e5m2.f16.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvd.e5m2.f16.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvd.e5m2.f16.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 1) {
         INLINE_PISA("tcvd.e5m2.f16.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
@@ -4262,6 +4286,16 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
         INLINE_PISA("tcvd.e4m3.f16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvd.e4m3.f16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvd.e4m3.f16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvd.e4m3.f16.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvd.e4m3.f16.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvd.e4m3.f16.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvd.e4m3.f16.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -4270,6 +4304,12 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
         INLINE_PISA("tcvd.e2m1.f16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvd.e2m1.f16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvd.e2m1.f16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvd.e2m1.f16.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvd.e2m1.f16.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -4284,6 +4324,14 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
         INLINE_PISA("tcvd.e5m2.bf16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 8) {
         INLINE_PISA("tcvd.e5m2.bf16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvd.e5m2.bf16.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvd.e5m2.bf16.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvd.e5m2.bf16.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvd.e5m2.bf16.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -4294,6 +4342,14 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
         INLINE_PISA("tcvd.e4m3.bf16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 8) {
         INLINE_PISA("tcvd.e4m3.bf16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvd.e4m3.bf16.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvd.e4m3.bf16.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvd.e4m3.bf16.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvd.e4m3.bf16.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -4302,6 +4358,12 @@ inline void gtp_tcvd(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
         INLINE_PISA("tcvd.e2m1.bf16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvd.e2m1.bf16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvd.e2m1.bf16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvd.e2m1.bf16.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvd.e2m1.bf16.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -4346,6 +4408,12 @@ inline void gtp_tcvd(dtype_dst *dst_ptr, const dtype_src *src_ptr) {
         INLINE_PISA("tcvd.e5m2.f16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 8) {
         INLINE_PISA("tcvd.e5m2.f16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvd.e5m2.f16.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvd.e5m2.f16.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvd.e5m2.f16.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 1) {
         INLINE_PISA("tcvd.e5m2.f16.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
@@ -4356,6 +4424,16 @@ inline void gtp_tcvd(dtype_dst *dst_ptr, const dtype_src *src_ptr) {
         INLINE_PISA("tcvd.e4m3.f16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvd.e4m3.f16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvd.e4m3.f16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvd.e4m3.f16.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvd.e4m3.f16.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvd.e4m3.f16.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvd.e4m3.f16.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -4364,6 +4442,12 @@ inline void gtp_tcvd(dtype_dst *dst_ptr, const dtype_src *src_ptr) {
         INLINE_PISA("tcvd.e2m1.f16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvd.e2m1.f16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvd.e2m1.f16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvd.e2m1.f16.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvd.e2m1.f16.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -4378,6 +4462,14 @@ inline void gtp_tcvd(dtype_dst *dst_ptr, const dtype_src *src_ptr) {
         INLINE_PISA("tcvd.e5m2.bf16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 8) {
         INLINE_PISA("tcvd.e5m2.bf16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvd.e5m2.bf16.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvd.e5m2.bf16.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvd.e5m2.bf16.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvd.e5m2.bf16.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -4386,6 +4478,16 @@ inline void gtp_tcvd(dtype_dst *dst_ptr, const dtype_src *src_ptr) {
         INLINE_PISA("tcvd.e4m3.bf16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvd.e4m3.bf16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvd.e4m3.bf16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvd.e4m3.bf16.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvd.e4m3.bf16.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvd.e4m3.bf16.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvd.e4m3.bf16.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -4394,6 +4496,12 @@ inline void gtp_tcvd(dtype_dst *dst_ptr, const dtype_src *src_ptr) {
         INLINE_PISA("tcvd.e2m1.bf16.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvd.e2m1.bf16.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvd.e2m1.bf16.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvd.e2m1.bf16.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvd.e2m1.bf16.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -4444,10 +4552,12 @@ inline void gtp_tcvd(dtype_dst *dst_ptr, const dtype_src *src_ptr) {
 
 template <typename dtype_dst, typename dtype_src, uint32_t N, typename dtype_reg>
 inline void gtp_tcvdmx(dtype_reg *dst_ptr, const dtype_reg *src_ptr, const uint8_t &meta) {
-  constexpr uint32_t N_dst = N * ::sizeof_bits<dtype_dst>() / BITS_PER_BYTE / sizeof(dtype_reg);
-  constexpr uint32_t N_src = N * sizeof(dtype_src) / sizeof(dtype_reg);
-  constexpr uint32_t N_u32_dst = N * ::sizeof_bits<dtype_dst>() / BITS_PER_BYTE / sizeof(uint32_t);
-  constexpr uint32_t N_u32_src = N * sizeof(dtype_src) / sizeof(uint32_t);
+  constexpr uint32_t N_u32_dst =
+      (N * ::sizeof_bits<dtype_dst>() / BITS_PER_BYTE + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+  constexpr uint32_t N_u32_src = (N * sizeof(dtype_src) + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+  // N_dst/N_src must be byte-compatible with vector_t sizes for bit_cast
+  constexpr uint32_t N_dst = N_u32_dst * sizeof(uint32_t) / sizeof(dtype_reg);
+  constexpr uint32_t N_src = N_u32_src * sizeof(uint32_t) / sizeof(dtype_reg);
   sycl::marray<dtype_reg, N_src> src;
   using vtype_src = vector_t<uint32_t, N_u32_src>;
   using vtype_dst = vector_t<uint32_t, N_u32_dst>;
@@ -4457,7 +4567,91 @@ inline void gtp_tcvdmx(dtype_reg *dst_ptr, const dtype_reg *src_ptr, const uint8
   }
   vtype_dst vdst;
   uint32_t meta_u32 = meta;
-  if constexpr (std::is_same_v<dtype_src, fp16>) {
+  if constexpr (std::is_same_v<dtype_src, float>) {
+    if constexpr (std::is_same_v<dtype_dst, bf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e5m2.f32.m32n32.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e5m2.f32.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e5m2.f32.m32n8.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e5m2.f32.m32n4.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e5m2.f32.m32n2.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvdmx.e5m2.f32.m32n1.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e4m3.f32.m32n32.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e4m3.f32.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e4m3.f32.m32n8.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e4m3.f32.m32n4.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e4m3.f32.m32n2.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvdmx.e4m3.f32.m32n1.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, fp4_e2m1>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e2m1.f32.m32n32.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e2m1.f32.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e2m1.f32.m32n8.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e2m1.f32.m32n4.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e2m1.f32.m32n2.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, fp16>) {
     if constexpr (std::is_same_v<dtype_dst, bf8>) {
       if constexpr (N == 32) {
         INLINE_PISA("tcvdmx.e5m2.f16.m32n32.mxnd %0, %1, %2;"
@@ -4465,6 +4659,58 @@ inline void gtp_tcvdmx(dtype_reg *dst_ptr, const dtype_reg *src_ptr, const uint8
                     : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvdmx.e5m2.f16.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n8.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n4.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n3.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n2.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n1.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n32.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n8.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n4.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n3.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n2.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n1.mxnd %0, %1, %2;"
                     : "=r"(vdst)
                     : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
       } else {
@@ -4477,6 +4723,18 @@ inline void gtp_tcvdmx(dtype_reg *dst_ptr, const dtype_reg *src_ptr, const uint8
                     : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvdmx.e2m1.f16.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e2m1.f16.m32n8.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e2m1.f16.m32n4.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e2m1.f16.m32n2.mxnd %0, %1, %2;"
                     : "=r"(vdst)
                     : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
       } else {
@@ -4495,6 +4753,58 @@ inline void gtp_tcvdmx(dtype_reg *dst_ptr, const dtype_reg *src_ptr, const uint8
         INLINE_PISA("tcvdmx.e5m2.bf16.m32n16.mxnd %0, %1, %2;"
                     : "=r"(vdst)
                     : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n8.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n4.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n3.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n2.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n1.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n32.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n8.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n4.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n3.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n2.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n1.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
       } else {
         static_assert(sizeof(dtype_src) == 0, "unsupported N");
       }
@@ -4505,6 +4815,18 @@ inline void gtp_tcvdmx(dtype_reg *dst_ptr, const dtype_reg *src_ptr, const uint8
                     : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
       } else if constexpr (N == 16) {
         INLINE_PISA("tcvdmx.e2m1.bf16.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e2m1.bf16.m32n8.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e2m1.bf16.m32n4.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e2m1.bf16.m32n2.mxnd %0, %1, %2;"
                     : "=r"(vdst)
                     : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
       } else {
@@ -4520,6 +4842,624 @@ inline void gtp_tcvdmx(dtype_reg *dst_ptr, const dtype_reg *src_ptr, const uint8
 #pragma unroll
   for (int i = 0; i < N_dst; i++) {
     dst_ptr[i] = dst[i];
+  }
+}
+
+// gtp_tcvdmx_mxmd: per-column (.mxmd) variant of gtp_tcvdmx.
+// Identical to gtp_tcvdmx but uses .mxmd qualifier (scale applied per column).
+// From pISA doc: "The scaling factor is applied to each column of src0."
+template <typename dtype_dst, typename dtype_src, uint32_t N, typename dtype_reg>
+inline void gtp_tcvdmx_mxmd(dtype_reg *dst_ptr, const dtype_reg *src_ptr, const uint8_t &meta) {
+  constexpr uint32_t N_u32_dst =
+      (N * ::sizeof_bits<dtype_dst>() / BITS_PER_BYTE + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+  constexpr uint32_t N_u32_src = (N * sizeof(dtype_src) + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+  constexpr uint32_t N_dst = N_u32_dst * sizeof(uint32_t) / sizeof(dtype_reg);
+  constexpr uint32_t N_src = N_u32_src * sizeof(uint32_t) / sizeof(dtype_reg);
+  sycl::marray<dtype_reg, N_src> src;
+  using vtype_src = vector_t<uint32_t, N_u32_src>;
+  using vtype_dst = vector_t<uint32_t, N_u32_dst>;
+#pragma unroll
+  for (int i = 0; i < N_src; i++) {
+    src[i] = src_ptr[i];
+  }
+  vtype_dst vdst;
+  uint32_t meta_u32 = meta;
+  if constexpr (std::is_same_v<dtype_src, float>) {
+    if constexpr (std::is_same_v<dtype_dst, bf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e5m2.f32.m32n32.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e5m2.f32.m32n16.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e5m2.f32.m32n8.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e5m2.f32.m32n4.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e5m2.f32.m32n2.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvdmx.e5m2.f32.m32n1.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e4m3.f32.m32n32.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e4m3.f32.m32n16.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e4m3.f32.m32n8.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e4m3.f32.m32n4.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e4m3.f32.m32n2.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvdmx.e4m3.f32.m32n1.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, fp4_e2m1>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e2m1.f32.m32n32.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e2m1.f32.m32n16.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e2m1.f32.m32n8.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e2m1.f32.m32n4.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e2m1.f32.m32n2.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, fp16>) {
+    if constexpr (std::is_same_v<dtype_dst, bf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n32.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n16.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n8.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n4.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n2.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n1.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n32.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n16.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n8.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n4.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n2.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n1.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, fp4_e2m1>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e2m1.f16.m32n32.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e2m1.f16.m32n16.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e2m1.f16.m32n8.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e2m1.f16.m32n4.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e2m1.f16.m32n2.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, bf16>) {
+    if constexpr (std::is_same_v<dtype_dst, bf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n32.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n16.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n8.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n4.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n2.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n1.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n32.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n16.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n8.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n4.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n2.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n1.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, fp4_e2m1>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e2m1.bf16.m32n32.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e2m1.bf16.m32n16.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e2m1.bf16.m32n8.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvdmx.e2m1.bf16.m32n4.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvdmx.e2m1.bf16.m32n2.mxmd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else {
+    static_assert(sizeof(dtype_src) == 0, "unsupported dtype_src");
+  }
+  sycl::marray<dtype_reg, N_dst> dst = sycl::bit_cast<sycl::marray<dtype_reg, N_dst>>(vdst);
+#pragma unroll
+  for (int i = 0; i < N_dst; i++) {
+    dst_ptr[i] = dst[i];
+  }
+}
+
+// gtp_tcvdmx_srnd: stochastic rounding (.srnd.swseed) variant of gtp_tcvdmx.
+// Uses tcvdmx.toty.fromty.m32nN.mxnd.srnd.swseed dst, src0, dsrc1, m
+// The seed (dsrc1) is both input and output (updated by hardware).
+template <typename dtype_dst, typename dtype_src, uint32_t N, typename dtype_reg>
+inline void gtp_tcvdmx_srnd(dtype_reg *dst_ptr, const dtype_reg *src_ptr, const uint8_t &meta, uint32_t &seed) {
+  constexpr uint32_t N_u32_dst =
+      (N * ::sizeof_bits<dtype_dst>() / BITS_PER_BYTE + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+  constexpr uint32_t N_u32_src = (N * sizeof(dtype_src) + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+  constexpr uint32_t N_dst = N_u32_dst * sizeof(uint32_t) / sizeof(dtype_reg);
+  constexpr uint32_t N_src = N_u32_src * sizeof(uint32_t) / sizeof(dtype_reg);
+  sycl::marray<dtype_reg, N_src> src;
+  using vtype_src = vector_t<uint32_t, N_u32_src>;
+  using vtype_dst = vector_t<uint32_t, N_u32_dst>;
+#pragma unroll
+  for (int i = 0; i < N_src; i++) {
+    src[i] = src_ptr[i];
+  }
+  vtype_dst vdst;
+  uint32_t meta_u32 = meta;
+  // Inline asm operand mapping:
+  //   %0 = vdst (output), %1 = seed (in/out), %2 = vsrc (input), %3 = meta (input)
+  // Instruction: tcvdmx.*.mxnd.srnd.swseed dst, src0, dsrc1, m → %0, %2, %1, %3
+  if constexpr (std::is_same_v<dtype_src, fp16>) {
+    if constexpr (std::is_same_v<dtype_dst, bf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n32.mxnd.srnd.swseed %0, %2, %1, %3;"
+                    : "=r"(vdst), "+r"(seed)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n16.mxnd.srnd.swseed %0, %2, %1, %3;"
+                    : "=r"(vdst), "+r"(seed)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e5m2.f16.m32n8.mxnd.srnd.swseed %0, %2, %1, %3;"
+                    : "=r"(vdst), "+r"(seed)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N for srnd");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n32.mxnd.srnd.swseed %0, %2, %1, %3;"
+                    : "=r"(vdst), "+r"(seed)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n16.mxnd.srnd.swseed %0, %2, %1, %3;"
+                    : "=r"(vdst), "+r"(seed)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e4m3.f16.m32n8.mxnd.srnd.swseed %0, %2, %1, %3;"
+                    : "=r"(vdst), "+r"(seed)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N for srnd");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst for srnd");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, bf16>) {
+    if constexpr (std::is_same_v<dtype_dst, bf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n32.mxnd.srnd.swseed %0, %2, %1, %3;"
+                    : "=r"(vdst), "+r"(seed)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n16.mxnd.srnd.swseed %0, %2, %1, %3;"
+                    : "=r"(vdst), "+r"(seed)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e5m2.bf16.m32n8.mxnd.srnd.swseed %0, %2, %1, %3;"
+                    : "=r"(vdst), "+r"(seed)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N for srnd");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n32.mxnd.srnd.swseed %0, %2, %1, %3;"
+                    : "=r"(vdst), "+r"(seed)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n16.mxnd.srnd.swseed %0, %2, %1, %3;"
+                    : "=r"(vdst), "+r"(seed)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvdmx.e4m3.bf16.m32n8.mxnd.srnd.swseed %0, %2, %1, %3;"
+                    : "=r"(vdst), "+r"(seed)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N for srnd");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst for srnd");
+    }
+  } else {
+    static_assert(sizeof(dtype_src) == 0, "unsupported dtype_src for srnd");
+  }
+  sycl::marray<dtype_reg, N_dst> dst = sycl::bit_cast<sycl::marray<dtype_reg, N_dst>>(vdst);
+#pragma unroll
+  for (int i = 0; i < N_dst; i++) {
+    dst_ptr[i] = dst[i];
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// gtp_tcvumx: MX dequantization (up-convert from narrow MX type to wider non-MX type)
+//
+// tcvumx.toty.fromty.m32nN.mxnd dst, src, m
+//   - dst: OUTPUT wider type (bf16/f16) — N_u32_dst = ceil(N/2) registers
+//   - src: INPUT narrow MX type (e5m2/e4m3/e2m1/etc.) — N_u32_src = ceil(N*bits/32) registers
+//   - m:   INPUT meta (e8m0 scale, per-row with .mxnd)
+//
+// Supported conversions:
+//   bf8 (e5m2) → bf16, bf8 → f16
+//   hf8 (e4m3) → bf16, hf8 → f16
+//   fp4 (e2m1) → bf16, fp4 → f16
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <typename dtype_dst, typename dtype_src, uint32_t N, typename dtype_reg>
+inline void gtp_tcvumx(dtype_reg *dst_ptr, const dtype_reg *src_ptr, const uint8_t &meta) {
+  // dst is 16-bit (bf16/f16): N values → ceil(N*16/32) = ceil(N/2) uint32 regs
+  constexpr uint32_t N_u32_dst = (N * sizeof(dtype_dst) + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+  // src is narrow: N values × bitwidth / 32
+  constexpr uint32_t N_u32_src =
+      (N * ::sizeof_bits<dtype_src>() / BITS_PER_BYTE + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+  constexpr uint32_t N_dst = N_u32_dst * sizeof(uint32_t) / sizeof(dtype_reg);
+  constexpr uint32_t N_src = N_u32_src * sizeof(uint32_t) / sizeof(dtype_reg);
+  sycl::marray<dtype_reg, N_src> src;
+  using vtype_src = vector_t<uint32_t, N_u32_src>;
+  using vtype_dst = vector_t<uint32_t, N_u32_dst>;
+#pragma unroll
+  for (int i = 0; i < N_src; i++) {
+    src[i] = src_ptr[i];
+  }
+  vtype_dst vdst;
+  uint32_t meta_u32 = meta;
+  if constexpr (std::is_same_v<dtype_src, bf8>) {
+    // e5m2 → bf16 or f16
+    if constexpr (std::is_same_v<dtype_dst, bf16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvumx.bf16.e5m2.m32n32.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvumx.bf16.e5m2.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvumx.bf16.e5m2.m32n8.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvumx.bf16.e5m2.m32n4.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvumx.bf16.e5m2.m32n3.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvumx.bf16.e5m2.m32n2.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvumx.bf16.e5m2.m32n1.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, fp16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvumx.f16.e5m2.m32n32.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvumx.f16.e5m2.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvumx.f16.e5m2.m32n8.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvumx.f16.e5m2.m32n4.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvumx.f16.e5m2.m32n3.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvumx.f16.e5m2.m32n2.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvumx.f16.e5m2.m32n1.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst for tcvumx");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, hf8>) {
+    // e4m3 → bf16 or f16
+    if constexpr (std::is_same_v<dtype_dst, bf16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvumx.bf16.e4m3.m32n32.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvumx.bf16.e4m3.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvumx.bf16.e4m3.m32n8.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvumx.bf16.e4m3.m32n4.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvumx.bf16.e4m3.m32n3.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvumx.bf16.e4m3.m32n2.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvumx.bf16.e4m3.m32n1.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, fp16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvumx.f16.e4m3.m32n32.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvumx.f16.e4m3.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvumx.f16.e4m3.m32n8.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvumx.f16.e4m3.m32n4.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvumx.f16.e4m3.m32n3.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvumx.f16.e4m3.m32n2.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvumx.f16.e4m3.m32n1.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst for tcvumx");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, fp4_e2m1>) {
+    // e2m1 → bf16 or f16
+    if constexpr (std::is_same_v<dtype_dst, bf16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvumx.bf16.e2m1.m32n32.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvumx.bf16.e2m1.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvumx.bf16.e2m1.m32n8.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvumx.bf16.e2m1.m32n4.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvumx.bf16.e2m1.m32n2.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, fp16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvumx.f16.e2m1.m32n32.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvumx.f16.e2m1.m32n16.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvumx.f16.e2m1.m32n8.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvumx.f16.e2m1.m32n4.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvumx.f16.e2m1.m32n2.mxnd %0, %1, %2;"
+                    : "=r"(vdst)
+                    : "r"(sycl::bit_cast<vtype_src>(src)), "r"(meta_u32));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst for tcvumx");
+    }
+  } else {
+    static_assert(sizeof(dtype_src) == 0, "unsupported dtype_src for tcvumx");
+  }
+  auto dst_arr = sycl::bit_cast<sycl::marray<dtype_reg, N_dst>>(vdst);
+#pragma unroll
+  for (int i = 0; i < N_dst; i++) {
+    dst_ptr[i] = dst_arr[i];
   }
 }
 
@@ -4583,6 +5523,624 @@ inline void gtp_tcvd_xch(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
   sycl::marray<dtype_reg, N_dst> dst = sycl::bit_cast<sycl::marray<dtype_reg, N_dst>>(vdst);
 #pragma unroll
   for (int i = 0; i < N_dst; i++) {
+    dst_ptr[i] = dst[i];
+  }
+}
+
+// ===================== gtp_tcvu (Tensor Pipe Upconversion) =====================
+// Upconverts narrow types (bf8, hf8, fp6_e3m2, fp6_e2m3, fp4_e2m1) to wider types
+// (fp16, bf16, bf8, hf8). First overload uses dtype_reg for raw register interface.
+template <typename dtype_dst, typename dtype_src, uint32_t N, typename dtype_reg>
+inline void gtp_tcvu(dtype_reg *dst_ptr, const dtype_reg *src_ptr) {
+  constexpr uint32_t dbits_u32 = sizeof(uint32_t) * BITS_PER_BYTE;
+  constexpr uint32_t dbits_dst = ::sizeof_bits<dtype_dst>();
+  constexpr uint32_t dbits_src = ::sizeof_bits<dtype_src>();
+  constexpr uint32_t N_u32_dst = (N * dbits_dst + dbits_u32 - 1) / dbits_u32;
+  constexpr uint32_t N_u32_src = (N * dbits_src + dbits_u32 - 1) / dbits_u32;
+  constexpr uint32_t N_dst = N_u32_dst * sizeof(uint32_t) / sizeof(dtype_reg);
+  constexpr uint32_t N_src = N_u32_src * sizeof(uint32_t) / sizeof(dtype_reg);
+  sycl::marray<dtype_reg, N_src> src;
+  using vtype_src = vector_t<uint32_t, N_u32_src>;
+  using vtype_dst = vector_t<uint32_t, N_u32_dst>;
+#pragma unroll
+  for (int i = 0; i < N_src; i++) {
+    src[i] = src_ptr[i];
+  }
+  vtype_dst vdst;
+  if constexpr (std::is_same_v<dtype_src, bf8>) {
+    if constexpr (std::is_same_v<dtype_dst, fp16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.f16.e5m2.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.f16.e5m2.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.f16.e5m2.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.f16.e5m2.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.f16.e5m2.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.f16.e5m2.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.f16.e5m2.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, bf16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.bf16.e5m2.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.bf16.e5m2.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.bf16.e5m2.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.bf16.e5m2.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.bf16.e5m2.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.bf16.e5m2.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.bf16.e5m2.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, hf8>) {
+    if constexpr (std::is_same_v<dtype_dst, fp16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.f16.e4m3.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.f16.e4m3.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.f16.e4m3.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.f16.e4m3.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.f16.e4m3.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.f16.e4m3.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.f16.e4m3.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, bf16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.bf16.e4m3.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.bf16.e4m3.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.bf16.e4m3.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.bf16.e4m3.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.bf16.e4m3.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.bf16.e4m3.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.bf16.e4m3.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, fp6_e3m2>) {
+    if constexpr (std::is_same_v<dtype_dst, fp16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.f16.e3m2.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.f16.e3m2.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.f16.e3m2.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.f16.e3m2.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.f16.e3m2.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.f16.e3m2.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.f16.e3m2.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, bf16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.bf16.e3m2.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.bf16.e3m2.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.bf16.e3m2.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.bf16.e3m2.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.bf16.e3m2.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.bf16.e3m2.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.bf16.e3m2.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, bf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.e5m2.e3m2.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.e5m2.e3m2.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.e5m2.e3m2.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.e5m2.e3m2.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.e5m2.e3m2.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.e5m2.e3m2.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.e5m2.e3m2.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.e4m3.e3m2.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.e4m3.e3m2.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.e4m3.e3m2.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.e4m3.e3m2.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.e4m3.e3m2.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.e4m3.e3m2.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.e4m3.e3m2.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, fp6_e2m3>) {
+    if constexpr (std::is_same_v<dtype_dst, fp16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.f16.e2m3.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.f16.e2m3.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.f16.e2m3.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.f16.e2m3.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.f16.e2m3.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.f16.e2m3.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.f16.e2m3.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, bf16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.bf16.e2m3.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.bf16.e2m3.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.bf16.e2m3.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.bf16.e2m3.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.bf16.e2m3.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.bf16.e2m3.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.bf16.e2m3.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.e4m3.e2m3.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.e4m3.e2m3.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.e4m3.e2m3.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.e4m3.e2m3.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.e4m3.e2m3.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.e4m3.e2m3.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.e4m3.e2m3.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, fp4_e2m1>) {
+    if constexpr (std::is_same_v<dtype_dst, fp16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.f16.e2m1.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.f16.e2m1.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.f16.e2m1.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.f16.e2m1.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.f16.e2m1.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, bf16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.bf16.e2m1.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.bf16.e2m1.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.bf16.e2m1.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.bf16.e2m1.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.bf16.e2m1.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, bf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.e5m2.e2m1.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.e5m2.e2m1.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.e5m2.e2m1.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.e5m2.e2m1.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.e5m2.e2m1.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.e4m3.e2m1.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.e4m3.e2m1.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.e4m3.e2m1.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.e4m3.e2m1.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.e4m3.e2m1.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else {
+    static_assert(sizeof(dtype_src) == 0, "unsupported dtype_src");
+  }
+  sycl::marray<dtype_reg, N_dst> dst = sycl::bit_cast<sycl::marray<dtype_reg, N_dst>>(vdst);
+#pragma unroll
+  for (int i = 0; i < N_dst; i++) {
+    dst_ptr[i] = dst[i];
+  }
+}
+
+// Second overload: typed pointer interface for gtp_tcvu
+template <typename dtype_dst, typename dtype_src, uint32_t N>
+inline void gtp_tcvu(dtype_dst *dst_ptr, const dtype_src *src_ptr) {
+  constexpr uint32_t dbits_u32 = sizeof(uint32_t) * BITS_PER_BYTE;
+  constexpr uint32_t dbits_src = ::sizeof_bits<dtype_src>();
+  constexpr uint32_t dbits_dst = ::sizeof_bits<dtype_dst>();
+
+  constexpr uint32_t N_u32_src = (N * dbits_src + dbits_u32 - 1) / dbits_u32;
+  constexpr uint32_t N_u32_dst = (N * dbits_dst + dbits_u32 - 1) / dbits_u32;
+
+  // For sub-byte source types, read as uint8_t
+  using src_reg_type = std::conditional_t<(dbits_src < 8), uint8_t, dtype_src>;
+  constexpr uint32_t N_u8_src = (N * dbits_src + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
+  constexpr uint32_t N_src_copy = (dbits_src < 8) ? N_u8_src : N;
+  // u32-aligned register count for source
+  constexpr uint32_t N_src_reg = N_u32_src * dbits_u32 / sizeof_bits<src_reg_type>();
+
+  sycl::marray<src_reg_type, N_src_reg> src;
+  const src_reg_type *src_reg_ptr = reinterpret_cast<const src_reg_type *>(src_ptr);
+
+  using vtype_src = vector_t<uint32_t, N_u32_src>;
+  using vtype_dst = vector_t<uint32_t, N_u32_dst>;
+#pragma unroll
+  for (uint32_t i = 0; i < N_src_copy; i++) {
+    src[i] = src_reg_ptr[i];
+  }
+  vtype_dst vdst;
+  if constexpr (std::is_same_v<dtype_src, bf8>) {
+    if constexpr (std::is_same_v<dtype_dst, fp16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.f16.e5m2.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.f16.e5m2.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.f16.e5m2.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.f16.e5m2.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.f16.e5m2.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.f16.e5m2.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.f16.e5m2.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, bf16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.bf16.e5m2.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.bf16.e5m2.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.bf16.e5m2.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.bf16.e5m2.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.bf16.e5m2.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.bf16.e5m2.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.bf16.e5m2.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, hf8>) {
+    if constexpr (std::is_same_v<dtype_dst, fp16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.f16.e4m3.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.f16.e4m3.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.f16.e4m3.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.f16.e4m3.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.f16.e4m3.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.f16.e4m3.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.f16.e4m3.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, bf16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.bf16.e4m3.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.bf16.e4m3.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.bf16.e4m3.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.bf16.e4m3.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.bf16.e4m3.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.bf16.e4m3.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.bf16.e4m3.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, fp6_e3m2>) {
+    if constexpr (std::is_same_v<dtype_dst, fp16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.f16.e3m2.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.f16.e3m2.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.f16.e3m2.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.f16.e3m2.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.f16.e3m2.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.f16.e3m2.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.f16.e3m2.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, bf16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.bf16.e3m2.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.bf16.e3m2.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.bf16.e3m2.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.bf16.e3m2.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.bf16.e3m2.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.bf16.e3m2.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.bf16.e3m2.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, bf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.e5m2.e3m2.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.e5m2.e3m2.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.e5m2.e3m2.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.e5m2.e3m2.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.e5m2.e3m2.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.e5m2.e3m2.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.e5m2.e3m2.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.e4m3.e3m2.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.e4m3.e3m2.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.e4m3.e3m2.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.e4m3.e3m2.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.e4m3.e3m2.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.e4m3.e3m2.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.e4m3.e3m2.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, fp6_e2m3>) {
+    if constexpr (std::is_same_v<dtype_dst, fp16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.f16.e2m3.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.f16.e2m3.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.f16.e2m3.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.f16.e2m3.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.f16.e2m3.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.f16.e2m3.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.f16.e2m3.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, bf16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.bf16.e2m3.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.bf16.e2m3.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.bf16.e2m3.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.bf16.e2m3.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.bf16.e2m3.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.bf16.e2m3.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.bf16.e2m3.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.e4m3.e2m3.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.e4m3.e2m3.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.e4m3.e2m3.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.e4m3.e2m3.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 3) {
+        INLINE_PISA("tcvu.e4m3.e2m3.m32n3 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.e4m3.e2m3.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 1) {
+        INLINE_PISA("tcvu.e4m3.e2m3.m32n1 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else if constexpr (std::is_same_v<dtype_src, fp4_e2m1>) {
+    if constexpr (std::is_same_v<dtype_dst, fp16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.f16.e2m1.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.f16.e2m1.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.f16.e2m1.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.f16.e2m1.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.f16.e2m1.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, bf16>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.bf16.e2m1.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.bf16.e2m1.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.bf16.e2m1.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.bf16.e2m1.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.bf16.e2m1.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, bf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.e5m2.e2m1.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.e5m2.e2m1.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.e5m2.e2m1.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.e5m2.e2m1.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.e5m2.e2m1.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else if constexpr (std::is_same_v<dtype_dst, hf8>) {
+      if constexpr (N == 32) {
+        INLINE_PISA("tcvu.e4m3.e2m1.m32n32 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 16) {
+        INLINE_PISA("tcvu.e4m3.e2m1.m32n16 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 8) {
+        INLINE_PISA("tcvu.e4m3.e2m1.m32n8 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 4) {
+        INLINE_PISA("tcvu.e4m3.e2m1.m32n4 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else if constexpr (N == 2) {
+        INLINE_PISA("tcvu.e4m3.e2m1.m32n2 %0, %1;" : "=r"(vdst) : "r"(sycl::bit_cast<vtype_src>(src)));
+      } else {
+        static_assert(sizeof(dtype_src) == 0, "unsupported N");
+      }
+    } else {
+      static_assert(sizeof(dtype_dst) == 0, "unsupported dtype_dst");
+    }
+  } else {
+    static_assert(sizeof(dtype_src) == 0, "unsupported dtype_src");
+  }
+
+  // Destination is always >= 8 bits for tcvu
+  constexpr uint32_t N_dst_reg = N_u32_dst * dbits_u32 / dbits_dst;
+  sycl::marray<dtype_dst, N_dst_reg> dst = sycl::bit_cast<sycl::marray<dtype_dst, N_dst_reg>>(vdst);
+#pragma unroll
+  for (uint32_t i = 0; i < N; i++) {
     dst_ptr[i] = dst[i];
   }
 }
