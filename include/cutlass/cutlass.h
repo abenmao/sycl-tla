@@ -36,11 +36,14 @@
 
 #pragma once
 
-#if defined(SYCL_INTEL_TARGET)
+#if defined(SYCL_INTEL_TARGET) && !(SYCL_INTEL_TARGET == 40)
 #undef SYCL_INTEL_TARGET
 #if __SYCL_TARGET_INTEL_GPU_CRI__
 #define SYCL_INTEL_TARGET 35
-#elif __SYCL_TARGET_INTEL_GPU_JGS__
+#elif __SYCL_TARGET_INTEL_GPU_JGS__ || __PISA__
+// For jgs, fsycl-targets=pisa doesn't define __SYCL_TARGET_INTEL_GPU_JGS__,
+// so if SYCL_INTEL_TARGET=40 is used as a compile-time definition, it would
+// get over-written to some other value if we wouldn't also test for __PISA flag.
 #define SYCL_INTEL_TARGET 40
 #else
 #define SYCL_INTEL_TARGET 20

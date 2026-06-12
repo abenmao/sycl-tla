@@ -187,10 +187,10 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
 
   // Only threads that will use abarrier should initialize it.
   // For Xe4, only the leader work-item from chosen sub-group (here 0th sub-group) will call AMMA.
-  auto mma_barrier = allocate_abar<0>();
+  auto& mma_barrier = cutlass::arch::allocate_cluster_tx_barrier();
   if (elect_one_thr && elect_one_warp) {
-    xe4_initialize_barrier(*mma_barrier, 1);
-  } 
+    mma_barrier.init(1);
+  }
   xe4_syncthreads();
   int mma_barrier_phase_bit = 0;  // Each barrier has an associated phase_bit.
   
@@ -214,11 +214,11 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
     sycl::group_barrier(item.get_group());
     // (V,M,K) x (V,N,K) => (V,M,N) - XE4 AMMA gemm call from the elected sub-group (warp) & elected lane (work-item)
     if (elect_one_thr && elect_one_warp) {
-      xe4_set_barrier_transaction_bytes(*mma_barrier, 1);
-      auto new_mma = mma.with(AMMA::TrackMethod<AMMA::Tracking::D>{}, mma_ctrl, mma_barrier);
+      mma_barrier.arrive_and_expect_tx(1);
+      auto new_mma = mma.with(AMMA::TrackMethod<AMMA::Tracking::D>{}, mma_ctrl, reinterpret_cast<uint64_t*>(&mma_barrier));
       cute::gemm(new_mma, tCrA(_,_,_,k_pipe_read), tCrB(_,_,_,k_pipe_read), tCrC);
       mma_ctrl = 0x000;
-      xe4_wait_barrier(*mma_barrier, mma_barrier_phase_bit);
+      mma_barrier.try_wait(mma_barrier_phase_bit);
       mma_barrier_phase_bit ^= 1;
     }
     sycl::group_barrier(item.get_group());

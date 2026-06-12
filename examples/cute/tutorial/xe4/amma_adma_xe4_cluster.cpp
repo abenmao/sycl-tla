@@ -77,10 +77,9 @@
 #include <cute/atom/copy_traits_xe4_adma.hpp>
 #include <cute/arch/xe4_util.hpp>
 #include <cute/arch/cluster_xe4.hpp>
-#include "cutlass/arch/barrier.h"
+#include <cutlass/arch/barrier.h>
 
 #include "cutlass/util/packed_stride.hpp"
-#include "cutlass/arch/barrier.h"
 #include "cutlass/pipeline/pipeline.hpp"
 
 #include "../../../common/sycl_cute_common.hpp"
@@ -330,21 +329,22 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape, Cl
   // ========================================================================
   // Step 6: Allocate and initialize async barriers
   // ========================================================================
-  auto load_a_abar = allocate_abar<0, K_PIPE_MAX>();
-  auto load_b_abar = allocate_abar<1, K_PIPE_MAX>();
-  auto mma_abar    = allocate_abar<2, K_PIPE_MAX>();
-  auto store_c_abar = allocate_abar<3>();
+  using namespace cutlass::arch;
+  auto load_a_abar = allocate_cluster_tx_barriers<K_PIPE_MAX>();
+  auto load_b_abar = allocate_cluster_tx_barriers<K_PIPE_MAX>();
+  auto mma_abar    = allocate_cluster_tx_barriers<K_PIPE_MAX>();
+  auto& store_c_abar = allocate_cluster_tx_barrier();
 
   if (elect_one_thr && warp_idx == 0) {
     for (int i = 0; i < K_PIPE_MAX; ++i) {
-      xe4_initialize_barrier(load_a_abar[i], 1);
-      xe4_initialize_barrier(load_b_abar[i], 1);
+      load_a_abar[i].init(1);
+      load_b_abar[i].init(1);
     }
   } else if (elect_one_thr && warp_idx == 1) {
     for (int i = 0; i < K_PIPE_MAX; ++i) {
-      xe4_initialize_barrier(mma_abar[i], 1);
+      mma_abar[i].init(1);
     }
-    xe4_initialize_barrier(store_c_abar[0], 1);
+    store_c_abar.init(1);
   }
   xe4_syncthreads();
 
@@ -402,10 +402,10 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape, Cl
       // ---- Prologue: Fill all pipeline stages ----
       for (int pipe = 0; pipe < K_PIPE_MAX; ++pipe)
       {
-        xe4_set_barrier_transaction_bytes(load_a_abar[pipe], dma_transaction_bytesA);
-        xe4_set_barrier_transaction_bytes(load_b_abar[pipe], dma_transaction_bytesB);
-        copy(adma_load_a.with(&load_a_abar[pipe], mcast_mask_a), tAgA(_, k_tile), tAsA(_, pipe));
-        copy(adma_load_b.with(&load_b_abar[pipe], mcast_mask_b), tBgB(_, k_tile), tBsB(_, pipe));
+        load_a_abar[pipe].arrive_and_expect_tx(dma_transaction_bytesA);
+        load_b_abar[pipe].arrive_and_expect_tx(dma_transaction_bytesB);
+        copy(adma_load_a.with(reinterpret_cast<uint64_t*>(&load_a_abar[pipe]), mcast_mask_a), tAgA(_, k_tile), tAsA(_, pipe));
+        copy(adma_load_b.with(reinterpret_cast<uint64_t*>(&load_b_abar[pipe]), mcast_mask_b), tBgB(_, k_tile), tBsB(_, pipe));
         ++k_tile;
       }
 
@@ -413,11 +413,11 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape, Cl
       for (int k_tile_next = k_tile; k_tile_next < K_TILE_MAX; ++k_tile_next)
       {
         int write_pipe = write_state.index();
-        xe4_wait_barrier(mma_abar[write_pipe], write_state.phase());
-        xe4_set_barrier_transaction_bytes(load_a_abar[write_pipe], dma_transaction_bytesA);
-        xe4_set_barrier_transaction_bytes(load_b_abar[write_pipe], dma_transaction_bytesB);
-        copy(adma_load_a.with(&load_a_abar[write_pipe], mcast_mask_a), tAgA(_, k_tile_next), tAsA(_, write_pipe));
-        copy(adma_load_b.with(&load_b_abar[write_pipe], mcast_mask_b), tBgB(_, k_tile_next), tBsB(_, write_pipe));
+        mma_abar[write_pipe].try_wait(write_state.phase());
+        load_a_abar[write_pipe].arrive_and_expect_tx(dma_transaction_bytesA);
+        load_b_abar[write_pipe].arrive_and_expect_tx(dma_transaction_bytesB);
+        copy(adma_load_a.with(reinterpret_cast<uint64_t*>(&load_a_abar[write_pipe]), mcast_mask_a), tAgA(_, k_tile_next), tAsA(_, write_pipe));
+        copy(adma_load_b.with(reinterpret_cast<uint64_t*>(&load_b_abar[write_pipe]), mcast_mask_b), tBgB(_, k_tile_next), tBsB(_, write_pipe));
         ++write_state;
       }
     }
@@ -431,12 +431,13 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape, Cl
       for (int k_tile_next = 0; k_tile_next < K_TILE_MAX - 1; ++k_tile_next)
       {
         int read_pipe = read_state.index();
-        xe4_wait_barrier(load_a_abar[read_pipe], read_state.phase());
-        xe4_wait_barrier(load_b_abar[read_pipe], read_state.phase());
-        xe4_set_barrier_transaction_bytes(mma_abar[read_pipe], 2);
+        load_a_abar[read_pipe].try_wait(read_state.phase());
+        load_b_abar[read_pipe].try_wait(read_state.phase());
+        mma_abar[read_pipe].arrive_and_expect_tx(2);
         auto new_mma = mma.with(AMMA::TrackMethod<AMMA::Tracking::AB>{},
                                 mma_ctrl,
-                                &mma_abar[read_pipe], &mma_abar[read_pipe],
+                                reinterpret_cast<uint64_t*>(&mma_abar[read_pipe]),
+                                reinterpret_cast<uint64_t*>(&mma_abar[read_pipe]),
                                 mcast_mask_a, mcast_mask_b);
         cute::gemm(new_mma, tCrA(_,_,_,read_pipe), tCrB(_,_,_,read_pipe), tCrC);
         mma_ctrl = 0x000;
@@ -446,16 +447,17 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape, Cl
       // ---- Last iteration: Track D+A+B completion for store barrier ----
       {
         int read_pipe = read_state.index();
-        xe4_wait_barrier(load_a_abar[read_pipe], read_state.phase());
-        xe4_wait_barrier(load_b_abar[read_pipe], read_state.phase());
-        xe4_set_barrier_transaction_bytes(store_c_abar[0], 1);       // D barrier: 1 byte
-        xe4_set_barrier_transaction_bytes(mma_abar[read_pipe], 2);   // A+B barriers: 2 bytes
+        load_a_abar[read_pipe].try_wait(read_state.phase());
+        load_b_abar[read_pipe].try_wait(read_state.phase());
+        store_c_abar.arrive_and_expect_tx(1);       // D barrier: 1 byte
+        mma_abar[read_pipe].arrive_and_expect_tx(2);   // A+B barriers: 2 bytes
         if constexpr (std::is_same_v<TC, float>) {
           // Same type: no dtype change, 3-operand DAB tracking
           auto new_mma = mma.with(AMMA::TrackMethod<AMMA::Tracking::DAB>{},
                                   mma_ctrl,
-                                  &store_c_abar[0],                            // D → dedicated epilogue barrier
-                                  &mma_abar[read_pipe], &mma_abar[read_pipe],  // A,B → pipeline slot barrier
+                                  reinterpret_cast<uint64_t*>(&store_c_abar),                            // D → dedicated epilogue barrier
+                                  reinterpret_cast<uint64_t*>(&mma_abar[read_pipe]),
+                                  reinterpret_cast<uint64_t*>(&mma_abar[read_pipe]),  // A,B → pipeline slot barrier
                                   mcast_mask_a, mcast_mask_b);
           cute::gemm(new_mma, tCrA(_,_,_,read_pipe), tCrB(_,_,_,read_pipe), tCrC);
         } else {
@@ -463,8 +465,9 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape, Cl
           auto new_mma = mma.with(TC{},
                                   AMMA::TrackMethod<AMMA::Tracking::DAB>{},
                                   mma_ctrl,
-                                  &store_c_abar[0],                            // D → dedicated epilogue barrier
-                                  &mma_abar[read_pipe], &mma_abar[read_pipe],  // A,B → pipeline slot barrier
+                                  reinterpret_cast<uint64_t*>(&store_c_abar),                            // D → dedicated epilogue barrier
+                                  reinterpret_cast<uint64_t*>(&mma_abar[read_pipe]),
+                                  reinterpret_cast<uint64_t*>(&mma_abar[read_pipe]),  // A,B → pipeline slot barrier
                                   mcast_mask_a, mcast_mask_b);
           cute::gemm(new_mma, tCrD, tCrA(_,_,_,read_pipe), tCrB(_,_,_,read_pipe), tCrC);
         }
@@ -482,14 +485,14 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape, Cl
   {
     if (elect_one_thr)
     {
-      xe4_wait_barrier(store_c_abar[0], 0);
-      xe4_set_barrier_transaction_bytes(store_c_abar[0], dma_transaction_bytesC);
+      store_c_abar.try_wait(0);
+      store_c_abar.arrive_and_expect_tx(dma_transaction_bytesC);
       if constexpr (std::is_same_v<TC, float>) {
-        copy(adma_store_c.with(&store_c_abar[0]), tCsC, tCgC);
+        copy(adma_store_c.with(reinterpret_cast<uint64_t*>(&store_c_abar)), tCsC, tCgC);
       } else {
-        copy(adma_store_c.with(&store_c_abar[0]), tCsD, tCgC);
+        copy(adma_store_c.with(reinterpret_cast<uint64_t*>(&store_c_abar)), tCsD, tCgC);
       }
-      xe4_wait_barrier(store_c_abar[0], 1);
+      store_c_abar.try_wait(1);
     }
   }
 }

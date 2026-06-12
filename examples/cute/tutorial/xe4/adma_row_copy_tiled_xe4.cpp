@@ -126,8 +126,8 @@ adma_row_copy_tiled_device(sycl::nd_item<2> item,
   T*    slm_ptr = smem.smem_A.begin();
 
   // ---- Barriers (one for load, one for store) ----
-  auto load_abar  = allocate_abar<0>();
-  auto store_abar = allocate_abar<1>();
+  auto& load_abar  = cutlass::arch::allocate_cluster_tx_barrier();
+  auto& store_abar = cutlass::arch::allocate_cluster_tx_barrier();
 
   // ---- Matrix descriptor over the SLM tile ----
   matrix_desc_t mat_slm_desc(slm_space_cast(slm_ptr), kMatrixStrideMult_v<T, COL_MULT_K>, kCmType);
@@ -150,9 +150,9 @@ adma_row_copy_tiled_device(sycl::nd_item<2> item,
   // ---- Initialize barriers + load-phase transaction bytes ----
   constexpr uint32_t kTileBytes = kWgRows * kWgCols * sizeof(T);
   if (is_leader) {
-    xe4_initialize_barrier(load_abar [0], 1);
-    xe4_initialize_barrier(store_abar[0], 1);
-    xe4_set_barrier_transaction_bytes(load_abar[0], kTileBytes);
+    load_abar.init(1);
+    store_abar.init(1);
+    load_abar.arrive_and_expect_tx(kTileBytes);
   }
   sycl::group_barrier(group);
 
@@ -171,13 +171,13 @@ adma_row_copy_tiled_device(sycl::nd_item<2> item,
                                     const_cast<T*>(gRowA_base),
                                     load_offset,
                                     kRowSizeBytesMult_v<T, COL_MULT_K>,
-                                    &load_abar[0]);
+                                    reinterpret_cast<uint64_t*>(&load_abar));
     copy(load_with, gRowA, sRow);
 
-    xe4_wait_barrier(load_abar[0], phase_bit);
+    load_abar.try_wait(phase_bit);
     sycl::group_barrier(group);
     if (is_leader) {
-      xe4_set_barrier_transaction_bytes(store_abar[0], kTileBytes);
+      store_abar.arrive_and_expect_tx(kTileBytes);
     }
     sycl::group_barrier(group);
 
@@ -188,7 +188,7 @@ adma_row_copy_tiled_device(sycl::nd_item<2> item,
                                       gRowC_base,
                                       store_offset,
                                       kRowSizeBytesMult_v<T, COL_MULT_K>,
-                                      &store_abar[0]);
+                                      reinterpret_cast<uint64_t*>(&store_abar));
     copy(store_with, sRow, gRowC);
   } else {
     // ---- Threaded (TiledCopy partition_S/partition_D) path ----
@@ -207,13 +207,13 @@ adma_row_copy_tiled_device(sycl::nd_item<2> item,
                                           const_cast<T*>(gRowA_base),
                                           load_offset,
                                           kRowSizeBytesMult_v<T, COL_MULT_K>,
-                                          &load_abar[0]);
+                                          reinterpret_cast<uint64_t*>(&load_abar));
     copy(load_with, tGgA, tGsA);
 
-    xe4_wait_barrier(load_abar[0], phase_bit);
+    load_abar.try_wait(phase_bit);
     sycl::group_barrier(group);
     if (is_leader) {
-      xe4_set_barrier_transaction_bytes(store_abar[0], kTileBytes);
+      store_abar.arrive_and_expect_tx(kTileBytes);
     }
     sycl::group_barrier(group);
 
@@ -224,11 +224,11 @@ adma_row_copy_tiled_device(sycl::nd_item<2> item,
                                             gRowC_base,
                                             store_offset,
                                             kRowSizeBytesMult_v<T, COL_MULT_K>,
-                                            &store_abar[0]);
+                                            reinterpret_cast<uint64_t*>(&store_abar));
     copy(store_with, tGsC, tGgC);
   }
 
-  xe4_wait_barrier(store_abar[0], phase_bit);
+  store_abar.try_wait(phase_bit);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -122,16 +122,14 @@ adma_linear_copy_device(ProblemShape problemSize,
   uint32_t warp_idx = get_sg_id();  // Sub-group = 0 for ADMA load & Sub-group = 1 for ADMA store
 
   // Allocate abarrier for Load A and Store C.
-  auto load_a_abar = allocate_abar<0>();
-  auto store_c_abar = allocate_abar<1>();
+  auto& load_a_abar = cutlass::arch::allocate_cluster_tx_barrier();
+  auto& store_c_abar = cutlass::arch::allocate_cluster_tx_barrier();
 
   // Only lanes (work-items) using abarrier should initialize it.
   if (elect_one_thr && warp_idx == 0) {
-    for (int i = 0; i < 1; ++i){
-      xe4_initialize_barrier(load_a_abar[i], 1 /*numThreads*/);
-    }
+    load_a_abar.init(1 /*numThreads*/);
   } else if (elect_one_thr && warp_idx == 1) {
-    xe4_initialize_barrier(store_c_abar[0], 1 /*numThreads*/);
+    store_c_abar.init(1 /*numThreads*/);
   }
   xe4_syncthreads();
   
@@ -151,8 +149,8 @@ adma_linear_copy_device(ProblemShape problemSize,
         if constexpr (EnablePrefetch) {
           copy(adma_prefetch_a, tAgA, tAsA);
         }
-        xe4_set_barrier_transaction_bytes(load_a_abar[0], dma_transaction_bytesA);
-        copy(adma_load_a.with(&load_a_abar[0]), tAgA, tAsA);
+        load_a_abar.arrive_and_expect_tx(dma_transaction_bytesA);
+        copy(adma_load_a.with(reinterpret_cast<uint64_t*>(&load_a_abar)), tAgA, tAsA);
       }
 
       sycl::group_barrier(item.get_sub_group());
@@ -160,10 +158,10 @@ adma_linear_copy_device(ProblemShape problemSize,
       if ((warp_idx == 1) && elect_one_thr)
       {
           int read_pipe = read_state.index();
-          xe4_wait_barrier(load_a_abar[read_pipe], read_state.phase());
-          xe4_set_barrier_transaction_bytes(store_c_abar[0], dma_transaction_bytesC);
-          copy(adma_store_c.with(&store_c_abar[0]), tAsC, tAgC);
-          xe4_wait_barrier(store_c_abar[0], store_c_barrier_phase_bit);
+          load_a_abar.try_wait(read_state.phase());
+          store_c_abar.arrive_and_expect_tx(dma_transaction_bytesC);
+          copy(adma_store_c.with(reinterpret_cast<uint64_t*>(&store_c_abar)), tAsC, tAgC);
+          store_c_abar.try_wait(store_c_barrier_phase_bit);
           store_c_barrier_phase_bit ^= 1;
       }
   }

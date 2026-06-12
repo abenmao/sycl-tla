@@ -58,7 +58,7 @@
 #include <cute/tensor.hpp>
 #include <cute/atom/copy_traits_xe4_ldsm.hpp>
 #include <cute/atom/copy_traits_xe4_adma.hpp>
-#include <cute/arch/xe4_inline_pisa.hpp>
+#include <cutlass/arch/barrier.h>
 #include <cute/algorithm/tensor_processing.hpp>
 
 namespace cutlass::xe4 {

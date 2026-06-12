@@ -145,23 +145,23 @@ void adma_linear_reduce_kernel(ProblemShape problemSize,
   uint32_t leader = cute::elect_one_sync();
   uint32_t sg     = get_sg_id();
 
-  auto load_bar   = allocate_abar<0>();
-  auto reduce_bar = allocate_abar<1>();
+  auto& load_bar   = cutlass::arch::allocate_cluster_tx_barrier();
+  auto& reduce_bar = cutlass::arch::allocate_cluster_tx_barrier();
 
-  if (leader && sg == 0)      xe4_initialize_barrier(load_bar[0], 1);
-  else if (leader && sg == 1) xe4_initialize_barrier(reduce_bar[0], 1);
+  if (leader && sg == 0)      load_bar.init(1);
+  else if (leader && sg == 1) reduce_bar.init(1);
   sycl::group_barrier(get_nd_item<1>().get_group());
 
   if (sg == 0 && leader) {
-    xe4_set_barrier_transaction_bytes(load_bar[0], dma_bytes);
-    copy(adma_load.with(&load_bar[0]), gA, coalesce(sA));
+    load_bar.arrive_and_expect_tx(dma_bytes);
+    copy(adma_load.with(reinterpret_cast<uint64_t*>(&load_bar)), gA, coalesce(sA));
   }
   // SG1: wait for load (via abarrier), then reduce SLM → GMEM
   if (sg == 1 && leader) {
-    xe4_wait_barrier(load_bar[0], 0);
-    xe4_set_barrier_transaction_bytes(reduce_bar[0], dma_bytes);
-    copy(adma_reduce.with(&reduce_bar[0]), coalesce(sA), gC);
-    xe4_wait_barrier(reduce_bar[0], 0);
+    load_bar.try_wait(0);
+    reduce_bar.arrive_and_expect_tx(dma_bytes);
+    copy(adma_reduce.with(reinterpret_cast<uint64_t*>(&reduce_bar)), coalesce(sA), gC);
+    reduce_bar.try_wait(0);
   }
 }
 

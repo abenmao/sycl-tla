@@ -137,7 +137,6 @@ public:
 
   using TensorStorage = typename SharedStorage::TensorStorage;
   static constexpr int SharedStorageSize = sizeof(SharedStorage);
-  static constexpr int PipelineStorageSize = sizeof(typename SharedStorage::PipelineStorage);
 
   // Host facing host arguments
   struct Arguments {
@@ -204,8 +203,7 @@ public:
     auto tdesc_c = allocate_tdesc<1>();
     auto tdesc_d = allocate_tdesc<2>();
 
-    auto abar_base = allocate_abar_bytes<0, PipelineStorageSize>();
-    auto& shared_pipelines = *reinterpret_cast<typename SharedStorage::PipelineStorage*>(abar_base);
+    auto& shared_pipelines = allocate_abarrier<typename SharedStorage::PipelineStorage>();
 
     // Do we load source tensor C or other aux inputs
     bool is_epi_load_needed = false;

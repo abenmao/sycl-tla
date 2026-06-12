@@ -38,9 +38,16 @@
               :)
 #endif
 
+#if !defined(__PISA__)
+// Workaround for __pisa_abarrier_t not being found at build time
+struct __pisa_abarrier_t {
+  uint64_t barrier_placeholder;
+};
+#endif
+
 // Each N can be call only once
 template <uint32_t IDX, uint32_t abar_bytes>
-inline uint8_t *allocate_abar_bytes() {
+[[deprecated("use abarrier_alloc instead")]] inline uint8_t *allocate_abar_bytes() {
   uint8_t *ret;
   if constexpr (IDX == 0) {
     ALLOCATE_ABAR(abar0, ABAR0, abar_bytes);
@@ -62,9 +69,31 @@ inline uint8_t *allocate_abar_bytes() {
 
 // Each N can be call only once
 template <uint32_t IDX, uint32_t abar_count = 1, typename abar_ptr_t = uint64_t *>
-inline abar_ptr_t allocate_abar() {
+[[deprecated("use abarrier_alloc instead")]] inline abar_ptr_t allocate_abar() {
   auto ret = allocate_abar_bytes<IDX, abar_count * 8>();
   return reinterpret_cast<abar_ptr_t>(ret);
+}
+
+template<int num_abarriers=1, int num_bytes=num_abarriers * 8>
+inline uint64_t* abarrier_alloc() {
+  uint64_t* pAbar;
+#if defined(__SYCL_DEVICE_ONLY__)
+  asm volatile ("\n{\n\t"
+              ".abarrier .align 8 @abname[%1];\n\t"
+              ".reg .32b %%temp;\n\t"
+              "addrof.32b %%temp, @abname;\n\t"
+              "addrcast.generic.abarrier %0, %%temp;"
+              "\n}\n"
+              : "=r"(pAbar)
+              : "i"(num_bytes));
+#endif
+  return pAbar;
+}
+
+template<class T> T& allocate_abarrier() {
+  static_assert((sizeof(T) % sizeof(__pisa_abarrier_t)) == 0);
+  auto* abar_base = abarrier_alloc<sizeof(T)/sizeof(__pisa_abarrier_t)>();
+  return *reinterpret_cast<T*>(abar_base);
 }
 
 template <typename abar_ptr_t = uint64_t *>

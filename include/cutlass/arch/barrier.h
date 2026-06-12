@@ -29,7 +29,7 @@
  *
  **************************************************************************************************/
 /*! \file
-    \brief Barrier Operations on SM90+
+    \brief Barrier Operations on Nvidia SM90+ & Intel GPUs
 */
 
 #pragma once
@@ -44,6 +44,7 @@
 #if (SYCL_INTEL_TARGET == 40 )
 #include <cute/arch/xe4_inline_pisa.hpp>
 #include <cute/util/xe_split_barrier.hpp>
+#include <cute/arch/cluster_xe4.hpp>
 #endif
 #endif
 
@@ -560,6 +561,26 @@ public:
   }
 };
 
+
+#if (SYCL_INTEL_TARGET == 40 )
+// Returns a ref to a ClusterBarrier object that aliases an abarrier.
+// Example usage: auto& cluster_abarrier = allocate_cluster_barrier();
+ClusterBarrier& allocate_cluster_barrier() {
+  return allocate_abarrier<ClusterBarrier>();
+}
+
+// Returns a sycl::span corresponding to an abarrier array
+// instead of returning a raw pointer for an array
+template<int N>
+sycl::span<ClusterBarrier, N> allocate_cluster_barriers() {
+  auto* abar_base = abarrier_alloc<N>();
+  auto* barriers =
+    reinterpret_cast<ClusterBarrier*>(abar_base);
+  return sycl::span<ClusterBarrier, N>(barriers, N);
+}
+
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // SM90 also introduces a new type of cluster-barrier which supports sync.
@@ -734,6 +755,25 @@ struct ClusterTransactionBarrier : public ClusterBarrier {
     complete_transaction(smem_ptr, dst_cta_id, transaction_bytes, pred);
   }
 };
+
+#if (SYCL_INTEL_TARGET == 40 )
+// Returns a ref to a ClusterTransactionBarrier object that aliases an abarrier.
+// Example usage: auto& cluster_tx_barrier = allocate_cluster_tx_barrier();
+ClusterTransactionBarrier& allocate_cluster_tx_barrier() {
+  return allocate_abarrier<ClusterTransactionBarrier>();
+}
+
+// Returns a sycl::span corresponding to an abarrier array
+// instead of returning a raw pointer for an array
+template<int N>
+sycl::span<ClusterTransactionBarrier, N> allocate_cluster_tx_barriers() {
+  auto* abar_base = abarrier_alloc<N>();
+  auto* barriers =
+    reinterpret_cast<ClusterTransactionBarrier*>(abar_base);
+  return sycl::span<ClusterTransactionBarrier, N>(barriers, N);
+}
+
+#endif
 
 // Helps with visibility of barrier init operations across warps / cta / cluster
 // Available as a separate function so as to batch inits across barriers and fence once
