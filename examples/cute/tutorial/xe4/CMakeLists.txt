@@ -124,6 +124,27 @@ target_link_options(${ADMA_LINEAR_REDUCE_TARGET} PUBLIC
     -Xsycl-target-backend=spir64_gen
         -device\ jgs-a0)
 
+set(GEMM_ASYNC_REDUCE_TARGET xe4_gemm_async_reduce)
+add_xe4_test(${GEMM_ASYNC_REDUCE_TARGET} gemm_async_reduce_xe4.cpp)
+target_include_directories(${GEMM_ASYNC_REDUCE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(${GEMM_ASYNC_REDUCE_TARGET} PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)
+
+set(GEMM_SGSPLIT_REDUCE_TARGET xe4_gemm_sgsplit_reduce)
+add_xe4_test(${GEMM_SGSPLIT_REDUCE_TARGET} gemm_sgsplit_reduce_xe4.cpp)
+target_include_directories(${GEMM_SGSPLIT_REDUCE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(${GEMM_SGSPLIT_REDUCE_TARGET} PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)
+
+set(GEMM_PIPE_GMEM_REDUCE_CLUSTER_TARGET xe4_gemm_pipe_gmem_reduce_cluster)
+add_xe4_test(${GEMM_PIPE_GMEM_REDUCE_CLUSTER_TARGET} gemm_pipe_gmem_reduce_cluster_xe4.cpp)
+target_include_directories(${GEMM_PIPE_GMEM_REDUCE_CLUSTER_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_options(${GEMM_PIPE_GMEM_REDUCE_CLUSTER_TARGET} PUBLIC
+	-Xsycl-target-backend=spir64_gen
+	-device\ jgs-a0)
+
 set(ADMA_CLUSTER_LINEAR_COPY_TARGET xe4_adma_cluster_linear_copy)
 add_xe4_test(${ADMA_CLUSTER_LINEAR_COPY_TARGET} adma_cluster_linear_copy_xe4.cpp)
 target_include_directories(${ADMA_CLUSTER_LINEAR_COPY_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
