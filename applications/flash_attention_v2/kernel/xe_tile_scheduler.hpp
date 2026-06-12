@@ -63,9 +63,12 @@ struct XeFHMAIndividualTileScheduler {
 #if defined(Q_PACKED_DECODE) && defined(DECODE)
     // q_packed decode: one WG per (KV head, batch). The head_group_q query heads
     // that share a KV head are packed into the QK tile rows, so the grid iterates
-    // over KV heads (not query heads) and divmod uses num_heads_kv.
+    // over KV heads (not query heads) and divmod uses num_heads_kv. The packed M
+    // dimension spans head_group_q * seq_len_qo rows (speculative decode), which
+    // may exceed one tile, so the Q grid covers ceil_div(head_group_q*seq_len_qo).
+    int q_pack_rows = (shape.num_heads_q / shape.num_heads_kv) * int(shape.seq_len_qo);
     dim3 grid(size(ceil_div(shape.head_size_vo, get<1>(tile_shape))),     // V
-              size(ceil_div(shape.seq_len_qo,   get<0>(tile_shape))),     // Q
+              size(ceil_div(q_pack_rows,        get<0>(tile_shape))),     // packed Q rows
               size(shape.batch * shape.num_heads_kv));                    // (h_kv,b)
     return Params{grid, {shape.num_heads_kv}};
 #else

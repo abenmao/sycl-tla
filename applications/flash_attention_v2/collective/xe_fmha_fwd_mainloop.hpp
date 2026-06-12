@@ -266,7 +266,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
              int              full_tile_offset,
              int              discard_seq_coord,
             TensorK_cache2D const& K_cache_2D = TensorK_cache2D{},
-            TensorV_cache2D const& V_cache_2D = TensorV_cache2D{}) {
+            TensorV_cache2D const& V_cache_2D = TensorV_cache2D{},
+             int               q_pack_row_base = 0,   // q_packed decode: global packed-row offset of this M tile
+             int               q_pack_hg = 0) {        // q_packed decode: head_group_q (>0 enables per-row causal)
     using namespace sycl::ext::oneapi::this_work_item;
 
     // Short dimension names:
@@ -556,6 +558,33 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
           }
         }
       }
+#if defined(Q_PACKED_DECODE) && defined(DECODE)
+      /* q_packed (speculative) decode per-row causal masking.
+         The M dimension packs head_group_q query heads per token, so each tile
+         row maps to a query token = (q_pack_row_base + row_idx) / q_pack_hg.
+         Token `t` attends to the KV cache plus the first (full_tile_offset + t -
+         discard_seq_coord + 1) new keys; mask any new key beyond that. Only the
+         last K block can straddle the per-token boundary, so masking it suffices.
+         Active only when q_pack_hg > 0 (set by the packed-decode kernel path); the
+         mainloop is instantiated non-causal so the diagonal block above compiles
+         away. */
+      if constexpr (!is_cache && boundary) {
+        if (q_pack_hg > 0 && K == total_blk - 1) {
+          Tensor cPgP_pk = make_identity_tensor(make_shape(seq_len, seq_len));
+          Tensor gP_pk = local_tile(cPgP_pk, take<0,2>(TileShapeQK{}), make_coord(get<0>(blk_qv), K));
+          auto cS_thread_pk = thr_mma_qk.partition_C(gP_pk);
+          CUTLASS_PRAGMA_UNROLL
+          for (int i = 0; i < tSrS.size(); ++i) {
+            int row_idx = get<0>(cS_thread_pk(i));
+            int col_idx = get<1>(cS_thread_pk(i));
+            int token = (q_pack_row_base + row_idx) / q_pack_hg;
+            if (col_idx - seq_len_kv_cache - full_tile_offset > token - discard_seq_coord) {
+              tSrS(i) = ElementS(-INFINITY);
+            }
+          }
+        }
+      }
+#endif
       /* k masking for remainder tiles — only on boundary tile */
       if constexpr (!is_cache && boundary) {
         if (check_remainder_k && K == total_blk - 1) {

@@ -800,6 +800,8 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
         block_O.get(), stride_O,
         block_K_cache.get(), stride_K_cache,
         block_V_cache.get(), stride_V_cache,
+        nullptr,            // workspace (filled in by to_underlying_arguments)
+        options.is_causal,
       },
       {
         // For int8, fold Q/K dequant into the softmax scale (q_scale*k_scale*softmax_scale);

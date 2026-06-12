@@ -66,7 +66,14 @@ foreach(HEAD_DIM 64 96 128 192)
     else()
       target_compile_definitions(06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
     endif()
-    target_compile_definitions(06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE Q_PACKED_DECODE SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
+    target_compile_definitions(06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
+    # GQA q_packed decode: pack the query heads (and speculative tokens) sharing a
+    # KV head into the QK tile rows. Only hdim 64/128 have a packed tile-shape config
+    # (M=16), and the kernel/scheduler packed path is non-persistent only, so restrict
+    # the macro accordingly (never add it to PREFILL or the persistent decode target).
+    if(HEAD_DIM STREQUAL "64" OR HEAD_DIM STREQUAL "128")
+      target_compile_definitions(06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE Q_PACKED_DECODE)
+    endif()
     if (NOT HEAD_DIM STREQUAL 192)
       target_compile_definitions(06_xe_fmha_fwd_decode_persistent_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE PERSISTENT SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
     endif()

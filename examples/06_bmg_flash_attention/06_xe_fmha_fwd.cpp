@@ -226,6 +226,12 @@ int main(int argc, const char **argv) {
 
 #if PERSISTENT
   return FMHAConfig<false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, /*persistent=*/true, ElementQ, ElementK, ElementV>::run(options);
+#elif defined(Q_PACKED_DECODE) && defined(DECODE)
+  // q_packed (speculative) decode realizes causality per query token inside the
+  // kernel (each token gets its own KV length + the k-remainder mask), and the M
+  // dimension packs query heads rather than sequence rows, so the diagonal causal
+  // mask must not run. Always instantiate the NON-causal mainloop here.
+  return FMHAConfig<false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  /*persistent=*/false, ElementQ, ElementK, ElementV>::run(options);
 #else
   return options.is_causal ? FMHAConfig<true, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  /*persistent=*/false, ElementQ, ElementK, ElementV>::run(options)
   : FMHAConfig<false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  /*persistent=*/false, ElementQ, ElementK, ElementV>::run(options);
