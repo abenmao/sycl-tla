@@ -727,7 +727,7 @@ struct BenchmarkRunnerGemm {
 #endif
 
     // Verify that the result is correct
-    bool passed = verify(problem_size, options.alpha, options.beta);
+    bool passed = verify(problem_size, ElementCompute(options.alpha), ElementCompute(options.beta));
     if(not passed) {
       state.SkipWithError("Disposition Failed.");
     }

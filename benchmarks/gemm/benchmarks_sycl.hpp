@@ -55,6 +55,26 @@ using BmgGemm_BF16FP32_Tile_512_256_32 = typename TiledMMAHelper<MMA_Atom<XE_DPA
 using BmgGemmBF16BF16FP32_RRR_TileShape_512_256_32 = Gemm_Bench_BF16FP32_RRR<BmgGemm_BF16FP32_TileShape_512_256_32, BmgGemm_BF16FP32_Tile_512_256_32, void, void>;
 CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmBF16BF16FP32_RRR_TileShape_512_256_32);
 
+template <
+  typename TileShape,
+  typename Tiler,
+  typename GmemTiledCopyA,
+  typename GmemTiledCopyB>
+using Gemm_Bench_BF16BF16BF16_RRR = cutlass::gemm::device::GemmConfiguration<
+    cutlass::arch::IntelXe,
+    cutlass::bfloat16_t, cutlass::layout::RowMajor,
+    cutlass::bfloat16_t, cutlass::layout::RowMajor,
+    cutlass::bfloat16_t, cutlass::layout::RowMajor,
+    cutlass::bfloat16_t,
+    TileShape, Scheduler::Gemm, Tiler,
+    GmemTiledCopyA, GmemTiledCopyB,
+    cutlass::epilogue::fusion::LinearCombination<cutlass::bfloat16_t, cutlass::bfloat16_t>>;
+
+using BmgGemm_BF16BF16BF16_TileShape_512_256_64 = Shape<_512, _256, _64>;
+using BmgGemm_BF16BF16BF16_Tile_512_256_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, cutlass::bfloat16_t, cute::bfloat16_t>>, Layout<BmgGemm_BF16BF16BF16_TileShape_512_256_64>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using BmgGemmBF16BF16BF16_RRR_TileShape_512_256_64 = Gemm_Bench_BF16BF16BF16_RRR<BmgGemm_BF16BF16BF16_TileShape_512_256_64, BmgGemm_BF16BF16BF16_Tile_512_256_64, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_512_256_64);
+
 // StreamK variant matching example 03_bmg_gemm_streamk (TileShape 256x256x32,
 // KernelXeCooperative + StreamKScheduler).
 template <
@@ -179,6 +199,30 @@ using CriBLockScalingGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64 = BLockScalingGe
 
 CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64);
 
+template <
+  typename TileShape,
+  typename Tiler,
+  typename GmemTiledCopyA,
+  typename GmemTiledCopyB>
+using BLockScalingGemm_Bench_E4M3E4M3BF16_RRR = cutlass::gemm::device::BlockScalingGemmConfiguration<
+    cutlass::arch::IntelXe,
+    E4M3ElementInputA, cutlass::layout::RowMajor,
+    E4M3ElementInputB, cutlass::layout::RowMajor,
+    cutlass::bfloat16_t, cutlass::layout::RowMajor,
+    E4M3ElementScale,
+    cute::Stride<_1, int64_t, int64_t>,
+    cutlass::bfloat16_t,
+    TileShape, Scheduler::Gemm, Tiler,
+    GmemTiledCopyA, GmemTiledCopyB, void, void,
+    cutlass::epilogue::fusion::LinearCombination<cutlass::bfloat16_t, cutlass::bfloat16_t>>;
+
+using CriBLockScalingGemm_E4M3E4M3BF16_TileShape_512_256_128 = Shape<_512, _256, _128>;
+using CriBLockScalingGemm_E4M3E4M3BF16_Tile_512_256_128 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, cutlass::bfloat16_t, E4M3ElementInputA>>,
+  Layout<CriBLockScalingGemm_E4M3E4M3BF16_TileShape_512_256_128>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriBLockScalingGemm_E4M3E4M3BF16_RRR_TileShape_512_256_128 = BLockScalingGemm_Bench_E4M3E4M3BF16_RRR<CriBLockScalingGemm_E4M3E4M3BF16_TileShape_512_256_128, CriBLockScalingGemm_E4M3E4M3BF16_Tile_512_256_128, void, void>;
+
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E4M3E4M3BF16_RRR_TileShape_512_256_128);
+
 using E5M2ElementType = cutlass::mx_float8_t<float_e5m2_t>;
 using E5M2ElementInputA = typename E5M2ElementType::DataType;
 using E5M2ElementInputB = typename E5M2ElementType::DataType;
@@ -212,6 +256,30 @@ using CriBLockScalingGemm_E5M2E5M2FP32_Tile_512_256_64 = typename TiledMMAHelper
 using CriBLockScalingGemm_E5M2E5M2FP32_RRR_TileShape_512_256_64 = BLockScalingGemm_Bench_E5M2E5M2FP32_RRR<CriBLockScalingGemm_E5M2E5M2FP32_TileShape_512_256_64, CriBLockScalingGemm_E5M2E5M2FP32_Tile_512_256_64, void, void>;
 
 CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E5M2E5M2FP32_RRR_TileShape_512_256_64);
+
+template <
+  typename TileShape,
+  typename Tiler,
+  typename GmemTiledCopyA,
+  typename GmemTiledCopyB>
+using BLockScalingGemm_Bench_E5M2E5M2BF16_RRR = cutlass::gemm::device::BlockScalingGemmConfiguration<
+    cutlass::arch::IntelXe,
+    E5M2ElementInputA, cutlass::layout::RowMajor,
+    E5M2ElementInputB, cutlass::layout::RowMajor,
+    cutlass::bfloat16_t, cutlass::layout::RowMajor,
+    E5M2ElementScale,
+    cute::Stride<_1, int64_t, int64_t>,
+    cutlass::bfloat16_t,
+    TileShape, Scheduler::Gemm, Tiler,
+    GmemTiledCopyA, GmemTiledCopyB, void, void,
+    cutlass::epilogue::fusion::LinearCombination<cutlass::bfloat16_t, cutlass::bfloat16_t>>;
+
+using CriBLockScalingGemm_E5M2E5M2BF16_TileShape_512_256_128 = Shape<_512, _256, _128>;
+using CriBLockScalingGemm_E5M2E5M2BF16_Tile_512_256_128 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, cutlass::bfloat16_t, E5M2ElementInputA>>,
+  Layout<CriBLockScalingGemm_E5M2E5M2BF16_TileShape_512_256_128>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriBLockScalingGemm_E5M2E5M2BF16_RRR_TileShape_512_256_128 = BLockScalingGemm_Bench_E5M2E5M2BF16_RRR<CriBLockScalingGemm_E5M2E5M2BF16_TileShape_512_256_128, CriBLockScalingGemm_E5M2E5M2BF16_Tile_512_256_128, void, void>;
+
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E5M2E5M2BF16_RRR_TileShape_512_256_128);
 
 using E2M1ElementType = cutlass::mx_float4_t<float_e2m1_t>;
 using E2M1ElementInputA = typename E2M1ElementType::DataType;
@@ -252,6 +320,30 @@ template <
   typename Tiler,
   typename GmemTiledCopyA,
   typename GmemTiledCopyB>
+using BLockScalingGemm_Bench_E2M1E2M1BF16_RCR = cutlass::gemm::device::BlockScalingGemmConfiguration<
+    cutlass::arch::IntelXe,
+    E2M1ElementInputA, cutlass::layout::RowMajor,
+    E2M1ElementInputB, cutlass::layout::ColumnMajor,
+    cutlass::bfloat16_t, cutlass::layout::RowMajor,
+    E2M1ElementScale,
+    cute::Stride<_1, int64_t, int64_t>,
+    cutlass::bfloat16_t,
+    TileShape, Scheduler::Gemm, Tiler,
+    GmemTiledCopyA, GmemTiledCopyB, void, void,
+    cutlass::epilogue::fusion::LinearCombination<cutlass::bfloat16_t, cutlass::bfloat16_t>>;
+
+using CriBLockScalingGemm_E2M1E2M1BF16_TileShape_512_256_256 = Shape<_512, _256, _256>;
+using CriBLockScalingGemm_E2M1E2M1BF16_Tile_512_256_256 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, cutlass::bfloat16_t, E2M1ElementInputA>>,
+  Layout<CriBLockScalingGemm_E2M1E2M1BF16_TileShape_512_256_256>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriBLockScalingGemm_E2M1E2M1BF16_RCR_TileShape_512_256_256 = BLockScalingGemm_Bench_E2M1E2M1BF16_RCR<CriBLockScalingGemm_E2M1E2M1BF16_TileShape_512_256_256, CriBLockScalingGemm_E2M1E2M1BF16_Tile_512_256_256, void, void>;
+
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E2M1E2M1BF16_RCR_TileShape_512_256_256);
+
+template <
+  typename TileShape,
+  typename Tiler,
+  typename GmemTiledCopyA,
+  typename GmemTiledCopyB>
 using Gemm_Bench_E5M2E5M2FP32_RRR = cutlass::gemm::device::GemmConfiguration<
     cutlass::arch::IntelXe,
     cutlass::float_e5m2_t, cutlass::layout::RowMajor,
@@ -278,6 +370,27 @@ template <
   typename Tiler,
   typename GmemTiledCopyA,
   typename GmemTiledCopyB>
+using Gemm_Bench_E5M2E5M2BF16_RRR = cutlass::gemm::device::GemmConfiguration<
+    cutlass::arch::IntelXe,
+    cutlass::float_e5m2_t, cutlass::layout::RowMajor,
+    cutlass::float_e5m2_t, cutlass::layout::RowMajor,
+    cutlass::bfloat16_t, cutlass::layout::RowMajor,
+    cutlass::bfloat16_t,
+    TileShape, Scheduler::Gemm, Tiler,
+    GmemTiledCopyA, GmemTiledCopyB,
+    cutlass::epilogue::fusion::LinearCombination<cutlass::bfloat16_t, cutlass::bfloat16_t>>;
+
+using CriGemm_E5M2E5M2BF16_TileShape_512_256_128 = Shape<_512, _256, _128>;
+using CriGemm_E5M2E5M2BF16_Tile_512_256_128 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, cutlass::bfloat16_t, cutlass::float_e5m2_t>>, Layout<CriGemm_E5M2E5M2BF16_TileShape_512_256_128>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGemmE5M2E5M2BF16_RRR_TileShape_512_256_128 = Gemm_Bench_E5M2E5M2BF16_RRR<CriGemm_E5M2E5M2BF16_TileShape_512_256_128, CriGemm_E5M2E5M2BF16_Tile_512_256_128, void, void>;
+
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE5M2E5M2BF16_RRR_TileShape_512_256_128);
+
+template <
+  typename TileShape,
+  typename Tiler,
+  typename GmemTiledCopyA,
+  typename GmemTiledCopyB>
 using Gemm_Bench_E4M3E4M3FP32_RRR = cutlass::gemm::device::GemmConfiguration<
     cutlass::arch::IntelXe,
     cutlass::float_e4m3_t, cutlass::layout::RowMajor,
@@ -298,6 +411,27 @@ using CriGemm_E4M3E4M3FP32_Tile_512_256_64 = typename TiledMMAHelper<MMA_Atom<XE
 using CriGemmE4M3E4M3FP32_RRR_TileShape_512_256_64 = Gemm_Bench_E4M3E4M3FP32_RRR<CriGemm_E4M3E4M3FP32_TileShape_512_256_64, CriGemm_E4M3E4M3FP32_Tile_512_256_64, void, void>;
 
 CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE4M3E4M3FP32_RRR_TileShape_512_256_64);
+
+template <
+  typename TileShape,
+  typename Tiler,
+  typename GmemTiledCopyA,
+  typename GmemTiledCopyB>
+using Gemm_Bench_E4M3E4M3BF16_RRR = cutlass::gemm::device::GemmConfiguration<
+    cutlass::arch::IntelXe,
+    cutlass::float_e4m3_t, cutlass::layout::RowMajor,
+    cutlass::float_e4m3_t, cutlass::layout::RowMajor,
+    cutlass::bfloat16_t, cutlass::layout::RowMajor,
+    cutlass::bfloat16_t,
+    TileShape, Scheduler::Gemm, Tiler,
+    GmemTiledCopyA, GmemTiledCopyB,
+    cutlass::epilogue::fusion::LinearCombination<cutlass::bfloat16_t, cutlass::bfloat16_t>>;
+
+using CriGemm_E4M3E4M3BF16_TileShape_512_256_128 = Shape<_512, _256, _128>;
+using CriGemm_E4M3E4M3BF16_Tile_512_256_128 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, cutlass::bfloat16_t, cutlass::float_e4m3_t>>, Layout<CriGemm_E4M3E4M3BF16_TileShape_512_256_128>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGemmE4M3E4M3BF16_RRR_TileShape_512_256_128 = Gemm_Bench_E4M3E4M3BF16_RRR<CriGemm_E4M3E4M3BF16_TileShape_512_256_128, CriGemm_E4M3E4M3BF16_Tile_512_256_128, void, void>;
+
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE4M3E4M3BF16_RRR_TileShape_512_256_128);
 template <
   typename TileShape,
   typename Tiler,
@@ -322,11 +456,33 @@ using CriGemm_E2M1E2M1FP32_Tile_512_256_128 = typename TiledMMAHelper<MMA_Atom<X
 using CriGemmE2M1E2M1FP32_RCR_TileShape_512_256_128 = Gemm_Bench_E2M1E2M1FP32_RCR<CriGemm_E2M1E2M1FP32_TileShape_512_256_128, CriGemm_E2M1E2M1FP32_Tile_512_256_128, void, void>;
 CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE2M1E2M1FP32_RCR_TileShape_512_256_128);
 
+template <
+  typename TileShape,
+  typename Tiler,
+  typename GmemTiledCopyA,
+  typename GmemTiledCopyB>
+using Gemm_Bench_E2M1E2M1BF16_RCR = cutlass::gemm::device::GemmConfiguration<
+    cutlass::arch::IntelXe,
+    cutlass::float_e2m1_t, cutlass::layout::RowMajor,
+    cutlass::float_e2m1_t, cutlass::layout::ColumnMajor,
+    cutlass::bfloat16_t, cutlass::layout::RowMajor,
+    cutlass::bfloat16_t,
+    TileShape, Scheduler::Gemm, Tiler,
+    GmemTiledCopyA, GmemTiledCopyB,
+    cutlass::epilogue::fusion::LinearCombination<cutlass::bfloat16_t, cutlass::bfloat16_t>>;
+
+using CriGemm_E2M1E2M1BF16_TileShape_512_256_256 = Shape<_512, _256, _256>;
+using CriGemm_E2M1E2M1BF16_Tile_512_256_256 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, cutlass::bfloat16_t, cutlass::float_e2m1_t>>, Layout<CriGemm_E2M1E2M1BF16_TileShape_512_256_256>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGemmE2M1E2M1BF16_RCR_TileShape_512_256_256 = Gemm_Bench_E2M1E2M1BF16_RCR<CriGemm_E2M1E2M1BF16_TileShape_512_256_256, CriGemm_E2M1E2M1BF16_Tile_512_256_256, void, void>;
+
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE2M1E2M1BF16_RCR_TileShape_512_256_256);
+
 #endif
 
 static void register_gemm_benchmarks() {
   // TODO: support sglang cases
   CUTLASS_BENCHMARK(BmgGemmBF16BF16FP32_RRR_TileShape_512_256_32);
+  CUTLASS_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_512_256_64);
   CUTLASS_BENCHMARK(BmgGemmBF16BF16FP32_StreamK_TileShape_256_256_32);
   CUTLASS_BENCHMARK(BmgGemmBF16BF16FP32_RRR_TileShape_8_128_32);
   CUTLASS_BENCHMARK(BmgGemmBF16BF16FP32_RRR_TileShape_16_64_32);
@@ -347,5 +503,11 @@ static void register_gemm_benchmarks() {
   CUTLASS_BENCHMARK(CriBLockScalingGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64);
   CUTLASS_BENCHMARK(CriBLockScalingGemm_E5M2E5M2FP32_RRR_TileShape_512_256_64);
   CUTLASS_BENCHMARK(CriBLockScalingGemm_E2M1E2M1FP32_RCR_TileShape_512_256_128);
+  CUTLASS_BENCHMARK(CriGemmE4M3E4M3BF16_RRR_TileShape_512_256_128);
+  CUTLASS_BENCHMARK(CriGemmE5M2E5M2BF16_RRR_TileShape_512_256_128);
+  CUTLASS_BENCHMARK(CriGemmE2M1E2M1BF16_RCR_TileShape_512_256_256);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E4M3E4M3BF16_RRR_TileShape_512_256_128);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E5M2E5M2BF16_RRR_TileShape_512_256_128);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E2M1E2M1BF16_RCR_TileShape_512_256_256);
 #endif
 }

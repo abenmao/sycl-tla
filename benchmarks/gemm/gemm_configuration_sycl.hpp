@@ -167,6 +167,83 @@ struct GemmConfiguration<
   }
 };
 
+template<class ElementA, class LayoutA,
+  class ElementB, class LayoutB, typename LayoutC,
+  class TileShape, Scheduler TileScheduler,
+  class TiledMma, class GmemTiledCopyA, class GmemTiledCopyB,  class EpilogueOp>
+struct GemmConfiguration<
+      arch::IntelXe,
+      ElementA, LayoutA,
+      ElementB, LayoutB,
+      bfloat16_t, LayoutC,
+      bfloat16_t,
+      TileShape, TileScheduler, TiledMma,
+      GmemTiledCopyA, GmemTiledCopyB, EpilogueOp>
+{
+  static constexpr int PipelineStages = 2;
+  static constexpr bool UseStreamK =
+      (TileScheduler == Scheduler::GemmStreamK) || (TileScheduler == Scheduler::GemmSplitK);
+  using KernelScheduleType = std::conditional_t<UseStreamK,
+      cutlass::gemm::KernelXeCooperative, cutlass::gemm::KernelXe>;
+  using GEMMDispatchPolicy = cutlass::gemm::MainloopXeL1Staged<PipelineStages, KernelScheduleType>;
+  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
+
+  using StrideA = std::conditional_t<cute::is_tuple_v<LayoutA>, LayoutA, TagToStrideA_t<LayoutA>>;
+  using StrideB = std::conditional_t<cute::is_tuple_v<LayoutB>, LayoutB, TagToStrideB_t<LayoutB>>;
+
+  using CollectiveMainloop =
+      collective::CollectiveMma<
+        GEMMDispatchPolicy, TileShape,
+        ElementA, StrideA,
+        ElementB, StrideB,
+        TiledMma,
+        GmemTiledCopyA, void, void, identity,
+        GmemTiledCopyB, void, void, identity
+  >;
+
+  using FusionCallbacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueOp, TileShape,
+          decltype(tile_shape(TiledMma()))>;
+  using LayoutD = cutlass::layout::RowMajor;
+  using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
+          EpilogueDispatchPolicy,
+          TileShape,
+          void,
+          bfloat16_t,
+          cutlass::gemm::TagToStrideC_t<LayoutC>,
+          bfloat16_t,
+          cutlass::gemm::TagToStrideC_t<LayoutD>,
+          FusionCallbacks,
+          void,
+          void>;
+  using TileSchedulerTag = std::conditional_t<UseStreamK,
+      cutlass::gemm::StreamKScheduler, void>;
+  using GemmKernel = kernel::GemmUniversal<
+    Shape<int, int, int, int>,
+    CollectiveMainloop,
+    CollectiveEpilogue,
+    TileSchedulerTag
+  >;
+
+  using Gemm = GemmUniversalAdapter<GemmKernel>;
+
+  constexpr static typename GemmKernel::Arguments defaultArguments() {
+    using StreamKMode =
+      cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams::DecompositionMode;
+    if constexpr (TileScheduler == Scheduler::Gemm) {
+      return {};
+    } else if constexpr (TileScheduler == Scheduler::GemmStreamK) {
+      typename GemmKernel::Arguments arguments{};
+      arguments.scheduler = {1, StreamKMode::StreamK};
+      return arguments;
+    } else {
+      static_assert(TileScheduler == Scheduler::GemmSplitK);
+      typename GemmKernel::Arguments arguments{};
+      arguments.scheduler = {2, StreamKMode::SplitK};
+      return arguments;
+    }
+  }
+};
+
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
 
 // mxfp8/4
@@ -220,6 +297,83 @@ struct BlockScalingGemmConfiguration<
           float,                // ElementAccumulator
           cutlass::gemm::TagToStrideC_t<LayoutC>,
           float,                // ElementOutput
+          cutlass::gemm::TagToStrideC_t<LayoutD>,
+          FusionCallbacks,
+          void,
+          void>;
+    using GemmKernel = kernel::GemmUniversal<
+    Shape<int, int, int, int>,
+    CollectiveMainloop,
+    CollectiveEpilogue>;
+
+  using Gemm = GemmUniversalAdapter<GemmKernel>;
+
+  constexpr static typename GemmKernel::Arguments defaultArguments() {
+    using StreamKMode =
+      cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams::DecompositionMode;
+    if constexpr (TileScheduler == Scheduler::Gemm) {
+      return {};
+    } else if constexpr (TileScheduler == Scheduler::GemmStreamK) {
+      typename GemmKernel::Arguments arguments{};
+      arguments.scheduler = {1, StreamKMode::StreamK};
+      return arguments;
+    } else {
+      static_assert(TileScheduler == Scheduler::GemmSplitK);
+      typename GemmKernel::Arguments arguments{};
+      arguments.scheduler = {2, StreamKMode::SplitK};
+      return arguments;
+    }
+  }
+};
+
+template<class ElementA, class LayoutA,
+  class ElementB, class LayoutB, typename LayoutC,
+  class ElementScale, typename StrideScale,
+  class TileShape, Scheduler TileScheduler,
+  class TiledMma, class GmemTiledCopyA, class GmemTiledCopyB,
+  class GmemTiledCopyScaleA, class GmemTiledCopyScaleB,
+  class EpilogueOp>
+struct BlockScalingGemmConfiguration<
+      arch::IntelXe,
+      ElementA, LayoutA,
+      ElementB, LayoutB,
+      bfloat16_t, LayoutC,
+      ElementScale, StrideScale,
+      bfloat16_t,
+      TileShape, TileScheduler, TiledMma,
+      GmemTiledCopyA, GmemTiledCopyB,
+      GmemTiledCopyScaleA, GmemTiledCopyScaleB,
+      EpilogueOp>
+{
+  static constexpr int PipelineStages = 2;
+  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages>;
+  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
+
+  using StrideA = std::conditional_t<cute::is_tuple_v<LayoutA>, LayoutA, TagToStrideA_t<LayoutA>>;
+  using StrideB = std::conditional_t<cute::is_tuple_v<LayoutB>, LayoutB, TagToStrideB_t<LayoutB>>;
+
+  using CollectiveMainloop = cutlass::gemm::collective::CollectiveMma<
+          GEMMDispatchPolicy,
+          TileShape,
+          cute::tuple<ElementA, ElementScale>,
+          cute::tuple<StrideA, StrideScale>,
+          cute::tuple<ElementB, ElementScale>,
+          cute::tuple<StrideB, StrideScale>,
+          TiledMma,
+          cute::tuple<GmemTiledCopyA, GmemTiledCopyScaleA>, void, void, cute::identity,
+          cute::tuple<GmemTiledCopyB, GmemTiledCopyScaleB>, void, void, cute::identity
+  >;
+
+  using FusionCallbacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueOp, TileShape,
+          decltype(tile_shape(TiledMma()))>;
+  using LayoutD = cutlass::layout::RowMajor;
+  using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
+          EpilogueDispatchPolicy,
+          TileShape,
+          void,
+          bfloat16_t,
+          cutlass::gemm::TagToStrideC_t<LayoutC>,
+          bfloat16_t,
           cutlass::gemm::TagToStrideC_t<LayoutD>,
           FusionCallbacks,
           void,
