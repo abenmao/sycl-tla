@@ -405,4 +405,69 @@ struct BlockScalingGemmConfiguration<
 
 #endif
 
+/////////////////////////////////////////////////////////////////////////
+// W8A8 FP8 -> FP16-MMA fast path, mirrors examples/08_bmg_gemm_f8.
+// FP8 inputs (float_e4m3_t / float_e5m2_t) are upcast to FP16 inside the
+// W8A8 mainloop; MMA runs on XE_8x16x16_F32F16F16F32_TT (FP16 inputs,
+// FP32 accumulator). This is a distinct pipeline from the native-FP8
+// XE_DPAS_TT<8, float, float_e4m3_t> path used by GemmConfiguration.
+/////////////////////////////////////////////////////////////////////////
+template<
+  class ElementA, class LayoutA,
+  class ElementB, class LayoutB,
+  class ElementC, class LayoutC,
+  class ElementAccumulator,
+  class TileShape,
+  class TiledMma,
+  class GmemTiledCopyA = XE_2D_U8x32x32_LD_N,
+  class GmemTiledCopyB = XE_2D_U8x32x32_LD_V,
+  class EpilogueOp = epilogue::fusion::LinearCombination<float, float, float, float, FloatRoundStyle::round_to_nearest>>
+struct W8A8GemmConfiguration {
+  static constexpr int PipelineStages = 2;
+  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelW8A8<PipelineStages>;
+  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeXMX16;
+
+  using StrideA = std::conditional_t<cute::is_tuple_v<LayoutA>, LayoutA, TagToStrideA_t<LayoutA>>;
+  using StrideB = std::conditional_t<cute::is_tuple_v<LayoutB>, LayoutB, TagToStrideB_t<LayoutB>>;
+
+  using CollectiveMainloop = collective::CollectiveMma<
+        GEMMDispatchPolicy, TileShape,
+        ElementA, StrideA,
+        ElementB, StrideB,
+        TiledMma,
+        GmemTiledCopyA, void, void, cute::identity,
+        GmemTiledCopyB, void, void, cute::identity>;
+
+  using FusionCallbacks = cutlass::epilogue::fusion::FusionCallbacks<
+        EpilogueDispatchPolicy, EpilogueOp, TileShape,
+        decltype(tile_shape(TiledMma()))>;
+
+  using LayoutD = cutlass::layout::RowMajor;
+  // Note: the ElementAccumulator template parameter is retained for signature
+  // symmetry with the rest of the file; the actual accumulator type is
+  // deduced inside the kernel from TiledMma::ValTypeC. The slot below is the
+  // C-matrix element type, so we pass ElementC (matches example 08).
+  using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
+        EpilogueDispatchPolicy,
+        TileShape,
+        ElementC,
+        cutlass::gemm::TagToStrideC_t<LayoutC>,
+        float,
+        cutlass::gemm::TagToStrideC_t<LayoutD>,
+        FusionCallbacks,
+        XE_2D_U32x8x16_LD_N,
+        void, void,
+        XE_2D_U32x8x16_ST_N,
+        void, void>;
+
+  using GemmKernel = kernel::GemmUniversal<
+        Shape<int, int, int, int>,
+        CollectiveMainloop,
+        CollectiveEpilogue>;
+
+  using Gemm = GemmUniversalAdapter<GemmKernel>;
+
+  constexpr static typename GemmKernel::Arguments defaultArguments() { return {}; }
+};
+
 } // namespace cutlass::gemm::device

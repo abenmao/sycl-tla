@@ -412,6 +412,56 @@ using CriGemmE4M3E4M3FP32_RRR_TileShape_512_256_64 = Gemm_Bench_E4M3E4M3FP32_RRR
 
 CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE4M3E4M3FP32_RRR_TileShape_512_256_64);
 
+/////////////////////////////////////////////////////////////////////////
+// W8A8 FP8 -> FP16-MMA fast path benchmark cases (sync from
+// examples/08_bmg_gemm_f8). FP8 inputs are upcast to FP16, MMA via
+// XE_8x16x16_F32F16F16F32_TT, MainloopIntelW8A8 dispatch policy.
+// Pair-compare these against the native-FP8 DPAS cases above on the
+// same shape to measure the two pipelines.
+/////////////////////////////////////////////////////////////////////////
+template <
+  typename TileShape,
+  typename Tiler,
+  typename GmemTiledCopyA,
+  typename GmemTiledCopyB>
+using Gemm_Bench_W8A8_E4M3FP16MMA_RRR = cutlass::gemm::device::W8A8GemmConfiguration<
+    cutlass::float_e4m3_t, cutlass::layout::RowMajor,
+    cutlass::float_e4m3_t, cutlass::layout::RowMajor,
+    float, cutlass::layout::RowMajor,
+    float,
+    TileShape,
+    Tiler,
+    GmemTiledCopyA, GmemTiledCopyB>;
+
+template <
+  typename TileShape,
+  typename Tiler,
+  typename GmemTiledCopyA,
+  typename GmemTiledCopyB>
+using Gemm_Bench_W8A8_E5M2FP16MMA_RRR = cutlass::gemm::device::W8A8GemmConfiguration<
+    cutlass::float_e5m2_t, cutlass::layout::RowMajor,
+    cutlass::float_e5m2_t, cutlass::layout::RowMajor,
+    float, cutlass::layout::RowMajor,
+    float,
+    TileShape,
+    Tiler,
+    GmemTiledCopyA, GmemTiledCopyB>;
+
+// TileShape matches example 08_bmg_gemm_f8 (<_256, _256, _32>).
+using CriGemm_W8A8_E4M3FP16MMA_TileShape_256_256_32 = Shape<_256, _256, _32>;
+using CriGemm_W8A8_E4M3FP16MMA_Tile_256_256_32 = typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32F16F16F32_TT>, Layout<CriGemm_W8A8_E4M3FP16MMA_TileShape_256_256_32>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGemm_W8A8_E4M3E4M3FP16MMA_RRR_TileShape_256_256_32 = Gemm_Bench_W8A8_E4M3FP16MMA_RRR<
+    CriGemm_W8A8_E4M3FP16MMA_TileShape_256_256_32, CriGemm_W8A8_E4M3FP16MMA_Tile_256_256_32,
+    XE_2D_U8x32x32_LD_N, XE_2D_U8x32x32_LD_V>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemm_W8A8_E4M3E4M3FP16MMA_RRR_TileShape_256_256_32);
+
+using CriGemm_W8A8_E5M2FP16MMA_TileShape_256_256_32 = Shape<_256, _256, _32>;
+using CriGemm_W8A8_E5M2FP16MMA_Tile_256_256_32 = typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32F16F16F32_TT>, Layout<CriGemm_W8A8_E5M2FP16MMA_TileShape_256_256_32>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGemm_W8A8_E5M2E5M2FP16MMA_RRR_TileShape_256_256_32 = Gemm_Bench_W8A8_E5M2FP16MMA_RRR<
+    CriGemm_W8A8_E5M2FP16MMA_TileShape_256_256_32, CriGemm_W8A8_E5M2FP16MMA_Tile_256_256_32,
+    XE_2D_U8x32x32_LD_N, XE_2D_U8x32x32_LD_V>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemm_W8A8_E5M2E5M2FP16MMA_RRR_TileShape_256_256_32);
+
 template <
   typename TileShape,
   typename Tiler,
@@ -503,6 +553,9 @@ static void register_gemm_benchmarks() {
   CUTLASS_BENCHMARK(CriBLockScalingGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64);
   CUTLASS_BENCHMARK(CriBLockScalingGemm_E5M2E5M2FP32_RRR_TileShape_512_256_64);
   CUTLASS_BENCHMARK(CriBLockScalingGemm_E2M1E2M1FP32_RCR_TileShape_512_256_128);
+  // W8A8 FP8 -> FP16-MMA fast path (sync from example 08_bmg_gemm_f8)
+  CUTLASS_BENCHMARK(CriGemm_W8A8_E4M3E4M3FP16MMA_RRR_TileShape_256_256_32);
+  CUTLASS_BENCHMARK(CriGemm_W8A8_E5M2E5M2FP16MMA_RRR_TileShape_256_256_32);
   CUTLASS_BENCHMARK(CriGemmE4M3E4M3BF16_RRR_TileShape_512_256_128);
   CUTLASS_BENCHMARK(CriGemmE5M2E5M2BF16_RRR_TileShape_512_256_128);
   CUTLASS_BENCHMARK(CriGemmE2M1E2M1BF16_RCR_TileShape_512_256_256);
