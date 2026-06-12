@@ -183,7 +183,7 @@ public:
     /* Fused rescale + reorder*/
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < rA.size(); i++)
-      tOrO(i) = rA(i) * broadcast<0>(rA_sum, rA, i);
+      tOrO(i) = static_cast<ElementO>(rA(i) * broadcast<0>(rA_sum, rA, i));
     copy(copy_o, tOrO, tOgO);
   }
 

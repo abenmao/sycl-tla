@@ -36,13 +36,13 @@ using namespace cutlass::flash_attention;
 
 /* ---------------------------------------- HeadDim = 64 ------------------------------------------ */
 // e4m3
-using CriFMHAPrefill_E4M3_E4M3_E4M3_FP32_RCR_h64_Causal_FixedLen = FMHAConfigGen</*Mode*/FMHAMode::Prefill,
-  /*ElementQ*/ cutlass::float_e4m3_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ float,
+using CriFMHAPrefill_E4M3_E4M3_E4M3_BF16_RCR_h64_Causal_FixedLen = FMHAConfigGen</*Mode*/FMHAMode::Prefill,
+  /*ElementQ*/ cutlass::float_e4m3_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
   /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*HeadDim*/ 64
 >::type;
 
-CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_FP32_RCR_h64_Causal_FixedLen);
+CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_BF16_RCR_h64_Causal_FixedLen);
 
 /* ---------------------------------------- Custom Tiles ------------------------------------------ */
 // Tile shape aligned with develop branch (v0.1.0_next / xi/full_feature_fa example for CRI HEAD_DIM=128):
@@ -53,63 +53,63 @@ CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_FP32_RCR_h64_Causal_
 // => WgTileQ=512, WgTileK=64, WgTileV=64, SgTileQ=16 (512/32), SgTileK=64, HeadDimQK=64, HeadDimV=128
 
 // e4m3
-using CriFMHAPrefill_E4M3_E4M3_E4M3_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_NonCausal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
-  /*ElementQ*/ cutlass::float_e4m3_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ float,
+using CriFMHAPrefill_E4M3_E4M3_E4M3_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_NonCausal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
+  /*ElementQ*/ cutlass::float_e4m3_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
   /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 512, /*WgTileK*/ 64, /*WgTileV*/ 64,
   /*SgTileQ*/ 16, /*SgTileK*/ 64, /*HeadDimQK*/ 64, /*HeadDimV*/ 128
 >::type;
 
-using CriFMHAPrefill_E4M3_E4M3_E4M3_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
-  /*ElementQ*/ cutlass::float_e4m3_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ float,
+using CriFMHAPrefill_E4M3_E4M3_E4M3_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
+  /*ElementQ*/ cutlass::float_e4m3_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
   /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ true, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 512, /*WgTileK*/ 64, /*WgTileV*/ 64,
   /*SgTileQ*/ 16, /*SgTileK*/ 64, /*HeadDimQK*/ 64, /*HeadDimV*/ 128
 >::type;
 
-using CriFMHAPrefill_E4M3_E4M3_E4M3_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
-  /*ElementQ*/ cutlass::float_e4m3_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ float,
+using CriFMHAPrefill_E4M3_E4M3_E4M3_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
+  /*ElementQ*/ cutlass::float_e4m3_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
   /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 512, /*WgTileK*/ 64, /*WgTileV*/ 64,
   /*SgTileQ*/ 16, /*SgTileK*/ 64, /*HeadDimQK*/ 64, /*HeadDimV*/ 128
 >::type;
 
 // e5m2
-using CriFMHAPrefill_E5M2_E5M2_E5M2_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_NonCausal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
-  /*ElementQ*/ cutlass::float_e5m2_t, /*ElementK*/ cutlass::float_e5m2_t, /*ElementV*/ cutlass::float_e5m2_t, /*ElementO*/ float,
+using CriFMHAPrefill_E5M2_E5M2_E5M2_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_NonCausal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
+  /*ElementQ*/ cutlass::float_e5m2_t, /*ElementK*/ cutlass::float_e5m2_t, /*ElementV*/ cutlass::float_e5m2_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
   /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 512, /*WgTileK*/ 64, /*WgTileV*/ 64,
   /*SgTileQ*/ 16, /*SgTileK*/ 64, /*HeadDimQK*/ 64, /*HeadDimV*/ 128
 >::type;
 
-using CriFMHAPrefill_E5M2_E5M2_E5M2_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
-  /*ElementQ*/ cutlass::float_e5m2_t, /*ElementK*/ cutlass::float_e5m2_t, /*ElementV*/ cutlass::float_e5m2_t, /*ElementO*/ float,
+using CriFMHAPrefill_E5M2_E5M2_E5M2_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
+  /*ElementQ*/ cutlass::float_e5m2_t, /*ElementK*/ cutlass::float_e5m2_t, /*ElementV*/ cutlass::float_e5m2_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
   /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ true, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 512, /*WgTileK*/ 64, /*WgTileV*/ 64,
   /*SgTileQ*/ 16, /*SgTileK*/ 64, /*HeadDimQK*/ 64, /*HeadDimV*/ 128
 >::type;
 
-using CriFMHAPrefill_E5M2_E5M2_E5M2_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
-  /*ElementQ*/ cutlass::float_e5m2_t, /*ElementK*/ cutlass::float_e5m2_t, /*ElementV*/ cutlass::float_e5m2_t, /*ElementO*/ float,
+using CriFMHAPrefill_E5M2_E5M2_E5M2_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Prefill,
+  /*ElementQ*/ cutlass::float_e5m2_t, /*ElementK*/ cutlass::float_e5m2_t, /*ElementV*/ cutlass::float_e5m2_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
   /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 512, /*WgTileK*/ 64, /*WgTileV*/ 64,
   /*SgTileQ*/ 16, /*SgTileK*/ 64, /*HeadDimQK*/ 64, /*HeadDimV*/ 128
 >::type;
 
-CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_NonCausal_FixedLen);
-CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen);
-CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_FixedLen);
-CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_E5M2_E5M2_E5M2_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_NonCausal_FixedLen);
-CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_E5M2_E5M2_E5M2_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen);
-CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_E5M2_E5M2_E5M2_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_FixedLen);
+CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_NonCausal_FixedLen);
+CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen);
+CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_FixedLen);
+CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_E5M2_E5M2_E5M2_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_NonCausal_FixedLen);
+CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_E5M2_E5M2_E5M2_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen);
+CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_E5M2_E5M2_E5M2_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_FixedLen);
 
 static void register_flash_attention_prefill_benchmarks_fp8() {
-  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_FP32_RCR_h64_Causal_FixedLen);
+  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_BF16_RCR_h64_Causal_FixedLen);
 
-  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_NonCausal_FixedLen);
-  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen);
-  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_FixedLen);
-  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_E5M2_E5M2_E5M2_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_NonCausal_FixedLen);
-  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_E5M2_E5M2_E5M2_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen);
-  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_E5M2_E5M2_E5M2_FP32_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_FixedLen);
+  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_NonCausal_FixedLen);
+  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen);
+  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_E4M3_E4M3_E4M3_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_FixedLen);
+  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_E5M2_E5M2_E5M2_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_NonCausal_FixedLen);
+  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_E5M2_E5M2_E5M2_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen);
+  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_E5M2_E5M2_E5M2_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_FixedLen);
 }

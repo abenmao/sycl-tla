@@ -36,15 +36,15 @@ using namespace cutlass::flash_attention;
 
 /* ---------------------------------------- HeadDim = 64 ------------------------------------------ */
 
-using CriFMHAPrefill_FP16_E4M3_E4M3_FP32_RCR_h64_Causal_VarLen = FMHAConfigGen</*Mode*/FMHAMode::Prefill,
-  /*ElementQ*/ cutlass::half_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ float,
+using CriFMHAPrefill_FP16_E4M3_E4M3_BF16_RCR_h64_Causal_VarLen = FMHAConfigGen</*Mode*/FMHAMode::Prefill,
+  /*ElementQ*/ cutlass::half_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
   /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ true, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*HeadDim*/ 64
 >::type;
 
-CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_FP16_E4M3_E4M3_FP32_RCR_h64_Causal_VarLen);
+CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_FP16_E4M3_E4M3_BF16_RCR_h64_Causal_VarLen);
 /* ---------------------------------------- HeadDim = 64 ------------------------------------------ */
 
 static void register_flash_attention_prefill_benchmarks_fp8kv_fp16mma() {
-  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_FP16_E4M3_E4M3_FP32_RCR_h64_Causal_VarLen);
+  CUTLASS_FMHA_BENCHMARK(CriFMHAPrefill_FP16_E4M3_E4M3_BF16_RCR_h64_Causal_VarLen);
 }
