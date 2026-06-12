@@ -11,7 +11,7 @@
 #include <cute/atom/mma_traits_xe4_amma.hpp>
 #include <cute/atom/copy_atom.hpp>
 #include <cute/atom/copy_traits_xe4_eu_copy.hpp>
-#include <cute/arch/xe4_inline_pisa.hpp>
+#include <cutlass/arch/barrier.h>
 
 namespace gemm_asymmetric_reg_allocation {
 
@@ -133,12 +133,12 @@ CUTE_HOST_DEVICE
 
   const sycl::marray<int32_t, 2> zero_offset= {0, 0};
   uint64_t mma_ctrl = 0x100;
-  auto abarrier_systolic = allocate_abar<0>();
-  auto abarrier_adma_a = allocate_abar<1>();
-  auto abarrier_adma_b = allocate_abar<2>();
-  auto abarrier_dma_tile_available = allocate_abar<3>();
-  auto abarrier_mma_tile_consumed = allocate_abar<4>();
-  auto abarrier_epilogue_start = allocate_abar<5>();
+  auto& abarrier_systolic = cutlass::arch::allocate_cluster_tx_barrier();
+  auto& abarrier_adma_a = cutlass::arch::allocate_cluster_tx_barrier();
+  auto& abarrier_adma_b = cutlass::arch::allocate_cluster_tx_barrier();
+  auto& abarrier_dma_tile_available = cutlass::arch::allocate_cluster_barrier();
+  auto& abarrier_mma_tile_consumed = cutlass::arch::allocate_cluster_barrier();
+  auto& abarrier_epilogue_start = cutlass::arch::allocate_cluster_barrier();
   auto tdesc_a = allocate_tdesc<0>();
   auto tdesc_b = allocate_tdesc<1>();
 
@@ -162,11 +162,11 @@ CUTE_HOST_DEVICE
 
     /////////////////////////// Init All Abarriers//////////////////////////////
     if (is_chosen_leader_in_the_work_group(it, 0)) {
-      abarrier_init(abarrier_dma_tile_available, 2);
-      abarrier_init(abarrier_mma_tile_consumed, 1);
+      abarrier_dma_tile_available.init(2);
+      abarrier_mma_tile_consumed.init(1);
       constexpr int kWorkItemsInControlSubGroup = 
           kNumProducerSubGroups*kSubGroupSize;
-      abarrier_init(abarrier_epilogue_start, kWorkItemsInControlSubGroup);
+      abarrier_epilogue_start.init(kWorkItemsInControlSubGroup);
     }
     // NOTE: everything is async. except the intialization of Abarriers.
     sycl::group_barrier(it.get_group());
@@ -178,35 +178,33 @@ CUTE_HOST_DEVICE
 
         if (is_chosen_leader_in_the_work_group(it, kSubGroupLaunchingADMAA)) {
           if (ktile_idx > 0) {
-            abarrier_try_wait(abarrier_mma_tile_consumed,
-                  mma_tile_consumed_phase);
+            abarrier_mma_tile_consumed.try_wait(mma_tile_consumed_phase);
             mma_tile_consumed_phase ^= 1;
           }
           auto gmem_tensor = gA(_, _, ktile_idx);
-          abarrier_init(abarrier_adma_a, 1);
-          xe4_set_barrier_transaction_bytes(*abarrier_adma_a, tx_bytes_a);
+          abarrier_adma_a.init(1);
+          abarrier_adma_a.arrive_and_expect_tx(tx_bytes_a);
           const sycl::marray<int32_t, 2> coord = {0, 0};
           async_tensor_load<2, TA >(tdesc_a, sADesc,
                   const_cast<TA *>(gmem_tensor.data().get()),
-                  zero_offset, abarrier_adma_a);
-          abarrier_try_wait(abarrier_adma_a, 0);
-          abarrier_workgroup_arrive(abarrier_dma_tile_available, 1);
+                  zero_offset, reinterpret_cast<uint64_t*>(&abarrier_adma_a));
+          abarrier_adma_a.try_wait(0);
+          abarrier_dma_tile_available.arrive();
         }
 
         if (is_chosen_leader_in_the_work_group(it, kSubGroupLaunchingADMAB)) {
           if (ktile_idx > 0) {
-            abarrier_try_wait(abarrier_mma_tile_consumed,
-                  mma_tile_consumed_phase);
+            abarrier_mma_tile_consumed.try_wait(mma_tile_consumed_phase);
             mma_tile_consumed_phase ^= 1;
           }
           auto gmem_tensor_b = gB(_, _, ktile_idx);
-          abarrier_init(abarrier_adma_b, 1); 
-          xe4_set_barrier_transaction_bytes(*abarrier_adma_b, tx_bytes_b);
+          abarrier_adma_b.init(1);
+          abarrier_adma_b.arrive_and_expect_tx(tx_bytes_b);
           async_tensor_load<2, TB >(tdesc_b, sBDesc,
                     const_cast<TB *>(gmem_tensor_b.data().get()),
-                    zero_offset, abarrier_adma_b);
-          abarrier_try_wait(abarrier_adma_b, 0);
-          abarrier_workgroup_arrive(abarrier_dma_tile_available, 1);
+                    zero_offset, reinterpret_cast<uint64_t*>(&abarrier_adma_b));
+          abarrier_adma_b.try_wait(0);
+          abarrier_dma_tile_available.arrive();
         }
 
         ////////////////////////////////////////////////////////////////////////
@@ -216,23 +214,23 @@ CUTE_HOST_DEVICE
         ////////////////////////////////////////////////////////////////////////
 #if 0
         if (is_chosen_leader_in_the_work_group(it, 2)) {
-          abarrier_try_wait(abarrier_dma_tile_available, dma_tile_available_phase);
+          abarrier_dma_tile_available.try_wait(dma_tile_available_phase);
           dma_tile_available_phase ^= 1;
 
-          abarrier_init(abarrier_systolic,  1); 
-          xe4_set_barrier_transaction_bytes(*abarrier_systolic, 1);
+          abarrier_systolic.init(1);
+          abarrier_systolic.arrive_and_expect_tx(1);
           xe4_gmma_op_dtrack_t::fma(MMAControl(mma_ctrl),
-              sDDesc, sADesc, sBDesc, sDDesc, abarrier_systolic);
+              sDDesc, sADesc, sBDesc, sDDesc, reinterpret_cast<uint64_t*>(&abarrier_systolic));
           mma_ctrl = 0x000;
-          abarrier_try_wait(abarrier_systolic, 0);
-          abarrier_workgroup_arrive(abarrier_mma_tile_consumed, 1);
+          abarrier_systolic.try_wait(0);
+          abarrier_mma_tile_consumed.arrive();
         }
 #endif
       }
 
       ++ktile_idx;
     }
-    abarrier_workgroup_arrive(abarrier_epilogue_start, 1);
+    abarrier_epilogue_start.arrive();
   } else {
 
     uint32_t dma_tile_available_phase = 0;
@@ -242,23 +240,23 @@ CUTE_HOST_DEVICE
     #pragma unroll
     while (ktile_idx < ktile_count) {
       if (is_chosen_leader_in_the_work_group(it, kSubGroupLaunchingAsyncMMA)) {
-        abarrier_try_wait(abarrier_dma_tile_available, dma_tile_available_phase);
+        abarrier_dma_tile_available.try_wait(dma_tile_available_phase);
         dma_tile_available_phase ^= 1;
 
-        abarrier_init(abarrier_systolic,  1); 
-        xe4_set_barrier_transaction_bytes(*abarrier_systolic, 1);
+        abarrier_systolic.init(1);
+        abarrier_systolic.arrive_and_expect_tx(1);
         xe4_gmma_op_dtrack_t::fma(MMAControl(mma_ctrl),
-            sDDesc, sADesc, sBDesc, sDDesc, abarrier_systolic);
+            sDDesc, sADesc, sBDesc, sDDesc, reinterpret_cast<uint64_t*>(&abarrier_systolic));
         mma_ctrl = 0x000;
-        abarrier_try_wait(abarrier_systolic, 0);
-        abarrier_workgroup_arrive(abarrier_mma_tile_consumed, 1);
+        abarrier_systolic.try_wait(0);
+        abarrier_mma_tile_consumed.arrive();
       }
       ++ktile_idx;
     }
 
     ////////////////////////////////////////////////////////////////////////////
     ///////////////////////////// Epilogue /////////////////////////////////////
-    abarrier_try_wait(abarrier_epilogue_start, 0);
+    abarrier_epilogue_start.try_wait(0);
     auto tiled_copy_reg_layout =
         make_xe4_reg_layout_for_tiled_copy<TD, bM, bN>();
     auto rD = make_tensor<TD>(tiled_copy_reg_layout);

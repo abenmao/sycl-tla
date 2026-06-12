@@ -108,18 +108,18 @@ tcvd_api_test_kernel(sycl::nd_item<3>& item,
 
   int tid = ThreadIdxX();
 
-  uint64_t* load_mbar = allocate_abar<0>();
-  uint64_t* store_mbar = allocate_abar<1>();
+  auto& load_mbar = cutlass::arch::allocate_cluster_barrier();
+  auto& store_mbar = cutlass::arch::allocate_cluster_barrier();
 
   bool elected = cute::elect_one_sync();
   if (elected) {
-    xe4_initialize_barrier(load_mbar[0], 1);
-    xe4_initialize_barrier(store_mbar[0], 1);
+    load_mbar.init(1);
+    store_mbar.init(1);
   }
   item.barrier(sycl::access::fence_space::local_space);
 
   // Step 1: GMEM -> SLM(src) via ADMA
-  api::adma_load(t_smem_src, adma_ld, src_smem_layout, load_mbar, elected, item);
+  api::adma_load(t_smem_src, adma_ld, src_smem_layout, reinterpret_cast<uint64_t*>(&load_mbar), elected, item);
 
   // Step 2: SLM(src) -> Registers via LDSM
   auto tXrX = api::load_matrix(t_smem_src, src_smem_layout, tid, item);
@@ -134,7 +134,7 @@ tcvd_api_test_kernel(sycl::nd_item<3>& item,
   api::store_matrix<DstType, N_dst_bytes>(t_smem_dst, dst_reg, dst_smem_layout, tid, item);
 
   // Step 5: SLM(dst) -> GMEM via ADMA
-  api::adma_store(t_smem_dst, adma_st, dst_smem_layout, store_mbar, elected);
+  api::adma_store(t_smem_dst, adma_st, dst_smem_layout, reinterpret_cast<uint64_t*>(&store_mbar), elected);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

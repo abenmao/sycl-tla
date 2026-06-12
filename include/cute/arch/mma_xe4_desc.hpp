@@ -313,7 +313,7 @@ static inline void fillTensorDescriptorElementStride(
 // This structure is concept that'll never materialize through normal mean
 // Abarrier object reside in internal memroy but operate through other means
 //
-union Abarrier {
+union [[deprecated("use ClusterBarrier or ClusterTransactionBarrier APIs instead")]] Abarrier {
   constexpr Abarrier() noexcept : raw_(0) {}
   constexpr Abarrier(uint64_t ctrl) noexcept : raw_(ctrl) {}
   constexpr Abarrier(Abarrier const &ctrl) noexcept : raw_(ctrl.raw_) {}
@@ -348,6 +348,7 @@ union Abarrier {
   uint32_t raw;
 };*/
 
+[[deprecated("use ClusterBarrier or ClusterTransactionBarrier APIs instead")]]
 CUTE_HOST_DEVICE
 void
 xe4_initialize_barrier(uint64_t& smem_barrier,
@@ -358,6 +359,7 @@ xe4_initialize_barrier(uint64_t& smem_barrier,
 #endif
 }
 
+[[deprecated("use ClusterTransactionBarrier APIs instead")]]
 CUTE_HOST_DEVICE
 void
 xe4_set_barrier_transaction_bytes(uint64_t& smem_barrier,
@@ -368,6 +370,7 @@ xe4_set_barrier_transaction_bytes(uint64_t& smem_barrier,
 #endif
 }
 
+[[deprecated("use ClusterBarrier or ClusterTransactionBarrier APIs instead")]]
 CUTE_HOST_DEVICE
 void
 xe4_wait_barrier(uint64_t& smem_barrier,
@@ -378,6 +381,7 @@ xe4_wait_barrier(uint64_t& smem_barrier,
 #endif
 }
 
+[[deprecated("use ClusterBarrier APIs instead")]]
 CUTE_HOST_DEVICE
 void
 xe4_arrive_barrier(uint64_t& smem_barrier, int thread_count = 1)

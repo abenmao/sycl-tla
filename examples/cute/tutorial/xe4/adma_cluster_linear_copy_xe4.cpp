@@ -158,20 +158,20 @@ adma_cluster_linear_copy_device(
   uint32_t elect_one_thr = cute::elect_one_sync();
   uint32_t warp_idx      = get_sg_id();
 
-  auto load_a_abar  = allocate_abar<0>();
-  auto store_c_abar = allocate_abar<1>();
+  auto& load_a_abar  = cutlass::arch::allocate_cluster_tx_barrier();
+  auto& store_c_abar = cutlass::arch::allocate_cluster_tx_barrier();
 
   if (elect_one_thr && warp_idx == 0) {
-    xe4_initialize_barrier(load_a_abar[0],  1 /*numThreads*/);
+    load_a_abar.init(1 /*numThreads*/);
   } else if (elect_one_thr && warp_idx == 1) {
-    xe4_initialize_barrier(store_c_abar[0], 1 /*numThreads*/);
+    store_c_abar.init(1 /*numThreads*/);
   }
   xe4_syncthreads();
 
   // Load phase  (SG-0)
   if (warp_idx == 0 && elect_one_thr) {
-    xe4_set_barrier_transaction_bytes(load_a_abar[0], full_tile_bytes);
-    copy(adma_load_a.with(&load_a_abar[0], mcast_mask),
+    load_a_abar.arrive_and_expect_tx(full_tile_bytes);
+    copy(adma_load_a.with(reinterpret_cast<uint64_t*>(&load_a_abar), mcast_mask),
          coalesce(gA_chunk),
          coalesce(sA_chunk));
   }
@@ -179,7 +179,7 @@ adma_cluster_linear_copy_device(
 
   // Compute phase  (SG-1)
   if (warp_idx == 1 && elect_one_thr) {
-    xe4_wait_barrier(load_a_abar[0], 0 /*phase*/);
+    load_a_abar.try_wait(0 /*phase*/);
 
     for (int i = 0; i < ChunkElements; ++i) {
       float temp = 0;
@@ -195,11 +195,11 @@ adma_cluster_linear_copy_device(
 
   // Store phase  (SG-1)
   if (warp_idx == 1 && elect_one_thr) {
-    xe4_set_barrier_transaction_bytes(store_c_abar[0], chunk_bytes);    
-    copy(adma_store_c.with(&store_c_abar[0]),
+    store_c_abar.arrive_and_expect_tx(chunk_bytes);
+    copy(adma_store_c.with(reinterpret_cast<uint64_t*>(&store_c_abar)),
          coalesce(sA_chunk),
          coalesce(gC_chunk));
-    xe4_wait_barrier(store_c_abar[0], 0 /*phase*/);
+    store_c_abar.try_wait(0 /*phase*/);
   }
   sycl::group_barrier(item.get_sub_group());
 }

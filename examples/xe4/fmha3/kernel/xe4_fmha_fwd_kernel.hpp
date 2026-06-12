@@ -102,7 +102,6 @@ public:
   };
 
   static constexpr int TensorStorageSize = sizeof(typename SharedStorage::TensorStorage);
-  static constexpr int PipelineStorageSize = sizeof(typename SharedStorage::PipelineStorage);
 
   // Host side kernel arguments
   struct Arguments {
@@ -154,8 +153,7 @@ public:
     auto& shared_tensors = *reinterpret_cast<typename SharedStorage::TensorStorage*>(slm_ptr);
 
     // Allocate pipeline storage
-    auto abar_base = allocate_abar_bytes<0, PipelineStorageSize>();
-    auto& shared_pipelines = *reinterpret_cast<typename SharedStorage::PipelineStorage*>(abar_base);
+    auto& shared_pipelines = allocate_abarrier<typename SharedStorage::PipelineStorage>();
 
     // Allocate matrix descriptor
     auto tdesc_q = allocate_tdesc<0>();

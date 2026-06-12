@@ -465,32 +465,32 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTilerAB cta_tiler_AB,
   uint32_t warp_idx      = get_sg_id();
 
   // ---- Allocate asynchronous barriers ----
-  auto load_a_abar   = allocate_abar<0, K_PIPE_MAX>();
-  auto load_sfa_abar = allocate_abar<1, SF_barriers_needed>();
-  auto load_b_abar   = allocate_abar<2, K_PIPE_MAX>();
-  auto load_sfb_abar = allocate_abar<3, SF_barriers_needed>();
-  auto mma_abar      = allocate_abar<4, K_PIPE_MAX>();
-  auto store_c_abar  = allocate_abar<5>();
+  auto load_a_abar   = cutlass::arch::allocate_cluster_tx_barriers<K_PIPE_MAX>();
+  auto load_sfa_abar = cutlass::arch::allocate_cluster_tx_barriers<SF_barriers_needed>();
+  auto load_b_abar   = cutlass::arch::allocate_cluster_tx_barriers<K_PIPE_MAX>();
+  auto load_sfb_abar = cutlass::arch::allocate_cluster_tx_barriers<SF_barriers_needed>();
+  auto mma_abar      = cutlass::arch::allocate_cluster_tx_barriers<K_PIPE_MAX>();
+  auto& store_c_abar  = cutlass::arch::allocate_cluster_tx_barrier();
 
   if (elect_one_thr && warp_idx == 0) {
     for (int i = 0; i < K_PIPE_MAX; ++i) {
-      xe4_initialize_barrier(load_a_abar[i], 1);
-      xe4_initialize_barrier(load_b_abar[i], 1);
+      load_a_abar[i].init(1);
+      load_b_abar[i].init(1);
     }
     if constexpr (LoadSfAllAtOnce) {
-      xe4_initialize_barrier(load_sfa_abar[0], 1);
-      xe4_initialize_barrier(load_sfb_abar[0], 1);
+      load_sfa_abar[0].init(1);
+      load_sfb_abar[0].init(1);
     } else {
       for (int i = 0; i < K_PIPE_MAX; ++i) {
-        xe4_initialize_barrier(load_sfa_abar[i], 1);
-        xe4_initialize_barrier(load_sfb_abar[i], 1);
+        load_sfa_abar[i].init(1);
+        load_sfb_abar[i].init(1);
       }
     }
   } else if (elect_one_thr && warp_idx == 1) {
      for (int i = 0; i < K_PIPE_MAX; ++i) {
-      xe4_initialize_barrier(mma_abar[i], 1);
+      mma_abar[i].init(1);
     }
-    xe4_initialize_barrier(store_c_abar[0], 1);
+    store_c_abar.init(1);
   }
   xe4_syncthreads();
 
@@ -550,25 +550,25 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTilerAB cta_tiler_AB,
       CUTLASS_PRAGMA_UNROLL
       for (int pipe = 0; pipe < K_PIPE_MAX && k_tile < K_TILE_MAX; ++pipe)
       {
-        xe4_set_barrier_transaction_bytes(load_a_abar[pipe], dma_bytes_A);
-        xe4_set_barrier_transaction_bytes(load_b_abar[pipe], dma_bytes_B);
+        load_a_abar[pipe].arrive_and_expect_tx(dma_bytes_A);
+        load_b_abar[pipe].arrive_and_expect_tx(dma_bytes_B);
 
-        copy(adma_load_a.with(&load_a_abar[pipe], mcast_mask_a),       tAgA(_, k_tile),     tAsA(_, pipe));
-        copy(adma_load_b.with(&load_b_abar[pipe], mcast_mask_b),       tBgB(_, k_tile),     tBsB(_, pipe));
+        copy(adma_load_a.with(reinterpret_cast<uint64_t*>(&load_a_abar[pipe]), mcast_mask_a),       tAgA(_, k_tile),     tAsA(_, pipe));
+        copy(adma_load_b.with(reinterpret_cast<uint64_t*>(&load_b_abar[pipe]), mcast_mask_b),       tBgB(_, k_tile),     tBsB(_, pipe));
 
         if constexpr (LoadSfAllAtOnce) {
           if (pipe == 0 && k_tile == 0) {
-            xe4_set_barrier_transaction_bytes(load_sfa_abar[0], dma_bytes_SFA_wide);
-            xe4_set_barrier_transaction_bytes(load_sfb_abar[0], dma_bytes_SFB_wide);
-            copy(adma_load_sfa.with(&load_sfa_abar[0], mcast_mask_a),   tSFAgSFA(_, k_group), tSFAsSFA(_));
-            copy(adma_load_sfb.with(&load_sfb_abar[0], mcast_mask_b),   tSFBgSFB(_, k_group), tSFBsSFB(_));
+            load_sfa_abar[0].arrive_and_expect_tx(dma_bytes_SFA_wide);
+            load_sfb_abar[0].arrive_and_expect_tx(dma_bytes_SFB_wide);
+            copy(adma_load_sfa.with(reinterpret_cast<uint64_t*>(&load_sfa_abar[0]), mcast_mask_a),   tSFAgSFA(_, k_group), tSFAsSFA(_));
+            copy(adma_load_sfb.with(reinterpret_cast<uint64_t*>(&load_sfb_abar[0]), mcast_mask_b),   tSFBgSFB(_, k_group), tSFBsSFB(_));
             ++k_group;
           }
         } else {
-          xe4_set_barrier_transaction_bytes(load_sfa_abar[pipe], dma_bytes_SFA);
-          xe4_set_barrier_transaction_bytes(load_sfb_abar[pipe], dma_bytes_SFB);
-          copy(adma_load_sfa.with(&load_sfa_abar[pipe], mcast_mask_a),   tSFAgSFA(_, k_tile), tSFAsSFA(_, pipe));
-          copy(adma_load_sfb.with(&load_sfb_abar[pipe], mcast_mask_b),   tSFBgSFB(_, k_tile), tSFBsSFB(_, pipe));
+          load_sfa_abar[pipe].arrive_and_expect_tx(dma_bytes_SFA);
+          load_sfb_abar[pipe].arrive_and_expect_tx(dma_bytes_SFB);
+          copy(adma_load_sfa.with(reinterpret_cast<uint64_t*>(&load_sfa_abar[pipe]), mcast_mask_a),   tSFAgSFA(_, k_tile), tSFAsSFA(_, pipe));
+          copy(adma_load_sfb.with(reinterpret_cast<uint64_t*>(&load_sfb_abar[pipe]), mcast_mask_b),   tSFBgSFB(_, k_tile), tSFBsSFB(_, pipe));
         }
         ++k_tile;
       }
@@ -579,29 +579,29 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTilerAB cta_tiler_AB,
       {
         int pipe = write_state.index();
 
-        xe4_wait_barrier(mma_abar[pipe], write_state.phase());
+        mma_abar[pipe].try_wait(write_state.phase());
 
-        xe4_set_barrier_transaction_bytes(load_a_abar[pipe], dma_bytes_A);
-        xe4_set_barrier_transaction_bytes(load_b_abar[pipe], dma_bytes_B);
+        load_a_abar[pipe].arrive_and_expect_tx(dma_bytes_A);
+        load_b_abar[pipe].arrive_and_expect_tx(dma_bytes_B);
 
-        copy(adma_load_a.with(&load_a_abar[pipe], mcast_mask_a),       tAgA(_, k_tile),     tAsA(_, pipe));
-        copy(adma_load_b.with(&load_b_abar[pipe], mcast_mask_b),       tBgB(_, k_tile),     tBsB(_, pipe));
+        copy(adma_load_a.with(reinterpret_cast<uint64_t*>(&load_a_abar[pipe]), mcast_mask_a),       tAgA(_, k_tile),     tAsA(_, pipe));
+        copy(adma_load_b.with(reinterpret_cast<uint64_t*>(&load_b_abar[pipe]), mcast_mask_b),       tBgB(_, k_tile),     tBsB(_, pipe));
 
         if constexpr (LoadSfAllAtOnce) {
           ++used_ab_count;
           if (used_ab_count == int(K_PIPE_MAX) && k_group < K_GROUP_MAX) {
-            xe4_set_barrier_transaction_bytes(load_sfa_abar[0], dma_bytes_SFA_wide);
-            xe4_set_barrier_transaction_bytes(load_sfb_abar[0], dma_bytes_SFB_wide);
-            copy(adma_load_sfa.with(&load_sfa_abar[0], mcast_mask_a), tSFAgSFA(_, k_group), tSFAsSFA(_));
-            copy(adma_load_sfb.with(&load_sfb_abar[0], mcast_mask_b), tSFBgSFB(_, k_group), tSFBsSFB(_));
+            load_sfa_abar[0].arrive_and_expect_tx(dma_bytes_SFA_wide);
+            load_sfb_abar[0].arrive_and_expect_tx(dma_bytes_SFB_wide);
+            copy(adma_load_sfa.with(reinterpret_cast<uint64_t*>(&load_sfa_abar[0]), mcast_mask_a), tSFAgSFA(_, k_group), tSFAsSFA(_));
+            copy(adma_load_sfb.with(reinterpret_cast<uint64_t*>(&load_sfb_abar[0]), mcast_mask_b), tSFBgSFB(_, k_group), tSFBsSFB(_));
             ++k_group;
             used_ab_count = 0;
           }
         } else {
-          xe4_set_barrier_transaction_bytes(load_sfa_abar[pipe], dma_bytes_SFA);
-          xe4_set_barrier_transaction_bytes(load_sfb_abar[pipe], dma_bytes_SFB);
-          copy(adma_load_sfa.with(&load_sfa_abar[pipe], mcast_mask_a),   tSFAgSFA(_, k_tile), tSFAsSFA(_, pipe));
-          copy(adma_load_sfb.with(&load_sfb_abar[pipe], mcast_mask_b),   tSFBgSFB(_, k_tile), tSFBsSFB(_, pipe));
+          load_sfa_abar[pipe].arrive_and_expect_tx(dma_bytes_SFA);
+          load_sfb_abar[pipe].arrive_and_expect_tx(dma_bytes_SFB);
+          copy(adma_load_sfa.with(reinterpret_cast<uint64_t*>(&load_sfa_abar[pipe]), mcast_mask_a),   tSFAgSFA(_, k_tile), tSFAsSFA(_, pipe));
+          copy(adma_load_sfb.with(reinterpret_cast<uint64_t*>(&load_sfb_abar[pipe]), mcast_mask_b),   tSFBgSFB(_, k_tile), tSFBsSFB(_, pipe));
         }
 
         ++write_state;
@@ -624,21 +624,21 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTilerAB cta_tiler_AB,
       {
         int read_pipe = read_state.index();
 
-        xe4_wait_barrier(load_a_abar[read_pipe], read_state.phase());
-        xe4_wait_barrier(load_b_abar[read_pipe], read_state.phase());
+        load_a_abar[read_pipe].try_wait(read_state.phase());
+        load_b_abar[read_pipe].try_wait(read_state.phase());
 
         if constexpr (LoadSfAllAtOnce) {
           // SF barrier: wait once at the start of each K_PIPE_MAX group.
           // The wide atom fills all pipeline stages in one DMA, so a single
           // barrier covers the entire group.
           if (k_tile_next % int(K_PIPE_MAX) == 0) {
-            xe4_wait_barrier(load_sfa_abar[0], read_state_phase_sf);
-            xe4_wait_barrier(load_sfb_abar[0], read_state_phase_sf);
+            load_sfa_abar[0].try_wait(read_state_phase_sf);
+            load_sfb_abar[0].try_wait(read_state_phase_sf);
             read_state_phase_sf ^= 1;
           }
         } else {
-          xe4_wait_barrier(load_sfa_abar[read_pipe], read_state.phase());
-          xe4_wait_barrier(load_sfb_abar[read_pipe], read_state.phase());
+          load_sfa_abar[read_pipe].try_wait(read_state.phase());
+          load_sfb_abar[read_pipe].try_wait(read_state.phase());
         }
 
         // Set barrier expected bytes ONCE for all k_blocks in this pipeline stage.
@@ -646,9 +646,9 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTilerAB cta_tiler_AB,
         // On the last tile, last k_block additionally signals D (1 byte) to store_c_abar.
         int num_k = int(size<2>(tCrA));
         bool is_last_tile = (k_tile_next == K_TILE_MAX - 1);
-        xe4_set_barrier_transaction_bytes(mma_abar[read_pipe], 2 * num_k);
+        mma_abar[read_pipe].arrive_and_expect_tx(2 * num_k);
         if (is_last_tile) {
-          xe4_set_barrier_transaction_bytes(store_c_abar[0], 1);
+          store_c_abar.arrive_and_expect_tx(1);
         }
 
         CUTLASS_PRAGMA_UNROLL
@@ -664,8 +664,9 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTilerAB cta_tiler_AB,
                 AMMA::TrackMethod<AMMA::Tracking::DAB>{},
                 mma_ctrl,
                 tCrSFA(0, 0, k_block, read_pipe), tCrSFB(0, 0, k_block, read_pipe),
-                &store_c_abar[0],                                             // D → dedicated epilogue barrier
-                &mma_abar[read_pipe], &mma_abar[read_pipe],                  // A,B → pipeline slot barrier
+                reinterpret_cast<uint64_t*>(&store_c_abar),                  // D → dedicated epilogue barrier
+                reinterpret_cast<uint64_t*>(&mma_abar[read_pipe]),
+                reinterpret_cast<uint64_t*>(&mma_abar[read_pipe]),                  // A,B → pipeline slot barrier
                 mcast_mask_a, mcast_mask_b);
               cute::gemm(new_mma, tCrA(_,_,k_block,read_pipe), tCrB(_,_,k_block,read_pipe), tCrC);
             } else {
@@ -675,8 +676,9 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTilerAB cta_tiler_AB,
                 AMMA::TrackMethod<AMMA::Tracking::DAB>{},
                 mma_ctrl,
                 tCrSFA(0, 0, k_block, read_pipe), tCrSFB(0, 0, k_block, read_pipe),
-                &store_c_abar[0],                                             // D → dedicated epilogue barrier
-                &mma_abar[read_pipe], &mma_abar[read_pipe],                  // A,B → pipeline slot barrier
+                reinterpret_cast<uint64_t*>(&store_c_abar),                         // D → dedicated epilogue barrier
+                reinterpret_cast<uint64_t*>(&mma_abar[read_pipe]),
+                reinterpret_cast<uint64_t*>(&mma_abar[read_pipe]),                  // A,B → pipeline slot barrier
                 mcast_mask_a, mcast_mask_b);
               cute::gemm(new_mma, tCrD, tCrA(_,_,k_block,read_pipe), tCrB(_,_,k_block,read_pipe), tCrC);
             }
@@ -687,7 +689,8 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTilerAB cta_tiler_AB,
               AMMA::TrackMethod<AMMA::Tracking::AB>{},
               mma_ctrl,
               tCrSFA(0, 0, k_block, read_pipe), tCrSFB(0, 0, k_block, read_pipe),
-              &mma_abar[read_pipe], &mma_abar[read_pipe],
+              reinterpret_cast<uint64_t*>(&mma_abar[read_pipe]),
+              reinterpret_cast<uint64_t*>(&mma_abar[read_pipe]),
               mcast_mask_a, mcast_mask_b);
             cute::gemm(new_mma, tCrA(_,_,k_block,read_pipe), tCrB(_,_,k_block,read_pipe), tCrC);
           }
@@ -710,14 +713,14 @@ gemm_device_blockscaled_cluster(ProblemShape shape_MNK, CtaTilerAB cta_tiler_AB,
     if (elect_one_thr)
     {
       // Wait for MMA's D-completion signal on store_c_abar (phase 0 → signaled by last DAB)
-      xe4_wait_barrier(store_c_abar[0], 0);
-      xe4_set_barrier_transaction_bytes(store_c_abar[0], dma_bytes_C);
+      store_c_abar.try_wait(0);
+      store_c_abar.arrive_and_expect_tx(dma_bytes_C);
       if constexpr (std::is_same_v<ElementC, ElementAcc>) {
-        copy(adma_store_c.with(&store_c_abar[0]), tCsC, tCgC);
+        copy(adma_store_c.with(reinterpret_cast<uint64_t*>(&store_c_abar)), tCsC, tCgC);
       } else {
-        copy(adma_store_c.with(&store_c_abar[0]), tCsD, tCgC);
+        copy(adma_store_c.with(reinterpret_cast<uint64_t*>(&store_c_abar)), tCsD, tCgC);
       }
-      xe4_wait_barrier(store_c_abar[0], store_c_phase_bit);
+      store_c_abar.try_wait(store_c_phase_bit);
       store_c_phase_bit ^= 1;
     }
   }

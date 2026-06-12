@@ -33,8 +33,7 @@
 #pragma once
 
 #include "cutlass_unit_test.h"
-
-#include <cute/arch/xe4_inline_pisa.hpp>
+#include <cutlass/arch/barrier.h>
 
 #include <iostream>
 #include <cstdint>
@@ -106,8 +105,8 @@ adma_prefetch_test_device(sycl::nd_item<3> &item, T* g_in, T* g_out,
   SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>(shared_memory);
 
   Tensor sA = recast<T>(make_tensor(make_smem_ptr(shared_storage.smem.begin()), smem_layout));
-  uint64_t* adma_load_mbar = allocate_abar<0>();
-  uint64_t* adma_store_mbar = allocate_abar<1>();
+  auto& adma_load_mbar = cutlass::arch::allocate_cluster_tx_barrier();
+  auto& adma_store_mbar = cutlass::arch::allocate_cluster_tx_barrier();
 
   Tensor mA = adma_load.get_tma_tensor(shape(gmem_layout));
   Tensor mB = adma_store.get_tma_tensor(shape(gmem_layout));
@@ -143,8 +142,8 @@ adma_prefetch_test_device(sycl::nd_item<3> &item, T* g_in, T* g_out,
 
   bool electedThread = cute::elect_one_sync();
   if(electedThread) {
-    xe4_initialize_barrier(adma_load_mbar[0], 1);
-    xe4_initialize_barrier(adma_store_mbar[0], 1);
+    adma_load_mbar.init(1);
+    adma_store_mbar.init(1);
   }
   item.barrier(sycl::access::fence_space::local_space);
 
@@ -161,9 +160,9 @@ adma_prefetch_test_device(sycl::nd_item<3> &item, T* g_in, T* g_out,
     // ─── LOAD: gmem → SLM via ADMA ───
     constexpr int kTmaTransactionBytes = sizeof(make_tensor_like(tensor<0>(tAsA)));
     if (electedThread) {
-      xe4_set_barrier_transaction_bytes(adma_load_mbar[0], kTmaTransactionBytes);
-      copy(adma_load.with(&adma_load_mbar[0]), tAgA(_,stage), tAsA(_,0));
-      xe4_wait_barrier(adma_load_mbar[0], kPhaseBitLoad);
+      adma_load_mbar.arrive_and_expect_tx(kTmaTransactionBytes);
+      copy(adma_load.with(reinterpret_cast<uint64_t*>(&adma_load_mbar)), tAgA(_,stage), tAsA(_,0));
+      adma_load_mbar.try_wait(kPhaseBitLoad);
     }
     kPhaseBitLoad ^= 1;
 
@@ -171,9 +170,9 @@ adma_prefetch_test_device(sycl::nd_item<3> &item, T* g_in, T* g_out,
 
     // ─── STORE: SLM → gmem via ADMA ───
     if (electedThread) {
-      xe4_set_barrier_transaction_bytes(adma_store_mbar[0], kTmaTransactionBytes);
-      copy(adma_store.with(&adma_store_mbar[0]), tBsB(_,0), tBgB(_,stage));
-      xe4_wait_barrier(adma_store_mbar[0], kPhaseBitStore);
+      adma_store_mbar.arrive_and_expect_tx(kTmaTransactionBytes);
+      copy(adma_store.with(reinterpret_cast<uint64_t*>(&adma_store_mbar)), tBsB(_,0), tBgB(_,stage));
+      adma_store_mbar.try_wait(kPhaseBitStore);
     }
     kPhaseBitStore ^= 1;
   }
@@ -299,8 +298,8 @@ adma_prefetch_from_load_test_device(sycl::nd_item<3> &item, T* g_in, T* g_out,
   SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>(shared_memory);
 
   Tensor sA = recast<T>(make_tensor(make_smem_ptr(shared_storage.smem.begin()), smem_layout));
-  uint64_t* adma_load_mbar = allocate_abar<0>();
-  uint64_t* adma_store_mbar = allocate_abar<1>();
+  auto& adma_load_mbar = cutlass::arch::allocate_cluster_tx_barrier();
+  auto& adma_store_mbar = cutlass::arch::allocate_cluster_tx_barrier();
 
   // Only 2 TMA tensors — prefetch reuses load's descriptor
   Tensor mA = adma_load.get_tma_tensor(shape(gmem_layout));
@@ -330,8 +329,8 @@ adma_prefetch_from_load_test_device(sycl::nd_item<3> &item, T* g_in, T* g_out,
 
   bool electedThread = cute::elect_one_sync();
   if(electedThread) {
-    xe4_initialize_barrier(adma_load_mbar[0], 1);
-    xe4_initialize_barrier(adma_store_mbar[0], 1);
+    adma_load_mbar.init(1);
+    adma_store_mbar.init(1);
   }
   item.barrier(sycl::access::fence_space::local_space);
 
@@ -347,9 +346,9 @@ adma_prefetch_from_load_test_device(sycl::nd_item<3> &item, T* g_in, T* g_out,
     // ─── LOAD: gmem → SLM via ADMA ───
     constexpr int kTmaTransactionBytes = sizeof(make_tensor_like(tensor<0>(tAsA)));
     if (electedThread) {
-      xe4_set_barrier_transaction_bytes(adma_load_mbar[0], kTmaTransactionBytes);
-      copy(adma_load.with(&adma_load_mbar[0]), tAgA(_,stage), tAsA(_,0));
-      xe4_wait_barrier(adma_load_mbar[0], kPhaseBitLoad);
+      adma_load_mbar.arrive_and_expect_tx(kTmaTransactionBytes);
+      copy(adma_load.with(reinterpret_cast<uint64_t*>(&adma_load_mbar)), tAgA(_,stage), tAsA(_,0));
+      adma_load_mbar.try_wait(kPhaseBitLoad);
     }
     kPhaseBitLoad ^= 1;
 
@@ -357,9 +356,9 @@ adma_prefetch_from_load_test_device(sycl::nd_item<3> &item, T* g_in, T* g_out,
 
     // ─── STORE: SLM → gmem via ADMA ───
     if (electedThread) {
-      xe4_set_barrier_transaction_bytes(adma_store_mbar[0], kTmaTransactionBytes);
-      copy(adma_store.with(&adma_store_mbar[0]), tBsB(_,0), tBgB(_,stage));
-      xe4_wait_barrier(adma_store_mbar[0], kPhaseBitStore);
+      adma_store_mbar.arrive_and_expect_tx(kTmaTransactionBytes);
+      copy(adma_store.with(reinterpret_cast<uint64_t*>(&adma_store_mbar)), tBsB(_,0), tBgB(_,stage));
+      adma_store_mbar.try_wait(kPhaseBitStore);
     }
     kPhaseBitStore ^= 1;
   }

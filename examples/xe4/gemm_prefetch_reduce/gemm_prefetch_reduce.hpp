@@ -331,7 +331,6 @@ public:
 
   using TensorStorage = typename SharedStorage::TensorStorage;
   static constexpr int TensorStorageSize = sizeof(typename SharedStorage::TensorStorage);
-  static constexpr int PipelineStorageSize = sizeof(typename SharedStorage::PipelineStorage);
 
   struct Arguments {
     ProblemShape problem_shape;
@@ -497,8 +496,7 @@ public:
     auto tdesc_c = allocate_tdesc<2>();
     auto tdesc_d = allocate_tdesc<3>();
 
-    auto abar_base = allocate_abar_bytes<0, PipelineStorageSize>();
-    auto& shared_pipelines = *reinterpret_cast<typename SharedStorage::PipelineStorage*>(abar_base);
+    auto& shared_pipelines = allocate_abarrier<typename SharedStorage::PipelineStorage>();
 
     bool is_first_cta_in_cluster = true;
     IsParticipant is_participant = {

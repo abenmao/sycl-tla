@@ -34,7 +34,7 @@
 
 #include "cutlass_unit_test.h"
 
-#include <cute/arch/xe4_inline_pisa.hpp>
+#include <cutlass/arch/barrier.h>
 
 #include <iostream>
 #include <cstdint>
@@ -120,8 +120,8 @@ tma_test_device_cute(sycl::nd_item<3> &item, T* g_in, T* g_out,
 
   // Construct SMEM tensor
   Tensor sA = recast<T>(make_tensor(make_smem_ptr(shared_storage.smem.begin()), smem_layout));  // (CTA_TILE_M,CTA_TILE_N,...)
-  uint64_t* adma_load_mbar = allocate_abar<0>();
-  uint64_t* adma_store_mbar = allocate_abar<1>();
+  auto& adma_load_mbar = cutlass::arch::allocate_cluster_tx_barrier();
+  auto& adma_store_mbar = cutlass::arch::allocate_cluster_tx_barrier();
 
   // TMA requires special handling of strides to deal with coord codomain mapping
   // Represent the full tensors -- get these from TMA
@@ -171,8 +171,8 @@ tma_test_device_cute(sycl::nd_item<3> &item, T* g_in, T* g_out,
 
   bool electedThread = cute::elect_one_sync();
   if(electedThread) {
-    xe4_initialize_barrier(adma_load_mbar[0], 1 /*numThreads*/);
-    xe4_initialize_barrier(adma_store_mbar[0], 1 /*numThreads*/);
+    adma_load_mbar.init(1 /*numThreads*/);
+    adma_store_mbar.init(1 /*numThreads*/);
   }
   item.barrier(sycl::access::fence_space::local_space);
 
@@ -189,17 +189,17 @@ tma_test_device_cute(sycl::nd_item<3> &item, T* g_in, T* g_out,
     constexpr int kTmaTransactionBytes = sizeof(make_tensor_like(tensor<0>(tAsA)));
     //constexpr int kTmaTransactionBytes = cute::cosize_v<decltype(tAsA(_,0).layout())> * sizeof(T);
     if (electedThread) {
-      xe4_set_barrier_transaction_bytes(adma_load_mbar[0], kTmaTransactionBytes);
-      copy(adma_load.with(&adma_load_mbar[0]), tAgA(_,stage), tAsA(_,0));
-      xe4_wait_barrier(adma_load_mbar[0], kPhaseBitLoad);
+      adma_load_mbar.arrive_and_expect_tx(kTmaTransactionBytes);
+      copy(adma_load.with(reinterpret_cast<uint64_t*>(&adma_load_mbar)), tAgA(_,stage), tAsA(_,0));
+      adma_load_mbar.try_wait(kPhaseBitLoad);
     }
     kPhaseBitLoad ^=1;
 
     item.barrier(sycl::access::fence_space::local_space);
     if (electedThread) {
-      xe4_set_barrier_transaction_bytes(adma_store_mbar[0], kTmaTransactionBytes);
-      copy(adma_store.with(&adma_store_mbar[0]), tBsB(_,0), tBgB(_,stage));
-      xe4_wait_barrier(adma_store_mbar[0], kPhaseBitStore);
+      adma_store_mbar.arrive_and_expect_tx(kTmaTransactionBytes);
+      copy(adma_store.with(reinterpret_cast<uint64_t*>(&adma_store_mbar)), tBsB(_,0), tBgB(_,stage));
+      adma_store_mbar.try_wait(kPhaseBitStore);
     }
     kPhaseBitStore ^=1;
   }
@@ -241,7 +241,7 @@ eu_load_tma_reduce_device(sycl::nd_item<3> &item, T* g_in, T* g_out,
 
   // Construct SMEM tensor
   Tensor sA = recast<T>(make_tensor(make_smem_ptr(shared_storage.smem.begin()), smem_layout));
-  uint64_t* adma_store_mbar = allocate_abar<0>();
+  auto& adma_store_mbar = cutlass::arch::allocate_cluster_tx_barrier();
 
   // Load SLM via EU thread-parallel copy (ADMA_LOAD not supported for integer types)
   auto t_g_in = make_tensor(make_gmem_ptr(g_in), smem_layout);
@@ -267,7 +267,7 @@ eu_load_tma_reduce_device(sycl::nd_item<3> &item, T* g_in, T* g_out,
 
   bool electedThread = cute::elect_one_sync();
   if (electedThread) {
-    xe4_initialize_barrier(adma_store_mbar[0], 1 /*numThreads*/);
+    adma_store_mbar.init(1 /*numThreads*/);
   }
   item.barrier(sycl::access::fence_space::local_space);
 
@@ -275,9 +275,9 @@ eu_load_tma_reduce_device(sycl::nd_item<3> &item, T* g_in, T* g_out,
   {
     constexpr int kTmaTransactionBytes = sizeof(make_tensor_like(tensor<0>(tBsB)));
     if (electedThread) {
-      xe4_set_barrier_transaction_bytes(adma_store_mbar[0], kTmaTransactionBytes);
-      copy(adma_store.with(&adma_store_mbar[0]), tBsB(_,0), tBgB(_,stage));
-      xe4_wait_barrier(adma_store_mbar[0], kPhaseBitStore);
+      adma_store_mbar.arrive_and_expect_tx(kTmaTransactionBytes);
+      copy(adma_store.with(reinterpret_cast<uint64_t*>(&adma_store_mbar)), tBsB(_,0), tBgB(_,stage));
+      adma_store_mbar.try_wait(kPhaseBitStore);
     }
     kPhaseBitStore ^= 1;
   }

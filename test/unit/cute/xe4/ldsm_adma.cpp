@@ -34,7 +34,7 @@
 #include <iostream>
 #include <cute/tensor.hpp>
 #include <cute/atom/copy_traits_xe4_ldsm.hpp>
-
+#include <cutlass/arch/barrier.h>
 
 using namespace cute;
 namespace sc = compat;
@@ -62,7 +62,7 @@ ldsm_test_device_cute(T* g_in, T* g_out,
 
     // ADMA
     adma_load.set_tensor_desc(allocate_tdesc<0>());
-    uint64_t* adma_load_mbar = allocate_abar<0>();
+    auto& adma_load_mbar = cutlass::arch::allocate_cluster_tx_barrier();
     Tensor mA = adma_load.get_tma_tensor(shape(smem_layout));
     // Tensor gA = flat_divide(mA, ctile);
     // Slice and get partitions
@@ -78,14 +78,14 @@ ldsm_test_device_cute(T* g_in, T* g_out,
     //sycl::sub_group sg = sycl::ext::oneapi::experimental::this_sub_group();
     sycl::sub_group sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     if(electedThread && sg.get_group_id() == 0) {
-        xe4_initialize_barrier(adma_load_mbar[0], 1 /*numThreads*/);
+        adma_load_mbar.init(1 /*numThreads*/);
     }
     //for (int stage = 0; stage < size<1>(tAgA); ++stage) {
     if (electedThread&& sg.get_group_id() == 0) {
 	constexpr int kTmaTransactionBytes = sizeof(make_tensor_like(tAsA_x));
-        xe4_set_barrier_transaction_bytes(adma_load_mbar[0], kTmaTransactionBytes);
-        copy(adma_load.with(&adma_load_mbar[0]), tAgA_x, tAsA_x);
-        xe4_wait_barrier(adma_load_mbar[0], kPhaseBitLoad);
+        adma_load_mbar.arrive_and_expect_tx(kTmaTransactionBytes);
+        copy(adma_load.with(reinterpret_cast<uint64_t*>(&adma_load_mbar)), tAgA_x, tAsA_x);
+        adma_load_mbar.try_wait(kPhaseBitLoad);
     }
     kPhaseBitLoad ^=1;
     //}

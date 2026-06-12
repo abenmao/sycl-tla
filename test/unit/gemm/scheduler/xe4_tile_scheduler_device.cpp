@@ -148,11 +148,7 @@ struct VectorAddKernel {
     auto* clc_response_ptr = reinterpret_cast<CLCResponse*>(slm_ptr);
 
     // --- ABAR for pipeline barriers ---
-    constexpr uint32_t PipeStorageSize =
-        static_cast<uint32_t>(sizeof(typename CLCPipeline::SharedStorage));
-    auto abar_base = allocate_abar_bytes<0, PipeStorageSize>();
-    auto& pipeline_storage =
-        *reinterpret_cast<typename CLCPipeline::SharedStorage*>(abar_base);
+    auto& pipeline_storage = allocate_abarrier<typename CLCPipeline::SharedStorage>();
 
     // --- CLC pipeline (same pattern as real GEMM) ---
     // Only CTA 0's scheduler warp produces CLC queries; all others consume only.
@@ -307,11 +303,8 @@ struct TileIdKernel {
         sizeof(CLCResponse) * kStages>(item.get_group());
     auto* clc_response_ptr = reinterpret_cast<CLCResponse*>(slm_ptr);
 
-    constexpr uint32_t PipeStorageSize =
-        static_cast<uint32_t>(sizeof(typename CLCPipeline::SharedStorage));
-    auto abar_base = allocate_abar_bytes<0, PipeStorageSize>();
     auto& pipeline_storage =
-        *reinterpret_cast<typename CLCPipeline::SharedStorage*>(abar_base);
+        allocate_abarrier<typename CLCPipeline::SharedStorage>();
 
     uint32_t cluster_wgid_x = get_cluster_wgid<0>();
     uint32_t cluster_wgid_y = get_cluster_wgid<1>();

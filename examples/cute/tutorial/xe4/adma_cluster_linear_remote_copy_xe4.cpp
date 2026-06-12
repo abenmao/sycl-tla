@@ -165,24 +165,24 @@ adma_cluster_linear_remote_copy_device(
   uint32_t elect_one_thr = cute::elect_one_sync();
   uint32_t warp_idx      = get_sg_id();
 
-  auto load_abar  = allocate_abar<0, 1>();
-  auto store_abar = allocate_abar<1, 1>();
-  auto push_abar  = allocate_abar<2, ClusterSizeX - 1>();
+  auto& load_abar  = cutlass::arch::allocate_cluster_tx_barrier();
+  auto& store_abar = cutlass::arch::allocate_cluster_tx_barrier();
+  auto push_abar  = cutlass::arch::allocate_cluster_tx_barriers<ClusterSizeX - 1>();
 
   if (elect_one_thr && warp_idx == 0) {
-    xe4_initialize_barrier(load_abar[0], 1 /*numThreads*/);
+    load_abar.init(1 /*numThreads*/);
     for (int s = 0; s < ClusterSizeX - 1; ++s) {
-      xe4_initialize_barrier(push_abar[s], 1 /*numThreads*/);
+      push_abar[s].init(1 /*numThreads*/);
     }
-    xe4_initialize_barrier(store_abar[0], 1 /*numThreads*/);
+    store_abar.init(1 /*numThreads*/);
   }
   cbar_arrive();
   cbar_wait();
 
   // ── Phase 1: Load native row GMEM → slm_local (per-WG, no multicast) ─────
   if (warp_idx == 0 && elect_one_thr) {
-    xe4_set_barrier_transaction_bytes(load_abar[0], chunk_bytes);
-    copy(adma_load_local.with(&load_abar[0]),
+    load_abar.arrive_and_expect_tx(chunk_bytes);
+    copy(adma_load_local.with(reinterpret_cast<uint64_t*>(&load_abar)),
          coalesce(gA_chunk),
          coalesce(sA_local));    
   }
@@ -191,7 +191,7 @@ adma_cluster_linear_remote_copy_device(
 
   if (warp_idx == 1 && elect_one_thr)
   {
-    xe4_wait_barrier(load_abar[0], 0 /*phase*/);
+    load_abar.try_wait(0 /*phase*/);
     for (int i = 0; i < ChunkElements; ++i) {
       slm_accum[i] = slm_local[i];
     }
@@ -204,17 +204,16 @@ adma_cluster_linear_remote_copy_device(
         uint32_t right_id  = (cluster_id + step + 1) % static_cast<uint32_t>(ClusterSizeX);
         uint32_t push_mask = (1u << right_id);  // only right neighbor — NOT self
 
-        copy(adma_load_remote.with(&push_abar[step], push_mask),
+        copy(adma_load_remote.with(reinterpret_cast<uint64_t*>(&push_abar[step]), push_mask),
               coalesce(sA_local),         // src: this WG's native chunk in SLM
               coalesce(sA_from_remote));  // dst offset in neighbor's SLM same as offset for receiving from remote for this WG
           
-        auto* remote_abar = get_remote_abar_address(&push_abar[step], right_id);
-        abarrier_cluster_arrive_expect_tx(remote_abar, chunk_bytes);
+        push_abar[step].arrive_and_expect_tx(chunk_bytes, right_id, /* is_remote_wg = */1);
      }
 
      if (warp_idx == 0 && elect_one_thr)
      {
-        xe4_wait_barrier(push_abar[step], 0 /*phase*/);
+        push_abar[step].try_wait(0 /*phase*/);
         // Accumulate the incoming chunk from the right neighbor.
         for (int i = 0; i < ChunkElements; ++i) {
           slm_accum[i] = static_cast<TA>(
@@ -228,11 +227,11 @@ adma_cluster_linear_remote_copy_device(
 
   if (warp_idx == 0 && elect_one_thr)
   {
-    xe4_set_barrier_transaction_bytes(store_abar[0], chunk_bytes);
-    copy(adma_store_c.with(&store_abar[0]),
+    store_abar.arrive_and_expect_tx(chunk_bytes);
+    copy(adma_store_c.with(reinterpret_cast<uint64_t*>(&store_abar)),
         coalesce(sA_accum),
         coalesce(gC_chunk));
-    xe4_wait_barrier(store_abar[0], 0 /*phase*/);
+    store_abar.try_wait(0 /*phase*/);
   }
 
     

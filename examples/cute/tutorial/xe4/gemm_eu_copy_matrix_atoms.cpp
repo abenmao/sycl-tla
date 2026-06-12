@@ -41,6 +41,7 @@
 #include <cute/atom/mma_traits_xe4_amma.hpp>
 #include <cute/atom/copy_atom.hpp>
 #include <cute/atom/copy_traits_xe4_eu_copy.hpp>
+#include <cutlass/arch/barrier.h>
 
 namespace gemm_eu_copy {
 
@@ -198,19 +199,19 @@ CUTE_HOST_DEVICE
 
     uint64_t mma_ctrl = 0x100;
     int mma_barrier_phase_bit = 0;
-    uint64_t *abarrier_systolic = allocate_abar<1>();
+    auto& abarrier_systolic = cutlass::arch::allocate_cluster_tx_barrier();
 
     // Main Loop: issues GMMAs to systolic //
     #pragma unroll
     while (ktile_idx < ktile_count) {
       sycl::group_barrier(it.get_group());
       if (is_chosen_leader_in_the_work_group(it, kSubGroupLaunchingAsyncMMA)) {
-        abarrier_init(abarrier_systolic,  1); 
-        xe4_set_barrier_transaction_bytes(*abarrier_systolic, 1);
+        abarrier_systolic.init(1);
+        abarrier_systolic.arrive_and_expect_tx(1);
         xe4_gmma_op_dtrack_t::fma(MMAControl(mma_ctrl),
-            sDDesc, sADesc, sBDesc, sDDesc, abarrier_systolic);
+            sDDesc, sADesc, sBDesc, sDDesc, reinterpret_cast<uint64_t*>(&abarrier_systolic));
         mma_ctrl = 0x000;
-        abarrier_try_wait(abarrier_systolic, mma_barrier_phase_bit);
+        abarrier_systolic.try_wait(mma_barrier_phase_bit);
         mma_barrier_phase_bit ^= 1;
       }
       sycl::group_barrier(it.get_group());

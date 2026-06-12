@@ -55,7 +55,7 @@ template <> struct vector_element_helper<float_ue5m3_t> { using type = uint8_t; 
 
 template <class T, int N> struct vector_helper {
     using U = typename vector_element_helper<T>::type;
-    using type = U __attribute__((ext_vector_type(ceil_div(N * sizeof_bits_v<T>, sizeof_bits_v<U>))));
+    using type = U __attribute__((ext_vector_type((N * sizeof_bits_v<T> + sizeof_bits_v<U> - 1)/sizeof_bits_v<U>)));
 };
 template <class T, int N> using vector_t = typename vector_helper<T, N>::type;
 #else

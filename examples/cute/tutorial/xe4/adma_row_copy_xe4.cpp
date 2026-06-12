@@ -127,13 +127,13 @@ SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
   Tensor sL_local = make_tensor(make_smem_ptr(smem.smem_A.begin()), sL);
 
   uint32_t elect_one_thr = cute::elect_one_sync();
-  auto load_abar  = allocate_abar<0>();
-  auto store_abar = allocate_abar<1>();
+  auto& load_abar  = cutlass::arch::allocate_cluster_tx_barrier();
+  auto& store_abar = cutlass::arch::allocate_cluster_tx_barrier();
 
   if (warp_idx == 0 && elect_one_thr) {
-    xe4_initialize_barrier(load_abar[0], 1);
+    load_abar.init(1);
   } else if (warp_idx == 1 && elect_one_thr) {
-    xe4_initialize_barrier(store_abar[0], 1);
+    store_abar.init(1);
   }
   sycl::group_barrier(sg);
 
@@ -210,19 +210,19 @@ SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
       }
     }
     if (elect_one_thr) {
-      xe4_set_barrier_transaction_bytes(load_abar[0], barrier_txn_bytes);
+      load_abar.arrive_and_expect_tx(barrier_txn_bytes);
     }
     if (lane_active) {
       if constexpr (Mode == AddressingMode::A64) {
         auto gmem_load_addr =
             reinterpret_cast<uint64_t>(reinterpret_cast<uint8_t const*>(src_ptr) + lane_byte_offset);
-        auto load_atom = adma_load.with(gmem_load_addr, lane_bytes, &load_abar[0],
+        auto load_atom = adma_load.with(gmem_load_addr, lane_bytes, reinterpret_cast<uint64_t*>(&load_abar),
                                         detail::CacheHint<LoadCC>{},
                                         detail::FillMode<LoadFM>{});
         copy(load_atom, tGsrc, tSmem);
       } else {
         auto byte_offset = static_cast<OffsetType>(lane_byte_offset);
-        auto load_atom = adma_load.with(const_cast<T*>(src_ptr), byte_offset, lane_bytes, &load_abar[0],
+        auto load_atom = adma_load.with(const_cast<T*>(src_ptr), byte_offset, lane_bytes, reinterpret_cast<uint64_t*>(&load_abar),
                                         detail::CacheHint<LoadCC>{},
                                         detail::FillMode<LoadFM>{});
         copy(load_atom, tGsrc, tSmem);
@@ -234,27 +234,27 @@ SYCL_EXTERNAL ALWAYS_INLINE void adma_row_per_lane_kernel(
 
   // WARP 1: STORE — mirrors LOAD.
   if (warp_idx == 1) {
-    xe4_wait_barrier(load_abar[0], 0);
+    load_abar.try_wait(0);
     if (elect_one_thr) {
-      xe4_set_barrier_transaction_bytes(store_abar[0], barrier_txn_bytes);
+      store_abar.arrive_and_expect_tx(barrier_txn_bytes);
     }
     if (lane_active) {
       if constexpr (Mode == AddressingMode::A64) {
         auto gmem_store_addr =
             reinterpret_cast<uint64_t>(reinterpret_cast<uint8_t*>(dst_ptr) + lane_byte_offset);
-        auto store_atom = adma_store.with(gmem_store_addr, lane_bytes, &store_abar[0],
+        auto store_atom = adma_store.with(gmem_store_addr, lane_bytes, reinterpret_cast<uint64_t*>(&store_abar),
                                           detail::CacheHint<StoreCC>{},
                                           detail::CompletionModeHint<StoreCM>{});
         copy(store_atom, tSmem, tGdst);
       } else {
         auto byte_offset = static_cast<OffsetType>(lane_byte_offset);
-        auto store_atom = adma_store.with(dst_ptr, byte_offset, lane_bytes, &store_abar[0],
+        auto store_atom = adma_store.with(dst_ptr, byte_offset, lane_bytes, reinterpret_cast<uint64_t*>(&store_abar),
                                           detail::CacheHint<StoreCC>{},
                                           detail::CompletionModeHint<StoreCM>{});
         copy(store_atom, tSmem, tGdst);
       }
     }
-    xe4_wait_barrier(store_abar[0], 0);
+    store_abar.try_wait(0);
   }
 }
 

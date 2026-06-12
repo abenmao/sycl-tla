@@ -612,57 +612,29 @@ struct CollectiveMmaAttention {
     auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
     auto sg = item.get_sub_group();
 
-    auto tiled_copy_s2r_update = collective_softmax.get_params().tiled_copy_s2r_update;
-    auto thr_copy_s2r_update = tiled_copy_s2r_update.get_slice(worker_id);
-
-    auto tiled_copy_r2s_rescale_o = collective_softmax.get_params().tiled_copy_r2s_rescale_o;
-    auto thr_copy_r2s_rescale_o = tiled_copy_r2s_rescale_o.get_slice(worker_id);
-
-    auto tiled_copy_r2s_final_rescale_o = collective_softmax.get_params().tiled_copy_r2s_final_rescale_o;
-    auto thr_copy_r2s_final_rescale_o = tiled_copy_r2s_final_rescale_o.get_slice(worker_id);
-
-    // Matrix descriptors
-    using dtype_packed = uint32_t;
-    constexpr auto kv_stride = shape<1>(TileShapeQK_MNK{});
-    constexpr auto q_stride = shape<0>(TileShapeQK_MNK{});
-    constexpr uint32_t packed_row_size_s = kv_stride * sizeof(ElementS) / sizeof(dtype_packed);
-    constexpr uint32_t packed_row_size_p = kv_stride * sizeof(ElementP) / sizeof(dtype_packed);
-    constexpr auto slm_bytes_per_s_stage = q_stride * kv_stride * sizeof(ElementS);
-    constexpr auto slm_bytes_per_p_stage = q_stride * kv_stride * sizeof(ElementP);
-
-    constexpr auto o_row_len = shape<1>(TileShapePV_MNK{});
-    constexpr uint32_t row_size_oacc = o_row_len; // matrix stride in elements
-    constexpr uint32_t row_size_o = o_row_len;
-    constexpr auto slm_bytes_per_oacc_stage = q_stride * row_size_oacc * sizeof(ElementAccum);
-    constexpr auto slm_bytes_per_o_stage = q_stride * row_size_o * sizeof(ElementOutput);
-
-    auto tOsS = matrix_desc_t(shared_tensors.smem_S.data(), packed_row_size_s, slm_matrix_type::type1);
-#ifdef USE_LD_ST_MATRIX
-    auto tOsP = matrix_desc_t(shared_tensors.smem_P.data(), packed_row_size_p, slm_matrix_type::type1);
-#else
-    auto tOsP = matrix_desc_t(shared_tensors.smem_P.data(), kv_stride, slm_matrix_type::type1);
-#endif
-    auto tOsOacc = matrix_desc_t(shared_tensors.smem_Oacc.data(), row_size_oacc, slm_matrix_type::type1);
-    auto tOsO = matrix_desc_t(epi_shared_tensors.smem_O.data(), row_size_o, slm_matrix_type::type1);
-
-    auto retiled_layout_sS = cutlass::epilogue::thread::detail::CoreMatrix::retile<ElementS>(SmemLayoutS{});
-    Tensor sS_post_process = make_tensor(make_smem_ptr(shared_tensors.smem_S.begin()), retiled_layout_sS);
-    Tensor tSR_sS = group_modes<1, 3>(thr_copy_s2r_update.partition_S(sS_post_process));
-    
-    auto retiled_layout_sOacc = cutlass::epilogue::thread::detail::CoreMatrix::retile<ElementAccum>(SmemLayoutOutputAccum{});
-    Tensor sOacc_post_process = make_tensor(make_smem_ptr(shared_tensors.smem_Oacc.begin()), retiled_layout_sOacc);
-    Tensor tSR_sOacc = group_modes<1, 3>(thr_copy_r2s_rescale_o.partition_D(sOacc_post_process)); // (VEC,VEC_M,PIPE)
-
-    auto retiled_layout_sO = cutlass::epilogue::thread::detail::CoreMatrix::retile<ElementOutput>(SmemLayoutOutput{});
-    Tensor sO_post_process = make_tensor(make_smem_ptr(epi_shared_tensors.smem_O.begin()), retiled_layout_sO);
-    Tensor tSR_sO = group_modes<1, 3>(thr_copy_r2s_final_rescale_o.partition_D(sO_post_process)); // (VEC,VEC_M,PIPE)
+    // ── M5 adapter: hand plain CuTe SLM tensors to CollectiveSoftmaxEpilogue ──
+    //
+    // Pre-LDSM (master_next) this adapter built four `matrix_desc_t` handles
+    // (`tOsS`, `tOsP`, `tOsOacc`, `tOsO`) and three `retile<...>`+`group_modes`
+    // CuTe tensors so the softmax methods could be passed both descriptors
+    // and per-stage views.  Both pieces are now gone — the descriptor is
+    // built inside the methods (via `make_ldsm_copy_warp_row_C/D<…>` →
+    // `make_ldsm_matrix_descriptor`), and the per-stage slice is selected
+    // via `sX_softmax(_, _, stage)` by the factory caller.
+    //
+    // The four full-pipe SLM tensors below carry the (BLK_M_Q, BLK_N_*, PIPE)
+    // shape of the SmemLayout templates.  Indexing `(_, _, stage)` returns
+    // the rank-2 per-stage tile expected by the factory.
+    Tensor sS_softmax    = make_tensor(make_smem_ptr(shared_tensors.smem_S.data()),
+                                       SmemLayoutS{});
+    Tensor sP_softmax    = make_tensor(make_smem_ptr(shared_tensors.smem_P.data()),
+                                       SmemLayoutP{});
+    Tensor sOacc_softmax = make_tensor(make_smem_ptr(shared_tensors.smem_Oacc.data()),
+                                       SmemLayoutOutputAccum{});
+    Tensor sO_softmax    = make_tensor(make_smem_ptr(epi_shared_tensors.smem_O.data()),
+                                       SmemLayoutOutput{});
 
     constexpr uint32_t total_rows_per_wi = CollectiveSoftmax::TotalRowsPerThread;
-
-    constexpr int SP_tile_N = CUTE_STATIC_V(get<1>(TileShapeQK_MNK{}));
-    constexpr int numElemPerThread = SP_tile_N / CollectiveSoftmax::NumThreadPerRow;
-    constexpr auto packedNum = sizeof(uint32_t) / sizeof(ElementS);
-    constexpr auto packedArrLen = numElemPerThread / packedNum;
 
     ElementS max_reg[NumStageQO][total_rows_per_wi];
     ElementAccum sum_reg[NumStageQO][total_rows_per_wi];
@@ -676,15 +648,14 @@ struct CollectiveMmaAttention {
     }
 
     pipeline_s.consumer_wait(pipeline_s_consumer_state);
-    
+
     collective_softmax.template update<true>(
       sg, worker_id,
-      tSR_sS(_, _, _0{}),
-      tOsS,
+      sS_softmax(_, _, _0{}),
+      sP_softmax(_, _, _0{}),
       max_reg[0],
       sum_reg[0],
-      exp_reg,
-      tOsP
+      exp_reg
     );
 
     pipeline_s.consumer_release(pipeline_s_consumer_state);
@@ -694,12 +665,11 @@ struct CollectiveMmaAttention {
 
     collective_softmax.template update<true>(
       sg, worker_id,
-      tSR_sS(_, _, _1{}),
-      tOsS + slm_bytes_per_s_stage,
+      sS_softmax(_, _, _1{}),
+      sP_softmax(_, _, _1{}),
       max_reg[1],
       sum_reg[1],
-      exp_reg,
-      tOsP + slm_bytes_per_p_stage
+      exp_reg
     );
 
     pipeline_s.consumer_release(pipeline_s_consumer_state);
@@ -707,15 +677,14 @@ struct CollectiveMmaAttention {
 
     for (int kv_tile = 1; kv_tile < num_kv_tiles; ++kv_tile) {
       pipeline_s.consumer_wait(pipeline_s_consumer_state);
-      
+
       collective_softmax.template update<false>(
         sg, worker_id,
-        tSR_sS(_, _, _0{}),
-        tOsS,
+        sS_softmax(_, _, _0{}),
+        sP_softmax(_, _, _0{}),
         max_reg[0],
         sum_reg[0],
-        exp_reg,
-        tOsP
+        exp_reg
       );
 
       pipeline_s.consumer_release(pipeline_s_consumer_state);
@@ -725,8 +694,7 @@ struct CollectiveMmaAttention {
 
       collective_softmax.rescale_O(
         sg, worker_id,
-        tSR_sOacc(_, _, _0{}),
-        tOsOacc,
+        sOacc_softmax(_, _, _0{}),
         exp_reg
       );
 
@@ -737,12 +705,11 @@ struct CollectiveMmaAttention {
 
       collective_softmax.template update<false>(
         sg, worker_id,
-        tSR_sS(_, _, _1{}),
-        tOsS + slm_bytes_per_s_stage,
+        sS_softmax(_, _, _1{}),
+        sP_softmax(_, _, _1{}),
         max_reg[1],
         sum_reg[1],
-        exp_reg,
-        tOsP + slm_bytes_per_p_stage
+        exp_reg
       );
 
       pipeline_s.consumer_release(pipeline_s_consumer_state);
@@ -752,8 +719,7 @@ struct CollectiveMmaAttention {
 
       collective_softmax.rescale_O(
         sg, worker_id,
-        tSR_sOacc(_, _, _1{}),
-        tOsOacc + slm_bytes_per_oacc_stage,
+        sOacc_softmax(_, _, _1{}),
         exp_reg
       );
 
@@ -766,10 +732,8 @@ struct CollectiveMmaAttention {
 
     collective_softmax.final_rescale_O(
       sg, worker_id,
-      tSR_sOacc(_, _, _0{}),
-      tSR_sO(_, _, _0{}),
-      tOsOacc,
-      tOsO,
+      sOacc_softmax(_, _, _0{}),
+      sO_softmax(_, _, _0{}),
       sum_reg[0]
     );
 
@@ -784,10 +748,8 @@ struct CollectiveMmaAttention {
 
     collective_softmax.final_rescale_O(
       sg, worker_id,
-      tSR_sOacc(_, _, _1{}),
-      tSR_sO(_, _, _1{}),
-      tOsOacc + slm_bytes_per_oacc_stage,
-      tOsO + slm_bytes_per_o_stage,
+      sOacc_softmax(_, _, _1{}),
+      sO_softmax(_, _, _1{}),
       sum_reg[1]
     );
 
