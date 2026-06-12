@@ -143,7 +143,8 @@ public:
              FragARow       & tA_max,   // Softmax row-wise max accumulator
              FragSPRow      & tA_sum,   // Softmax row-wise partial sum (per-lane, deferred hreduce)
              QVCoord          blk_qv,   // WG tile indices: (q,v)
-             int              thr_id) { // Work-item ID
+             int              thr_id,   // Work-item ID
+             float            v_scale = 1.0f) { // Per-tensor V dequant scale (fp8 path)
 
     using namespace cute;
     using ElementA = typename FragA::element_type;
@@ -163,7 +164,10 @@ public:
     /* Complete softmax, dividing out sums. */
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < rA_sum.size(); i++)
-      rA_sum(i) = ElementA(1) / rA_sum(i);
+      if constexpr (CollectiveMainloop::PerTensorScale)
+        rA_sum(i) = ElementA(v_scale) / rA_sum(i);
+      else
+        rA_sum(i) = ElementA(1) / rA_sum(i);
 
     /* Tile output */
     Tensor cO = make_identity_tensor(O.shape());          // (q,v)

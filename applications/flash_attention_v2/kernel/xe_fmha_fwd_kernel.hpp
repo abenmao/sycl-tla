@@ -89,7 +89,7 @@ public:
   using StrideQ = decltype(stride(typename CollectiveMainloop::TensorQ{}));
   using StrideK = decltype(stride(typename CollectiveMainloop::TensorK{}));
   using StrideV = decltype(stride(typename CollectiveMainloop::TensorV{}));
-  static constexpr bool UseScale = CollectiveMainloop::UseScale;
+  static constexpr bool BlockScale = CollectiveMainloop::BlockScale;
 
   using SGPerWG = typename CollectiveMainloop::SGPerWG;
 
@@ -138,8 +138,9 @@ public:
     StrideScaleK dScaleK{};
     const ElementScale *scaleV = nullptr;
     StrideScaleV dScaleV{};
-    float scale_k;
-    float scale_v;
+    float scale_k = 1.f;
+    float scale_v = 1.f;
+    float scale_q = 1.f;
     int group_size = 32;
     const ElementK *K_cache;
     StrideK dK_cache{};
@@ -320,7 +321,7 @@ public:
 
       // Main loop
       CollectiveMainloop mainloop(params.mainloop, shared_storage.mainloop);
-      if constexpr (UseScale) {
+      if constexpr (BlockScale) {
         auto scale_q = cute::ceil_div(s.head_size_qk, p.group_size);
         auto scale_k = cute::ceil_div(s.head_size_qk, p.group_size);
         int scale_v = cute::ceil_div(seq_len_kv, p.group_size);
@@ -365,7 +366,7 @@ public:
                  full_tile_offset, discard_seq_coord,
                  K_cache(_,_,head,l_coord),
                  V_cache(_,_,head,l_coord),
-                 p.scale_k, p.scale_v,
+                 p.scale_k, p.scale_v, p.scale_q,
                  ScaleQ_head,
                  ScaleK_head,
                  ScaleV_head);
@@ -379,7 +380,7 @@ public:
                  full_tile_offset, discard_seq_coord,
                  K_cache(_,_,head,l_coord),
                  V_cache(_,_,head,l_coord),
-                 p.scale_k, p.scale_v);
+                 p.scale_k, p.scale_v, p.scale_q);
       }
       if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
         sycl::group_barrier(get_work_group<3>());
@@ -389,7 +390,7 @@ public:
       CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
       epilogue(O(_,_,head_q,l_coord),
                tArA, tA_max, tA_sum,
-               blk_qv, thr_id);
+               blk_qv, thr_id, p.scale_v);
     }
   }
 };
@@ -460,7 +461,7 @@ public:
     EpilogueSharedStorage epilogue;
   };
 
-  static constexpr bool UseScale = false;
+  static constexpr bool BlockScale = false;
 
   static constexpr int SharedStorageSize = is_empty_v<SharedStorage> ? size_t(0)
                                                                      : sizeof(SharedStorage);

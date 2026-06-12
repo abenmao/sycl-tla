@@ -109,8 +109,9 @@ cvt_f32x2_to_bf16x2_pack(cute::intel::uint2     const& /*tmp*/,
 
 template <class DispatchPolicy_,
           bool CausalMask_,
-          bool UseScale_,
+          bool BlockScale_,
           bool F8kvF16mma_,
+          bool PerTensorScale_,
           bool CachedKV_,
           bool PagedKV_,
           class TiledMMAQK_,          // Tiling for Q*K GEMM
@@ -136,15 +137,15 @@ struct FMHAFwdMainloop {
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <int Stages,
-          bool CausalMask_, bool UseScale_, bool F8kvF16mma_, bool CachedKV_, bool PagedKV_,
+          bool CausalMask_, bool BlockScale_, bool F8kvF16mma_, bool PerTensorScale_, bool CachedKV_, bool PagedKV_,
           class TiledMMAQK_, class TiledMMAPV_, int VTiles_,
           class TensorQ_, class TensorK_, class TensorV_,
           class TensorScaleQ_, class TensorScaleK_, class TensorScaleV_,
           class TensorK_cache_, class TensorV_cache_,
           class TiledCopyQ_, class TiledCopyK_, class TiledCopyV_,
           class TiledCopyK_cache_, class TiledCopyV_cache_>
-struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
-                       CachedKV_, PagedKV_, TiledMMAQK_, TiledMMAPV_, VTiles_,
+struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
+                       PerTensorScale_, CachedKV_, PagedKV_, TiledMMAQK_, TiledMMAPV_, VTiles_,
                        TensorQ_, TensorK_, TensorV_,
                        TensorScaleQ_, TensorScaleK_, TensorScaleV_,
                        TensorK_cache_, TensorV_cache_,
@@ -178,8 +179,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
   using TiledCopyQ = conditional_t<is_void_v<TiledCopyQ_>, decltype(make_block_2d_copy_A(TiledMMAQK{}, TensorQ2D{})), TiledCopyQ_>;
   using TiledCopyK = conditional_t<is_void_v<TiledCopyK_>, decltype(make_block_2d_copy_B(TiledMMAQK{}, TensorK2D{})), TiledCopyK_>;
   using TiledCopyV = conditional_t<is_void_v<TiledCopyV_>, decltype(make_block_2d_copy_B(TiledMMAPV{}, TensorV2D{})), TiledCopyV_>;
-  static constexpr bool UseScale = UseScale_;
+  static constexpr bool BlockScale = BlockScale_;
   static constexpr bool F8kvF16mma = F8kvF16mma_;
+  static constexpr bool PerTensorScale = PerTensorScale_;
 
   using TensorScaleQ = TensorScaleQ_;
   using TensorScaleK = TensorScaleK_;
@@ -266,7 +268,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
   static constexpr auto GROUP_K = 32;
 
   using DefScaleType = cutlass::float_ue8m0_t;
-  using ElementScaleP = cute::conditional_t<UseScale, ElementScaleV, DefScaleType>;
+  using ElementScaleP = cute::conditional_t<BlockScale, ElementScaleV, DefScaleType>;
 
   // User-facing arguments
   struct Arguments {
@@ -339,6 +341,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
              TensorV_cache2D const& V_cache_2D = TensorV_cache2D{},
              float            scale_k = 1.0f,
              float            scale_v = 1.0f,
+             float            scale_q = 1.0f,
              TensorScaleQ2D    const& scaleQ = TensorScaleQ2D{},
              TensorScaleK2D    const& scaleK = TensorScaleK2D{},
              TensorScaleV2D    const& scaleV = TensorScaleV2D{}) {
@@ -432,7 +435,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
     using ScaleCopyQK = void;
     using ScaleCopyPV = void;
     auto scale_context_qk = [&]() {
-      if constexpr (UseScale) {
+      if constexpr (BlockScale) {
         auto scale_copy_Q = gemm::collective::make_scaled_copy<ScaleCopyQK, ElementScaleQ, SG_Q, SG_QK_D, GROUP_K>(
                                                       scaleQ, 0, 0, size<4>(tKgK));
         auto scale_copy_K = gemm::collective::make_scaled_copy<ScaleCopyQK, ElementScaleK, SG_K, SG_QK_D, GROUP_K>(
@@ -455,7 +458,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
     }();
 
     auto scale_context_pv = [&]() {
-      if constexpr (UseScale) {
+      if constexpr (BlockScale) {
         auto scale_copy_P = gemm::collective::make_scaled_copy<ScaleCopyPV, ElementScaleP, SG_P, SG_PV_D, GROUP_K>(scaleV);
         auto scale_copy_V = gemm::collective::make_scaled_copy<ScaleCopyPV, ElementScaleV, SG_V, SG_PV_D, GROUP_K>(
                                                       scaleV, 0, 0, blk_k1);
@@ -549,7 +552,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
         }
       }
     }
-    if constexpr (UseScale) {
+    if constexpr (BlockScale) {
       const int q_coord = get<0>(blk_qv) * BLK_Q + (subgroup_id / ATOM_K)  * SG_Q;
       auto& tiled_prefetch_scaleQ = get<0>(get<2>(scale_context_qk));
       auto  prefetch_iter_scaleQ = get<1>(get<2>(scale_context_qk));
@@ -613,7 +616,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
 
         reorder(tKrK, tSrK);
 
-        if constexpr (UseScale) {
+        if constexpr (BlockScale) {
           if constexpr (sizeof_bits_v<ElementQ> <= 8) {
             static_assert(SG_QK_D >= 32, "Intel Xe blockscaled MMA requires SG_QK_D to be at least 32.");
             static_assert(SG_PV_D >= 32, "Intel Xe blockscaled MMA requires SG_PV_D to be at least 32.");
@@ -682,7 +685,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
         update_payloads(prepared_pk, kv_stride);
       }
       // Prefetch V scale
-      if constexpr (UseScale) {
+      if constexpr (BlockScale) {
         auto& tiled_prefetch_scaleV = get<0>(get<2>(scale_context_pv));
         auto  prefetch_iter_scaleV = get<1>(get<2>(scale_context_pv));
         CUTLASS_PRAGMA_UNROLL
@@ -742,7 +745,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
           }
         }
       }
-      auto [rescale, tS_partial_sum] = softmax(tSrS, tA_max, tA_sum);
+      // Fold Q*K  scale into params.scale
+      ElementS qk_scale = params.scale;
+      if constexpr (PerTensorScale) {
+        qk_scale = params.scale * ElementS(scale_q) * ElementS(scale_k);
+      }
+      auto [rescale, tS_partial_sum] = softmax(tSrS, tA_max, tA_sum, qk_scale);
       auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
       constexpr int kSumSize = decltype(tA_sum.size())::value;
       constexpr bool kSumDivVT = (kSumSize % VTiles == 0);
@@ -791,7 +799,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
             tA_sum(i) = tA_sum(i) * group_broadcast(sg, rescale(0), i) + tS_partial_sum(i);
           }
         }
-        if constexpr (UseScale && !FP4Input) {
+        if constexpr (BlockScale && !FP4Input) {
           const int v_coord = get<1>(blk_qv) * VTiles * BLK_V + VV * BLK_V + (subgroup_id % ATOM_V) * SG_V;
           auto& tiled_copy_scaleP = get<0>(get<0>(scale_context_pv));
           // P is dummy scale, just the same as V
@@ -840,7 +848,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
         }
       }
       // Prefetch K scale
-      if constexpr (UseScale) {
+      if constexpr (BlockScale) {
         auto& tiled_prefetch_scaleK = get<0>(get<3>(scale_context_qk));
         auto  prefetch_iter_scaleK = get<1>(get<3>(scale_context_qk));
         const int k_coord_next = (K_next-kblocks_cache) * BLK_K + (subgroup_id % ATOM_K) * SG_K;
@@ -877,14 +885,15 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
   auto
   softmax(FragS          & tS,        // Softmax src/dst block
           FragARow       & tA_max,    // Softmax row-wise max accumulator
-          FragSPartialRow& tA_sum) {  // Softmax row-wise partial sum (per-lane)
+          FragSPartialRow& tA_sum,    // Softmax row-wise partial sum (per-lane)
+          ElementS         qk_scale) {//  Q*K scale fold with original scale
     /* Compute row-wise maxima for this block */
     auto tS_bmax = reduce<1, ReduceMode::Full, /*EnableFast64Rows=*/!CausalMask>(tS, sycl::maximum<void>{});
 
     FragARow rescale;
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < tA_max.size(); i++) {
-      ElementS new_max = sycl::max(tA_max(i), params.scale * tS_bmax(i));
+      ElementS new_max = sycl::max(tA_max(i), qk_scale * tS_bmax(i));
       rescale(i) = sycl::native::exp2(tA_max(i) - new_max);
       tA_max(i) = new_max;
     }
@@ -892,7 +901,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, UseScale_, F8kvF16mma_,
     /* Scale S and subtract maxima, then exponentiate */
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < tS.size(); i++)
-      tS(i) = params.scale * tS(i) - broadcast<0>(tA_max, tS, i);
+      tS(i) = qk_scale * tS(i) - broadcast<0>(tA_max, tS, i);
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < tS.size(); i++)

@@ -208,6 +208,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   using ElementS = typename CollectiveMainloop::ElementS;
   static constexpr bool FP4Input = sizeof_bits_v<ElementQ> < 8;
   static constexpr bool F8kvF16mma = CollectiveMainloop::F8kvF16mma;
+  static constexpr bool PerTensorScale = CollectiveMainloop::PerTensorScale;
 
   using ProblemShapeType = cutlass::fmha::kernel::FMHAProblemShape<isVarLen>;
 
@@ -224,9 +225,9 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   StrideO stride_O;
 
 #if PERSISTENT
-  static constexpr bool UseScale = false;
+  static constexpr bool BlockScale = false;
 #else
-  static constexpr bool UseScale = FMHAKernel::UseScale;
+  static constexpr bool BlockScale = FMHAKernel::BlockScale;
 
   using ElementScale = typename FMHAKernel::ElementScale;
 
@@ -242,8 +243,9 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   cutlass::DeviceAllocation<ElementScale> block_scaleK;
   cutlass::DeviceAllocation<ElementScale> block_scaleV;
 
-  ElementScale scale_k;
-  ElementScale scale_v;
+  ElementScale scale_k = ElementScale(1);
+  ElementScale scale_v = ElementScale(1);
+  ElementScale scale_q = ElementScale(1);
 #endif
 
   std::vector<int> cumulative_scale_q;
@@ -320,7 +322,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     int max_seqlen_kv = 0;
     int max_seqlen_kv_cache = 0;
 
-    if constexpr (UseScale) {
+    if constexpr (BlockScale) {
       cumulative_scale_q = {0};
       cumulative_scale_kv = {0};
     }
@@ -341,7 +343,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
 
       cumulative_seqlen_q.push_back(cumulative_seqlen_q.back() + seqlen_q);
       cumulative_seqlen_kv.push_back(cumulative_seqlen_kv.back() + seqlen_kv);
-      if constexpr (UseScale) {
+      if constexpr (BlockScale) {
         int scale_len_q = cute::ceil_div(seqlen_q, GROUP_SIZE);
         int scale_len_kv = cute::ceil_div(seqlen_kv, GROUP_SIZE);
         cumulative_scale_q.push_back(cumulative_scale_q.back() + scale_len_q);
@@ -377,7 +379,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
       int max_seq_len_kv_cache = shape.seq_len_kv_cache;
       shape.seq_len_qo = cutlass::fmha::collective::VariableLength{max_seq_len_q, cumulative_seqlen_q.data()};
       shape.seq_len_kv = cutlass::fmha::collective::VariableLength{max_seq_len_kv, cumulative_seqlen_kv.data()};
-      if constexpr (UseScale) {
+      if constexpr (BlockScale) {
         shape.seq_len_qo.cumulative_scale_length = cumulative_scale_q.data();
         shape.seq_len_kv.cumulative_scale_length = cumulative_scale_kv.data();
       }
@@ -391,12 +393,12 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     auto head_size_vo = shape.head_size_vo;
     int seq_len_qo, seq_len_kv, seq_len_kv_cache;
 
-    auto block_Q_ = UseScale ? block_Q_dq : in_memory(block_Q);
-    auto block_K_ = (UseScale || F8kvF16mma) ? block_K_dq : in_memory(block_K);
-    auto block_V_ = ((UseScale && !FP4Input) || F8kvF16mma) ? block_V_dq : in_memory(block_V);
+    auto block_Q_ = (BlockScale || PerTensorScale) ? block_Q_dq : in_memory(block_Q);
+    auto block_K_ = (BlockScale || F8kvF16mma || PerTensorScale) ? block_K_dq : in_memory(block_K);
+    auto block_V_ = ((BlockScale && !FP4Input) || F8kvF16mma || PerTensorScale) ? block_V_dq : in_memory(block_V);
     auto block_K_cache_ = in_memory(block_K_cache);
     auto block_V_cache_ = in_memory(block_V_cache);
-    using ElementV_ = std::conditional_t<UseScale && !FP4Input, 
+    using ElementV_ = std::conditional_t<BlockScale && !FP4Input, 
                                     ElementPVMMAVerify,
                                     std::remove_pointer_t<decltype(block_V_.get())>>;
     using ElementK_ = std::remove_pointer_t<decltype(block_K_.get())>;
@@ -860,7 +862,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     if constexpr (isVarLen) {
       shape.seq_len_qo.cumulative_length = device_cumulative_seqlen_q.get();
       shape.seq_len_kv.cumulative_length = device_cumulative_seqlen_kv.get();
-      if constexpr (UseScale) {
+      if constexpr (BlockScale) {
         if (!cumulative_scale_q.empty()) {
           device_cumulative_scale_q.reset(cumulative_scale_q.size());
           device_cumulative_scale_q.copy_from_host(cumulative_scale_q.data(), cumulative_scale_q.size());
@@ -887,11 +889,15 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     if constexpr (F8kvF16mma) {
       apply_dequantization(block_K, block_K_dq, scale_k);
       apply_dequantization(block_V, block_V_dq, scale_v);
-    } else if constexpr (UseScale) {
+    } else if constexpr (PerTensorScale) {
+      apply_dequantization(block_Q, block_Q_dq, scale_q);
+      apply_dequantization(block_K, block_K_dq, scale_k);
+      apply_dequantization(block_V, block_V_dq, scale_v);
+    } else if constexpr (BlockScale) {
       auto scale_q = cute::ceil_div(head_size_qk, GROUP_SIZE);
       auto scale_k = cute::ceil_div(head_size_qk, GROUP_SIZE);
       int scale_v = cute::ceil_div(seq_len_kv, GROUP_SIZE);
-      if constexpr (isVarLen && UseScale) { scale_v = cumulative_scale_kv.back(); }
+      if constexpr (isVarLen && BlockScale) { scale_v = cumulative_scale_kv.back(); }
 
       auto shape_scale_Q = cute::make_shape(seq_len_qo, scale_q, num_heads_q, batch);
       auto shape_scale_K = cute::make_shape(seq_len_kv, scale_k, num_heads_kv, batch);
@@ -997,7 +1003,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
         block_scaleQ.get(), stride_SQ,
         block_scaleK.get(), stride_SK,
         block_scaleV.get(), stride_SV,
-        scale_k, scale_v,
+        scale_k, scale_v, scale_q,
         GROUP_SIZE,
         block_K_cache.get(), stride_K_cache,
         block_V_cache.get(), stride_V_cache
@@ -1123,7 +1129,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
 };
 
 template <bool Causal,
-          bool UseScale,
+          bool BlockScale,
           typename TileShapeQK,
           typename TileShapePV,
           typename TileShapeOutput,
@@ -1156,7 +1162,7 @@ struct FMHAConfig {
   static constexpr bool is_f8_v = cute::is_any_of_v<T, cute::float_e5m2_t, cute::float_e4m3_t>;
   template <typename T>
   static constexpr bool is_f16_v = cute::is_any_of_v<T, cute::half_t, cute::bfloat16_t>;
-  static constexpr bool F8kvF16mma = is_f16_v<ElementQ> && is_f8_v<ElementK> && cute::is_same_v<ElementScale, float> && !UseScale;
+  static constexpr bool F8kvF16mma = is_f16_v<ElementQ> && is_f8_v<ElementK> && cute::is_same_v<ElementScale, float> && !BlockScale;
 
 #if !(defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
   using DefaultMMA = typename cute::conditional_t<
@@ -1165,15 +1171,18 @@ struct FMHAConfig {
       XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, ElementQ>
   >;
   using MMAOperationPV = DefaultMMA;
+  static constexpr bool PerTensorScale = false;
 #else
   using DefaultDpasOp = XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, ElementQ>;
   using DefaultBdpasOp = XE_BDPAS_TT<cute::gcd(SGTileQ, 8), float, ElementQ>;
-  using DefaultMMA = cute::conditional_t<UseScale, DefaultBdpasOp, DefaultDpasOp>;
+  using DefaultMMA = cute::conditional_t<BlockScale, DefaultBdpasOp, DefaultDpasOp>;
   using MMAOperationPV = typename cute::conditional_t<
       cute::is_same_v<ElementV, cutlass::float_e5m2_t> || cute::is_same_v<ElementV, cutlass::float_e4m3_t>,
       DefaultMMA,
       XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, ElementV>
   >;
+  static constexpr bool PerTensorScale = is_f8_v<ElementQ> && is_f8_v<ElementK> && is_f8_v<ElementV>
+                                      && cute::is_same_v<ElementScale, float> && !BlockScale;
 #endif
 
   using MMAOperation = cute::conditional_t<is_void_v<MMAOperation_>,
@@ -1225,7 +1234,7 @@ struct FMHAConfig {
     // Mainloop
     using MainloopDispatchPolicy = cutlass::fmha::XeDefault<PipelineStages>;
     using CollectiveMainloop = cutlass::fmha::collective::FMHAFwdMainloop<
-        MainloopDispatchPolicy, Causal, UseScale, F8kvF16mma,
+        MainloopDispatchPolicy, Causal, BlockScale, F8kvF16mma, PerTensorScale,
         CachedKV, PagedKV, TiledMMAQK, TiledMMAPV, VTiles,
         TensorQ, TensorK, TensorV,
         TensorScaleQ, TensorScaleK, TensorScaleV,

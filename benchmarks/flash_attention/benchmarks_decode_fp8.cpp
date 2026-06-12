@@ -39,20 +39,20 @@ using namespace cutlass::flash_attention;
 using CriFMHADecode_E5M2_E5M2_E5M2_FP32_RCR_h64_NonCausal_FixedLen_CachedKV_PagedKV_Persistent = FMHAConfigGen</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::float_e5m2_t, /*ElementK*/ cutlass::float_e5m2_t, /*ElementV*/ cutlass::float_e5m2_t, /*ElementO*/ float,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ true, /*PagedKV*/ true, /*Persistent*/ true, /*UseScale*/ false, /*HeadDim*/ 64
+  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ true, /*PagedKV*/ true, /*Persistent*/ true, /*BlockScale*/ false, /*HeadDim*/ 64
 >::type;
 
 // Plain non-persistent FixedLen variants for direct comparison against example (no CachedKV/PagedKV/Persistent).
 using CriFMHADecode_E4M3_E4M3_E4M3_FP32_RCR_h64_NonCausal_FixedLen = FMHAConfigGen</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::float_e4m3_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ float,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*HeadDim*/ 64
+  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ false, /*HeadDim*/ 64
 >::type;
 
 using CriFMHADecode_E5M2_E5M2_E5M2_FP32_RCR_h64_NonCausal_FixedLen = FMHAConfigGen</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::float_e5m2_t, /*ElementK*/ cutlass::float_e5m2_t, /*ElementV*/ cutlass::float_e5m2_t, /*ElementO*/ float,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*HeadDim*/ 64
+  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ false, /*HeadDim*/ 64
 >::type;
 
 CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHADecode_E5M2_E5M2_E5M2_FP32_RCR_h64_NonCausal_FixedLen_CachedKV_PagedKV_Persistent);
@@ -71,14 +71,14 @@ CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHADecode_E5M2_E5M2_E5M2_FP32_RCR_h64_NonCausa
 using CriFMHADecode_E4M3_E4M3_E4M3_FP32_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_NonCausal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::float_e4m3_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ float,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
+  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
   /*SgTileQ*/ 1, /*SgTileK*/ 64, /*HeadDimQK*/ 64, /*HeadDimV*/ 128
 >::type;
 
 using CriFMHADecode_E4M3_E4M3_E4M3_FP32_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_VarLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::float_e4m3_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ float,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ true, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
+  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ true, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
   /*SgTileQ*/ 1, /*SgTileK*/ 64, /*HeadDimQK*/ 64, /*HeadDimV*/ 128
 >::type;
 
@@ -86,14 +86,14 @@ using CriFMHADecode_E4M3_E4M3_E4M3_FP32_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Cau
 using CriFMHADecode_E5M2_E5M2_E5M2_FP32_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_NonCausal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::float_e5m2_t, /*ElementK*/ cutlass::float_e5m2_t, /*ElementV*/ cutlass::float_e5m2_t, /*ElementO*/ float,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
+  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
   /*SgTileQ*/ 1, /*SgTileK*/ 64, /*HeadDimQK*/ 64, /*HeadDimV*/ 128
 >::type;
 
 using CriFMHADecode_E5M2_E5M2_E5M2_FP32_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_VarLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::float_e5m2_t, /*ElementK*/ cutlass::float_e5m2_t, /*ElementV*/ cutlass::float_e5m2_t, /*ElementO*/ float,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ true, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
+  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ true, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
   /*SgTileQ*/ 1, /*SgTileK*/ 64, /*HeadDimQK*/ 64, /*HeadDimV*/ 128
 >::type;
 
@@ -101,14 +101,14 @@ using CriFMHADecode_E5M2_E5M2_E5M2_FP32_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Cau
 using CriFMHADecode_E4M3_E4M3_E4M3_FP32_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::float_e4m3_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ float,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
+  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
   /*SgTileQ*/ 1, /*SgTileK*/ 64, /*HeadDimQK*/ 64, /*HeadDimV*/ 128
 >::type;
 
 using CriFMHADecode_E5M2_E5M2_E5M2_FP32_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::float_e5m2_t, /*ElementK*/ cutlass::float_e5m2_t, /*ElementV*/ cutlass::float_e5m2_t, /*ElementO*/ float,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
+  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
   /*SgTileQ*/ 1, /*SgTileK*/ 64, /*HeadDimQK*/ 64, /*HeadDimV*/ 128
 >::type;
 

@@ -166,16 +166,16 @@ int main(int argc, const char **argv) {
 
 #ifdef DECODE
   constexpr int PipelineStages = 1;
-  constexpr bool UseScale = false;
+  constexpr bool BlockScale = false;
 #else
   constexpr int PipelineStages = 2;
-  constexpr bool UseScale = true;
+  constexpr bool BlockScale = true;
 #endif
 #if defined(IS_MX_FLOAT_E5M2) || defined(IS_MX_FLOAT_E4M3) || defined(IS_MX_FLOAT_E2M1)
-  // UseScale does not support CachedKV/PagedKV
+  // BlockScale does not support CachedKV/PagedKV
   using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
-  using FMHACausal    = FMHAConfig<true, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>;
-  using FMHANonCausal = FMHAConfig<false, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>;
+  using FMHACausal    = FMHAConfig<true, BlockScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>;
+  using FMHANonCausal = FMHAConfig<false, BlockScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>;
 
   if (options.is_causal) {
     if (options.varlen) {
