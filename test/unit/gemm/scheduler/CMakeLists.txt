@@ -32,4 +32,23 @@ if(SYCL_TARGET_INTEL_GPU_JGS)
     cutlass_test_unit_gemm_scheduler_xe4_device
     xe4_tile_scheduler_device.cpp
   )
+
+  cutlass_test_unit_add_executable(
+    cutlass_test_unit_gemm_scheduler_xe4_streamk_device
+    xe4_tile_scheduler_streamk_device.cpp
+  )
+
+  add_custom_target(
+    cutlass_test_unit_gemm_scheduler_xe4
+    DEPENDS
+    cutlass_test_unit_gemm_scheduler_xe4_device
+    cutlass_test_unit_gemm_scheduler_xe4_streamk_device
+  )
+
+  add_custom_target(
+    test_unit_gemm_scheduler_xe4
+    DEPENDS
+    cutlass_test_unit_gemm_scheduler_xe4_device
+    cutlass_test_unit_gemm_scheduler_xe4_streamk_device
+  )
 endif()

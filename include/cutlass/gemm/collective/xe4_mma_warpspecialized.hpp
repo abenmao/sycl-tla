@@ -378,9 +378,13 @@ struct CollectiveMma<
     return cute::make_tuple(slm_pipe_write, k_tile_iter);
   }
 
+  // writes_d_output: true if this work tile produces a smem_D -> gmem D store (final SK split or
+  // DP tile, i.e. compute_epilogue). Only such tiles use the store pipeline, so MMA acquires a
+  // store stage only for them. Non-final SK splits perform no D-store and pass false.
   template <class Pipelines, class PipelineStates, class FrgTensorC, class MmaParams>
   CUTLASS_DEVICE auto
-  mma(Pipelines pipelines, PipelineStates pipeline_states, FrgTensorC& tensor_c, MmaParams const& mma_inputs, int k_tile_count) {
+  mma(Pipelines pipelines, PipelineStates pipeline_states, FrgTensorC& tensor_c, MmaParams const& mma_inputs,
+      int k_tile_count, bool writes_d_output = true) {
 
     auto [mainloop_pipeline, store_pipeline, accumulator_pipeline] = pipelines;
     auto [mainloop_pipe_consumer_state, store_pipe_producer_state, accumulator_pipe_producer_state] = pipeline_states;
@@ -407,7 +411,12 @@ struct CollectiveMma<
         bool is_last_iter = (k_tile_count == 1) && (k_block == size<2>(tCsA) - 1);
 
         if (is_last_iter) {
-          store_pipeline.producer_try_acquire(store_pipe_producer_state);
+          // Reserve the smem_D store slot only for tiles that actually D-store; non-final SK
+          // splits write no smem_D and must not touch the store pipeline (its fred uses the
+          // dedicated fred pipeline instead).
+          if (writes_d_output) {
+            store_pipeline.producer_try_acquire(store_pipe_producer_state);
+          }
           accumulator_pipeline.producer_acquire(accumulator_pipe_producer_state);
 
           int write_stage = accumulator_pipe_producer_state.index();

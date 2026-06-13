@@ -295,6 +295,13 @@ public:
   using MainloopPipelineState = typename CollectiveMainloop::MainloopPipelineState;
   using EpiLoadPipeline = typename CollectiveEpilogue::LoadPipeline;
   using EpiLoadPipelineState = typename CollectiveEpilogue::LoadPipelineState;
+  // G2S + Fred pipelines exist on the epilogue regardless of HasSkReduce; this DP-only kernel
+  // never drives them, but the shared epilogue load()/store() destructure 5-element pipeline
+  // tuples, so they must be declared, constructed, and threaded through to match the signature.
+  using EpiG2SPipeline = typename CollectiveEpilogue::G2SPipeline;
+  using EpiG2SPipelineState = typename CollectiveEpilogue::G2SPipelineState;
+  using EpiFredPipeline = typename CollectiveEpilogue::FredPipeline;
+  using EpiFredPipelineState = typename CollectiveEpilogue::FredPipelineState;
   using AccumulatorPipeline = cutlass::PipelineTmaAsync<AccumulatorPipelineStageCount>;
   using AccumulatorPipelineState = typename AccumulatorPipeline::PipelineState;
   using EpiStorePipeline = typename CollectiveEpilogue::StorePipeline;
@@ -316,12 +323,16 @@ public:
     struct PipelineStorage {
       using MainloopPipelineStorage = typename MainloopPipeline::SharedStorage;
       using EpiLoadPipelineStorage = typename EpiLoadPipeline::SharedStorage;
+      using EpiG2SPipelineStorage = typename EpiG2SPipeline::SharedStorage;
+      using EpiFredPipelineStorage = typename EpiFredPipeline::SharedStorage;
       using AccumulatorPipelineStorage = typename AccumulatorPipeline::SharedStorage;
       using EpiStorePipelineStorage = typename EpiStorePipeline::SharedStorage;
       using EpiWaveOrderBarrierStorage = typename EpiWaveOrderBarrier::SharedStorage;
       using CLCPipelineStorage = typename CLCPipeline::SharedStorage;
       MainloopPipelineStorage mainloop;
       EpiLoadPipelineStorage epi_load;
+      EpiG2SPipelineStorage epi_g2s;
+      EpiFredPipelineStorage epi_fred;
       AccumulatorPipelineStorage accumulator;
       EpiStorePipelineStorage epi_store;
       EpiWaveOrderBarrierStorage epi_wave_order;
@@ -536,6 +547,28 @@ public:
     epi_load_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::EpilogueLoad);
     EpiLoadPipeline epi_load_pipeline(shared_pipelines.epi_load, epi_load_pipeline_params, true_type{});
 
+    // G2S + Fred pipelines: constructed to satisfy the shared epilogue's 5-tuple signature.
+    // This DP-only kernel issues no SK splits, so neither is exercised at runtime.
+    typename EpiG2SPipeline::Params epi_g2s_pipeline_params;
+    if (WarpCategory::EpilogueLoad == warp_category) {
+      epi_g2s_pipeline_params.role = EpiG2SPipeline::ThreadCategory::Producer;
+    }
+    if (WarpCategory::Epilogue == warp_category) {
+      epi_g2s_pipeline_params.role = EpiG2SPipeline::ThreadCategory::Consumer;
+    }
+    epi_g2s_pipeline_params.transaction_bytes = CollectiveEpilogue::TransactionBytesImm;
+    epi_g2s_pipeline_params.producer_arv_count = NumThreadsPerWarp;
+    epi_g2s_pipeline_params.consumer_arv_count = NumEpilogueThreads;
+    epi_g2s_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::EpilogueLoad);
+    EpiG2SPipeline epi_g2s_pipeline(shared_pipelines.epi_g2s, epi_g2s_pipeline_params, true_type{});
+
+    typename EpiFredPipeline::Params epi_fred_pipeline_params;
+    epi_fred_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::Epilogue);
+    epi_fred_pipeline_params.num_producers = NumEpilogueThreads;
+    epi_fred_pipeline_params.num_consumers = 1;
+    EpiFredPipeline epi_fred_pipeline(shared_pipelines.epi_fred, epi_fred_pipeline_params,
+                                      cluster_shape, true_type{}, false_type{});
+
     typename AccumulatorPipeline::Params accumulator_pipeline_params;
     if (WarpCategory::MMA == warp_category) {
       accumulator_pipeline_params.role = AccumulatorPipeline::ThreadCategory::Producer;
@@ -580,6 +613,10 @@ public:
     auto mainloop_pipe_consumer_state = MainloopPipelineState{};
     auto epi_load_pipe_producer_state = cutlass::make_producer_start_state<EpiLoadPipeline>();
     auto epi_load_pipe_consumer_state = EpiLoadPipelineState{};
+    auto epi_g2s_pipe_producer_state = cutlass::make_producer_start_state<EpiG2SPipeline>();
+    auto epi_g2s_pipe_consumer_state = EpiG2SPipelineState{};
+    auto epi_fred_pipe_producer_state = cutlass::make_producer_start_state<EpiFredPipeline>();
+    auto epi_fred_pipe_consumer_state = EpiFredPipelineState{};
     auto accumulator_pipe_producer_state = cutlass::make_producer_start_state<AccumulatorPipeline>();
     auto accumulator_pipe_consumer_state = AccumulatorPipelineState{};
     auto epi_store_pipe_producer_state = cutlass::make_producer_start_state<EpiStorePipeline>();
@@ -686,16 +723,22 @@ public:
 
       do {
         auto cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);
-        auto [load_state_next, store_cons_state_next] =
+        auto [load_state_next, store_cons_state_next, acc_state_next, g2s_state_next, fred_state_next] =
             collective_epilogue.template load<IsOverlappingAccum>(
-                cute::make_tuple(epi_load_pipeline, epi_store_pipeline),
-                cute::make_tuple(epi_load_pipe_producer_state, epi_store_pipe_consumer_state),
+                cute::make_tuple(epi_load_pipeline, epi_store_pipeline, accumulator_pipeline,
+                                 epi_g2s_pipeline, epi_fred_pipeline),
+                cute::make_tuple(epi_load_pipe_producer_state, epi_store_pipe_consumer_state,
+                                 accumulator_pipe_consumer_state, epi_g2s_pipe_producer_state,
+                                 epi_fred_pipe_consumer_state),
                 problem_shape_MNKL, CtaShape_MNK{}, cta_coord_mnkl,
                 TileShape{}, TiledMma{}, shared_tensors.epilogue, reverse_epi_n);
 
         prev_epi_store_consumer_state = epi_store_pipe_consumer_state;
         epi_load_pipe_producer_state = load_state_next;
         epi_store_pipe_consumer_state = store_cons_state_next;
+        (void)acc_state_next;  // DP-only: accumulator/g2s/fred states are inert here
+        epi_g2s_pipe_producer_state = g2s_state_next;
+        epi_fred_pipe_consumer_state = fred_state_next;
 
         auto [next_work_tile_info, increment_pipe] =
             scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
@@ -710,15 +753,21 @@ public:
       // ━━━ EPILOGUE COMPUTE WARPS (unchanged) ━━━
       do {
         auto cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);
-        auto [load_state_next, store_prod_state_next, acc_state_next] = collective_epilogue.store(
-            cute::make_tuple(epi_load_pipeline, epi_store_pipeline, accumulator_pipeline),
-            cute::make_tuple(epi_load_pipe_consumer_state, epi_store_pipe_producer_state, accumulator_pipe_consumer_state),
-            problem_shape_MNKL, CtaShape_MNK{}, cta_coord_mnkl,
-            TileShape{}, TiledMma{}, intermedia_tensor, shared_tensors.epilogue);
+        auto [load_state_next, store_prod_state_next, acc_state_next, g2s_state_next, fred_state_next] =
+            collective_epilogue.store(
+                cute::make_tuple(epi_load_pipeline, epi_store_pipeline, accumulator_pipeline,
+                                 epi_g2s_pipeline, epi_fred_pipeline),
+                cute::make_tuple(epi_load_pipe_consumer_state, epi_store_pipe_producer_state,
+                                 accumulator_pipe_consumer_state, epi_g2s_pipe_consumer_state,
+                                 epi_fred_pipe_producer_state),
+                problem_shape_MNKL, CtaShape_MNK{}, cta_coord_mnkl,
+                TileShape{}, TiledMma{}, intermedia_tensor, shared_tensors.epilogue);
 
         epi_load_pipe_consumer_state = load_state_next;
         epi_store_pipe_producer_state = store_prod_state_next;
         accumulator_pipe_consumer_state = acc_state_next;
+        epi_g2s_pipe_consumer_state = g2s_state_next;
+        epi_fred_pipe_producer_state = fred_state_next;
 
         auto [next_work_tile_info, increment_pipe] =
             scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);

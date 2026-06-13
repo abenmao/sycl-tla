@@ -111,6 +111,36 @@ public:
     );
   }
 
+  CUTLASS_DEVICE
+  static bool
+  requires_fixup(Params const& params, WorkTileInfo const work_tile_info) {
+    return false;
+  }
+
+  CUTLASS_HOST_DEVICE
+  static bool
+  compute_epilogue(WorkTileInfo const& work_tile_info, Params const& params) {
+    return true;
+  }
+
+  CUTLASS_HOST_DEVICE
+  static bool
+  compute_epilogue(WorkTileInfo const& work_tile_info) {
+    return true;
+  }
+
+  CUTLASS_HOST_DEVICE
+  static int*
+  get_sk_tile_counter_ptr(Params const&) {
+    return nullptr;
+  }
+
+  CUTLASS_HOST_DEVICE
+  static uint64_t
+  get_tile_idx(Params const&, WorkTileInfo const&) {
+    return 0;
+  }
+
 };
 
 }

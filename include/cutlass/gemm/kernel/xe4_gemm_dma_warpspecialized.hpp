@@ -7,6 +7,8 @@
 #include "cute/arch/cluster_xe4.hpp"
 #include "cutlass/gemm/collective/collective_mma.hpp"
 #include "cutlass/epilogue/collective/collective_epilogue.hpp"
+#include "cutlass/gemm/kernel/tile_scheduler.hpp"
+#include "cutlass/block_striped.h"
 
 namespace cutlass::gemm::kernel {
 
@@ -25,7 +27,7 @@ class GemmUniversal<
   CollectiveEpilogue_,
   TileScheduler_,
   cute::enable_if_t<
-    cutlass::detail::is_kernel_tag_of_v<typename CollectiveMainloop_::DispatchPolicy::Schedule, KernelTmaWarpSpecializedXe4>>> 
+    cutlass::detail::is_kernel_tag_of_v<typename CollectiveMainloop_::DispatchPolicy::Schedule, KernelTmaWarpSpecializedXe4>>>
 {
 public:
   //
@@ -76,6 +78,9 @@ public:
   using TileSchedulerParams = typename TileScheduler::Params;
 
   static constexpr bool IsSchedDynamicPersistent = TileScheduler::IsDynamicPersistent;
+  static constexpr bool IsStreamK = cute::is_same_v<TileSchedulerTag, cutlass::gemm::StreamKScheduler>;
+  static_assert(!IsStreamK || CollectiveEpilogue::HasSkReduce,
+    "StreamKScheduler requires an SK-reduce-capable epilogue. Use Xe4AdmaSkReduceBuilderImpl (HasSkReduce=true).");
 
   // Warp specialization thread count per threadblock
   static constexpr uint32_t NumSchedThreads        = NumThreadsPerWarp; // 1 warp
@@ -85,7 +90,7 @@ public:
   static constexpr uint32_t NumEpilogueThreads     = CollectiveEpilogue::ThreadCount;
 
   // 4 EUs per Xecore, and 5 threads per EU, warps are assigned to EUs in round robin fashion.
-  // There are 4 control warps (Scheduler, Mainloop Load, MMA, Epilogue Load), 
+  // There are 4 control warps (Scheduler, Mainloop Load, MMA, Epilogue Load),
   // and the rest of the warps are Epilogue warps.
   constexpr static int NumControlWarps = 4;
   constexpr static int NumEpilogueWarps = 16;
@@ -101,6 +106,12 @@ public:
 
   using EpiLoadPipeline = typename CollectiveEpilogue::LoadPipeline;
   using EpiLoadPipelineState = typename CollectiveEpilogue::LoadPipelineState;
+
+  using EpiG2SPipeline = typename CollectiveEpilogue::G2SPipeline;
+  using EpiG2SPipelineState = typename CollectiveEpilogue::G2SPipelineState;
+
+  using EpiFredPipeline = typename CollectiveEpilogue::FredPipeline;
+  using EpiFredPipelineState = typename CollectiveEpilogue::FredPipelineState;
 
   using AccumulatorPipeline = cutlass::PipelineTmaAsync<AccumulatorPipelineStageCount>;
   using AccumulatorPipelineState = typename AccumulatorPipeline::PipelineState;
@@ -129,6 +140,8 @@ public:
     struct PipelineStorage {
       using MainloopPipelineStorage = typename MainloopPipeline::SharedStorage;
       using EpiLoadPipelineStorage = typename EpiLoadPipeline::SharedStorage;
+      using EpiG2SPipelineStorage = typename EpiG2SPipeline::SharedStorage;
+      using EpiFredPipelineStorage = typename EpiFredPipeline::SharedStorage;
       using AccumulatorPipelineStorage = typename AccumulatorPipeline::SharedStorage;
       using EpiStorePipelineStorage = typename EpiStorePipeline::SharedStorage;
       using EpiWaveOrderBarrierStorage = typename EpiWaveOrderBarrier::SharedStorage;
@@ -136,6 +149,8 @@ public:
 
       MainloopPipelineStorage mainloop;
       EpiLoadPipelineStorage epi_load;
+      EpiG2SPipelineStorage epi_g2s;
+      EpiFredPipelineStorage epi_fred;
       AccumulatorPipelineStorage accumulator;
       EpiStorePipelineStorage epi_store;
       EpiWaveOrderBarrierStorage epi_wave_order;
@@ -291,7 +306,23 @@ public:
     epi_load_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::EpilogueLoad);
     EpiLoadPipeline epi_load_pipeline(shared_pipelines.epi_load, epi_load_pipeline_params, true_type{});
 
-    // Mainloop-Epilogue pipeline
+    // Final-SK G2S sync pipeline (1 stage): produced by EpiLoad, consumed by EpiStore.
+    typename EpiG2SPipeline::Params epi_g2s_pipeline_params;
+    if (WarpCategory::EpilogueLoad == warp_category) {
+      epi_g2s_pipeline_params.role = EpiG2SPipeline::ThreadCategory::Producer;
+    }
+    if (WarpCategory::Epilogue == warp_category) {
+      epi_g2s_pipeline_params.role = EpiG2SPipeline::ThreadCategory::Consumer;
+    }
+    epi_g2s_pipeline_params.transaction_bytes = CollectiveEpilogue::TransactionBytesImm;
+    epi_g2s_pipeline_params.producer_arv_count = NumThreadsPerWarp;
+    epi_g2s_pipeline_params.consumer_arv_count = NumEpilogueThreads;
+    epi_g2s_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::EpilogueLoad);
+    EpiG2SPipeline epi_g2s_pipeline(shared_pipelines.epi_g2s, epi_g2s_pipeline_params, true_type{});
+
+    // Mainloop-Epilogue pipeline.
+    // EpiStore consumes the accumulator pipeline for both DP and SK-capable
+    // kernels. SK-specific ordering is carried by the epi_store pipeline.
     typename AccumulatorPipeline::Params accumulator_pipeline_params;
     if (WarpCategory::MMA == warp_category) {
       accumulator_pipeline_params.role = AccumulatorPipeline::ThreadCategory::Producer;
@@ -311,6 +342,14 @@ public:
     epi_store_pipeline_params.num_producers = NumEpilogueThreads;
     epi_store_pipeline_params.num_consumers = 1;
     EpiStorePipeline epi_store_pipeline(shared_pipelines.epi_store, epi_store_pipeline_params, cluster_shape, true_type{}, false_type{});
+
+    // SK fred pipeline (1 stage):
+    // (EpiStore warps signal smem_Imm ready, EpiLoad performs the smem_Imm -> gmem D reduce).
+    typename EpiFredPipeline::Params epi_fred_pipeline_params;
+    epi_fred_pipeline_params.initializing_warp = static_cast<int>(WarpCategory::Epilogue);
+    epi_fred_pipeline_params.num_producers = NumEpilogueThreads;
+    epi_fred_pipeline_params.num_consumers = 1;
+    EpiFredPipeline epi_fred_pipeline(shared_pipelines.epi_fred, epi_fred_pipeline_params, cluster_shape, true_type{}, false_type{});
 
     // Epilogue wave order barrier
     typename EpiWaveOrderBarrier::Params epi_wave_order_barrier_params;
@@ -338,17 +377,20 @@ public:
     auto epi_load_pipe_producer_state = cutlass::make_producer_start_state<EpiLoadPipeline>();
     auto epi_load_pipe_consumer_state = EpiLoadPipelineState{};
 
+    auto epi_g2s_pipe_producer_state = cutlass::make_producer_start_state<EpiG2SPipeline>();
+    auto epi_g2s_pipe_consumer_state = EpiG2SPipelineState{};
+
     auto accumulator_pipe_producer_state = cutlass::make_producer_start_state<AccumulatorPipeline>();
     auto accumulator_pipe_consumer_state = AccumulatorPipelineState{};
 
     auto epi_store_pipe_producer_state = cutlass::make_producer_start_state<EpiStorePipeline>();
     auto epi_store_pipe_consumer_state = EpiStorePipelineState{};
 
+    auto epi_fred_pipe_producer_state = cutlass::make_producer_start_state<EpiFredPipeline>();
+    auto epi_fred_pipe_consumer_state = EpiFredPipelineState{};
+
     auto clc_pipe_producer_state = cutlass::make_producer_start_state<CLCPipeline>();
     auto clc_pipe_consumer_state = CLCPipelineState{};
-
-    auto wg_k = get<2>(TileShape{});
-    uint32_t k_tile_count = (K + wg_k -1) / wg_k;
 
     auto cluster_wait_fn = [&] () {
       // We need this to guarantee that the Pipeline init is visible
@@ -438,82 +480,178 @@ public:
 
       do {
         auto cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);
+        auto work_k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, CtaShape_MNK{});
+
+        // MMA owns the store pipeline's producer_acquire (the empty-barrier wait that gates
+        // smem_D reuse); the EpiStore warps do the producer_commit. The store pipeline now carries
+        // ONLY the smem_D handoff (the D-store), so it is touched exactly by tiles that write D
+        // output -- final SK splits and DP tiles, i.e. compute_epilogue == true. Non-final SK
+        // splits perform no epilogue / no smem_D and their fred rides the dedicated fred pipeline,
+        // so MMA must NOT acquire or advance the store state for them. Acquiring once per
+        // compute_epilogue tile matches the EpiStore warps' one producer_commit per such tile, so
+        // the two store-pipeline producers stay phase-locked with a single, semantically meaningful
+        // predicate (no per-tile commit-count mirroring).
+        bool mma_writes_d_output = true;
+        if constexpr (IsStreamK && CollectiveEpilogue::HasSkReduce) {
+          mma_writes_d_output = TileScheduler::compute_epilogue(work_tile_info, params.scheduler);
+        }
 
         mainloop_pipe_consumer_state = collective_mainloop.mma(
           cute::make_tuple(mainloop_pipeline, epi_store_pipeline, accumulator_pipeline),
           cute::make_tuple(mainloop_pipe_consumer_state, epi_store_pipe_producer_state, accumulator_pipe_producer_state),
-          intermedia_tensor, mma_inputs, k_tile_count);
+          intermedia_tensor, mma_inputs, work_k_tile_count, mma_writes_d_output);
 
         auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
         if (increment_pipe) {
           ++clc_pipe_consumer_state;
         }
 
-        ++epi_store_pipe_producer_state;
+        if (mma_writes_d_output) {
+          ++epi_store_pipe_producer_state;  // one D-store commit per compute_epilogue tile
+        }
         ++accumulator_pipe_producer_state;
         work_tile_info = next_work_tile_info;
       } while (work_tile_info.is_valid());
     } else if (is_participant.epi_load) {
-      int current_wave = 0;
       bool reverse_epi_n = false;
       static constexpr bool IsOverlappingAccum = false;
-      auto prev_epi_store_consumer_state = epi_store_pipe_consumer_state;
+      bool did_epilogue_load = false;
+      auto tail_epi_store_consumer_state = epi_store_pipe_consumer_state;
+
+      auto pipelines_epi_load = cute::make_tuple(epi_load_pipeline, epi_store_pipeline, accumulator_pipeline, epi_g2s_pipeline, epi_fred_pipeline);
 
       do {
         auto cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);
+        auto pipe_states_epi_load = cute::make_tuple(epi_load_pipe_producer_state, epi_store_pipe_consumer_state,
+                                                     accumulator_pipe_consumer_state, epi_g2s_pipe_producer_state,
+                                                     epi_fred_pipe_consumer_state);
 
-        auto [load_state_next, store_cons_state_next] = collective_epilogue.template load<IsOverlappingAccum>(
-          cute::make_tuple(epi_load_pipeline, epi_store_pipeline),
-          cute::make_tuple(epi_load_pipe_producer_state, epi_store_pipe_consumer_state),
-          problem_shape_MNKL,
-          CtaShape_MNK{},
-          cta_coord_mnkl,
-          TileShape{},
-          TiledMma{},
-          shared_tensors.epilogue,
-          reverse_epi_n
-        );
-        prev_epi_store_consumer_state = epi_store_pipe_consumer_state;
-        epi_load_pipe_producer_state = load_state_next;
-        epi_store_pipe_consumer_state = store_cons_state_next;
+        // SK path: wrapped in if constexpr so WorkTileInfo::k_tile_count / K_idx
+        // (SK-only fields) are never accessed for DP scheduler types.
+        if constexpr (IsStreamK) {
+          const bool is_sk_split = TileScheduler::requires_fixup(params.scheduler, work_tile_info);
+          if (is_sk_split) {
+            const bool is_sk_final = TileScheduler::compute_epilogue(work_tile_info, params.scheduler);
+            int* sk_tile_counter = TileScheduler::get_sk_tile_counter_ptr(params.scheduler);
+            uint64_t sk_tile_idx = TileScheduler::get_tile_idx(params.scheduler, work_tile_info);
+
+            // The fred now rides the dedicated fred pipeline, so the final split consumes exactly
+            // one store stage (the D-store). tail_epi_store_consumer_state is the current store
+            // consumer state -- no +1 pre-capture is needed any more.
+            auto final_store_consumer_state = epi_store_pipe_consumer_state;
+
+            auto do_sk_load = [&](auto nonfinal_tag, auto final_tag) {
+              return collective_epilogue.template load<IsOverlappingAccum,
+                                                       nonfinal_tag,
+                                                       final_tag>(
+                pipelines_epi_load, pipe_states_epi_load,
+                problem_shape_MNKL, CtaShape_MNK{}, cta_coord_mnkl,
+                TileShape{}, TiledMma{}, shared_tensors.epilogue, reverse_epi_n,
+                sk_tile_counter, sk_tile_idx, work_tile_info
+              );
+            };
+            // Tags are (nonfinal, final) here -- see load()'s combination table. Final splits
+            // produce output (false, true); non-final splits only fred + counter (true, false).
+            auto [load_state_next, store_cons_state_next, acc_state_next, g2s_state_next, fred_state_next] =
+              is_sk_final ? do_sk_load(false_type{}, true_type{})
+                          : do_sk_load(true_type{}, false_type{});
+            epi_load_pipe_producer_state    = load_state_next;
+            epi_store_pipe_consumer_state   = store_cons_state_next;
+            accumulator_pipe_consumer_state = acc_state_next;
+            epi_g2s_pipe_producer_state     = g2s_state_next;
+            epi_fred_pipe_consumer_state    = fred_state_next;
+            if (is_sk_final) {
+              tail_epi_store_consumer_state = final_store_consumer_state;
+              did_epilogue_load = true;
+            }
+          } else {
+            // Plain DP case: accumulator pipeline state not used.
+            auto [load_state_next, store_cons_state_next, acc_state_next, g2s_state_next, fred_state_next] =
+              collective_epilogue.template load<IsOverlappingAccum>(
+                pipelines_epi_load, pipe_states_epi_load,
+                problem_shape_MNKL, CtaShape_MNK{}, cta_coord_mnkl,
+                TileShape{}, TiledMma{}, shared_tensors.epilogue, reverse_epi_n
+              );
+            tail_epi_store_consumer_state   = epi_store_pipe_consumer_state;
+            epi_load_pipe_producer_state    = load_state_next;
+            epi_store_pipe_consumer_state   = store_cons_state_next;
+            (void)acc_state_next;
+            epi_g2s_pipe_producer_state     = g2s_state_next;
+            epi_fred_pipe_consumer_state    = fred_state_next;
+            did_epilogue_load = true;
+          }
+        } else {
+          // Plain DP case: accumulator pipeline state not used.
+          auto [load_state_next, store_cons_state_next, acc_state_next, g2s_state_next, fred_state_next] =
+            collective_epilogue.template load<IsOverlappingAccum>(
+              pipelines_epi_load, pipe_states_epi_load,
+              problem_shape_MNKL, CtaShape_MNK{}, cta_coord_mnkl,
+              TileShape{}, TiledMma{}, shared_tensors.epilogue, reverse_epi_n
+            );
+          tail_epi_store_consumer_state   = epi_store_pipe_consumer_state;
+          epi_load_pipe_producer_state    = load_state_next;
+          epi_store_pipe_consumer_state   = store_cons_state_next;
+          (void)acc_state_next;
+          epi_g2s_pipe_producer_state     = g2s_state_next;
+          epi_fred_pipe_consumer_state    = fred_state_next;
+          did_epilogue_load = true;
+        }
 
         auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
         if (increment_pipe) {
           ++clc_pipe_consumer_state;
         }
-
         work_tile_info = next_work_tile_info;
-        current_wave++;
       } while (work_tile_info.is_valid());
 
-      epi_store_pipeline.producer_try_acquire(prev_epi_store_consumer_state);
+      if (did_epilogue_load) {
+        epi_store_pipeline.producer_try_acquire(tail_epi_store_consumer_state);
+      }
     } else if (is_participant.epilogue)  {
+      auto pipelines_epi = cute::make_tuple(epi_load_pipeline, epi_store_pipeline, accumulator_pipeline, epi_g2s_pipeline, epi_fred_pipeline);
+
       do {
         auto cta_coord_mnkl = scheduler.work_tile_to_cta_coord(work_tile_info);
 
-        //
-        // Epilogue and write to gD
-        //
-        auto [load_state_next, store_prod_state_next, acc_state_next] = collective_epilogue.store(
-          cute::make_tuple(epi_load_pipeline, epi_store_pipeline, accumulator_pipeline),
-          cute::make_tuple(epi_load_pipe_consumer_state, epi_store_pipe_producer_state, accumulator_pipe_consumer_state),
-          problem_shape_MNKL,
-          CtaShape_MNK{},
-          cta_coord_mnkl,
-          TileShape{},
-          TiledMma{},
-          intermedia_tensor,
-          shared_tensors.epilogue
-        );
-        epi_load_pipe_consumer_state = load_state_next;
-        epi_store_pipe_producer_state = store_prod_state_next;
+        const bool is_sk_split_epi = IsStreamK
+            && TileScheduler::requires_fixup(params.scheduler, work_tile_info);
+        const bool is_sk_final_epi = is_sk_split_epi
+            && TileScheduler::compute_epilogue(work_tile_info, params.scheduler);
+
+        // Symmetric with the EpiLoad branch's do_sk_load dispatch: store() owns all three
+        // cases internally via (IsSkFinal, IsSkNonFinal) tags. The non-final SK split signals the
+        // fred pipeline (smem_Imm ready) without emitting epilogue output or touching the store
+        // pipeline; final SK and DP commit the store pipeline (D-store) exactly once.
+        const bool is_sk_nonfinal_epi = is_sk_split_epi && !is_sk_final_epi;
+        auto pipe_states_epi = cute::make_tuple(epi_load_pipe_consumer_state, epi_store_pipe_producer_state,
+                                                accumulator_pipe_consumer_state, epi_g2s_pipe_consumer_state,
+                                                epi_fred_pipe_producer_state);
+        auto do_store = [&](auto is_sk_final_tag, auto is_sk_nonfinal_tag) {
+          return collective_epilogue.template store<is_sk_final_tag,
+                                                    is_sk_nonfinal_tag>(
+            pipelines_epi, pipe_states_epi,
+            problem_shape_MNKL, CtaShape_MNK{}, cta_coord_mnkl,
+            TileShape{}, TiledMma{},
+            intermedia_tensor, shared_tensors.epilogue,
+            decltype(is_sk_final_tag)::value
+          );
+        };
+        auto [load_state_next, store_prod_state_next, acc_state_next, g2s_state_next, fred_state_next] =
+          is_sk_nonfinal_epi ? do_store(false_type{}, true_type{})
+          : is_sk_final_epi  ? do_store(true_type{},  false_type{})
+                             : do_store(false_type{}, false_type{});
+        epi_load_pipe_consumer_state    = load_state_next;
+        epi_store_pipe_producer_state   = store_prod_state_next;
         accumulator_pipe_consumer_state = acc_state_next;
+        epi_g2s_pipe_consumer_state     = g2s_state_next;
+        epi_fred_pipe_producer_state    = fred_state_next;
 
         auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, clc_pipeline, clc_pipe_consumer_state);
         if (increment_pipe) {
           ++clc_pipe_consumer_state;
         }
         work_tile_info = next_work_tile_info;
+        
       } while (work_tile_info.is_valid());
     }
   }
