@@ -319,6 +319,111 @@ public:
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Xe4AdmaSkReduceBuilderImpl — same as Xe4AdmaBuilderImpl but with CopyOpS2GReduce wired in.
+/// Used for StreamK GEMMs: non-final splits fire async_tensor_fred (smem_Imm -> gmem D
+/// reduction workspace); final split polls the per-tile counter, does G2S load-back, then
+/// runs the full epilogue normally. Rop and BType are forwarded to XE4_ADMA_STORE_REDUCE.
+////////////////////////////////////////////////////////////////////////////////////////////////////
+template <
+  class OpClass,
+  class MmaTileShape_MNK,
+  class ClusterShape_MNK,
+  class EpilogueTileType,
+  class ElementAccumulator,
+  class ElementCompute,
+  class ElementC_,
+  class GmemLayoutTagC_,
+  int AlignmentC,
+  class ElementD,
+  class GmemLayoutTagD,
+  int AlignmentD,
+  class Schedule,
+  class FusionOpOrCallbacks,
+  cute::RedOp Rop   = cute::RedOp::Add,
+  cute::BarrierType BType = cute::BarrierType::Abarrier
+>
+struct Xe4AdmaSkReduceBuilderImpl {
+private:
+  static constexpr int StagesC = 2;
+  static constexpr int StagesD = 1;
+  static constexpr bool ReuseSmemC = false;
+  static constexpr bool DelayTmaStore = false;
+  static constexpr int NumControlWarps = 4;
+  static constexpr int NumEpilogueWarps = 16;
+  static constexpr int EpilogueWarpTileN = 32;
+  static constexpr int FragmentSize = 32 / sizeof(ElementD);
+
+  static constexpr bool DisableSource = cute::is_void_v<ElementC_>;
+  using ElementC = cute::conditional_t<DisableSource, ElementD, ElementC_>;
+  using GmemLayoutTagC = cute::conditional_t<DisableSource, GmemLayoutTagD, GmemLayoutTagC_>;
+  using GmemStrideTypeC = cutlass::detail::TagToStrideC_t<GmemLayoutTagC>;
+  using GmemStrideTypeD = cutlass::detail::TagToStrideC_t<GmemLayoutTagD>;
+
+  constexpr static bool is_fp_postop = is_floating_t<ElementD>::value && (sizeof_bits_v<ElementD> < 16);
+  constexpr static bool is_int8_postop = is_integral<ElementD>::value && (sizeof_bits_v<ElementD> == 8);
+  using ElementImm = cute::conditional_t<is_fp_postop, bf16, cute::conditional_t<is_int8_postop, int32_t, ElementD>>;
+
+  using CtaTileShape_MNK = MmaTileShape_MNK;
+  using TileShape_MN = decltype(select<0,1>(MmaTileShape_MNK{}));
+
+  static constexpr auto
+  epilogue_tile() {
+    using namespace cute;
+    if constexpr (not is_same_v<EpilogueTileType, EpilogueTileAuto>) {
+      static_assert(is_tuple_v<EpilogueTileType>, "Shape or Tile");
+      return EpilogueTileType{};
+    }
+    else {
+      constexpr int WarpSizeM = cutlass::NumThreadsPerWarp;
+      constexpr int ElementsPerWarpN = 32;
+      constexpr int TileShapeM = size<0>(CtaTileShape_MNK{});
+      constexpr int TileShapeN = size<1>(CtaTileShape_MNK{});
+      static_assert(TileShapeM % WarpSizeM == 0);
+      static_assert(TileShapeN % ElementsPerWarpN == 0);
+      constexpr int WarpsAlongM = TileShapeM / WarpSizeM;
+      constexpr int WarpsAlongN = TileShapeN / ElementsPerWarpN;
+      constexpr int NumWarpsAlongN = min(WarpsAlongN, NumEpilogueWarps);
+      constexpr int NumWarpsAlongM = min(WarpsAlongM, NumEpilogueWarps / NumWarpsAlongN);
+      return make_tile(Int<NumWarpsAlongM * WarpSizeM>{}, Int<NumWarpsAlongN * ElementsPerWarpN>{});
+    }
+  }
+  using EpilogueTile = decltype(epilogue_tile());
+
+  using FusionCallbacks = fusion::FusionCallbacks<
+    Xe4TmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore>,
+    FusionOpOrCallbacks, CtaTileShape_MNK, EpilogueTile
+  >;
+
+  using SmemLayoutAtomC = decltype(make_ordered_layout(EpilogueTile{}, Step<_1, _0>{}));
+  using SmemLayoutAtomD = decltype(make_ordered_layout(TileShape_MN{}, Step<_1, _0>{}));
+  using CopyOpS2G        = XE4_ADMA_STORE;
+  using CopyOpG2S        = XE4_ADMA_LOAD;
+  using CopyOpS2GReduce  = cute::XE4_ADMA_STORE_REDUCE<ElementImm, Rop, BType>;
+
+public:
+  using CollectiveOp =
+    cutlass::epilogue::collective::CollectiveEpilogue<
+      Xe4AdmaWarpSpecialized<StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore, NumControlWarps, NumEpilogueWarps>,
+      CtaTileShape_MNK,
+      EpilogueTile,
+      ElementC_,
+      GmemStrideTypeC,
+      ElementD,
+      GmemStrideTypeD,
+      FusionCallbacks,
+      CopyOpG2S,
+      SmemLayoutAtomC,
+      decltype(xe4_get_smem_load_op<EpilogueWarpTileN, ElementD>()),
+      decltype(xe4_get_smem_load_op<EpilogueWarpTileN, ElementImm>()),
+      CopyOpS2G,
+      SmemLayoutAtomD,
+      decltype(xe4_get_smem_store_op<EpilogueWarpTileN, ElementD>()),
+      void,
+      CopyOpS2GReduce
+    >;
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 /// LDSM ADMA builder impl (Module 3)
 /// Same as Xe4AdmaBuilderImpl but uses descriptor-based XE4_LOAD_MATRIX / XE4_STORE_MATRIX
 /// for S2R and R2S operations instead of legacy XE4_LDSM / XE4_STSM.

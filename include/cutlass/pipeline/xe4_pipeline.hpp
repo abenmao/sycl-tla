@@ -476,7 +476,7 @@ public:
   }
 
   CUTLASS_DEVICE
-  void producer_commit(PipelineState state, uint32_t bytes) {
+  void producer_commit(PipelineState state, uint32_t bytes = 1) {
     producer_commit(state.index(), bytes);
   }
 

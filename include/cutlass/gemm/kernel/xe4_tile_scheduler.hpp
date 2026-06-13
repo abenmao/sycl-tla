@@ -447,31 +447,46 @@ public:
   CUTLASS_HOST_DEVICE
   static int
   get_work_k_tile_count(WorkTileInfo const& work_tile_info, ProblemShape problem_shape, TileShape tile_shape) {
-    return UnderlyingTileScheduler::get_work_k_tile_count(work_tile_info, problem_shape, tile_shape);
+    // All work units returned by this scheduler cover the entire K iteration
+    // space of the output tile assigned to the work unit.
+    return cute::size(cute::ceil_div(cute::get<2>(problem_shape), cute::get<2>(tile_shape)));
   }
 
   CUTLASS_HOST_DEVICE
   static uint32_t
   get_work_k_tile_start(WorkTileInfo const& work_tile_info) {
-    return UnderlyingTileScheduler::get_work_k_tile_start(work_tile_info);
+    // All work units returned by this scheduler start from K tile 0
+    return 0u;
   }
 
   CUTLASS_HOST_DEVICE
   static bool
   compute_epilogue(WorkTileInfo const& work_tile_info, Params const& params) {
-    return UnderlyingTileScheduler::compute_epilogue(work_tile_info, params.underlying_params_);
+    return true;
   }
 
   CUTLASS_HOST_DEVICE
   static bool
   compute_epilogue(WorkTileInfo const& work_tile_info) {
-    return UnderlyingTileScheduler::compute_epilogue(work_tile_info);
+    return true;
   }
 
   CUTLASS_HOST_DEVICE
   static bool
   requires_fixup(Params const& params, WorkTileInfo const work_tile_info) {
-    return UnderlyingTileScheduler::requires_fixup(params.underlying_params_, work_tile_info);
+    return false;
+  }
+
+  CUTLASS_HOST_DEVICE
+  static int*
+  get_sk_tile_counter_ptr(Params const&) {
+    return nullptr;
+  }
+
+  CUTLASS_HOST_DEVICE
+  static uint64_t
+  get_tile_idx(Params const&, WorkTileInfo const&) {
+    return 0;
   }
 
   template <class FrgTensorC>
@@ -490,13 +505,13 @@ public:
   CUTLASS_DEVICE
   static bool
   valid_warpgroup_in_work_tile(WorkTileInfo const& work_tile_info) {
-    return UnderlyingTileScheduler::valid_warpgroup_in_work_tile(work_tile_info);
+    return true;
   }
 
   CUTLASS_DEVICE
   static bool
   requires_separate_reduction(Params const& params) {
-    return UnderlyingTileScheduler::requires_separate_reduction(params.underlying_params_);
+    return false;
   }
 
 private:

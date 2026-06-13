@@ -102,6 +102,10 @@ jobs:
           ninja xe4_gemm
           ./examples/xe4/gemm/xe4_gemm
           echo "--------------------------------------"
+          echo "Running Xe4 GEMM STREAMK Workload"
+          ninja xe4_gemm_streamk
+          ./examples/xe4/gemm/xe4_gemm_streamk
+          echo "--------------------------------------"
           echo "Running Xe4 GEMM Block-Scaled FP4/FP8 Workload"
           ninja xe4_gemm_blockscaled
           ./examples/xe4/gemm/xe4_gemm_blockscaled

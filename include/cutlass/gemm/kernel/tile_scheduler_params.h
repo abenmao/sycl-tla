@@ -2045,6 +2045,181 @@ struct PersistentTileSchedulerXe4Params {
 };
 
 ////////////////////////////////////////////////////////////////////////////////
+// Parameters for XE4 stream-K tile scheduler
+// Wraps SM90 StreamK params (K-decomposition, workspace, fixup barriers) and
+// XE4 params (grid shape, swizzle, CLC iteration) following the SM100 pattern.
+struct PersistentTileSchedulerXe4StreamKParams {
+  using UnderlyingStreamKParams = PersistentTileSchedulerSm90StreamKParams;
+  using UnderlyingXe4Params = PersistentTileSchedulerXe4Params;
+  using RasterOrderOptions = UnderlyingXe4Params::RasterOrderOptions;
+  using ReductionMode = UnderlyingStreamKParams::ReductionMode;
+  using DecompositionMode = UnderlyingStreamKParams::DecompositionMode;
+
+  using RasterOrder = UnderlyingXe4Params::RasterOrder;
+  RasterOrder raster_order_ = RasterOrder::AlongM;
+  int32_t log_swizzle_size_ = 0;
+
+  UnderlyingStreamKParams sk_params_{};
+  UnderlyingXe4Params xe4_params_{};
+
+  void
+  initialize(
+    dim3 problem_blocks,
+    uint32_t k_tile_per_output_tile,
+    GemmCoord cluster_shape,
+    KernelHardwareInfo const& hw_info,
+    int splits,
+    int max_swizzle_size,
+    RasterOrderOptions raster_order_option,
+    ReductionMode reduction_mode,
+    DecompositionMode decomposition_mode,
+    void* workspace,
+    uint32_t ktile_start_alignment_count = 1u
+  ) {
+    // Initialize sk_params with the heuristic-selected raster order
+    // This allows SplitK/StreamK decomposition to work with the chosen order
+    sk_params_.initialize(
+      problem_blocks,
+      k_tile_per_output_tile,
+      cluster_shape,
+      hw_info,
+      splits,
+      max_swizzle_size,
+      raster_order_option,
+      reduction_mode,
+      decomposition_mode,
+      workspace,
+      /*epilogue_subtile=*/1,
+      ktile_start_alignment_count,
+      /*bypass_sm90_occupancy_calculation=*/true
+    );
+
+    log_swizzle_size_ = sk_params_.log_swizzle_size_;
+    raster_order_ = sk_params_.raster_order_;
+
+    xe4_params_.initialize(
+      problem_blocks,
+      cluster_shape,
+      hw_info,
+      0, // Override max_swizzle_size; XE4 stream-K handles swizzling via sk_params_
+      raster_order_option // Use heuristic-selected raster order
+    );
+  }
+
+  CUTLASS_HOST_DEVICE
+  dim3
+  get_grid_shape(dim3 problem_blocks, GemmCoord cluster_shape) const {
+    if (sk_params_.sk_units_ > 0) {
+      // Stream-K: launch waves of sk_units_ CTAs, distributed across X and Y dimensions
+      // respecting cluster alignment, with wave count in Z.
+      uint32_t waves = static_cast<uint32_t>(
+        (sk_params_.units_per_problem_ + sk_params_.sk_units_ - 1) / sk_params_.sk_units_);
+
+      return dim3(
+        sk_params_.sk_units_ / cluster_shape.n(),
+        cluster_shape.n(),
+        waves
+      );
+    }
+    else {
+      // Data-parallel or basic split-K decomposition.
+      // When data-parallel mode is used, sk_params_.splits = 1.
+      return dim3(problem_blocks.x, problem_blocks.y, problem_blocks.z * sk_params_.divmod_splits_.divisor);
+    }
+  }
+
+  // XE4 StreamK reduces directly into gmem D via fred; no accumulator scratch is needed.
+  // Workspace holds only one int32 atomic counter per output tile.
+  // We pass element_accumulator_bits=0 to suppress the reduction scratch allocation;
+  // the upstream barrier workspace (int32 * num_sk_tiles) is the counter array.
+  static size_t
+  get_workspace_size(
+    dim3 problem_blocks,
+    uint32_t k_tiles_per_output_tile,
+    GemmCoord tile_shape,
+    GemmCoord cluster_shape,
+    KernelHardwareInfo const& hw_info,
+    int splits,
+    int max_swizzle,
+    RasterOrderOptions raster_order_option,
+    DecompositionMode decomposition_mode,
+    ReductionMode reduction_mode,
+    uint32_t reduction_warp_groups,
+    uint32_t barrier_bits,
+    [[maybe_unused]] uint32_t element_accumulator_bits,
+    uint32_t epilogue_subtile = 1,
+    uint32_t num_accumulator_mtxs = 1,
+    uint32_t ktile_start_alignment_count = 1
+  ) {
+    return UnderlyingStreamKParams::get_workspace_size(
+      problem_blocks,
+      k_tiles_per_output_tile,
+      tile_shape,
+      cluster_shape,
+      hw_info,
+      splits,
+      max_swizzle,
+      raster_order_option,
+      decomposition_mode,
+      reduction_mode,
+      reduction_warp_groups,
+      barrier_bits,
+      /*element_accumulator_bits=*/0,
+      epilogue_subtile,
+      num_accumulator_mtxs,
+      ktile_start_alignment_count,
+      /*bypass_sm90_occupancy_calculation=*/true
+    );
+  }
+
+  static cutlass::Status
+  initialize_workspace(
+    void* workspace,
+    cudaStream_t stream,
+    dim3 problem_blocks,
+    uint32_t k_tiles_per_output_tile,
+    GemmCoord tile_shape,
+    GemmCoord cluster_shape,
+    KernelHardwareInfo const& hw_info,
+    int splits,
+    int max_swizzle,
+    RasterOrderOptions raster_order_option,
+    DecompositionMode decomposition_mode,
+    ReductionMode reduction_mode,
+    uint32_t reduction_warp_groups,
+    uint32_t barrier_bits,
+    [[maybe_unused]] uint32_t element_accumulator_bits,
+    uint32_t epilogue_subtile = 1,
+    uint32_t num_accumulator_mtxs = 1,
+    CudaHostAdapter *cuda_adapter = nullptr,
+    uint32_t ktile_start_alignment_count = 1
+  ) {
+    return UnderlyingStreamKParams::initialize_workspace(
+      workspace,
+      stream,
+      problem_blocks,
+      k_tiles_per_output_tile,
+      tile_shape,
+      cluster_shape,
+      hw_info,
+      splits,
+      max_swizzle,
+      raster_order_option,
+      decomposition_mode,
+      reduction_mode,
+      reduction_warp_groups,
+      barrier_bits,
+      /*element_accumulator_bits=*/0,
+      epilogue_subtile,
+      num_accumulator_mtxs,
+      cuda_adapter,
+      ktile_start_alignment_count,
+      /*bypass_sm90_occupancy_calculation=*/true
+    );
+  }
+};
+
+////////////////////////////////////////////////////////////////////////////////
 
 
 //
