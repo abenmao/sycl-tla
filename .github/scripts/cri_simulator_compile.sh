@@ -70,38 +70,49 @@ if [[ "$MODE" == "test" ]] && ! command -v lsof &>/dev/null; then
     echo "ERROR: 'lsof' is required for test mode but not found. Install it or check PATH."
     exit 1
 fi
-# Auto-calculate safe parallelism (build mode only): each icpx -O3
-# process uses ~4 GB.  Use (available_memory / 5GB) to leave headroom,
-# capped between 4 and 32, and no more than half the CPU count.
+# Auto-calculate two-tier, memory-bound parallelism (build mode only).
+# Both tiers are limited by available memory; the logical CPU count is only an upper
+# cap (rarely binding). Heavy FA/FMHA TUs are the memory bottleneck, so they get the
+# smaller budget and are throttled via a Ninja job pool (CUTLASS_HEAVY_BUILD_JOBS),
+# while cheap TUs fill the larger global -j.
+#   heavy (FA/FMHA) : MEM_GB / 10   (validated safe ceiling)
+#   global -j (all) : MEM_GB / 5    (heavy capped above prevents an all-heavy thrash)
 if [[ "$MODE" == "build" ]] && [[ -z "${BUILD_JOBS:-}" ]]; then
     MEM_GB=$(awk '/MemAvailable/ {printf "%d", $2/1024/1024}' /proc/meminfo 2>/dev/null || echo 0)
     CPU_COUNT=$(nproc 2>/dev/null || echo 10)
-    HALF_CPUS=$(( (CPU_COUNT + 1) / 2 ))
     if [[ "$MEM_GB" -gt 0 ]]; then
-        MAX_BY_MEM=$((MEM_GB / 5))
-        [[ "$MAX_BY_MEM" -lt 4 ]] && MAX_BY_MEM=4
-        [[ "$MAX_BY_MEM" -gt 32 ]] && MAX_BY_MEM=32
-        BUILD_JOBS=$((HALF_CPUS < MAX_BY_MEM ? HALF_CPUS : MAX_BY_MEM))
+        BUILD_JOBS=$((MEM_GB / 5))
+        HEAVY_JOBS=$((MEM_GB / 10))
         [[ "$BUILD_JOBS" -lt 4 ]] && BUILD_JOBS=4
+        [[ "$HEAVY_JOBS" -lt 2 ]] && HEAVY_JOBS=2
+        # Logical CPU count is only an upper cap (usually not reached).
+        [[ "$BUILD_JOBS" -gt "$CPU_COUNT" ]] && BUILD_JOBS=$CPU_COUNT
+        [[ "$HEAVY_JOBS" -gt "$CPU_COUNT" ]] && HEAVY_JOBS=$CPU_COUNT
+        # Heavy pool must never exceed the global budget.
+        [[ "$HEAVY_JOBS" -gt "$BUILD_JOBS" ]] && HEAVY_JOBS=$BUILD_JOBS
     else
         BUILD_JOBS=10  # fallback if /proc/meminfo unavailable
+        HEAVY_JOBS=5
     fi
-    echo "Auto-detected build parallelism: -j${BUILD_JOBS} (CPUs: ${CPU_COUNT}, RAM: ${MEM_GB}GB, max by mem: ${MAX_BY_MEM:-N/A}, half CPUs: ${HALF_CPUS})"
+    echo "Auto-detected build parallelism: global -j${BUILD_JOBS}, heavy(FA) pool=${HEAVY_JOBS} (CPUs: ${CPU_COUNT}, RAM: ${MEM_GB}GB)"
 fi
-# Validate BUILD_JOBS (whether from env or auto-detection): must be a positive
-# integer, no more than half CPUs and capped at 32.
+# Validate BUILD_JOBS (whether from env or auto-detection): must be a positive integer,
+# capped only by the logical CPU count. Derive the heavy-pool depth if it is not already
+# set (e.g. when BUILD_JOBS was supplied via the environment): half the global budget.
 if [[ "$MODE" == "build" ]]; then
+    CPU_COUNT_VAL=$(nproc 2>/dev/null || echo 10)
     if ! [[ "${BUILD_JOBS:-1}" =~ ^[0-9]+$ ]] || [[ "${BUILD_JOBS:-1}" -le 0 ]]; then
         echo "WARNING: Invalid BUILD_JOBS='${BUILD_JOBS:-}'; clamping to 1."
         BUILD_JOBS=1
-    else
-        HALF_CPUS_VAL=$(( ($(nproc 2>/dev/null || echo 10) + 1) / 2 ))
-        MAX_SAFE=$(( HALF_CPUS_VAL < 32 ? HALF_CPUS_VAL : 32 ))
-        if [[ "${BUILD_JOBS}" -gt "$MAX_SAFE" ]]; then
-            echo "WARNING: BUILD_JOBS=${BUILD_JOBS} exceeds safe limit ${MAX_SAFE} (min of half-CPUs, 32); clamping."
-            BUILD_JOBS=$MAX_SAFE
-        fi
+    elif [[ "${BUILD_JOBS}" -gt "$CPU_COUNT_VAL" ]]; then
+        echo "WARNING: BUILD_JOBS=${BUILD_JOBS} exceeds logical CPU count ${CPU_COUNT_VAL}; clamping."
+        BUILD_JOBS=$CPU_COUNT_VAL
     fi
+    if ! [[ "${HEAVY_JOBS:-}" =~ ^[0-9]+$ ]] || [[ "${HEAVY_JOBS:-0}" -le 0 ]]; then
+        HEAVY_JOBS=$(( BUILD_JOBS / 2 ))
+        [[ "$HEAVY_JOBS" -lt 1 ]] && HEAVY_JOBS=1
+    fi
+    [[ "$HEAVY_JOBS" -gt "$BUILD_JOBS" ]] && HEAVY_JOBS=$BUILD_JOBS
 fi
 
 # --- cleanup (test mode only — build never starts a simulator) ---
@@ -223,6 +234,7 @@ if [[ "$MODE" == "build" ]]; then
         -DCUTLASS_ENABLE_BENCHMARKS=ON \
         -DCUTLASS_SYCL_RUNNING_CI=ON \
         -DCUTLASS_SYCL_PROFILING_ENABLED=ON \
+        -DCUTLASS_HEAVY_BUILD_JOBS="${HEAVY_JOBS:-0}" \
         -DCUTLASS_TEST_FOR_CRI=ON
 
     echo ""

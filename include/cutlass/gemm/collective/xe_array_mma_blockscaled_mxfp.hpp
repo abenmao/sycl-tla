@@ -76,7 +76,7 @@ struct CollectiveMma<
     SmemLayoutAtomB_,
     SmemCopyAtomB_,
     TransformB_> : 
-    public CollectiveMma<MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::Int<GroupSize>>,
+    public CollectiveMma<MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::Int<GroupSize>, KernelXe>,
                               TileShape_,
                               ElementPairA_,
                               StridePairA_,
@@ -97,7 +97,7 @@ public:
   // Type Aliases
   //
   using DispatchPolicy = MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, cute::Int<GroupSize>, Schedule>;
-  using Base = CollectiveMma<MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::Int<GroupSize>>,
+  using Base = CollectiveMma<MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::Int<GroupSize>, KernelXe>,
                     TileShape_,
                     ElementPairA_,
                     StridePairA_,
@@ -114,7 +114,6 @@ public:
                     TransformB_>;
 
     using BaseArguments = typename Base::Arguments;
-    using BaseParams = typename Base::Params;
 
     using ElementA = typename Base::ElementA;
     using ElementB = typename Base::ElementB;
@@ -163,12 +162,8 @@ public:
   static constexpr Params
   to_underlying_arguments(ProblemShape const &problem_shape,
                           Arguments const &args, void *workspace) {
+    (void)problem_shape;
     (void)workspace;
-
-    auto problem_shape_MNK = repeat_like(typename ProblemShape::UnderlyingProblemShape{}, int32_t(1));;
-    auto init_M = get<0>(problem_shape_MNK);
-    auto init_N = get<1>(problem_shape_MNK);
-    auto init_K = get<2>(problem_shape_MNK);
 
     return Params{
       args

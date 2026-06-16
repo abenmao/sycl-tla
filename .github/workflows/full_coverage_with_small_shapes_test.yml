@@ -67,7 +67,7 @@ jobs:
         id: remote-build
         if: steps.build-strategy.outputs.use_remote == 'true'
         continue-on-error: true
-        timeout-minutes: 30
+        timeout-minutes: 60
         shell: bash
         run: |
           BUILD_ID="${{ github.run_id }}-small-${{ runner.name }}-${{ github.run_attempt }}"
@@ -168,9 +168,10 @@ jobs:
               -v /shared/builds/${BUILD_ID}:/workspace/output \
               -v /home/${BUILD_SERVER_USER}/tools/bmg-ocloc:/workspace/tools/bmg-ocloc:ro \
               -v /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source/.github/docker/build.sh:/workspace/bin/build.sh:ro \
+              -e DISABLE_FLASH_ATTENTION=0 \
               -e SYCL_TARGET=${{ matrix.sycl_target }} \
               -e BUILD_TARGETS=all \
-              -e NINJA_JOBS=52 \
+              -e NINJA_JOBS=32 \
               -e REMOTE_BUILD_DIR=/tmp/cutlass-build-${BUILD_ID} \
               -e REMOTE_SOURCE_DIR=${{ github.workspace }} \
               -e CMAKE_EXTRA_FLAGS='-DCUTLASS_TEST_FOR_CRI=ON -DCUTLASS_ENABLE_BENCHMARKS=ON -DCUTLASS_SYCL_PROFILING_ENABLED=ON -DCUTLASS_SYCL_RUNNING_CI=ON' \
@@ -325,7 +326,7 @@ jobs:
         run: |
           cd ${BUILD_DIR}
           if [ "${{ matrix.gpu }}" = "BMG" ]; then
-            ctest -R cbenchmarks -E "flash_attention" --output-on-failure
+            ctest -R cbenchmarks --output-on-failure
           elif [ "${{ matrix.gpu }}" = "PVC" ]; then
             ctest -R cbenchmarks -E "fp8|config_file_bmg_prefill_bf16|prefill_legacy_xe_config_file_pvc" --output-on-failure
           else

@@ -277,7 +277,8 @@ struct MMA_Traits<XE4_TMM<d_type, a_type, b_type, c_type, N>>
   using CLayout = tmm::CLayout<c_type, M_atom, N>;
 };
 
-template <class d_type, class a_type, class b_type, class c_type, int N,
+template <bool NoAcc = false,
+          class d_type, class a_type, class b_type, class c_type, int N,
           class TD, class DLayout,
           class TA, class ALayout,
           class TB, class BLayout,
@@ -311,10 +312,16 @@ mma_unpack(MMA_Traits<XE4_TMM<d_type, a_type, b_type, c_type, N>> const&,
   CUTE_STATIC_ASSERT_V(size(rD) == Int<1>{});
   CUTE_STATIC_ASSERT_V(size(rC) == Int<1>{});
 
-  MMA_Op::fma(rD[0], rA[0], rB[0], rC[0]);
+  // NoAcc selects the 3-operand (D = A*B) form, skipping the +C accumulate.
+  if constexpr (NoAcc) {
+    MMA_Op::fma(rD[0], rA[0], rB[0]);
+  } else {
+    MMA_Op::fma(rD[0], rA[0], rB[0], rC[0]);
+  }
 }
 
-template <class d_type, class a_type, class b_type, class c_type, int N,
+template <bool NoAcc = false,
+          class d_type, class a_type, class b_type, class c_type, int N,
           class TD, class DLayout,
           class TA, class ALayout,
           class TB, class BLayout,
@@ -327,7 +334,7 @@ mma_unpack(MMA_Traits<XE4_TMM<d_type, a_type, b_type, c_type, N>> const& traits,
            Tensor<TB, BLayout> const& B,
            Tensor<TC, CLayout> const& C)
 {
-  mma_unpack(traits, D, A, B, C);
+  mma_unpack<NoAcc>(traits, D, A, B, C);
 }
 
 

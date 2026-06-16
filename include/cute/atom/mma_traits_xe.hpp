@@ -101,7 +101,8 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
   using MMAOp = XE_BDPAS_TT<M, TD, TA, TB, TC>;
   using BaseOp = XE_DPAS_TT<M, TD, TA, TB, TC>;
 
-  template <class TD1, class DLayout,
+  template <bool NoAcc = false,
+            class TD1, class DLayout,
             class TA1, class ALayout,
             class TB1, class BLayout,
             class TC1, class CLayout>
@@ -149,7 +150,7 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
       CUTE_STATIC_ASSERT_V(size(rA) == Int<RegNumA>{});
       CUTE_STATIC_ASSERT_V(size(rB) == Int<RegNumB>{});
 
-      cute::detail::explode_mma<BaseOp>(
+      cute::detail::explode_mma<BaseOp, NoAcc>(
               rD, make_int_sequence<RegNumD>{},
               rA, make_int_sequence<RegNumA>{},
               rB, make_int_sequence<RegNumB>{},
@@ -181,7 +182,7 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
         auto sfa_offset = SFA_M_OFFSET[0] + SFA_K_OFFSET[0];
         auto sfb_offset = SFB_N_OFFSET[0] + SFB_K_OFFSET[0];
 
-        cute::detail::explode_mma<MMAOp>(
+        cute::detail::explode_mma<MMAOp, NoAcc>(
                 rD,   make_int_sequence<RegNumD>{},
                 rA,   make_int_sequence<RegNumA>{},
                 rB,   make_int_sequence<RegNumB>{},
@@ -198,13 +199,18 @@ struct MMA_Traits<XE_BDPAS_TT<M, TD, TA, TB, TC>> : public MMA_Traits<XE_DPAS_TT
 
         RegTypeD product{};
         RegTypeC zero{};
-        BaseOp::fma(product, rA[0], rB[0], zero);
+        // Inner DPAS already has zero accumulator, use null-src0 to elide it.
+        BaseOp::template fma<true>(product, rA[0], rB[0], zero);
 
         RegTypeD out{};
         for (int i = 0; i < M; ++i) {
           float const scale = static_cast<float>(SFA(i)) * static_cast<float>(SFB(i));
-          float const value = static_cast<float>(product[i]) * scale + static_cast<float>(rC[0][i]);
-          out[i] = static_cast<TD>(value);
+          float const scaled = static_cast<float>(product[i]) * scale;
+          if constexpr (NoAcc) {
+            out[i] = static_cast<TD>(scaled);
+          } else {
+            out[i] = static_cast<TD>(scaled + static_cast<float>(rC[0][i]));
+          }
         }
 
         rD[0] = out;

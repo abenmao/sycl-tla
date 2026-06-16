@@ -164,7 +164,7 @@ public:
       return cute::is_same_v<LeftmostStrideB, _1>;
     }
   }();
-  
+
   static_assert(!(cute::is_same_v<ElementA, cutlass::float_e2m1_t> || 
                   cute::is_same_v<ElementB, cutlass::float_e2m1_t>) || (GroupSize == 32), 
                 "Intel Xe blockscaled MMA only supports GroupSize=32 for e2m1 inputs.");
@@ -224,7 +224,7 @@ public:
   static_assert(sizeof_bits_v<NonVoidElementScaleA> == 8 && sizeof_bits_v<NonVoidElementScaleB> == 8);
 
   // 2D block load requires surface width to be 4-byte aligned.
-  // M and N must be multiples of ScaleAlignElems; callers are responsible for ensuring alignment.
+  // Physical scale extents must be multiples of ScaleAlignElems; callers may pad scale storage.
   static constexpr int ScaleAlignElems = cute::ceil_div(4, (int)(sizeof_bits_v<NonVoidElementScaleA> / 8));
 
   // Host side kernel arguments
@@ -310,13 +310,20 @@ public:
       CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Problem Size doesn't meet the minimum alignment requirements for XE 2D copy.\n");
     }
 
-    // 2D block load requires M/N to be multiples of ScaleAlignElems (4 for 8-bit scales).
-    // For unaligned M/N, use the tuple-based MXFP block-scaled scalar scale-load variant instead.
-    if (M % ScaleAlignElems != 0 || N % ScaleAlignElems != 0) {
-      CUTLASS_TRACE_HOST("  CAN IMPLEMENT: M/N not aligned for 2D block load of scale factors. "
-                         "Use the tuple-based MXFP BlockScaled scalar scale-load variant "
-                         "(e.g. MainloopIntelXeXMX16BlockScaledImpl<..., tuple<_1, _1, Int<32>>>) "
-                         "for arbitrary M/N.\n");
+    int scale_m_extent = static_cast<int>(M);
+    int scale_n_extent = static_cast<int>(N);
+    if constexpr (!cute::is_void_v<StrideScaleA>) {
+      scale_m_extent = cute::max(scale_m_extent, static_cast<int>(get<1>(args.dSA)));
+    }
+    if constexpr (!cute::is_void_v<StrideScaleB>) {
+      scale_n_extent = cute::max(scale_n_extent, static_cast<int>(get<1>(args.dSB)));
+    }
+
+    // 2D block load requires physical scale extents to be multiples of ScaleAlignElems
+    // (4 for 8-bit scales). Logical M/N may be unaligned if scale storage is padded.
+    if (scale_m_extent % ScaleAlignElems != 0 || scale_n_extent % ScaleAlignElems != 0) {
+      CUTLASS_TRACE_HOST("  CAN IMPLEMENT: physical scale extents are not aligned for 2D block load. "
+                         "Pad scale storage for MXFP scale factors.\n");
       implementable = false;
     }
 
@@ -392,6 +399,7 @@ public:
     const int l_coord = l_idx;
 
     const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K_start));
+
     constexpr int k_reload_factor = cute::max(GroupK / BLK_K, 1);
 
     auto [tiled_copy_scaleA, copy_iter_scaleA, fragment_scaleA] = make_scaled_copy<GmemTiledCopyScaleA, NonVoidElementScaleA,

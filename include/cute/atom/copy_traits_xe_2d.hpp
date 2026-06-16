@@ -77,6 +77,7 @@ template <class Op, class XMode, class YMode, typename ValType, typename TiledSt
 struct Xe2DTraitsBase
 {
   using Traits = Copy_Traits<Op, XMode, YMode, ValType, TiledStrides>;
+  using CopyOp = Op;
   using ThrID = Layout<intel::_SGSize>;
 
   static constexpr int ValBits = is_void_v<ValType> ? Op::CopyBits
@@ -229,6 +230,175 @@ struct Xe2DLoadTraitsBase : Xe2DTraitsBase<Op, XMode, YMode, ValType, TiledStrid
     Op::copy(traits.payload, recast_ptr<int_byte_t<bits_to_bytes(Super::ValBits)>>(&*dst.data()));
   }
 };
+
+// TODO: Add unit tests under test/unit/cute/intel_xe/ covering the multi-payload
+template <int N>
+struct Xe2DPreparedPayloads {
+  int* payloads[N];
+};
+
+namespace detail {
+
+template <class Op, class XMode, class YMode, typename ValType, typename TiledStrides>
+CUTE_HOST_DEVICE
+Xe2DTraitsBase<Op, XMode, YMode, ValType, TiledStrides> const&
+as_xe2d_base(Xe2DTraitsBase<Op, XMode, YMode, ValType, TiledStrides> const& o) {
+  return o;
+}
+
+enum class MultiPayloadPhase { Prepare, Load, Prefetch };
+template <MultiPayloadPhase Phase, int NumValDst, int N, class BaseT,
+          class SEngine, class SLayout,
+          class DEngine, class DLayout>
+CUTE_DEVICE void
+walk_payloads(BaseT const& base,
+                   Tensor<SEngine, SLayout> const& src,
+                   Tensor<DEngine, DLayout>& dst,
+                   Xe2DPreparedPayloads<N>& payloads,
+                   int& idx)
+{
+  using Op    = typename BaseT::CopyOp;
+  constexpr int ValBits = BaseT::ValBits;
+
+  if constexpr (SLayout::rank == 1 && decltype(size(DLayout{}))::value == NumValDst) {
+    // Leaf atom.
+    if constexpr (Phase == MultiPayloadPhase::Prepare) {
+#ifdef __SYCL_DEVICE_ONLY__
+      using XMode = decltype(BaseT::get_x_mode());
+      using YMode = decltype(BaseT::get_y_mode());
+      auto coord = src.data().coord_;
+      int32_t x = get<XMode::value>(coord) * ValBits / Op::CopyBits;
+      int32_t y = get<YMode::value>(coord);
+      uint64_t bp = base.base_ptr;
+      if constexpr (BaseT::nontrivial_tiled_strides) {
+        auto off = inner_product(coord, base.tiled_strides);
+        bp += (off * ValBits) >> 3;
+      }
+      payloads.payloads[idx] = __builtin_IB_subgroup_createBlock2DAddressPayload(
+          bp, base.width - 1, base.height - 1, base.pitch - 1, x, y,
+          Op::AtomWidth / Op::BlockCount, Op::AtomHeight, Op::BlockCount);
+#else
+      CUTE_INVALID_CONTROL_PATH("Xe 2D multi-payload copies are only available on SYCL device.");
+#endif
+    } else if constexpr (Phase == MultiPayloadPhase::Prefetch) {
+#ifdef __SYCL_DEVICE_ONLY__
+      Op::copy(payloads.payloads[idx]);
+#else
+      CUTE_INVALID_CONTROL_PATH("Xe 2D multi-payload copies are only available on SYCL device.");
+#endif
+    } else {
+#ifdef __SYCL_DEVICE_ONLY__
+      using ValT = int_byte_t<bits_to_bytes(ValBits)>;
+      Op::copy(payloads.payloads[idx],
+               const_cast<ValT*>(recast_ptr<ValT>(&*dst.data())));
+#else
+      CUTE_INVALID_CONTROL_PATH("Xe 2D multi-payload copies are only available on SYCL device.");
+#endif
+    }
+    ++idx;
+  } else if constexpr (SLayout::rank > 1) {
+    // Multi-mode: filter identically to cute::copy (nullspace + zipped_divide),
+    // then recurse into each atom.
+    constexpr int R = SLayout::rank;
+    auto src_v = group_modes<1, R>(src);
+    auto dst_v = group_modes<1, R>(dst);
+    auto dst_null = nullspace(layout<1>(dst_v));
+    auto dst_n = zipped_divide(dst_v, make_tile(shape<0>(dst_v), dst_null));
+    auto src_n = zipped_divide(src_v, make_tile(shape<0>(src_v), dst_null));
+    auto dst_c = dst_n(make_coord(_, Int<0>{}), make_coord(Int<0>{}, _));
+    auto src_c = src_n(make_coord(_, Int<0>{}), make_coord(Int<0>{}, _));
+    constexpr int Rest = decltype(size<1>(dst_c))::value;
+    CUTE_UNROLL
+    for (int i = 0; i < Rest; ++i) {
+      auto s_i = src_c(_, i);
+      auto d_i = dst_c(_, i);
+      walk_payloads<Phase, NumValDst>(base, s_i, d_i, payloads, idx);
+    }
+  } else {
+    // Rank-1 but V mode is still a tuple larger than the atom: peel outer level.
+    static_assert(is_tuple<decltype(shape<0>(SLayout{}))>::value,
+                  "Cannot peel further: V mode is atomic but size does not match NumValDst");
+    auto s_sub = tensor<0>(src);
+    auto d_sub = tensor<0>(dst);
+    walk_payloads<Phase, NumValDst>(base, s_sub, d_sub, payloads, idx);
+  }
+}
+
+} // namespace detail
+
+// TODO: Fold these multi-payload API into the generic cute::copy / cute::prefetch paths
+template <class TiledCopy,
+          class SEngine, class SLayout,
+          class DEngine, class DLayout>
+CUTE_DEVICE auto
+prepare_payloads(TiledCopy const& tiled_copy,
+                  Tensor<SEngine, SLayout> const& src,
+                  Tensor<DEngine, DLayout> const& dst)
+{
+  auto const& base = detail::as_xe2d_base(tiled_copy);
+  using BaseT = remove_cvref_t<decltype(base)>;
+
+  constexpr int NumValDst = decltype(size<1>(typename BaseT::Traits::DstLayout{}))::value / BaseT::ValBits;
+  constexpr int Total     = decltype(size(DLayout{}))::value;
+  static_assert(Total % NumValDst == 0,
+                "dst fragment size is not a multiple of per-atom size");
+  constexpr int N = Total / NumValDst;
+
+  Xe2DPreparedPayloads<N> prepared{};
+  int idx = 0;
+  auto dst_mut = make_tensor(dst.data(), dst.layout());   // walk signature wants dst&
+  detail::walk_payloads<detail::MultiPayloadPhase::Prepare, NumValDst>(
+      base, src, dst_mut, prepared, idx);
+  return prepared;
+}
+
+template <class TiledCopy, int N, class DEngine, class DLayout>
+CUTE_DEVICE void
+copy_with_multi_payloads(TiledCopy const& tiled_copy,
+              Xe2DPreparedPayloads<N> const& prepared,
+              Tensor<DEngine, DLayout>& dst)
+{
+  auto const& base = detail::as_xe2d_base(tiled_copy);
+  using BaseT = remove_cvref_t<decltype(base)>;
+  constexpr int NumValDst = decltype(size<1>(typename BaseT::Traits::DstLayout{}))::value / BaseT::ValBits;
+
+  int idx = 0;
+  auto src = make_identity_tensor(shape(dst));
+  detail::walk_payloads<detail::MultiPayloadPhase::Load, NumValDst>(
+      base, src, dst,
+      const_cast<Xe2DPreparedPayloads<N>&>(prepared), idx);
+}
+
+template <class TiledCopy, int N, class Shape>
+CUTE_DEVICE void
+prefetch_with_payloads(TiledCopy const& tiled_copy,
+                       Xe2DPreparedPayloads<N> const& prepared,
+                       Shape const& src_shape)
+{
+  auto const& base = detail::as_xe2d_base(tiled_copy);
+  using BaseT = remove_cvref_t<decltype(base)>;
+  constexpr int NumValDst = decltype(size<1>(typename BaseT::Traits::DstLayout{}))::value / BaseT::ValBits;
+
+  auto drv = make_identity_tensor(src_shape);
+  int idx = 0;
+  detail::walk_payloads<detail::MultiPayloadPhase::Prefetch, NumValDst>(
+      base, drv, drv,
+      const_cast<Xe2DPreparedPayloads<N>&>(prepared), idx);
+}
+
+template <int N>
+CUTE_DEVICE void
+update_payloads(Xe2DPreparedPayloads<N>& prepared, int32_t y_delta)
+{
+#ifdef __SYCL_DEVICE_ONLY__
+  CUTE_UNROLL
+  for (int i = 0; i < N; ++i) {
+    __builtin_IB_subgroup_addBlock2DAddressPayloadBlockY(prepared.payloads[i], y_delta);
+  }
+#else
+  CUTE_INVALID_CONTROL_PATH("Xe 2D multi-payload copies are only available on SYCL device.");
+#endif
+}
 
 
 // Split a subgroup-level layout into a TV-layout.
@@ -706,7 +876,8 @@ block_2d_selector(CoordLayout const&, GlobalStride const&)
     //   (Rationale: we are already moving data, so layouts don't need to match)
     constexpr int y_stride = get_block_size<y_mode()>(slayout);
     constexpr int max_h = Store ? 8 : 32;
-    constexpr int height = cute::gcd(resize ? get<y_mode()>(shape) : y_stride, max_h);
+    constexpr int height = Store ? cute::gcd(resize ? get<y_mode()>(shape) : y_stride, max_h) :
+                                   cute::gcd(get<y_mode()>(shape), max_h);
 
     if constexpr (Store)
       return XE_STORE_2D    <CopyBits, height, cwidth>{};
@@ -721,9 +892,19 @@ block_2d_selector(CoordLayout const&, GlobalStride const&)
     constexpr int y_stride = get_block_size<y_mode(), min_large_block>(slayout);
     constexpr int height = cute::gcd(32, y_stride);
 
-    constexpr int max_w = 32 * 8 / MemBits;
-    constexpr int x_stride = get_block_size<x_mode()>(slayout);
-    constexpr int width = cute::gcd(resize ? get<x_mode()>(shape) : x_stride, max_w);
+    // Transpose Width limits (in CopyBits-element units):
+    //   d32: <=8 on Xe2; <=16 on Xe3P+.
+    //   d64: <=4 on Xe2; <=8 on Xe3P+.
+#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+    constexpr int max_cwidth_d32 = 16;
+    constexpr int max_cwidth_d64 = 8;
+#else
+    constexpr int max_cwidth_d32 = 8;
+    constexpr int max_cwidth_d64 = 4;
+#endif
+    constexpr int max_cwidth = (CopyBits == 64) ? max_cwidth_d64 : max_cwidth_d32;
+    constexpr int max_w = max_cwidth * CopyBits / MemBits;
+    constexpr int width = cute::gcd(get<x_mode()>(shape), max_w);
     constexpr int cwidth = width * MemBits / CopyBits;
 
     return XE_LOAD_2D_TRANSPOSE<CopyBits, height, cwidth>{};
@@ -1267,49 +1448,37 @@ constexpr auto
 make_A_slm_copies(TiledMMA  const& tiled_mma,
                   TiledCopy const& global_copy)  // input TiledCopy for global A load
 {
-  using SLM_Layout = decltype(make_A_slm_layout(tiled_mma));
   using ValType = typename TiledMMA::ValTypeA;
-  auto dummy_tensor = make_tensor(make_smem_ptr(static_cast<ValType*>(nullptr)), SLM_Layout{});
+  using CoopTV    = typename TiledCopy::TiledLayout_TV;
+  using CoopTiler = typename TiledCopy::Tiler_MN;
+
   auto tile_mk = select<0, 2>(tiled_mma.tile_mnk());   // (M,K)
-  auto thrfrg_shape = shape(SLM_Layout{});
-  auto thr_to_vmk_ = right_inverse(make_layout(make_shape(get<0, 0>(thrfrg_shape), get<1, 1>(thrfrg_shape))));
-  auto sg_to_vmk_ = composition(thr_to_vmk_, make_layout(product(get<0,1>(thrfrg_shape)), product(get<0,0>(thrfrg_shape))));
 
-  auto svA_= composition(SLM_Layout{}, make_tile(sg_to_vmk_,_));
+  // r2s: explicitly extract thread/value layouts from coop copy's TV layout,
+  // then recompose into a TV layout. This makes the (Thr, Val) decomposition
+  // explicit and decoupled from the underlying atom (UniversalCopy with
+  // AtomNumThr = AtomNumVal = 1 acts as an identity atom over the TV layout).
+  auto r2s_T = layout<0>(CoopTV{});   // (Thrs)  -> tile coord
+  auto r2s_V = layout<1>(CoopTV{});   // (Vals)  -> tile coord
+  auto r2s_tv = make_layout(r2s_T, r2s_V);
 
-  auto thr_vmnk = tiled_mma.get_thr_layout_vmnk();                                  // (ThrV,ThrM,ThrN,ThrK) -> thr
-  auto shape_vmnk = shape(thr_vmnk);                                                // (ThrV,ThrM,ThrN,ThrK)
-  auto drop_n = make_layout(shape_vmnk,
-      make_stride(_1{}, get<0>(shape_vmnk), _0{},
-                  get<0>(shape_vmnk) * get<1>(shape_vmnk)));                        // (ThrV,ThrM,ThrN,ThrK) -> (ThrV,ThrM,ThrK)
+  using CopyTypeA = uint_bit_t<sizeof_bits_v<ValType>>;
+  auto atom_r2s = Copy_Atom<UniversalCopy<CopyTypeA>, ValType>{};
+  auto r2s = cute::TiledCopy<decltype(atom_r2s), decltype(r2s_tv), CoopTiler>{};
 
-  auto thr_to_vmk = composition(drop_n, right_inverse(thr_vmnk));                   // thr -> (ThrV,ThrM,ThrK)
-  auto sg_to_vmk = composition(thr_to_vmk,
-      make_layout(product(take<1,4>(shape_vmnk)), get<0>(shape_vmnk)));             // SG -> (0,ThrM,ThrK)
+  // s2r: TV from MMA's thrfrg_A on the coop SLM layout + SG redundancy
+  auto thrfrg = tiled_mma.thrfrg_A(make_layout(tile_mk));     // ((ThrV,(ThrM,ThrK)),(FrgV,(RestM,RestK)))
+  auto thrfrg_T = layout<0>(thrfrg);
+  auto thrfrg_V = layout<1>(thrfrg);
+  auto shape_vmnk = shape(tiled_mma.get_thr_layout_vmnk());   // (ThrV,ThrM,ThrN,ThrK)
+  // Insert ThrN (redundant for A, stride 0) into T mode
+  auto s2r_T = make_layout(
+      make_shape(shape<0>(thrfrg_T), get<2>(shape_vmnk), shape<1>(thrfrg_T)),
+      make_stride(stride<0>(thrfrg_T), _0{}, stride<1>(thrfrg_T)));
+  auto s2r_tv = make_layout(s2r_T, thrfrg_V);
 
-  auto svA = composition(tiled_mma.thrfrg_A(make_layout(tile_mk)),
-                         make_tile(sg_to_vmk, _));                                  // (SG,V) -> (M,K)
-
-  using AtomShape_MNK = typename TiledMMA::AtomShape_MNK;
-  constexpr int Width = get<2>(AtomShape_MNK{});
-  constexpr int Height = get<0>(AtomShape_MNK{});
-  auto op_tile = Shape<Int<Height>, Int<Width>>{};
-  auto atom_shape = shape_div(tile_mk, op_tile);
-
-  auto divide_by_op_tile = zip(make_layout(op_tile, make_stride(_0{}, _0{})),
-                               make_layout(atom_shape));                       // (M,K) -> (M tile, K tile)
-
-  auto sv_layout_t0 = composition(divide_by_op_tile, svA);                     // (SG,V) -> (M tile, K tile)
-  auto sv_layout_t = make_layout(get<0>(sv_layout_t0),
-                                 filter(get<1>(sv_layout_t0)));                // (SG,V') -> (M tile, K tile)
-  auto sv_layout_t0_ = composition(divide_by_op_tile, svA_);                   // (SG,V) -> (M tile, K tile)
-  auto sv_layout_t_ = make_layout(get<0>(sv_layout_t0_),
-                                 filter(get<1>(sv_layout_t0_)));               // (SG,V') -> (M tile, K tile)
-  auto tCrA = tiled_mma.get_slice(0).partition_sg_fragment_A(make_identity_tensor(tile_mk));
-  // Use MMA-typed fragment for r2s: after reorder/convert, register data is always in MMA type,
-  // regardless of whether the copy and MMA types differ.
-  auto r2s = make_slm_copy(tCrA, dummy_tensor, sv_layout_t_);
-  auto s2r = make_slm_copy(dummy_tensor, tCrA, sv_layout_t);
+  auto atom_s2r = Copy_Atom<UniversalCopy<CopyTypeA>, ValType>{};
+  auto s2r = cute::TiledCopy<decltype(atom_s2r), decltype(s2r_tv), CoopTiler>{};
   return std::tuple(r2s, s2r);
 }
 
@@ -1319,48 +1488,35 @@ constexpr auto
 make_B_slm_copies(TiledMMA  const& tiled_mma,
                   TiledCopy const& global_copy)  // input TiledCopy for global B load
 {
-  using SLM_Layout = decltype(make_B_slm_layout(tiled_mma));
   using ValType = typename TiledMMA::ValTypeB;
-  auto dummy_tensor = make_tensor(make_smem_ptr(static_cast<ValType*>(nullptr)), SLM_Layout{});
+  using CoopTV    = typename TiledCopy::TiledLayout_TV;
+  using CoopTiler = typename TiledCopy::Tiler_MN;
+
   auto tile_nk = select<1, 2>(tiled_mma.tile_mnk());   // (N,K)
-  auto thrfrg_shape = shape(SLM_Layout{});
-  auto thr_to_vnk_ = right_inverse(make_layout(make_shape(get<0, 0>(thrfrg_shape), get<1, 1>(thrfrg_shape))));
-  auto sg_to_vnk_ = composition(thr_to_vnk_, make_layout(product(get<0,1>(thrfrg_shape)), product(get<0,0>(thrfrg_shape))));
 
-  auto svB_= composition(SLM_Layout{}, make_tile(sg_to_vnk_,_));
-  auto thr_vmnk = tiled_mma.get_thr_layout_vmnk();                                  // (ThrV,ThrM,ThrN,ThrK) -> thr
-  auto shape_vmnk = shape(thr_vmnk);                                                // (ThrV,ThrM,ThrN,ThrK)
-  auto drop_m = make_layout(shape_vmnk,
-      make_stride(_1{}, _0{}, get<0>(shape_vmnk),
-                  get<0>(shape_vmnk) * get<2>(shape_vmnk)));                        // (ThrV,ThrM,ThrN,ThrK) -> (ThrV,ThrN,ThrK)
+  // r2s: explicitly extract thread/value layouts from coop copy's TV layout,
+  // then recompose into a TV layout (mirrors the s2r pattern).
+  auto r2s_T = layout<0>(CoopTV{});   // (Thrs)  -> tile coord
+  auto r2s_V = layout<1>(CoopTV{});   // (Vals)  -> tile coord
+  auto r2s_tv = make_layout(r2s_T, r2s_V);
 
-  auto thr_to_vnk = composition(drop_m, right_inverse(thr_vmnk));                   // thr -> (ThrV,ThrN,ThrK)
-  auto sg_to_vnk = composition(thr_to_vnk,
-      make_layout(product(take<1,4>(shape_vmnk)), get<0>(shape_vmnk)));             // SG -> (0,ThrN,ThrK)
+  using CopyTypeB = uint_bit_t<sizeof_bits_v<ValType>>;
+  auto atom_r2s = Copy_Atom<UniversalCopy<CopyTypeB>, ValType>{};
+  auto r2s = cute::TiledCopy<decltype(atom_r2s), decltype(r2s_tv), CoopTiler>{};
 
-  auto svB = composition(tiled_mma.thrfrg_B(make_layout(tile_nk)),
-                         make_tile(sg_to_vnk, _));                                  // (SG,V) -> (N,K)
+  // s2r: TV from MMA's thrfrg_B on the coop SLM layout + SG redundancy
+  auto thrfrg = tiled_mma.thrfrg_B(make_layout(tile_nk));     // ((ThrV,(ThrN,ThrK)),(FrgV,(RestN,RestK)))
+  auto thrfrg_T = layout<0>(thrfrg);
+  auto thrfrg_V = layout<1>(thrfrg);
+  auto shape_vmnk = shape(tiled_mma.get_thr_layout_vmnk());   // (ThrV,ThrM,ThrN,ThrK)
+  // Insert ThrM (redundant for B, stride 0) into T mode
+  auto s2r_T = make_layout(
+      make_shape(shape<0>(thrfrg_T), shape<1>(thrfrg_T), get<1>(shape_vmnk)),
+      make_stride(stride<0>(thrfrg_T), stride<1>(thrfrg_T), _0{}));
+  auto s2r_tv = make_layout(s2r_T, thrfrg_V);
 
-  using AtomShape_MNK = typename TiledMMA::AtomShape_MNK;
-  constexpr int Width = get<2>(AtomShape_MNK{});
-  constexpr int Height = get<1>(AtomShape_MNK{});
-  auto op_tile = Shape<Int<Height>, Int<Width>>{};
-  auto atom_shape = shape_div(tile_nk, op_tile);
-
-  auto divide_by_op_tile = zip(make_layout(op_tile, make_stride(_0{}, _0{})),
-                               make_layout(atom_shape));                         // (M,K) -> (M tile, K tile)
-
-  auto sv_layout_t0 = composition(divide_by_op_tile, svB);                       // (SG,V) -> (M tile, K tile)
-  auto sv_layout_t = make_layout(get<0>(sv_layout_t0),
-                                 filter(get<1>(sv_layout_t0)));                  // (SG,V') -> (M tile, K tile)
-  auto sv_layout_t0_ = composition(divide_by_op_tile, svB_);                     // (SG,V) -> (M tile, K tile)
-  auto sv_layout_t_ = make_layout(get<0>(sv_layout_t0_),
-                                 filter(get<1>(sv_layout_t0_)));                 // (SG,V') -> (M tile, K tile)
-  auto tCrB = tiled_mma.get_slice(0).partition_sg_fragment_B(make_identity_tensor(tile_nk));
-  // Use MMA-typed fragment for r2s: after reorder/convert, register data is always in MMA type,
-  // regardless of whether the copy and MMA types differ.
-  auto r2s = make_slm_copy(tCrB, dummy_tensor, sv_layout_t_);
-  auto s2r = make_slm_copy(dummy_tensor, tCrB, sv_layout_t);
+  auto atom_s2r = Copy_Atom<UniversalCopy<CopyTypeB>, ValType>{};
+  auto s2r = cute::TiledCopy<decltype(atom_s2r), decltype(s2r_tv), CoopTiler>{};
   return std::tuple(r2s, s2r);
 }
 
@@ -1501,11 +1657,13 @@ make_block_2d_copy_CD_subtiled(CopyOp             const& op,          // Copy op
   //   - SubtileSGLayout must have a subtile for each ThrK, OR ThrK must be the last mode.
   decltype(coalesce(get<0>(svC))) sC{};
   constexpr auto mode_thr_k = find_if(stride(sC), [](auto const &x) { return C<is_constant_v<0, decltype(x)>>{}; });
-
-  using SCThrKShape = remove_cvref_t<decltype(shape<mode_thr_k>(sC))>;
-  using MMAThrKShape = remove_cvref_t<decltype(shape<3>(thr_vmnk))>;
-  static_assert(SCThrKShape::value == MMAThrKShape::value,
+  using SCShape =
+      cute::remove_cvref_t<decltype(shape<mode_thr_k>(sC))>;
+  using TVShape =
+      cute::remove_cvref_t<decltype(shape<3>(thr_vmnk))>;
+  static_assert(cute::is_same_v<SCShape, TVShape>,
                 "ThrK split into multiple modes; unsupported");
+
   auto k_to_mn = composition(make_layout(tile_mn), xssg_layout);                    // ThrK -> (M,N)
 
   static_assert(size(SubtileSGLayout{}) == shape<3>(thr_vmnk) || mode_thr_k + 1 >= rank(sC),

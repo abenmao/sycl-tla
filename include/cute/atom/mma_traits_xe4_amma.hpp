@@ -31,7 +31,8 @@ struct MMA_Traits<
   // No control
   MMAControl ctrl_ {};
 
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+            class TD, class DLayout,
             class TA, class ALayout,
             class TB, class BLayout,
             class TC, class CLayout>
@@ -123,7 +124,8 @@ struct MMA_Traits<
   // No control
   MMAControl ctrl_ {};
 
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+            class TD, class DLayout,
             class TA, class ALayout,
             class TB, class BLayout,
             class TC, class CLayout>
@@ -174,7 +176,8 @@ struct MMA_Traits<
 
   uint64_t* d_barrier_;
 
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+            class TD, class DLayout,
             class TA, class ALayout,
             class TB, class BLayout,
             class TC, class CLayout>
@@ -229,7 +232,8 @@ struct MMA_Traits<
   // Dummy mask
   uint32_t mask_[2];
 
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+    class TD, class DLayout,
     class TA, class ALayout,
     class TB, class BLayout,
     class TC, class CLayout>
@@ -285,7 +289,8 @@ struct MMA_Traits<
   // Dummy mask
   uint32_t mask0_, mask1_;
 
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+            class TD, class DLayout,
             class TA, class ALayout,
             class TB, class BLayout,
             class TC, class CLayout>
@@ -341,7 +346,8 @@ struct MMA_Traits<
   // Dummy mask
   uint32_t mask0_, mask1_;
 
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+            class TD, class DLayout,
             class TA, class ALayout,
             class TB, class BLayout,
             class TC, class CLayout>
@@ -398,7 +404,8 @@ struct MMA_Traits<
   uint32_t a_mask_;
   uint32_t b_mask_;
 
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+            class TD, class DLayout,
             class TA, class ALayout,
             class TB, class BLayout,
             class TC, class CLayout>
@@ -487,7 +494,8 @@ struct MMA_Traits<
   uint32_t a_mask_;
   uint32_t b_mask_;
 
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+            class TD, class DLayout,
             class TA, class ALayout,
             class TB, class BLayout,
             class TC, class CLayout>
@@ -559,7 +567,8 @@ struct MMA_Traits<
   uint32_t sf_a_ {};
   uint32_t sf_b_ {};
 
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+            class TD, class DLayout,
             class TA, class ALayout,
             class TB, class BLayout,
             class TC, class CLayout>
@@ -642,7 +651,8 @@ struct MMA_Traits<
   uint32_t sf_b_ {};
   uint64_t* d_barrier_;
 
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+            class TD, class DLayout,
             class TA, class ALayout,
             class TB, class BLayout,
             class TC, class CLayout>
@@ -678,7 +688,8 @@ struct MMA_Traits<
   uint64_t* a_barrier_;
   uint64_t* b_barrier_;
 
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+            class TD, class DLayout,
             class TA, class ALayout,
             class TB, class BLayout,
             class TC, class CLayout>
@@ -715,7 +726,8 @@ struct MMA_Traits<
   uint64_t* a_barrier_;
   uint64_t* b_barrier_;
 
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+            class TD, class DLayout,
             class TA, class ALayout,
             class TB, class BLayout,
             class TC, class CLayout>
@@ -753,7 +765,8 @@ struct MMA_Traits<
   uint32_t a_mask_;
   uint32_t b_mask_;
 
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+            class TD, class DLayout,
             class TA, class ALayout,
             class TB, class BLayout,
             class TC, class CLayout>
@@ -836,7 +849,8 @@ struct MMA_Traits<
   uint32_t a_mask_;
   uint32_t b_mask_;
 
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+    class TD, class DLayout,
     class TA, class ALayout,
     class TB, class BLayout,
     class TC, class CLayout>
@@ -880,7 +894,8 @@ struct MMA_Traits<
   uint32_t a_mask_;
   uint32_t b_mask_;
 
-  template <class TD, class DLayout,
+  template <bool NoAcc = false,
+            class TD, class DLayout,
             class TA, class ALayout,
             class TB, class BLayout,
             class TC, class CLayout>

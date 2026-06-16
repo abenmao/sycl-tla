@@ -28,8 +28,10 @@
 
 if (CUTLASS_TEST_FOR_CRI)
   set(TEST_BASE "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
+  set(DEFAULT_K ${CRI_GEMM_DEFAULT_SIZE})
 else()
   set(TEST_BASE "")
+  set(DEFAULT_K 4096)  # Must match the default k in bmg_grouped_gemm_mixed_dtype_runner.hpp
 endif()
 
 set(TEST_GROUPS ${TEST_BASE} --groups=2)
@@ -52,9 +54,9 @@ foreach(MMA_TYPE IN LISTS MMA_T)
     if (${MMA_TYPE} STREQUAL "half_t" AND ${QUANT_TYPE} STREQUAL "int8_t")
       set(exe_name "${mma_name}_s8_tensorwise")
       if (NOT CUTLASS_TEST_FOR_CRI)
-        set(TEST_GROUP_DEQUANT ${TEST_BASE} --g=0) 
-        # TODO(Zhitao): use default g for CRI testing for now due to stable
-        # simulator crashing.
+        # Tensorwise dequantization: --g=K means one scale per entire K dimension.
+        # --g=0 is no longer accepted (causes division-by-zero in the kernel).
+        set(TEST_GROUP_DEQUANT ${TEST_BASE} --g=${DEFAULT_K}) 
       endif()
       set(TEST_A_NARROW ${TEST_BASE} --groups=2)
     endif()
@@ -73,6 +75,10 @@ foreach(MMA_TYPE IN LISTS MMA_T)
     target_compile_definitions(${exe_name} PRIVATE MMA_TYPE=${MMA_TYPE} QUANT_TYPE=${QUANT_TYPE})
   endforeach()
 endforeach()
+
+# Reset TEST_GROUP_DEQUANT to default after the foreach loop, since the
+# f16_s8_tensorwise case may have overridden it to --g=4096 (tensorwise).
+set(TEST_GROUP_DEQUANT ${TEST_BASE} --g=128)
 
 cutlass_example_add_executable(
   10_bmg_grouped_gemm_f16_u4

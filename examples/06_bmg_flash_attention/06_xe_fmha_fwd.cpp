@@ -117,10 +117,14 @@ int main(int argc, const char **argv) {
   using ShapeOut = Shape<_256, _128>;
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 #else
-  using ShapeQK = Shape<_256, _64, _64>;
-  using ShapePV = Shape<_256, _64, _64>;
-  using ShapeOut = Shape<_256, _128>;
-  using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
+#if defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
+  using ShapeQK = Shape<_512, _64, _128>;
+#else
+  using ShapeQK = Shape<_512, _64, _64>;
+#endif
+  using ShapePV = Shape<_512, _64, _64>;
+  using ShapeOut = Shape<_512, _128>;
+  using SubgroupLayoutQK = Layout<Shape<_32, _1, _1>>;
 #endif
 #elif HEAD_DIM == 192
   using ShapeQK = Shape<_256, _64, _32>;
@@ -153,7 +157,7 @@ int main(int argc, const char **argv) {
     using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 96
-    using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
+    using ShapeQK = Shape<_1, KV_TILE_SIZE, _32>;
     using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
     using ShapeOut = Shape<_1, _96>;
     using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
@@ -181,9 +185,35 @@ int main(int argc, const char **argv) {
 #endif
 
 #if PERSISTENT
-  return FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, /*persistent=*/true, ElementQ, ElementK, ElementV>::run(options);
+  if (options.use_paged_kv || options.seq_len_kv_cache > 0) {
+    std::cerr << "Error: Persistent kernel does not support paged/cached KV cache (use_paged_kv or seq_len_kv_cache > 0)." << std::endl;
+    return -1;
+  }
+  using FMHAPersistent = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, /*persistent=*/true, ElementQ, ElementK, ElementV>;
+  return FMHAPersistent::template run<false, false, false, cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options);
 #else
-  return options.is_causal ? FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  /*persistent=*/false, ElementQ, ElementK, ElementV>::run(options)
-  : FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  /*persistent=*/false, ElementQ, ElementK, ElementV>::run(options);
+  if (options.seq_len_kv_cache > 0 || options.use_paged_kv) {
+    std::cerr << "Error: CachedKV/PagedKV requested. Use the cached_kv binary." << std::endl;
+    return -1;
+  }
+
+  using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
+
+  using FMHACausal    = FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV>;
+  using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV>;
+
+  if (options.is_causal) {
+    if (options.varlen) {
+      return FMHACausal::template run<true, false, false, Scheduler>(options);
+    } else {
+      return FMHACausal::template run<false, false, false, Scheduler>(options);
+    }
+  } else {
+    if (options.varlen) {
+      return FMHANonCausal::template run<true, false, false, Scheduler>(options);
+    } else {
+      return FMHANonCausal::template run<false, false, false, Scheduler>(options);
+    }
+  }
 #endif
 }

@@ -39,6 +39,57 @@
 #include "cute/layout.hpp"
 #include "cute/tensor.hpp"
 
+namespace cute
+{
+
+template <int Bits, int Height, int Width, int BlockWidth = Width>
+struct MXFP_SCALE_LOAD_2D : XE_LOAD_2D<Bits, Height, Width, BlockWidth> {};
+
+template <class XMode, class YMode, typename ValType, typename TiledStrides,
+          int CopyBits, int Height, int Width, int BlockWidth>
+struct Copy_Traits<MXFP_SCALE_LOAD_2D<CopyBits, Height, Width, BlockWidth>, XMode, YMode, ValType, TiledStrides>
+    : Xe2DLoadTraitsBase<MXFP_SCALE_LOAD_2D<CopyBits, Height, Width, BlockWidth>, XMode, YMode, ValType, TiledStrides>
+{
+  using Op = MXFP_SCALE_LOAD_2D<CopyBits, Height, Width, BlockWidth>;
+  using Super = Xe2DLoadTraitsBase<Op, XMode, YMode, ValType, TiledStrides>;
+  using Super::Super;
+
+  template <typename SEngine, typename SLayout>
+  CUTE_DEVICE
+  Copy_Traits(Tensor<SEngine, SLayout> const& src)
+      : Super()
+  {
+    this->base_ptr = (uint64_t)&*src.data();
+    this->tiled_strides = replace<XMode::value>(replace<YMode::value>(src.stride(), _0{}), _0{});
+
+    constexpr auto SBits = sizeof_bits_v<typename SEngine::value_type>;
+    uint32_t logical_width = (shape<XMode::value>(src) * SBits) >> 3;
+    this->width = (logical_width + 3) & ~uint32_t(3);
+    this->height = shape<YMode::value>(src);
+    this->pitch = (stride<YMode::value>(src) * SBits) >> 3;
+
+#ifdef CUTE_ENABLE_XE_BLOCK_2D_ASSERT
+    assert((this->base_ptr % 64 == 0) && "CuTe runtime error: misaligned block 2D base pointer");
+    assert((this->width % 4 == 0) && "CuTe runtime error: misaligned block 2D tensor width");
+    assert((this->pitch % 4 == 0) && "CuTe runtime error: misaligned block 2D tensor pitch");
+    assert((this->width <= 0xFFFFFF) && "CuTe runtime error: block 2D tensor width exceeds 2^24");
+    assert((this->height <= 0xFFFFFF) && "CuTe runtime error: block 2D tensor height exceeds 2^24");
+    assert((this->pitch <= 0xFFFFFF) && "CuTe runtime error: block 2D tensor pitch exceeds 2^24");
+#endif
+    this->device_init();
+  }
+
+  using DstLayout = XeInterleavedLayout<Layout<Shape<Int<BlockWidth>, Int<Height>, Int<Width/BlockWidth>>,
+                                               Stride<_1, Int<Width>, Int<BlockWidth>>>,
+                                        CopyBits,
+                                        sizeof_bits_v<ValType>>;
+
+  using RefLayout = DstLayout;
+  using SrcLayout = decltype(replace<0>(RefLayout{}, Layout<Shape<intel::_SGSize>, Stride<_0>>{}));
+};
+
+} // namespace cute
+
 namespace cutlass::gemm::collective
 {
 
@@ -61,13 +112,13 @@ namespace cutlass::gemm::collective
     static_assert(Height > 0);
     // Width2D must between 32/64 due to limitation
     static constexpr auto Width2D = Width <= 32 ? 32 : 64;
-    using Type = XE_LOAD_2D<8, Height, Width2D, 32>;
+    using Type = MXFP_SCALE_LOAD_2D<8, Height, Width2D, 32>;
   };
 
     template <class Dtype,class Stride>
   struct ScaleCopyTraits<Dtype, 1, 64, Stride, std::enable_if_t<sizeof_bits_v<Dtype> == 8>>
   {
-    using Type = XE_LOAD_2D<8, 1, 64>;
+    using Type = MXFP_SCALE_LOAD_2D<8, 1, 64>;
   };
 
   // -----------------------------------------------------------------------------

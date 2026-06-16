@@ -143,7 +143,7 @@ int main(int argc, const char **argv) {
     using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
 
 #elif HEAD_DIM == 96
-    using ShapeQK = Shape<_1, _512, _64>;
+    using ShapeQK = Shape<_1, _512, _32>;
     using ShapePV = Shape<_1, _32, _512>;
     using ShapeOut = Shape<_1, _96>;
     using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
@@ -166,13 +166,29 @@ int main(int argc, const char **argv) {
 
 #ifdef DECODE
   constexpr int PipelineStages = 1;
-  constexpr bool UseScale = false;
+  constexpr bool BlockScale = false;
 #else
   constexpr int PipelineStages = 2;
-  constexpr bool UseScale = true;
+  constexpr bool BlockScale = true;
 #endif
 #if defined(IS_MX_FLOAT_E5M2) || defined(IS_MX_FLOAT_E4M3) || defined(IS_MX_FLOAT_E2M1)
-  return options.is_causal ? FMHAConfig<true, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>::run(options)
-  : FMHAConfig<false, UseScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>::run(options);
+  // BlockScale does not support CachedKV/PagedKV
+  using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
+  using FMHACausal    = FMHAConfig<true, BlockScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>;
+  using FMHANonCausal = FMHAConfig<false, BlockScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV, ElementScale>;
+
+  if (options.is_causal) {
+    if (options.varlen) {
+      return FMHACausal::template run<true, false, false, Scheduler>(options);
+    } else {
+      return FMHACausal::template run<false, false, false, Scheduler>(options);
+    }
+  } else {
+    if (options.varlen) {
+      return FMHANonCausal::template run<true, false, false, Scheduler>(options);
+    } else {
+      return FMHANonCausal::template run<false, false, false, Scheduler>(options);
+    }
+  }
 #endif
 }
