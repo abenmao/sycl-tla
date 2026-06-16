@@ -123,12 +123,15 @@ cleanup() {
     fi
     echo ""
     echo "=== Cleaning up simulator ==="
+    # Stop the runsim supervisor FIRST so it cannot respawn AubLoad while we clear
+    # the port; its trap takes the AubLoad child down with it.
+    if [[ -n "${SIM_PORT:-}" ]]; then
+        stop_runsim "$SIM_PORT" || true
+    fi
     if [[ -n "${SIM_PID:-}" ]]; then
-        if sudo -n kill -0 "$SIM_PID" 2>/dev/null; then
-            sudo -n kill -9 "$SIM_PID" 2>/dev/null || true
-            echo "Simulator stopped (PID: $SIM_PID)."
-        fi
+        sudo -n kill -9 "$SIM_PID" 2>/dev/null || true
         wait "$SIM_PID" 2>/dev/null || true
+        echo "Simulator launcher stopped (PID: $SIM_PID)."
     fi
     # Safety net: kill anything still listening on the simulator port.
     if [[ -n "${SIM_PORT:-}" ]]; then
@@ -169,6 +172,29 @@ kill_existing_on_port() {
         return 1
     else
         echo "Port $port cleared."
+    fi
+}
+
+# --- helper: stop the runsim supervisor loop(s) for a port ---
+# IMPORTANT: the simulator tree is  sudo -> runsim.sh -> AubLoad.  Killing only
+# the backgrounded launcher PID (the sudo) orphans runsim.sh, whose `while true`
+# loop immediately respawns AubLoad *after* we have cleared the port -> the
+# stray-simulator accumulation seen on the runners.  Here we target the runsim.sh
+# supervisor itself FIRST (SIGTERM lets its trap take its AubLoad child down
+# cleanly), then escalate to SIGKILL.  pgrep only lists (no sudo needed); the
+# actual signal uses `sudo -n kill`, which the runners already allow.
+stop_runsim() {
+    local port="$1" pids
+    local pat="runsim\\.sh +${port}( |\$)"
+    pids=$(pgrep -f "$pat" 2>/dev/null || true)
+    [[ -z "$pids" ]] && return 0
+    echo "Stopping runsim supervisor loop(s) for port $port: $pids"
+    echo "$pids" | xargs -r sudo -n kill 2>/dev/null || true   # SIGTERM -> runsim trap cleans up AubLoad
+    sleep 2
+    pids=$(pgrep -f "$pat" 2>/dev/null || true)
+    if [[ -n "$pids" ]]; then
+        echo "runsim supervisor(s) survived SIGTERM on port $port: $pids — escalating to SIGKILL"
+        echo "$pids" | xargs -r sudo -n kill -9 2>/dev/null || true
     fi
 }
 
@@ -268,6 +294,10 @@ if [[ "$MODE" == "test" ]]; then
         echo "Simulator already listening on port $SIM_PORT — reusing."
     else
         echo "Simulator not running — starting fresh."
+        # Clear any orphaned runsim supervisor that may still hold the per-port
+        # lock (otherwise the refined runsim.sh would refuse to start), then the
+        # port itself.
+        stop_runsim "$SIM_PORT" || true
         kill_existing_on_port "$SIM_PORT" || true
 
         echo "--- Starting CRI simulator (port: $SIM_PORT, max retries: $SIM_MAX_RETRIES) ---"
@@ -286,6 +316,7 @@ if [[ "$MODE" == "test" ]]; then
             fi
 
             echo "WARNING: Simulator attempt $attempt failed. Check simulator logs on the runner if this persists."
+            stop_runsim "$SIM_PORT" || true
             sudo -n kill -9 "$SIM_PID" 2>/dev/null || true
             wait "$SIM_PID" 2>/dev/null || true
             SIM_PID=""
