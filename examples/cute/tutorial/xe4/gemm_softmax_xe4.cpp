@@ -306,7 +306,12 @@ gemm_softmax_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape /*tile
   // ===========================================================================
   {
     constexpr int NumWarps = NumEpilogueWarps;
-    int worker_id = ThreadIdxX();
+    // worker_id MUST be the flat 0..NumWarps*32-1 within the work-group.
+    // ThreadIdxX() returns only the SIMD lane id 0..31 (mapping local_id(2)),
+    // which collapses all warps into warp-0's partition and produces an LDSM
+    // descriptor whose lane-id mapping no longer matches the hardware dispatch
+    // The fix is to use get_local_linear_id.
+    uint32_t worker_id = item.get_local_linear_id();
     sycl::sub_group sg = item.get_sub_group();
 
     // Warp-row factory's template knobs (NumWarps, EuCount, RowsPerWi,

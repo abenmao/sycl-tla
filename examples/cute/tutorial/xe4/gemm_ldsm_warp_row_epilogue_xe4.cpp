@@ -312,7 +312,12 @@ gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler, TileShape tile_shape,
 
   {
     constexpr int NumWarps = NumEpilogueWarps;
-    int worker_id = ThreadIdxX();  // 0..NumWarps*32-1
+    // worker_id MUST be the flat 0..NumWarps*32-1 within the work-group.
+    // ThreadIdxX() returns only the SIMD lane id 0..31 (mapping local_id(2)),
+    // which collapses all warps into warp-0's partition and produces an LDSM
+    // descriptor whose lane-id mapping no longer matches the hardware dispatch
+    // The fix is to use get_local_linear_id.
+    uint32_t worker_id = item.get_local_linear_id();
 
     auto tc_load  = cute::make_ldsm_copy_warp_row_C<NumWarps>(sC);
     auto tc_store = cute::make_ldsm_copy_warp_row_D<NumWarps>(sC);
