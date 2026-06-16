@@ -29,6 +29,9 @@
 
 # Pass these configuration files for the CI
 
+# Dual GEMM benchmark pulls in headers from applications/dual_gemm.
+set(CUTLASS_APPLICATIONS_DIR ${CUTLASS_DIR}/applications)
+
 if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
   set(CONFIG_FILE_CRI_SMALL --config_file=${CUTLASS_DIR}/benchmarks/device/cri/input_files/input_small_gemm.in)
   # ByteDance real-scenario LLM shapes from xpu-perf/micro_perf workloads

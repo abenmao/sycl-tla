@@ -33,6 +33,8 @@
  #pragma once
 
 #include "gemm_configuration_sycl.hpp"
+#include "dual_gemm_benchmark_runner.hpp"
+#include "cutlass/epilogue/thread/activation.h"
 
 using Scheduler = cutlass::gemm::device::Scheduler;
 
@@ -162,6 +164,72 @@ using CriGemm_TF32TF32FP32_TileShape_512_256_16 = Shape<_512, _256, _16>;
 using CriGemm_TF32TF32FP32_Tile_512_256_16 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_TF32TF32FP32_TileShape_512_256_16>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
 using CriGemmTF32TF32FP32_RRR_TileShape_512_256_16 = Gemm_Bench_TF32TF32FP32_RRR<CriGemm_TF32TF32FP32_TileShape_512_256_16, CriGemm_TF32TF32FP32_Tile_512_256_16, void, void>;
 CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmTF32TF32FP32_RRR_TileShape_512_256_16);
+
+// Dual GEMM (sync from example 07_bmg_dual_gemm): one shared A matrix multiplied by two B
+// matrices, fused through a SiLU activation epilogue. Uses MainloopIntelXeXMX16<2> + two
+// linear-combination epilogues. TileShape <_128,_128,_64>, MMA XE_8x16x16_F32BF16BF16F32_TT.
+using BmgDualGemm_BF16FP32_TileShape_128_128_64 = Shape<_128, _128, _64>;
+using BmgDualGemm_BF16FP32_Tile_128_128_64 = typename TiledMMAHelper<
+    MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>,
+    Layout<BmgDualGemm_BF16FP32_TileShape_128_128_64>,
+    Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using BmgDualGemmBF16BF16FP32_RRR_TileShape_128_128_64 = cutlass::gemm::device::DualGemmConfiguration<
+    cutlass::bfloat16_t, cutlass::layout::RowMajor,
+    cutlass::bfloat16_t, cutlass::layout::RowMajor,
+    float,               cutlass::layout::RowMajor,
+    BmgDualGemm_BF16FP32_TileShape_128_128_64,
+    BmgDualGemm_BF16FP32_Tile_128_128_64,
+    XE_2D_U16x16x32_LD_N, XE_2D_U16x32x32_LD_V, 2>;
+CUTLASS_CREATE_DUAL_GEMM_BENCHMARK(BmgDualGemmBF16BF16FP32_RRR_TileShape_128_128_64);
+
+// ---------------------------------------------------------------------------
+// Activation-fused epilogue variants (sync from example 05_bmg_gemm_with_epilogues:
+// 05_bmg_gemm_with_epilogue_{relu,silu,gelu}). Same BF16 GEMM as the baseline but
+// with D = Act(alpha * A*B + beta * C). Uses MainloopXeL1Staged + IntelXeGeneric
+// epilogue, TileShape <_256,_256,_32>, MMA XE_DPAS_TT<8,float,bf16>.
+//
+// NOTE: the generic benchmark verify() compares against a plain GEMM reference and
+// does NOT apply the activation, so it only matches for the baseline. Verification
+// is disabled under CUTLASS_TEST_FOR_CRI (the simulator path), so these cases are
+// intended to be run on the CRI simulator (see input_files/cri/input_epilogue_gemm.in).
+// ---------------------------------------------------------------------------
+template <
+  template <class> class ActivationFn,
+  typename TileShape,
+  typename Tiler,
+  typename GmemTiledCopyA,
+  typename GmemTiledCopyB>
+using Gemm_Bench_BF16FP32_RRR_EltAct = cutlass::gemm::device::GemmConfiguration<
+    cutlass::arch::IntelXe,
+    cutlass::bfloat16_t, cutlass::layout::RowMajor,
+    cutlass::bfloat16_t, cutlass::layout::RowMajor,
+    float, cutlass::layout::RowMajor,
+    float,
+    TileShape, Scheduler::Gemm, Tiler,
+    GmemTiledCopyA, GmemTiledCopyB,
+    cutlass::epilogue::fusion::LinCombEltAct<ActivationFn, float, float, float, float,
+        cutlass::FloatRoundStyle::round_to_nearest>>;
+
+using BmgGemm_EltAct_BF16FP32_TileShape_256_256_32 = Shape<_256, _256, _32>;
+using BmgGemm_EltAct_BF16FP32_Tile_256_256_32 = typename TiledMMAHelper<
+    MMA_Atom<XE_DPAS_TT<8, float, cute::bfloat16_t>>,
+    Layout<BmgGemm_EltAct_BF16FP32_TileShape_256_256_32>,
+    Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+
+using BmgGemmReLUBF16BF16FP32_RRR_TileShape_256_256_32 = Gemm_Bench_BF16FP32_RRR_EltAct<
+    cutlass::epilogue::thread::ReLu, BmgGemm_EltAct_BF16FP32_TileShape_256_256_32,
+    BmgGemm_EltAct_BF16FP32_Tile_256_256_32, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmReLUBF16BF16FP32_RRR_TileShape_256_256_32);
+
+using BmgGemmSiLUBF16BF16FP32_RRR_TileShape_256_256_32 = Gemm_Bench_BF16FP32_RRR_EltAct<
+    cutlass::epilogue::thread::SiLu, BmgGemm_EltAct_BF16FP32_TileShape_256_256_32,
+    BmgGemm_EltAct_BF16FP32_Tile_256_256_32, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmSiLUBF16BF16FP32_RRR_TileShape_256_256_32);
+
+using BmgGemmGELUBF16BF16FP32_RRR_TileShape_256_256_32 = Gemm_Bench_BF16FP32_RRR_EltAct<
+    cutlass::epilogue::thread::GELU, BmgGemm_EltAct_BF16FP32_TileShape_256_256_32,
+    BmgGemm_EltAct_BF16FP32_Tile_256_256_32, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmGELUBF16BF16FP32_RRR_TileShape_256_256_32);
 
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
 
@@ -539,6 +607,12 @@ static void register_gemm_benchmarks() {
   CUTLASS_BENCHMARK(CriGemmFP16FP16FP32_RRR_TileShape_512_256_32);
   CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_512_256_16);
   CUTLASS_BENCHMARK(CriGemmTF32TF32FP32_RRR_TileShape_512_256_16);
+  // Dual GEMM (sync from example 07_bmg_dual_gemm)
+  CUTLASS_BENCHMARK(BmgDualGemmBF16BF16FP32_RRR_TileShape_128_128_64);
+  // Activation-fused epilogues (sync from example 05_bmg_gemm_with_epilogues)
+  CUTLASS_BENCHMARK(BmgGemmReLUBF16BF16FP32_RRR_TileShape_256_256_32);
+  CUTLASS_BENCHMARK(BmgGemmSiLUBF16BF16FP32_RRR_TileShape_256_256_32);
+  CUTLASS_BENCHMARK(BmgGemmGELUBF16BF16FP32_RRR_TileShape_256_256_32);
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
   CUTLASS_BENCHMARK(CriGemmE5M2E5M2FP32_RRR_TileShape_256_256_32);
   CUTLASS_BENCHMARK(CriGemmE4M3E4M3FP32_RRR_TileShape_256_256_32);
