@@ -59,9 +59,41 @@ Base NVIDIA CUTLASS Versions for SYCL*TLA releases:
 |0.8-jgs | 4.2.1 |
 |0.9 | 4.2.1 |
 |0.9-cri | 4.2.1 |
+|0.9-jgs | 4.2.1 |
 |0.9.1 | 4.2.1 |
 |0.9.1-cri | 4.2.1 |
-|0.9-jgs | 4.2.1 |
+|0.9.1-jgs | 4.2.1 |
+
+# What's New in SYCL*TLA [0.9.1-jgs](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.9.1-jgs)
+
+### Architecture & APIs (XE4)
+  - Add XE4 StreamK tile scheduler support ([#502](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/502))
+  - Add XE4 async reduction examples ([#512](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/512))
+  - Add FMHA4 Load/Store Matrix APIs for epilogue flows ([#534](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/534))
+  - Revise XE4 `abarrier` APIs ([#501](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/501))
+  - Enable tensor descriptor update for XE4 copy path ([#563](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/563))
+  - Add XE4 ADMA row-copy CuTe atoms and tiled-mode tutorial (GMEM <-> SLM) ([#566](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/566))
+  - Enhance row-copy API naming and modes (drop `_COLLECTIVE`, add prefetch/completion modes) ([#564](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/564), [#582](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/582))
+
+### GEMM & Flash Attention
+  - Enable direct `cute::gemm` for XE4 TMMA using specialized `mma_unpack`; update TMMA example path and tutorials ([#546](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/546))
+  - Add Xe4 ColBroadcast and ScaledMM epilogue fusion support ([#521](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/521))
+  - Update block-scaled GEMM tutorial to decouple data and scale-factor loading ([#571](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/571))
+
+### Validation & Tooling
+  - Add new unit tests for tensor pipe quantize/dequantize APIs with and without MX scaling ([#569](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/569))
+  - Refactor XE4 GEMM test configs into compact inline-documented format ([#488](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/488))
+  - Use AOT build for PISA target ([#532](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/532))
+  - Add `public-main` CI lane and improve branch autosync/secrets workflow ([#596](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/596), [#511](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/511), [#567](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/567))
+
+### Bug Fixes
+  - Fix GEMM ADMA+AMMA race-condition hang in example path ([#558](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/558))
+  - Fix XE4 ADMA alignment validation for device builds and add runtime Core Matrix alignment validation after ADMA cluster truncation ([#605](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/605), [#581](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/581))
+  - Fix scale-factor errors caused by new xesim behavior ([#585](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/585))
+  - Fix XE4 LDSM examples that failed in release validation ([#654](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/654))
+  - Fix XE4 ADMA linear prefetch/reduction API and tutorial issues (`async_linear_copy` and ADMA copy-path updates) ([#505](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/505))
+  - Fix XE4 LDSM copy-path issues and ADMA reduce inline-assembly/test coverage issues ([#499](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/499), [#500](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/500))
+  - Resolve XE4 build warnings due to C++20 extensions ([#640](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/640))
 
 # What's New in SYCL*TLA [0.9.1-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal/releases/tag/v0.9.1-cri)
 
