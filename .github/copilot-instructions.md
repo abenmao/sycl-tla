@@ -1,5 +1,9 @@
 # Copilot Coding Agent Onboarding — SYCL*TLA
 
+> See [`../AGENTS.md`](../AGENTS.md) for the cross-agent routing index. This
+> file remains the authoritative Copilot-specific onboarding for build, test,
+> and PR steps.
+
 Purpose
 -------
 This file is a short, focused onboarding guide so a coding agent (Copilot coding agent) can make correct, CI-safe changes to the SYCL*TLA repository without long exploratory searches. Keep edits conservative: prefer small, well-tested changes and follow the PR checklist described below.
@@ -148,7 +152,8 @@ Trust these instructions first. Only perform a broad code search if:
 
 Where to look for help
 ----------------------
-- `README.md` and `media/docs/*` for architecture details
+- `../AGENTS.md` — cross-agent routing index (perf / arch / GEMM tuning docs, skills)
+- `README.md` for project overview and supported HW
 - `.github/workflows/` for CI expectations
 - Open issues and PR templates in `.github/ISSUE_TEMPLATE` and `.github/PULL_REQUEST_TEMPLATE`
 
