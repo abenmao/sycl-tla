@@ -33,6 +33,7 @@
  #pragma once
 
 #include "grouped_gemm_configuration_sycl.hpp"
+#include "moe_benchmark_runner.hpp"
 
 template <
   typename TileShape,
@@ -60,6 +61,19 @@ using BmgGroupedGemmBF16BF16FP32_RRR_TileShape_256_256_32 = GroupedGemm_Bench_BF
 CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(BmgGroupedGemmBF16BF16FP32_RRR_TileShape_256_256_32);
 
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+
+// MoE GEMM benchmark aligned with example 12_xe20_moe_gemm_cute_interface:
+// PersistentTileSchedulerXeMoE + TileShape <256, 128, 32>, 8x2 sub-group tiling
+// (n-major), bf16 in/out, XE_DPAS_TT MMA atom.
+using CriMoEGemm_BF16_TileShape_256_128_32 = Shape<_256, _128, _32>;
+using CriMoEGemm_BF16_Tile_256_128_32 = typename TiledMMAHelper<
+    MMA_Atom<XE_DPAS_TT<8, float, cute::bfloat16_t, cute::bfloat16_t>>,
+    Layout<CriMoEGemm_BF16_TileShape_256_128_32>,
+    Layout<Shape<_8, _2, _1>, Stride<_2, _1, _0>>>::TiledMMA;
+using CriMoEGemmBF16BF16BF16_RRR_TileShape_256_128_32 = cutlass::benchmark::MoEGemmConfiguration<
+    cute::bfloat16_t, cute::bfloat16_t, cute::bfloat16_t,
+    CriMoEGemm_BF16_TileShape_256_128_32, CriMoEGemm_BF16_Tile_256_128_32>;
+CUTLASS_CREATE_MOE_GEMM_BENCHMARK(CriMoEGemmBF16BF16BF16_RRR_TileShape_256_128_32);
 
 using E4M3ElementType = cutlass::mx_float8_t<float_e4m3_t>;
 using E4M3ElementInputA = typename E4M3ElementType::DataType;
@@ -220,5 +234,6 @@ static void register_grouped_gemm_benchmarks() {
   CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64);
   CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E5M2E5M2FP32_RRR_TileShape_256_256_32);
   CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_256_256_64);
+  CUTLASS_BENCHMARK(CriMoEGemmBF16BF16BF16_RRR_TileShape_256_128_32);
 #endif
 }
