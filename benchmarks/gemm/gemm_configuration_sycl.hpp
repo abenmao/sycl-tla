@@ -79,6 +79,7 @@ template<
   class TileShape, Scheduler TileScheduler, class TiledMma = void,
   class GmemTiledCopyA = void, class GmemTiledCopyB = void,
   class GmemTiledCopyScaleA = void, class GmemTiledCopyScaleB = void,
+  class GroupSize = _32,
   class EpilogueOp = epilogue::fusion::LinearCombination<float, float, float, float, FloatRoundStyle::round_to_nearest>>
 struct BlockScalingGemmConfiguration {
   static_assert(sizeof(ElementA) == 0, "No valid BlockScalingGemmConfiguration configuration exists.");
@@ -253,6 +254,7 @@ template<class ElementA, class LayoutA,
   class TileShape, Scheduler TileScheduler,
   class TiledMma, class GmemTiledCopyA, class GmemTiledCopyB,  
   class GmemTiledCopyScaleA, class GmemTiledCopyScaleB,
+  class GroupSize,
   class EpilogueOp>
 struct BlockScalingGemmConfiguration<
       arch::IntelXe,
@@ -264,10 +266,11 @@ struct BlockScalingGemmConfiguration<
       TileShape, TileScheduler, TiledMma,
       GmemTiledCopyA, GmemTiledCopyB, 
       GmemTiledCopyScaleA, GmemTiledCopyScaleB,
+      GroupSize,
       EpilogueOp>
 {
   static constexpr int PipelineStages = 2;
-  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages>;
+  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages, GroupSize>;
   using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
 
   // Configurations in benchmarks.hpp can pass either a layout tag (e.g. RowMajor) or a Stride directly
@@ -332,6 +335,7 @@ template<class ElementA, class LayoutA,
   class TileShape, Scheduler TileScheduler,
   class TiledMma, class GmemTiledCopyA, class GmemTiledCopyB,
   class GmemTiledCopyScaleA, class GmemTiledCopyScaleB,
+  class GroupSize,
   class EpilogueOp>
 struct BlockScalingGemmConfiguration<
       arch::IntelXe,
@@ -343,10 +347,11 @@ struct BlockScalingGemmConfiguration<
       TileShape, TileScheduler, TiledMma,
       GmemTiledCopyA, GmemTiledCopyB,
       GmemTiledCopyScaleA, GmemTiledCopyScaleB,
+      GroupSize,
       EpilogueOp>
 {
   static constexpr int PipelineStages = 2;
-  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages>;
+  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages, GroupSize>;
   using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
 
   using StrideA = std::conditional_t<cute::is_tuple_v<LayoutA>, LayoutA, TagToStrideA_t<LayoutA>>;

@@ -35,7 +35,7 @@
 
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/dispatch_policy.hpp"
-#include "cutlass/gemm/collective/xe_common_blockscaled_mxfp.hpp"
+#include "cutlass/gemm/collective/xe_mma_blockscaled_scale_traits.hpp"
 #include "cute/algorithm/functional.hpp"
 #include "cute/algorithm/gemm.hpp"
 #include "cute/algorithm/subgroup_algorithms.hpp"

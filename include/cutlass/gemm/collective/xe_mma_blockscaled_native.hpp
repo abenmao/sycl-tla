@@ -34,7 +34,8 @@
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/dispatch_policy.hpp"
 #include "cutlass/fp8_to_fp16.h"
-#include "cutlass/gemm/collective/xe_common_blockscaled_mxfp.hpp"
+#include "cutlass/gemm/collective/xe_mma_blockscaled_fallback.hpp"
+#include "cutlass/gemm/collective/xe_mma_blockscaled_scale_traits.hpp"
 #include "cute/algorithm/functional.hpp"
 #include "cute/atom/mma_atom.hpp"
 #include "cute/algorithm/gemm.hpp"
@@ -65,7 +66,7 @@ template <
   class SmemCopyAtomB_,
   class TransformB_>
 struct CollectiveMma<
-  MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::Int<GroupSize>, KernelSchedule>,
+  MainloopIntelXeXMX16BlockScaled<Stages, cute::Int<GroupSize>, KernelSchedule>,
     TileShape_,
     ElementPairA_,
     StridePairA_,
@@ -85,7 +86,7 @@ public:
   //
   // Type Aliases
   //
-  using DispatchPolicy = MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::Int<GroupSize>, KernelSchedule>;
+  using DispatchPolicy = MainloopIntelXeXMX16BlockScaled<Stages, cute::Int<GroupSize>, KernelSchedule>;
   using WorkgroupTileShape = TileShape_;
 
   using GmemTiledCopyPairA = GmemTiledCopyPairA_;
@@ -119,8 +120,6 @@ public:
   using ElementAccumulator = typename TiledMma::ValTypeC;
 
 
-  // using GmemTiledCopyA = void;
-  // using GmemTiledCopyB = void;
   using GmemTiledCopyA = typename std::tuple_element<0, GmemTiledCopyPairA>::type;
   using GmemTiledCopyB = typename std::tuple_element<0, GmemTiledCopyPairB>::type;
   using GmemTiledCopyScaleA = typename std::tuple_element<1, GmemTiledCopyPairA>::type;
@@ -165,18 +164,19 @@ public:
     }
   }();
 
-  static_assert(!(cute::is_same_v<ElementA, cutlass::float_e2m1_t> || 
-                  cute::is_same_v<ElementB, cutlass::float_e2m1_t>) || (GroupSize == 32), 
-                "Intel Xe blockscaled MMA only supports GroupSize=32 for e2m1 inputs.");
-
   static_assert(std::is_same_v<TransformA, cute::identity>, "Transformation for A is not currently supported on Intel PVC");
   static_assert(std::is_same_v<TransformB, cute::identity>, "Transformation for B is not currently supported on Intel PVC");
-  static_assert(kSupportedElementA && kSupportedElementB,
-                "Intel Xe blockscaled MMA only supports bf8 and hf8 operand types.");
-  static_assert(kScaleALeftmostUnitStride,
-                "Intel Xe blockscaled MMA requires scale A leftmost stride to be _1.");
-  static_assert(kScaleBLeftmostUnitStride,
-                "Intel Xe blockscaled MMA requires scale B leftmost stride to be _1.");
+
+  // Compile-time eligibility for native MXFP block-scaled path.
+  // Checked via can_implement() rather than static_assert to allow the proxy
+  // CollectiveMma to instantiate NativeImpl for runtime dispatch even when
+  // the template arguments are incompatible.
+  static constexpr bool kNativeEligible =
+      kSupportedElementA && kSupportedElementB &&
+      kScaleALeftmostUnitStride && kScaleBLeftmostUnitStride &&
+      (sizeof_bits_v<ElementSF> == 8) &&
+      (!(cute::is_same_v<ElementA, cutlass::float_e2m1_t> ||
+         cute::is_same_v<ElementB, cutlass::float_e2m1_t>) || (GroupSize == 32));
 
 public:
   static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize;
@@ -221,7 +221,7 @@ public:
   using NonVoidElementScaleA = cute::conditional_t<cute::is_void_v<ElementScaleA>, DefScaleType, ElementScaleA>;
   using NonVoidElementScaleB = cute::conditional_t<cute::is_void_v<ElementScaleB>, DefScaleType, ElementScaleB>;
 
-  static_assert(sizeof_bits_v<NonVoidElementScaleA> == 8 && sizeof_bits_v<NonVoidElementScaleB> == 8);
+  static constexpr bool k8bitScales = sizeof_bits_v<NonVoidElementScaleA> == 8 && sizeof_bits_v<NonVoidElementScaleB> == 8;
 
   // 2D block load requires surface width to be 4-byte aligned.
   // Physical scale extents must be multiples of ScaleAlignElems; callers may pad scale storage.
@@ -286,12 +286,8 @@ public:
 
     bool implementable = true;
 
-    if constexpr (cute::is_same_v<ElementA, cutlass::float_e2m1_t> ||
-                  cute::is_same_v<ElementB, cutlass::float_e2m1_t>) {
-      if (GroupSize != 32) {
-        CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Intel Xe blockscaled MMA only supports GroupSize=32 for e2m1 inputs.\n");
-        implementable = false;
-      }
+    if constexpr (!kNativeEligible) {
+      return false;
     }
 
     constexpr int min_aligned_elements_A = copy_alignment_bits / sizeof_bits<ElementA>::value;
@@ -310,18 +306,9 @@ public:
       CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Problem Size doesn't meet the minimum alignment requirements for XE 2D copy.\n");
     }
 
-    int scale_m_extent = static_cast<int>(M);
-    int scale_n_extent = static_cast<int>(N);
-    if constexpr (!cute::is_void_v<StrideScaleA>) {
-      scale_m_extent = cute::max(scale_m_extent, static_cast<int>(get<1>(args.dSA)));
-    }
-    if constexpr (!cute::is_void_v<StrideScaleB>) {
-      scale_n_extent = cute::max(scale_n_extent, static_cast<int>(get<1>(args.dSB)));
-    }
-
-    // 2D block load requires physical scale extents to be multiples of ScaleAlignElems
-    // (4 for 8-bit scales). Logical M/N may be unaligned if scale storage is padded.
-    if (scale_m_extent % ScaleAlignElems != 0 || scale_n_extent % ScaleAlignElems != 0) {
+    // 2D block load requires M/N to be multiples of ScaleAlignElems (4 for 8-bit scales).
+    // For unaligned M/N, use the tuple-based MXFP block-scaled scalar scale-load variant instead.
+    if (M % ScaleAlignElems != 0 || N % ScaleAlignElems != 0) {
       CUTLASS_TRACE_HOST("  CAN IMPLEMENT: physical scale extents are not aligned for 2D block load. "
                          "Pad scale storage for MXFP scale factors.\n");
       implementable = false;
@@ -354,7 +341,6 @@ public:
     static_assert(is_rmem<FrgTensorC>::value, "C tensor must be rmem resident.");
 
     // Partition the copying of A and B tiles across the threads
-    (void)blk_coord;
     auto batch_idx = get<3>(blk_coord);
     auto copy_a = get_block_2d_copy_A<GmemTiledCopyA>(TiledMma{}, mainloop.mA_mkl(_,_,batch_idx));
     auto copy_b = get_block_2d_copy_B<GmemTiledCopyB>(TiledMma{}, mainloop.mB_nkl(_,_,batch_idx));
@@ -421,10 +407,10 @@ public:
     int prefetch_k = k_start_idx;
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
-        prefetch(prefetch_a, pAgA(_, _, _, prefetch_k));
-        prefetch(prefetch_b, pBgB(_, _, _, prefetch_k));
-        prefetch(tiled_prefetch_scaleA, prefetch_iter_scaleA(_, _, _, prefetch_k / k_reload_factor));
-        prefetch(tiled_prefetch_scaleB, prefetch_iter_scaleB(_, _, _, prefetch_k / k_reload_factor));
+      prefetch(prefetch_a, pAgA(_, _, _, prefetch_k));
+      prefetch(prefetch_b, pBgB(_, _, _, prefetch_k));
+      prefetch(tiled_prefetch_scaleA, prefetch_iter_scaleA(_, _, _, prefetch_k / k_reload_factor));
+      prefetch(tiled_prefetch_scaleB, prefetch_iter_scaleB(_, _, _, prefetch_k / k_reload_factor));
     }
 
     for (int k_tile = k_start_idx; k_tile < k_tile_count + k_start_idx; k_tile++, prefetch_k++) {

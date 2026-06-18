@@ -1,4 +1,5 @@
 /***************************************************************************************************
+ * Copyright (c) 2025 - 2025 Codeplay Software Ltd. All rights reserved.
  * Copyright (C) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
@@ -32,20 +33,25 @@
 
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/dispatch_policy.hpp"
-#include "cutlass/fp8_to_fp16.h"
 
 #include "cute/algorithm/functional.hpp"
 #include "cute/atom/mma_atom.hpp"
 #include "cute/algorithm/gemm.hpp"
-#include "cutlass/gemm/collective/xe_mma_blockscaled_fp8.hpp"
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 namespace cutlass::gemm::collective {
 
+/// Array/Grouped variant of block-scaled GEMM (MXFP with Int<GroupSize> for K-only blocking)
+///
+/// This specializes MainloopIntelXeXMX16BlockScaledGroup for grouped GEMM dispatch,
+/// dispatching through the block-scaled MainloopIntelXeXMX16BlockScaled entry,
+/// which selects between Native and Fallback implementations at compile-time.
+///
+/// Extends the base CollectiveMma with ptr-array Arguments for batch processing
+/// and per-group tensor views and alignment checks. Enforces e2m1 GroupSize==32 constraint.
 template <
   int Stages,
-  class GroupSizeM_,
-  class GroupSizeN_,
-  class GroupSizeK_,
+  int GroupSize,
   class Schedule,
   class TileShape_,
   class ElementPairA_,
@@ -62,7 +68,7 @@ template <
   class SmemCopyAtomB_,
   class TransformB_>
 struct CollectiveMma<
-  MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, cute::tuple<GroupSizeM_, GroupSizeN_, GroupSizeK_>, Schedule>,
+  MainloopIntelXeXMX16BlockScaledGroup<Stages, cute::Int<GroupSize>, Schedule>,
     TileShape_,
     ElementPairA_,
     StridePairA_,
@@ -77,7 +83,7 @@ struct CollectiveMma<
     SmemLayoutAtomB_,
     SmemCopyAtomB_,
     TransformB_> : 
-    public CollectiveMma<MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::tuple<GroupSizeM_, GroupSizeN_, GroupSizeK_>>,
+    public CollectiveMma<MainloopIntelXeXMX16BlockScaled<Stages, cute::Int<GroupSize>, KernelXe>,
                               TileShape_,
                               ElementPairA_,
                               StridePairA_,
@@ -93,12 +99,8 @@ struct CollectiveMma<
                               SmemCopyAtomB_,
                               TransformB_>
 {
-public:
-  //
-  // Type Aliases
-  //
-  using DispatchPolicy = MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, cute::tuple<GroupSizeM_, GroupSizeN_, GroupSizeK_>, Schedule>;
-  using Base = CollectiveMma<MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::tuple<GroupSizeM_, GroupSizeN_, GroupSizeK_>>,
+private:
+  using Base = CollectiveMma<MainloopIntelXeXMX16BlockScaled<Stages, cute::Int<GroupSize>, KernelXe>,
                     TileShape_,
                     ElementPairA_,
                     StridePairA_,
@@ -114,32 +116,27 @@ public:
                     SmemCopyAtomB_,
                     TransformB_>;
 
-    using BaseArguments = typename Base::Arguments;
-    using BaseParams = typename Base::Params;
+public:
+  using DispatchPolicy = MainloopIntelXeXMX16BlockScaledGroup<Stages, cute::Int<GroupSize>, Schedule>;
+  using BaseArguments = typename Base::Arguments;
 
-    using ElementA = typename Base::ElementA;
-    using ElementB = typename Base::ElementB;
-    using StrideA  = remove_cvref_t<decltype(get<0>(StridePairA_{}))>;
-    using StrideB  = remove_cvref_t<decltype(get<0>(StridePairB_{}))>;
-    using InternalStrideA = cute::remove_pointer_t<StrideA>;
-    using InternalStrideB = cute::remove_pointer_t<StrideB>;
+  // Forward type aliases from base proxy (which handles native/fallback dispatch)
+  using ElementA = typename Base::ElementA;
+  using ElementB = typename Base::ElementB;
+  using ElementScaleA = typename Base::ElementScaleA;
+  using ElementScaleB = typename Base::ElementScaleB;
 
-    using ElementScaleA = typename Base::ElementScaleA;
-    using ElementScaleB = typename Base::ElementScaleB;
-    using InternalStrideScaleA = typename Base::StrideScaleA;
-    using InternalStrideScaleB = typename Base::StrideScaleB;
+  // Array-specific stride aliases
+  using StrideA  = remove_cvref_t<decltype(get<0>(StridePairA_{}))>;
+  using StrideB  = remove_cvref_t<decltype(get<0>(StridePairB_{}))>;
+  using InternalStrideA = cute::remove_pointer_t<StrideA>;
+  using InternalStrideB = cute::remove_pointer_t<StrideB>;
+  using StrideScaleA = remove_cvref_t<decltype(get<1>(StridePairA_{}))>;
+  using StrideScaleB = remove_cvref_t<decltype(get<1>(StridePairB_{}))>;
+  using InternalStrideScaleA = cute::remove_pointer_t<StrideScaleA>;
+  using InternalStrideScaleB = cute::remove_pointer_t<StrideScaleB>;
 
-    using StrideScaleA = remove_cvref_t<decltype(get<1>(StridePairA_{}))>;
-    using StrideScaleB = remove_cvref_t<decltype(get<1>(StridePairB_{}))>;
-
-    using TensorMKL = decltype(make_tensor(make_gmem_ptr(static_cast<ElementA const*>(nullptr)), make_shape(0,0,0), InternalStrideA{}));
-    using TensorNKL = decltype(make_tensor(make_gmem_ptr(static_cast<ElementB const*>(nullptr)), make_shape(0,0,0), InternalStrideB{}));
-    using TensorScaleA = decltype(make_tensor(make_gmem_ptr(static_cast<ElementScaleA const*>(nullptr)), make_shape(0,0,0), InternalStrideScaleA{}));
-    using TensorScaleB = decltype(make_tensor(make_gmem_ptr(static_cast<ElementScaleB const*>(nullptr)), make_shape(0,0,0), InternalStrideScaleB{}));
-
-    using MainloopTensors = cute::tuple<TensorMKL, TensorNKL, TensorScaleA, TensorScaleB>;
-  
-  // Host side kernel arguments — ptr-array for grouped GEMM
+  // ptr-array Arguments for grouped GEMM dispatch
   struct Arguments {
     ElementA const** ptr_A;
     StrideA dA;
@@ -153,29 +150,18 @@ public:
 
   using Params = Arguments;
 
-  //
-  // Methods
-  //
-
   CollectiveMma() = default;
 
   template <class ProblemShape>
   static constexpr Params
   to_underlying_arguments(ProblemShape const &problem_shape,
                           Arguments const &args, void *workspace) {
+    (void)problem_shape;
     (void)workspace;
-
-    auto problem_shape_MNK = repeat_like(typename ProblemShape::UnderlyingProblemShape{}, int32_t(1));
-    auto init_M = get<0>(problem_shape_MNK);
-    auto init_N = get<1>(problem_shape_MNK);
-    auto init_K = get<2>(problem_shape_MNK);
-
-    return Params{
-      args
-    };
+    return Params{args};
   }
 
-  /// Convert grouped arguments to single-GEMM base arguments for the given group index
+  /// Convert ptr-array arguments to single-GEMM base arguments for group idx
   CUTLASS_DEVICE static constexpr BaseArguments
   to_base_arguments(Arguments const &args, int idx) {
     return BaseArguments{ args.ptr_A[idx], args.dA[idx],
@@ -184,28 +170,36 @@ public:
                           args.ptr_SB[idx], args.dSB[idx]};
   }
 
+  /// Validate grouped GEMM alignment constraints and format-specific restrictions
   template<class ProblemShape>
   static bool
-  can_implement(
-      ProblemShape problem_shapes,
-      Arguments const& args) {
-    constexpr int copy_alignment_bits = 128;
-    constexpr int batch_alignment_bits = 512;
-    auto problem_shape_MNKL = append<4>(problem_shapes, 1);
-    auto [M,N,K,L] = problem_shape_MNKL;
-
+  can_implement(ProblemShape problem_shapes, Arguments const& args) {
     bool implementable = true;
 
+    // e2m1 format requires GroupSize == 32
+    if constexpr (cute::is_same_v<ElementA, cutlass::float_e2m1_t> ||
+                  cute::is_same_v<ElementB, cutlass::float_e2m1_t>) {
+      if (GroupSize != 32) {
+        CUTLASS_TRACE_HOST("  CAN IMPLEMENT: e2m1 MXFP requires GroupSize=32.\n");
+        return false;
+      }
+    }
+
+    constexpr int copy_alignment_bits = 128;
+    constexpr int batch_alignment_bits = 512;
     constexpr int min_aligned_elements_A = copy_alignment_bits / sizeof_bits<ElementA>::value;
     constexpr int min_aligned_elements_B = copy_alignment_bits / sizeof_bits<ElementB>::value;
     constexpr int min_batch_aligned_elements_A = batch_alignment_bits / sizeof_bits<ElementA>::value;
     constexpr int min_batch_aligned_elements_B = batch_alignment_bits / sizeof_bits<ElementB>::value;
-    for (int i = 0; i < problem_shapes.groups(); i++) {
+
+    for (int i = 0; i < problem_shapes.groups(); ++i) {
       auto problem_shape_MNKL = append<4>(problem_shapes.get_host_problem_shape(i), 1);
       auto [M,N,K,L] = problem_shape_MNKL;
 
-      implementable &= cutlass::detail::check_alignment<min_aligned_elements_A>(cute::make_shape(M,K,L), InternalStrideA{});
-      implementable &= cutlass::detail::check_alignment<min_aligned_elements_B>(cute::make_shape(N,K,L), InternalStrideB{});
+      implementable &= cutlass::detail::check_alignment<min_aligned_elements_A>(
+          cute::make_shape(M,K,L), InternalStrideA{});
+      implementable &= cutlass::detail::check_alignment<min_aligned_elements_B>(
+          cute::make_shape(N,K,L), InternalStrideB{});
 
       if (L > 1) {
         implementable &= get<2>(InternalStrideA{}) % min_batch_aligned_elements_A == 0;
@@ -214,9 +208,8 @@ public:
     }
 
     if (!implementable) {
-      CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Problem Size doesn't meet the minimum alignment requirements for XE 2D copy.\n");
+      CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Grouped GEMM alignment requirements not met for XE 2D copy.\n");
     }
-
     return implementable;
   }
 

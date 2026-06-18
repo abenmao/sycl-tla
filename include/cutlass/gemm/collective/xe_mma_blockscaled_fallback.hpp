@@ -74,7 +74,7 @@ template <
   class SmemCopyAtomB_,
   class TransformB_>
 struct CollectiveMma<
-  MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::tuple<GroupSizeM_, GroupSizeN_, GroupSizeK_>, KernelSchedule>,
+  MainloopIntelXeXMX16BlockScaled<Stages, cute::tuple<GroupSizeM_, GroupSizeN_, GroupSizeK_>, KernelSchedule>,
     TileShape_,
     ElementPairA_,
     StridePairA_,
@@ -94,7 +94,7 @@ public:
   //
   // Type Aliases
   //
-  using DispatchPolicy = MainloopIntelXeXMX16BlockScaledImpl<Stages, cute::tuple<GroupSizeM_, GroupSizeN_, GroupSizeK_>, KernelSchedule>;
+  using DispatchPolicy = MainloopIntelXeXMX16BlockScaled<Stages, cute::tuple<GroupSizeM_, GroupSizeN_, GroupSizeK_>, KernelSchedule>;
   using WorkgroupTileShape = TileShape_;
 
   using GmemTiledCopyPairA = GmemTiledCopyPairA_;
@@ -186,13 +186,19 @@ public:
   // Use fine-grain K-scale loading whenever GroupK boundaries can fall within a BLK_K tile.
   static constexpr bool kFineGrainScaleK = (GroupK < BLK_K) || ((GroupK % BLK_K) != 0);
 
+  // Sub-atom scale path: GroupK < ATOM_K means scale factors change within a single DPAS
+  // invocation's K range. DPAS accumulates across ATOM_K elements, so we cannot apply
+  // different scales to sub-ranges of one DPAS call. Instead, we bypass DPAS and perform
+  // the scaled multiply-accumulate in software at GroupK granularity.
+  static constexpr bool kSubAtomScaleK = (GroupK < ATOM_K);
+
   // Deferred-scale path: applies to the broadcast-scale-B path (GroupN != 1;
   // the static_assert above guarantees each SG_N tile stays within one GroupN block)
   // and to aligned K-scale groups (GroupK >= BLK_K and GroupK is a multiple of BLK_K).
   // In this regime scaleA/scaleB stay constant over each BLK_K tile and GroupK boundaries
   // align with tile boundaries, so DPAS can accumulate raw results and apply the combined
   // scale once when draining each GroupK block.
-  static constexpr bool kUseDeferredScale = (!kPerLaneScaleB) && (!kFineGrainScaleK);
+  static constexpr bool kUseDeferredScale = (!kPerLaneScaleB) && (!kFineGrainScaleK) && (!kSubAtomScaleK);
 
   // Accumulator iterations
   static constexpr int M_ITERS = SG_M / ATOM_M;
@@ -440,6 +446,99 @@ public:
     }
   }
 
+  /// Sub-atom scale constants (only valid when kSubAtomScaleK is true)
+  static constexpr int SUB_K_ITERS = kSubAtomScaleK ? (ATOM_K / GroupK) : 1;
+  // Number of uint32_t words in B vector per GroupK chunk
+  static constexpr int B_bits_per_group = kSubAtomScaleK ? (GroupK * int(sizeof_bits_v<ElementB>)) : 0;
+  static constexpr int B_words_per_group = kSubAtomScaleK ? (B_bits_per_group / 32) : 0;
+  static constexpr int B_words_total = kSubAtomScaleK ? (ATOM_K * int(sizeof_bits_v<ElementB>) / 32) : 0;
+  // Number of uint32_t words in A vector per atom
+  static constexpr int A_vec_elems = (ATOM_M * ATOM_K + 15) / 16;
+  static constexpr int A_words_per_atom = kSubAtomScaleK ? (A_vec_elems * int(sizeof_bits_v<ElementA>) / 32) : 0;
+
+  // DPAS types used in the sub-atom scale path
+  using DpasOp  = XE_DPAS_TT<ATOM_M, ElementAccumulator, ElementA, ElementB, ElementAccumulator>;
+  using DpasAVec = typename DpasOp::AVector;
+  using DpasBVec = typename DpasOp::BVector;
+  using DpasDVec = typename DpasOp::DVector;
+  using DpasCVec = typename DpasOp::CVector;
+
+  /// Sub-atom scale GEMM: split each DPAS into ATOM_K/GroupK partial calls
+  /// with masked B vectors so each K sub-range gets its own scale factor.
+  template <class FrgTensorD, class FrgTensorA, class FrgTensorB>
+  CUTLASS_DEVICE static void
+  sub_atom_scale_gemm(FrgTensorD &accum,
+                      FrgTensorA const &tCrA,
+                      FrgTensorB const &tCrB,
+                      int k_tile,
+                      Params const &mainloop,
+                      int m_coord,
+                      int n_coord,
+                      int l_coord,
+                      int M_extent,
+                      int N_scale_extent,
+                      [[maybe_unused]] int n_scale_coord,
+                      [[maybe_unused]] int lane_id) {
+    constexpr int K_ITERS = SG_K / ATOM_K;
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int ki = 0; ki < K_ITERS; ++ki) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int mi = 0; mi < M_ITERS; ++mi) {
+        // Build DpasAVec from the A fragment via uint32_t word copy
+        DpasAVec a_vec{};
+        {
+          auto a_words = recast<uint32_t>(tCrA(_, mi, ki));
+          auto a_ptr = reinterpret_cast<uint32_t*>(&a_vec);
+          CUTLASS_PRAGMA_UNROLL
+          for (int w = 0; w < A_words_per_atom; ++w) {
+            a_ptr[w] = a_words(w);
+          }
+        }
+
+        CUTLASS_PRAGMA_UNROLL
+        for (int ni = 0; ni < N_ITERS; ++ni) {
+          auto b_words = recast<uint32_t>(tCrB(_, ni, ki));
+
+          CUTLASS_PRAGMA_UNROLL
+          for (int sub_k = 0; sub_k < SUB_K_ITERS; ++sub_k) {
+            const int k_abs = k_tile * BLK_K + ki * ATOM_K + sub_k * GroupK;
+            const int k_scale_idx = k_abs / GroupK;
+
+            // Masked B: only the current GroupK chunk is nonzero
+            DpasBVec b_masked{};
+            auto b_masked_ptr = reinterpret_cast<uint32_t*>(&b_masked);
+            CUTLASS_PRAGMA_UNROLL
+            for (int w = 0; w < B_words_per_group; ++w) {
+              b_masked_ptr[sub_k * B_words_per_group + w] = b_words(sub_k * B_words_per_group + w);
+            }
+
+            DpasDVec partial{};
+            DpasCVec zero_c{};
+            DpasOp::fma(partial, a_vec, b_masked, zero_c);
+
+            // Apply per-element scales and accumulate
+            auto partial_ptr = reinterpret_cast<ElementAccumulator*>(&partial);
+            CUTLASS_PRAGMA_UNROLL
+            for (int v = 0; v < ATOM_M; ++v) {
+              const ElementScaleA sa = load_scale_a_value(
+                  mainloop, m_coord + mi * ATOM_M + v, k_scale_idx, l_coord, M_extent);
+              ElementScaleB sb;
+              if constexpr (kPerLaneScaleB) {
+                sb = load_scale_b_value(
+                    mainloop, n_coord + ni * ATOM_N + lane_id, k_scale_idx, l_coord, N_scale_extent);
+              } else {
+                sb = static_cast<ElementScaleB>(mainloop.mBscale(n_scale_coord, k_scale_idx, l_coord));
+              }
+              using ElemAcc = cute::remove_cvref_t<decltype(accum(v, mi, ni))>;
+              accum(v, mi, ni) += static_cast<ElemAcc>(static_cast<float>(partial_ptr[v]) * static_cast<float>(sa) * static_cast<float>(sb));
+            }
+          }
+        }
+      }
+    }
+  }
+
   template <class FrgTensorD,
     class TensorA,
     class TensorB,
@@ -558,7 +657,9 @@ public:
 
     for (int k_tile = k_start_idx; k_tile < k_tile_end; k_tile++, prefetch_k++) {
 
-      if constexpr (kPerLaneScaleB) {
+      if constexpr (kSubAtomScaleK) {
+        // Sub-atom path: scale loading is handled inline in the GEMM loop below.
+      } else if constexpr (kPerLaneScaleB) {
         // Per-lane scale path (GroupN=1): reload both scales per ki.
         CUTLASS_PRAGMA_UNROLL
         for (int ki = 0; ki < GEMM_K_ITERS; ++ki) {
@@ -606,7 +707,10 @@ public:
       reorder(tArA, tCrA);
       reorder(tBrB, tCrB);
 
-      if constexpr (kUseDeferredScale) {
+      if constexpr (kSubAtomScaleK) {
+        sub_atom_scale_gemm(accum, tCrA, tCrB, k_tile, mainloop,
+            m_coord, n_coord, l_coord, M_extent, N_scale_extent, n_scale_coord, lane_id);
+      } else if constexpr (kUseDeferredScale) {
         // Direct DPAS accumulation into raw_accum (no per-element scale multiply).
         // The 16 DPAS atoms become back-to-back, freeing float ALU bandwidth between tiles.
         cute::gemm(tiled_mma, tCrA, tCrB, raw_accum);

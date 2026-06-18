@@ -155,7 +155,7 @@ template <class DispatchPolicy>
 struct RunnerScalePolicy;
 
 template <int Stages, int GroupSize, class KernelSchedule>
-struct RunnerScalePolicy<cutlass::gemm::MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, cute::Int<GroupSize>, KernelSchedule>> {
+struct RunnerScalePolicy<cutlass::gemm::MainloopIntelXeXMX16BlockScaledGroup<Stages, cute::Int<GroupSize>, KernelSchedule>> {
   static constexpr int group_k = GroupSize;
   static constexpr int group_n = 1;
   static constexpr bool has_n_block_scale = false;
@@ -172,7 +172,7 @@ struct RunnerScalePolicy<cutlass::gemm::MainloopIntelXeXMX16BlockScaledGroupImpl
 };
 
 template <int Stages, class GroupSizeM, class GroupSizeN, class GroupSizeK, class KernelSchedule>
-struct RunnerScalePolicy<cutlass::gemm::MainloopIntelXeXMX16BlockScaledGroupImpl<Stages, cute::tuple<GroupSizeM, GroupSizeN, GroupSizeK>, KernelSchedule>> {
+struct RunnerScalePolicy<cutlass::gemm::MainloopIntelXeXMX16BlockScaledGroup<Stages, cute::tuple<GroupSizeM, GroupSizeN, GroupSizeK>, KernelSchedule>> {
   static constexpr int group_k = GroupSizeK::value;
   static constexpr int group_n = GroupSizeN::value;
   static constexpr bool has_n_block_scale = true;
