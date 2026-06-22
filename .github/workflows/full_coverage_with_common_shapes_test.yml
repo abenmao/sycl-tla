@@ -18,6 +18,18 @@ env:
   SSH_OPTS: "-o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
   REMOTE_CPU_THRESHOLD: "32"
   REMOTE_RAM_THRESHOLD: "128"
+  # Remote build step timeout (general compile budget, minutes) and the extra
+  # grace margin before a still-running container is treated as an orphan.
+  # Change these two; the build-step timeout and the orphan-reap age are both
+  # derived from them, so they stay in sync automatically.
+  #
+  # Empirically a clean remote compile finishes in ~30+ minutes, so 60 min is a
+  # deliberate ~2x headroom (slow disk / contention / re-runs), not a guess.
+  # Re-measure if the build set changes and tune this down/up accordingly; any
+  # downstream decision keyed off this value should be validated against real
+  # timings rather than assumed.
+  BUILD_STEP_TIMEOUT_MIN: "60"
+  ORPHAN_REAP_GRACE_MIN: "10"
 
 jobs:
   run-tests:
@@ -73,7 +85,7 @@ jobs:
         id: remote-build
         if: steps.build-strategy.outputs.use_remote == 'true'
         continue-on-error: true
-        timeout-minutes: 60
+        timeout-minutes: ${{ env.BUILD_STEP_TIMEOUT_MIN }}
         shell: bash
         run: |
           BUILD_ID="${{ github.run_id }}-common-${{ runner.name }}-${{ github.run_attempt }}"
@@ -92,6 +104,42 @@ jobs:
             echo "failure_type=infra" >> $GITHUB_OUTPUT
             exit 1
           fi
+
+          # Startup sweep: reap orphaned build containers left by previously
+          # cancelled/timed-out runs. The build's docker run is parented by
+          # dockerd (not the SSH client), so a cancelled run can leave a
+          # container alive after the SSH client is killed.
+          #
+          # This sweep is the ONLY layer that can reap orphans left by *other*
+          # runs (the trap and the always() cleanup only touch this run's own
+          # CONTAINER_NAME). It runs best-effort and only when this step is
+          # reached -- if the build server is unreachable we exit above first.
+          #
+          # The reap threshold is BUILD_STEP_TIMEOUT_MIN + ORPHAN_REAP_GRACE_MIN
+          # (default 60 + 10 = 70 min), derived into REAP_AGE_S below so the two
+          # env knobs at the top of this workflow stay the single source of truth.
+          # It sits just above the build step timeout: a container older than the
+          # step timeout is guaranteed orphaned -- GitHub has already force-cancelled
+          # its step -- so the timeout alone already has zero false-positive risk;
+          # the grace margin just covers the timeout boundary.
+          REAP_AGE_S=$(( (BUILD_STEP_TIMEOUT_MIN + ORPHAN_REAP_GRACE_MIN) * 60 ))
+          ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} '
+            now=$(date +%s)
+            for cid in $(docker ps -q --filter "name=cutlass-build-"); do
+              started=$(docker inspect -f "{{.State.StartedAt}}" "$cid" 2>/dev/null)
+              [ -z "$started" ] && continue
+              # If StartedAt cannot be parsed, fall back to "now" (age 0) so the
+              # container is KEPT, not reaped -- never docker rm -f a container we
+              # cannot prove is old. A leaked orphan is caught later (24h cleanup);
+              # wrongly reaping a live build would break a legitimate run.
+              started_s=$(date -d "$started" +%s 2>/dev/null || echo "$now")
+              if [ $(( now - started_s )) -gt '"${REAP_AGE_S}"' ]; then
+                name=$(docker inspect -f "{{.Name}}" "$cid" 2>/dev/null)
+                echo "Reaping orphan build container ${name#/} (age $(( now - started_s ))s)"
+                docker rm -f "$cid" >/dev/null 2>&1 || true
+              fi
+            done
+          ' || true
 
           # Find a oneAPI installation on build server with matching compiler version
           ONEAPI_REAL_PATH=$(readlink -f /opt/intel/oneapi)
@@ -143,7 +191,7 @@ jobs:
             done
           " || true
 
-          # Layer 2: Full remote build (protected by 30-min step timeout)
+          # Layer 2: Full remote build (protected by the BUILD_STEP_TIMEOUT_MIN step timeout)
           # On re-run (attempt > 1), clean previous attempt's leftover dirs.
           # Docker may leave root-owned artifacts that rsync cannot overwrite.
           PREV_ATTEMPT_BUILD_ID="${{ github.run_id }}-common-${{ runner.name }}-$(( ${{ github.run_attempt }} - 1 ))"
@@ -166,9 +214,22 @@ jobs:
 
           # --- Compilation (EXIT_COMPILE_ERROR=42 from build.sh = code error → no fallback) ---
 
+          # Name the container so it can be force-removed if this step is cancelled
+          # or times out. The docker run is launched over SSH, so its real parent is
+          # dockerd on the build server — not this SSH client. Without an explicit
+          # kill, cancelling the run orphans the container, which keeps compiling and
+          # consuming RAM. This trap is a best-effort kill within the cancel grace
+          # period; the startup sweep and always() cleanup are the other two layers.
+          CONTAINER_NAME="cutlass-build-${BUILD_ID}"
+          kill_remote_container() {
+            ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} \
+              "docker rm -f ${CONTAINER_NAME} >/dev/null 2>&1" || true
+          }
+          trap kill_remote_container EXIT INT TERM
+
           set +e
           ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} "
-            docker run --rm \
+            docker run --rm --name ${CONTAINER_NAME} \
               -v ${ONEAPI_REAL_PATH}:/opt/intel/oneapi:ro \
               -v /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source:/workspace/source:ro \
               -v /shared/builds/${BUILD_ID}:/workspace/output \
@@ -185,6 +246,10 @@ jobs:
           "
           DOCKER_RC=$?
           set -e
+          # docker run is synchronous: once it returns, the container has exited and
+          # --rm has removed it. Disarm the orphan-kill trap — nothing left to kill,
+          # and we don't want it firing on later (post-build) exit paths.
+          trap - EXIT INT TERM
 
           if [ $DOCKER_RC -ne 0 ]; then
             # EXIT_COMPILE_ERROR (42): compilation failure from build.sh (cmake/ninja)
@@ -364,7 +429,9 @@ jobs:
       #     - Server unreachable: SSH times out (~30s), || true prevents job failure
       #     - Server reachable, no artifacts: rm -rf silently succeeds (~1s)
       #     - Server reachable, artifacts exist: normal cleanup (~few seconds)
-      #   Residual artifacts (if any) are cleaned by 24h auto-cleanup on next run.
+      #   This only removes THIS run's own container/dirs (cutlass-build-${BUILD_ID});
+      #   orphans from other runs are handled by the startup sweep above, and any
+      #   residual artifacts are cleaned by the 24h auto-cleanup on the next run.
       - name: Cleanup Build Artifacts
         if: always() && steps.build-strategy.outputs.use_remote == 'true'
         shell: bash
@@ -372,7 +439,7 @@ jobs:
           if [ -n "${BUILD_ID}" ] && [[ "${BUILD_ID}" =~ ^[0-9]+-(common|small)- ]]; then
             rm -rf /tmp/cutlass-build-${BUILD_ID} || true
             ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} \
-              "sudo -n rm -rf /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID} /shared/builds/${BUILD_ID}" || true
+              "docker rm -f cutlass-build-${BUILD_ID} >/dev/null 2>&1; sudo -n rm -rf /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID} /shared/builds/${BUILD_ID}" || true
           else
             echo "Skipping cleanup: BUILD_ID '${BUILD_ID}' is empty or does not match expected pattern"
           fi
