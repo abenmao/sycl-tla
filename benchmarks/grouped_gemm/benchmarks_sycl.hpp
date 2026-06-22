@@ -60,6 +60,11 @@ using BmgGroupedGemm_BF16FP32_Tile_256_256_32 = typename TiledMMAHelper<MMA_Atom
 using BmgGroupedGemmBF16BF16FP32_RRR_TileShape_256_256_32 = GroupedGemm_Bench_BF16FP32_RRR<BmgGroupedGemm_BF16FP32_TileShape_256_256_32, BmgGroupedGemm_BF16FP32_Tile_256_256_32, void, void>;
 CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(BmgGroupedGemmBF16BF16FP32_RRR_TileShape_256_256_32);
 
+using CriGroupedGemm_BF16FP32_TileShape_352_256_32 = Shape<cute::Int<352>, _256, _32>;
+using CriGroupedGemm_BF16FP32_Tile_352_256_32 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cute::bfloat16_t>>, Layout<CriGroupedGemm_BF16FP32_TileShape_352_256_32>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriGroupedGemmBF16BF16FP32_RRR_TileShape_352_256_32 = GroupedGemm_Bench_BF16FP32_RRR<CriGroupedGemm_BF16FP32_TileShape_352_256_32, CriGroupedGemm_BF16FP32_Tile_352_256_32, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemmBF16BF16FP32_RRR_TileShape_352_256_32);
+
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
 
 // MoE GEMM benchmark aligned with example 12_xe20_moe_gemm_cute_interface:
@@ -95,20 +100,18 @@ using BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR = cutlass::gemm::device::Bl
     TileShape, Tiler,
     GmemTiledCopyA, GmemTiledCopyB, void, void>;
 
-using CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_256_256_32 = Shape<_256, _256, _32>;
-using CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_256_256_32 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E4M3ElementInputA>>, 
-        Layout<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_256_256_32>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-using CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_32 = BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_256_256_32, CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_256_256_32, void, void>;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_256_256_64 = Shape<_256, _256, _64>;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_256_256_64 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E4M3ElementInputA>>,
+        Layout<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_256_256_64>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_64 = BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_256_256_64, CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_256_256_64, void, void>;
 
-CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_32);
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_64);
 
-// TileShape matching example 51_xe35_block_scaled_grouped_gemm_e4m3 (GroupSize=32 run).
-using CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_512_256_64 = Shape<_512, _256, _64>;
-using CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_512_256_64 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E4M3ElementInputA>>,
-        Layout<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_512_256_64>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-using CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64 = BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_512_256_64, CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_512_256_64, void, void>;
-
-CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64);
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_352_256_64 = Shape<cute::Int<352>, _256, _64>;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_352_256_64 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E4M3ElementInputA>>,
+        Layout<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_352_256_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_352_256_64 = BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_352_256_64, CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_352_256_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_352_256_64);
 
 using E5M2ElementType = cutlass::mx_float8_t<float_e5m2_t>;
 using E5M2ElementInputA = typename E5M2ElementType::DataType;
@@ -130,12 +133,12 @@ using BLockScalingGroupedGemm_Bench_E5M2E5M2FP32_RRR = cutlass::gemm::device::Bl
     TileShape, Tiler,
     GmemTiledCopyA, GmemTiledCopyB, void, void>;
 
-using CriBLockScalingGroupedGemm_E5M2E5M2FP32_TileShape_256_256_32 = Shape<_256, _256, _32>;
-using CriBLockScalingGroupedGemm_E5M2E5M2FP32_Tile_256_256_32 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E5M2ElementInputA>>, 
-        Layout<CriBLockScalingGroupedGemm_E5M2E5M2FP32_TileShape_256_256_32>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-using CriBLockScalingGroupedGemm_E5M2E5M2FP32_RRR_TileShape_256_256_32 = BLockScalingGroupedGemm_Bench_E5M2E5M2FP32_RRR<CriBLockScalingGroupedGemm_E5M2E5M2FP32_TileShape_256_256_32, CriBLockScalingGroupedGemm_E5M2E5M2FP32_Tile_256_256_32, void, void>;
+using CriBLockScalingGroupedGemm_E5M2E5M2FP32_TileShape_256_256_64 = Shape<_256, _256, _64>;
+using CriBLockScalingGroupedGemm_E5M2E5M2FP32_Tile_256_256_64 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E5M2ElementInputA>>,
+        Layout<CriBLockScalingGroupedGemm_E5M2E5M2FP32_TileShape_256_256_64>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E5M2E5M2FP32_RRR_TileShape_256_256_64 = BLockScalingGroupedGemm_Bench_E5M2E5M2FP32_RRR<CriBLockScalingGroupedGemm_E5M2E5M2FP32_TileShape_256_256_64, CriBLockScalingGroupedGemm_E5M2E5M2FP32_Tile_256_256_64, void, void>;
 
-CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E5M2E5M2FP32_RRR_TileShape_256_256_32);
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E5M2E5M2FP32_RRR_TileShape_256_256_64);
 using E2M1ElementType = cutlass::mx_float4_t<float_e2m1_t>;
 using E2M1ElementInputA = typename E2M1ElementType::DataType;
 using E2M1ElementInputB = typename E2M1ElementType::DataType;
@@ -156,12 +159,18 @@ using BLockScalingGroupedGemm_Bench_E2M1E2M1FP32_RCR = cutlass::gemm::device::Bl
     TileShape, Tiler,
     GmemTiledCopyA, GmemTiledCopyB, void, void>;
 
-using CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_256_256_64 = Shape<_256, _256, _64>;
-using CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_256_256_64 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E2M1ElementInputA>>, 
-        Layout<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_256_256_64>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-using CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_256_256_64 = BLockScalingGroupedGemm_Bench_E2M1E2M1FP32_RCR<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_256_256_64, CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_256_256_64, void, void>;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_256_256_128 = Shape<_256, _256, _128>;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_256_256_128 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E2M1ElementInputA>>,
+        Layout<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_256_256_128>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_256_256_128 = BLockScalingGroupedGemm_Bench_E2M1E2M1FP32_RCR<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_256_256_128, CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_256_256_128, void, void>;
 
-CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_256_256_64);
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_256_256_128);
+
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_352_256_128 = Shape<cute::Int<352>, _256, _128>;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_352_256_128 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E2M1ElementInputA>>,
+        Layout<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_352_256_128>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_352_256_128 = BLockScalingGroupedGemm_Bench_E2M1E2M1FP32_RCR<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_352_256_128, CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_352_256_128, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_352_256_128);
 
 template <
   typename TileShape,
@@ -177,11 +186,11 @@ using GroupedGemm_Bench_E5M2E5M2FP32_RRR = cutlass::gemm::device::GroupedGemmCon
     TileShape, Tiler,
     GmemTiledCopyA, GmemTiledCopyB>;
 
-using CriGroupedGemm_E5M2E5M2FP32_TileShape_256_256_32 = Shape<_256, _256, _32>;
-using CriGroupedGemm_E5M2E5M2FP32_Tile_256_256_32 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e5m2_t>>, Layout<CriGroupedGemm_E5M2E5M2FP32_TileShape_256_256_32>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-using CriGroupedGemm_E5M2E5M2FP32_RRR_TileShape_256_256_32 = GroupedGemm_Bench_E5M2E5M2FP32_RRR<CriGroupedGemm_E5M2E5M2FP32_TileShape_256_256_32, CriGroupedGemm_E5M2E5M2FP32_Tile_256_256_32, void, void>;
+using CriGroupedGemm_E5M2E5M2FP32_TileShape_256_256_64 = Shape<_256, _256, _64>;
+using CriGroupedGemm_E5M2E5M2FP32_Tile_256_256_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e5m2_t>>, Layout<CriGroupedGemm_E5M2E5M2FP32_TileShape_256_256_64>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGroupedGemm_E5M2E5M2FP32_RRR_TileShape_256_256_64 = GroupedGemm_Bench_E5M2E5M2FP32_RRR<CriGroupedGemm_E5M2E5M2FP32_TileShape_256_256_64, CriGroupedGemm_E5M2E5M2FP32_Tile_256_256_64, void, void>;
 
-CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E5M2E5M2FP32_RRR_TileShape_256_256_32);
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E5M2E5M2FP32_RRR_TileShape_256_256_64);
 template <
   typename TileShape,
   typename Tiler,
@@ -196,11 +205,17 @@ using GroupedGemm_Bench_E4M3E4M3FP32_RRR = cutlass::gemm::device::GroupedGemmCon
     TileShape, Tiler,
     GmemTiledCopyA, GmemTiledCopyB>;
 
-using CriGroupedGemm_E4M3E4M3FP32_TileShape_256_256_32 = Shape<_256, _256, _32>;
-using CriGroupedGemm_E4M3E4M3FP32_Tile_256_256_32 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e4m3_t>>, Layout<CriGroupedGemm_E4M3E4M3FP32_TileShape_256_256_32>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-using CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_32 = GroupedGemm_Bench_E4M3E4M3FP32_RRR<CriGroupedGemm_E4M3E4M3FP32_TileShape_256_256_32, CriGroupedGemm_E4M3E4M3FP32_Tile_256_256_32, void, void>;
+using CriGroupedGemm_E4M3E4M3FP32_TileShape_256_256_64 = Shape<_256, _256, _64>;
+using CriGroupedGemm_E4M3E4M3FP32_Tile_256_256_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e4m3_t>>, Layout<CriGroupedGemm_E4M3E4M3FP32_TileShape_256_256_64>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_64 = GroupedGemm_Bench_E4M3E4M3FP32_RRR<CriGroupedGemm_E4M3E4M3FP32_TileShape_256_256_64, CriGroupedGemm_E4M3E4M3FP32_Tile_256_256_64, void, void>;
 
-CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_32);
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_64);
+
+using CriGroupedGemm_E4M3E4M3FP32_TileShape_352_256_64 = Shape<cute::Int<352>, _256, _64>;
+using CriGroupedGemm_E4M3E4M3FP32_Tile_352_256_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e4m3_t>>, Layout<CriGroupedGemm_E4M3E4M3FP32_TileShape_352_256_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_352_256_64 = GroupedGemm_Bench_E4M3E4M3FP32_RRR<CriGroupedGemm_E4M3E4M3FP32_TileShape_352_256_64, CriGroupedGemm_E4M3E4M3FP32_Tile_352_256_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_352_256_64);
+
 template <
   typename TileShape,
   typename Tiler,
@@ -215,25 +230,204 @@ using GroupedGemm_Bench_E2M1E2M1FP32_RCR = cutlass::gemm::device::GroupedGemmCon
     TileShape, Tiler,
     GmemTiledCopyA, GmemTiledCopyB>;
 
-using CriGroupedGemm_E2M1E2M1FP32_TileShape_256_256_64 = Shape<_256, _256, _64>;
-using CriGroupedGemm_E2M1E2M1FP32_Tile_256_256_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e2m1_t>>, Layout<CriGroupedGemm_E2M1E2M1FP32_TileShape_256_256_64>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-using CriGroupedGemm_E2M1E2M1FP32_RCR_TileShape_256_256_64 = GroupedGemm_Bench_E2M1E2M1FP32_RCR<CriGroupedGemm_E2M1E2M1FP32_TileShape_256_256_64, CriGroupedGemm_E2M1E2M1FP32_Tile_256_256_64, void, void>;
+using CriGroupedGemm_E2M1E2M1FP32_TileShape_256_256_128 = Shape<_256, _256, _128>;
+using CriGroupedGemm_E2M1E2M1FP32_Tile_256_256_128 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e2m1_t>>, Layout<CriGroupedGemm_E2M1E2M1FP32_TileShape_256_256_128>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGroupedGemm_E2M1E2M1FP32_RCR_TileShape_256_256_128 = GroupedGemm_Bench_E2M1E2M1FP32_RCR<CriGroupedGemm_E2M1E2M1FP32_TileShape_256_256_128, CriGroupedGemm_E2M1E2M1FP32_Tile_256_256_128, void, void>;
 
-CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E2M1E2M1FP32_RCR_TileShape_256_256_64);
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E2M1E2M1FP32_RCR_TileShape_256_256_128);
+
+
+// ===== MOE best-shape tiles (src0 SKU4 shapes from WW35 sweep) =====
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_128_896_128 = Shape<cute::Int<128>, cute::Int<896>, cute::Int<128>>;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_128_896_128 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E2M1ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_128_896_128>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_128_896_128 = BLockScalingGroupedGemm_Bench_E2M1E2M1FP32_RCR<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_128_896_128, CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_128_896_128, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_128_896_128);
+
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_192_512_128 = Shape<cute::Int<192>, cute::Int<512>, cute::Int<128>>;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_192_512_128 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E2M1ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_192_512_128>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_192_512_128 = BLockScalingGroupedGemm_Bench_E2M1E2M1FP32_RCR<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_192_512_128, CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_192_512_128, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_192_512_128);
+
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_192_640_128 = Shape<cute::Int<192>, cute::Int<640>, cute::Int<128>>;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_192_640_128 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E2M1ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_192_640_128>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_192_640_128 = BLockScalingGroupedGemm_Bench_E2M1E2M1FP32_RCR<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_192_640_128, CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_192_640_128, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_192_640_128);
+
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_320_512_128 = Shape<cute::Int<320>, cute::Int<512>, cute::Int<128>>;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_320_512_128 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E2M1ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_320_512_128>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_320_512_128 = BLockScalingGroupedGemm_Bench_E2M1E2M1FP32_RCR<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_320_512_128, CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_320_512_128, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_320_512_128);
+
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_448_256_128 = Shape<cute::Int<448>, cute::Int<256>, cute::Int<128>>;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_448_256_128 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E2M1ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_448_256_128>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_448_256_128 = BLockScalingGroupedGemm_Bench_E2M1E2M1FP32_RCR<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_448_256_128, CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_448_256_128, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_448_256_128);
+
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_448_320_128 = Shape<cute::Int<448>, cute::Int<320>, cute::Int<128>>;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_448_320_128 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E2M1ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_448_320_128>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_448_320_128 = BLockScalingGroupedGemm_Bench_E2M1E2M1FP32_RCR<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_448_320_128, CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_448_320_128, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_448_320_128);
+
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_608_128_128 = Shape<cute::Int<608>, cute::Int<128>, cute::Int<128>>;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_608_128_128 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E2M1ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_608_128_128>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_608_128_128 = BLockScalingGroupedGemm_Bench_E2M1E2M1FP32_RCR<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_608_128_128, CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_608_128_128, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_608_128_128);
+
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_96_1280_128 = Shape<cute::Int<96>, cute::Int<1280>, cute::Int<128>>;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_96_1280_128 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E2M1ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_96_1280_128>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_96_1280_128 = BLockScalingGroupedGemm_Bench_E2M1E2M1FP32_RCR<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_96_1280_128, CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_96_1280_128, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_96_1280_128);
+
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_96_640_128 = Shape<cute::Int<96>, cute::Int<640>, cute::Int<128>>;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_96_640_128 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E2M1ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_96_640_128>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_96_640_128 = BLockScalingGroupedGemm_Bench_E2M1E2M1FP32_RCR<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_96_640_128, CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_96_640_128, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_96_640_128);
+
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_96_896_128 = Shape<cute::Int<96>, cute::Int<896>, cute::Int<128>>;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_96_896_128 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E2M1ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_96_896_128>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_96_896_128 = BLockScalingGroupedGemm_Bench_E2M1E2M1FP32_RCR<CriBLockScalingGroupedGemm_E2M1E2M1FP32_TileShape_96_896_128, CriBLockScalingGroupedGemm_E2M1E2M1FP32_Tile_96_896_128, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_96_896_128);
+
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_128_896_64 = Shape<cute::Int<128>, cute::Int<896>, cute::Int<64>>;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_128_896_64 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E4M3ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_128_896_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_128_896_64 = BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_128_896_64, CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_128_896_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_128_896_64);
+
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_192_640_64 = Shape<cute::Int<192>, cute::Int<640>, cute::Int<64>>;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_192_640_64 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E4M3ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_192_640_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_192_640_64 = BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_192_640_64, CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_192_640_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_192_640_64);
+
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_320_512_64 = Shape<cute::Int<320>, cute::Int<512>, cute::Int<64>>;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_320_512_64 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E4M3ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_320_512_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_320_512_64 = BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_320_512_64, CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_320_512_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_320_512_64);
+
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_448_256_64 = Shape<cute::Int<448>, cute::Int<256>, cute::Int<64>>;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_448_256_64 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E4M3ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_448_256_64>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_448_256_64 = BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_448_256_64, CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_448_256_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_448_256_64);
+
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_448_320_64 = Shape<cute::Int<448>, cute::Int<320>, cute::Int<64>>;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_448_320_64 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E4M3ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_448_320_64>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_448_320_64 = BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_448_320_64, CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_448_320_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_448_320_64);
+
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_608_128_64 = Shape<cute::Int<608>, cute::Int<128>, cute::Int<64>>;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_608_128_64 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E4M3ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_608_128_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_608_128_64 = BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_608_128_64, CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_608_128_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_608_128_64);
+
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_64_1280_64 = Shape<cute::Int<64>, cute::Int<1280>, cute::Int<64>>;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_64_1280_64 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E4M3ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_64_1280_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_64_1280_64 = BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_64_1280_64, CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_64_1280_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_64_1280_64);
+
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_64_1792_64 = Shape<cute::Int<64>, cute::Int<1792>, cute::Int<64>>;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_64_1792_64 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E4M3ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_64_1792_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_64_1792_64 = BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_64_1792_64, CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_64_1792_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_64_1792_64);
+
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_96_896_64 = Shape<cute::Int<96>, cute::Int<896>, cute::Int<64>>;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_96_896_64 = typename TiledMMAHelper<MMA_Atom<XE_BDPAS_TT<8, float, E4M3ElementInputA>>, Layout<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_96_896_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_96_896_64 = BLockScalingGroupedGemm_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGroupedGemm_E4M3E4M3FP32_TileShape_96_896_64, CriBLockScalingGroupedGemm_E4M3E4M3FP32_Tile_96_896_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_96_896_64);
+
+using CriGroupedGemm_E4M3E4M3FP32_TileShape_128_896_64 = Shape<cute::Int<128>, cute::Int<896>, cute::Int<64>>;
+using CriGroupedGemm_E4M3E4M3FP32_Tile_128_896_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e4m3_t>>, Layout<CriGroupedGemm_E4M3E4M3FP32_TileShape_128_896_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_128_896_64 = GroupedGemm_Bench_E4M3E4M3FP32_RRR<CriGroupedGemm_E4M3E4M3FP32_TileShape_128_896_64, CriGroupedGemm_E4M3E4M3FP32_Tile_128_896_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_128_896_64);
+
+using CriGroupedGemm_E4M3E4M3FP32_TileShape_192_640_64 = Shape<cute::Int<192>, cute::Int<640>, cute::Int<64>>;
+using CriGroupedGemm_E4M3E4M3FP32_Tile_192_640_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e4m3_t>>, Layout<CriGroupedGemm_E4M3E4M3FP32_TileShape_192_640_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_192_640_64 = GroupedGemm_Bench_E4M3E4M3FP32_RRR<CriGroupedGemm_E4M3E4M3FP32_TileShape_192_640_64, CriGroupedGemm_E4M3E4M3FP32_Tile_192_640_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_192_640_64);
+
+using CriGroupedGemm_E4M3E4M3FP32_TileShape_320_512_64 = Shape<cute::Int<320>, cute::Int<512>, cute::Int<64>>;
+using CriGroupedGemm_E4M3E4M3FP32_Tile_320_512_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e4m3_t>>, Layout<CriGroupedGemm_E4M3E4M3FP32_TileShape_320_512_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_320_512_64 = GroupedGemm_Bench_E4M3E4M3FP32_RRR<CriGroupedGemm_E4M3E4M3FP32_TileShape_320_512_64, CriGroupedGemm_E4M3E4M3FP32_Tile_320_512_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_320_512_64);
+
+using CriGroupedGemm_E4M3E4M3FP32_TileShape_448_256_64 = Shape<cute::Int<448>, cute::Int<256>, cute::Int<64>>;
+using CriGroupedGemm_E4M3E4M3FP32_Tile_448_256_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e4m3_t>>, Layout<CriGroupedGemm_E4M3E4M3FP32_TileShape_448_256_64>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_448_256_64 = GroupedGemm_Bench_E4M3E4M3FP32_RRR<CriGroupedGemm_E4M3E4M3FP32_TileShape_448_256_64, CriGroupedGemm_E4M3E4M3FP32_Tile_448_256_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_448_256_64);
+
+using CriGroupedGemm_E4M3E4M3FP32_TileShape_448_320_64 = Shape<cute::Int<448>, cute::Int<320>, cute::Int<64>>;
+using CriGroupedGemm_E4M3E4M3FP32_Tile_448_320_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e4m3_t>>, Layout<CriGroupedGemm_E4M3E4M3FP32_TileShape_448_320_64>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_448_320_64 = GroupedGemm_Bench_E4M3E4M3FP32_RRR<CriGroupedGemm_E4M3E4M3FP32_TileShape_448_320_64, CriGroupedGemm_E4M3E4M3FP32_Tile_448_320_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_448_320_64);
+
+using CriGroupedGemm_E4M3E4M3FP32_TileShape_608_128_64 = Shape<cute::Int<608>, cute::Int<128>, cute::Int<64>>;
+using CriGroupedGemm_E4M3E4M3FP32_Tile_608_128_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e4m3_t>>, Layout<CriGroupedGemm_E4M3E4M3FP32_TileShape_608_128_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_608_128_64 = GroupedGemm_Bench_E4M3E4M3FP32_RRR<CriGroupedGemm_E4M3E4M3FP32_TileShape_608_128_64, CriGroupedGemm_E4M3E4M3FP32_Tile_608_128_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_608_128_64);
+
+using CriGroupedGemm_E4M3E4M3FP32_TileShape_64_1280_64 = Shape<cute::Int<64>, cute::Int<1280>, cute::Int<64>>;
+using CriGroupedGemm_E4M3E4M3FP32_Tile_64_1280_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e4m3_t>>, Layout<CriGroupedGemm_E4M3E4M3FP32_TileShape_64_1280_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_64_1280_64 = GroupedGemm_Bench_E4M3E4M3FP32_RRR<CriGroupedGemm_E4M3E4M3FP32_TileShape_64_1280_64, CriGroupedGemm_E4M3E4M3FP32_Tile_64_1280_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_64_1280_64);
+
+using CriGroupedGemm_E4M3E4M3FP32_TileShape_64_1792_64 = Shape<cute::Int<64>, cute::Int<1792>, cute::Int<64>>;
+using CriGroupedGemm_E4M3E4M3FP32_Tile_64_1792_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e4m3_t>>, Layout<CriGroupedGemm_E4M3E4M3FP32_TileShape_64_1792_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_64_1792_64 = GroupedGemm_Bench_E4M3E4M3FP32_RRR<CriGroupedGemm_E4M3E4M3FP32_TileShape_64_1792_64, CriGroupedGemm_E4M3E4M3FP32_Tile_64_1792_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_64_1792_64);
+
+using CriGroupedGemm_E4M3E4M3FP32_TileShape_64_896_64 = Shape<cute::Int<64>, cute::Int<896>, cute::Int<64>>;
+using CriGroupedGemm_E4M3E4M3FP32_Tile_64_896_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e4m3_t>>, Layout<CriGroupedGemm_E4M3E4M3FP32_TileShape_64_896_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_64_896_64 = GroupedGemm_Bench_E4M3E4M3FP32_RRR<CriGroupedGemm_E4M3E4M3FP32_TileShape_64_896_64, CriGroupedGemm_E4M3E4M3FP32_Tile_64_896_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_64_896_64);
+
+using CriGroupedGemm_E4M3E4M3FP32_TileShape_96_896_64 = Shape<cute::Int<96>, cute::Int<896>, cute::Int<64>>;
+using CriGroupedGemm_E4M3E4M3FP32_Tile_96_896_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::float_e4m3_t>>, Layout<CriGroupedGemm_E4M3E4M3FP32_TileShape_96_896_64>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_96_896_64 = GroupedGemm_Bench_E4M3E4M3FP32_RRR<CriGroupedGemm_E4M3E4M3FP32_TileShape_96_896_64, CriGroupedGemm_E4M3E4M3FP32_Tile_96_896_64, void, void>;
+CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_96_896_64);
 
 #endif
 
 static void register_grouped_gemm_benchmarks() {
   CUTLASS_BENCHMARK(BmgGroupedGemmBF16BF16FP32_RRR_TileShape_512_256_32);
   CUTLASS_BENCHMARK(BmgGroupedGemmBF16BF16FP32_RRR_TileShape_256_256_32);
+  CUTLASS_BENCHMARK(CriGroupedGemmBF16BF16FP32_RRR_TileShape_352_256_32);
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
-  CUTLASS_BENCHMARK(CriGroupedGemm_E5M2E5M2FP32_RRR_TileShape_256_256_32);
-  CUTLASS_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_32);
-  CUTLASS_BENCHMARK(CriGroupedGemm_E2M1E2M1FP32_RCR_TileShape_256_256_64);
-  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_32);
-  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64);
-  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E5M2E5M2FP32_RRR_TileShape_256_256_32);
-  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_256_256_64);
+  CUTLASS_BENCHMARK(CriGroupedGemm_E5M2E5M2FP32_RRR_TileShape_256_256_64);
+  CUTLASS_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_64);
+  CUTLASS_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_352_256_64);
+  CUTLASS_BENCHMARK(CriGroupedGemm_E2M1E2M1FP32_RCR_TileShape_256_256_128);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_256_256_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_352_256_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E5M2E5M2FP32_RRR_TileShape_256_256_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_256_256_128);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_352_256_128);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_128_896_128);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_192_512_128);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_192_640_128);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_320_512_128);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_448_256_128);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_448_320_128);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_608_128_128);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_96_1280_128);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_96_640_128);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E2M1E2M1FP32_RCR_TileShape_96_896_128);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_128_896_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_192_640_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_320_512_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_448_256_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_448_320_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_608_128_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_64_1280_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_64_1792_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGroupedGemm_E4M3E4M3FP32_RRR_TileShape_96_896_64);
+  CUTLASS_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_128_896_64);
+  CUTLASS_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_192_640_64);
+  CUTLASS_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_320_512_64);
+  CUTLASS_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_448_256_64);
+  CUTLASS_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_448_320_64);
+  CUTLASS_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_608_128_64);
+  CUTLASS_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_64_1280_64);
+  CUTLASS_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_64_1792_64);
+  CUTLASS_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_64_896_64);
+  CUTLASS_BENCHMARK(CriGroupedGemm_E4M3E4M3FP32_RRR_TileShape_96_896_64);
   CUTLASS_BENCHMARK(CriMoEGemmBF16BF16BF16_RRR_TileShape_256_128_32);
 #endif
 }
