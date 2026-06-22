@@ -147,10 +147,23 @@ int main(int argc, const char **argv) {
   using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 64
+#ifdef Q_PACKED_DECODE
+    // GQA q_packed decode: pack head_group_q query heads (sharing one KV head)
+    // as the rows of the QK tile. First dim is the packed query-head count, NOT
+    // the (=1) decode query sequence length. This turns the per-head GEMV into a
+    // small GEMM and reads each KV head once per WG instead of once per query head.
+    // Tile rows (16) are >= head_group_q (e.g. 10 for 80/8); the block-2D copies
+    // predicate rows beyond the real head_group_q (built from the runtime Q/O view).
+    using ShapeQK = Shape<_16, _64, _64>;
+    using ShapePV = Shape<_16, _32, _64>;
+    using ShapeOut = Shape<_16, _64>;
+    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
+#else
     using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
     using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
     using ShapeOut = Shape<_1, _64>;
     using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
+#endif
 
 #elif HEAD_DIM == 96
     using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
@@ -159,10 +172,23 @@ int main(int argc, const char **argv) {
     using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 128
+#ifdef Q_PACKED_DECODE
+    // GQA q_packed decode: pack head_group_q query heads (sharing one KV head)
+    // as the rows of the QK tile. First dim is the packed query-head count, NOT
+    // the (=1) decode query sequence length. This turns the per-head GEMV into a
+    // small GEMM and reads each KV head once per WG instead of once per query head.
+    // Tile rows (16) are >= head_group_q (e.g. 10 for 80/8); the block-2D copies
+    // predicate rows beyond the real head_group_q (built from the runtime Q/O view).
+    using ShapeQK = Shape<_16, _64, _64>;
+    using ShapePV = Shape<_16, _32, _64>;
+    using ShapeOut = Shape<_16, _128>;
+    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
+#else
     using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
     using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
     using ShapeOut = Shape<_1, _128>;
     using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
+#endif
 
 #elif HEAD_DIM == 192
     using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
@@ -182,6 +208,13 @@ int main(int argc, const char **argv) {
 
 #if PERSISTENT
   return FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, /*persistent=*/true, ElementQ, ElementK, ElementV>::run(options);
+#elif defined(Q_PACKED_DECODE) && defined(DECODE)
+  // q_packed (speculative) decode realizes causality per query token inside the
+  // kernel (each token gets its own KV length + the k-remainder mask), and the M
+  // dimension packs query heads rather than sequence rows, so the diagonal causal
+  // mask must not run. Always instantiate the NON-causal mainloop here. The q_packed
+  // grid is selected inside the (macro-gated) scheduler, so no scheduler injection.
+  return FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, /*persistent=*/false, ElementQ, ElementK, ElementV>::run(options);
 #else
   return options.is_causal ? FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  /*persistent=*/false, ElementQ, ElementK, ElementV>::run(options)
   : FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages,  /*persistent=*/false, ElementQ, ElementK, ElementV>::run(options);

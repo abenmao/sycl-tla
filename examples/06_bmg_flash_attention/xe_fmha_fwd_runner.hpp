@@ -997,7 +997,11 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
         scale_k, scale_v,
         GROUP_SIZE,
         block_K_cache.get(), stride_K_cache,
-        block_V_cache.get(), stride_V_cache
+        block_V_cache.get(), stride_V_cache,
+#if defined(Q_PACKED_DECODE) && defined(DECODE)
+        nullptr,            // workspace (filled in by to_underlying_arguments)
+        options.is_causal,
+#endif
       },
       {
         options.softmax_scale,
