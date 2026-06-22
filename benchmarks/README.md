@@ -59,6 +59,29 @@ cmake .. -GNinja -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET=$target -DCUTLASS_
 ninja benchmarks_flash_attention
 ```
 
+## Compiling GDN Attention benchmarks with Intel Xe backend
+```
+# Choose DPCPP_SYCL_TARGET from 
+# target = intel_gpu_bmg_g21 | intel_gpu_cri
+cmake .. -GNinja -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET=$target -DCUTLASS_ENABLE_BENCHMARKS=ON -DCUTLASS_ENABLE_TESTS=ON
+
+ninja cutlass_benchmarks_gdn_xe
+# Pick the config matching your target. Both CRI and BMG sweep the same
+# sequence lengths (4096-128000); they reduce the batch count (to 1 and 4)
+# from the full model to stay within memory limits and CI/simulator timeouts.
+./benchmarks/gdn/cutlass_benchmarks_gdn_xe --config_file=../benchmarks/device/bmg/input_files/input_gdn_bf16.in   # intel_gpu_bmg_g21
+./benchmarks/gdn/cutlass_benchmarks_gdn_xe --config_file=../benchmarks/device/cri/input_files/input_gdn_bf16.in   # intel_gpu_cri
+```
+
+## Compiling and Running GDN Attention benchmarks with default configurations with Intel Xe backend
+```
+# Choose DPCPP_SYCL_TARGET from 
+# target = intel_gpu_bmg_g21 | intel_gpu_cri
+cmake .. -GNinja -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET=$target -DCUTLASS_ENABLE_BENCHMARKS=ON -DCUTLASS_ENABLE_TESTS=ON
+
+ninja benchmarks_gdn
+```
+
 ## Compiling and Running all benchmarks with default configurations with Intel Xe backend
 ```
 # Choose DPCPP_SYCL_TARGET from 

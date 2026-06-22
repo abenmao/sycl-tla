@@ -192,6 +192,15 @@ if (CUTLASS_ENABLE_SYCL)
       set(SYCL_TARGET_INTEL_GPU_CRI ON)
     endif()
 
+
+    # BMG (Xe20) is the default Intel baseline, so features are supported there
+    # unless explicitly excluded; only special tiers (CRI, PVC) get a positive
+    # flag. This flag lets gates opt PVC out without inverting the BMG default.
+    if(("intel_gpu_pvc" IN_LIST DPCPP_SYCL_TARGET_LIST) OR
+       ("pvc" IN_LIST DPCPP_SYCL_TARGET_LIST))
+      set(SYCL_TARGET_INTEL_GPU_PVC ON)
+    endif()
+
     option(CUTLASS_TEST_FOR_CRI "Enable CUTLASS_TEST_FOR_CRI" OFF)
     if(CUTLASS_TEST_FOR_CRI)
       add_compile_definitions(CUTLASS_TEST_FOR_CRI)

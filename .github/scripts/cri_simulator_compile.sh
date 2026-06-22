@@ -336,14 +336,15 @@ if [[ "$MODE" == "test" ]]; then
         examples)
             echo ""
             echo "--- Running example tests ---"
-            ctest -V -R '^(ctest_examples_03_bmg_gemm_streamk|ctest_examples_04_bmg_grouped_gemm|ctest_examples_05_bmg_gemm_with_epilogue_relu|ctest_examples_06_bmg_prefill_attention_cachedkv_hdim64|ctest_examples_08_bmg_gemm_f8|ctest_examples_cute_tutorial_tiled_copy|ctest_examples_cute_tutorial_bmg|ctest_examples_12_xe35_block_scaled_gemm_e2m1|ctest_examples_13_xe35_block_scaled_grouped_gemm_e5m2|ctest_examples_06_xe_fmha_fwd_decode_mx_float_e4m3_t_hdim64|ctest_examples_06_xe_fmha_fwd_decode_mx_float_e2m1_t_hdim64)$' --output-on-failure
+            ctest -V -R '^(ctest_examples_03_bmg_gemm_streamk|ctest_examples_04_bmg_grouped_gemm|ctest_examples_05_bmg_gemm_with_epilogue_relu|ctest_examples_06_bmg_prefill_attention_cachedkv_hdim64|ctest_examples_08_bmg_gemm_f8|ctest_examples_cute_tutorial_tiled_copy|ctest_examples_cute_tutorial_bmg|ctest_examples_12_xe35_block_scaled_gemm_e2m1|ctest_examples_13_xe35_block_scaled_grouped_gemm_e5m2|ctest_examples_06_xe_fmha_fwd_decode_mx_float_e4m3_t_hdim64|ctest_examples_06_xe_fmha_fwd_decode_mx_float_e2m1_t_hdim64|ctest_examples_14_xe35_gdn_attention_bfloat16)$' --output-on-failure
             ;;
         ut)
             echo ""
             echo "--- Running unit tests ---"
-            ctest -V -R '^(ctest_unit_flash_attention_decode_h128_xe|ctest_unit_cute_core|ctest_unit_flash_attention_prefill_fp8e4m3_fp32_fp32_h96_xe|ctest_unit_flash_attention_prefill_fp8e4m3_fp32_fp8e4m3_h96_xe|ctest_unit_gemm_device_tensorop_cooperative_xe|ctest_unit_gemm_device_tensorop_epilogue_fusion_xe|ctest_unit_gemm_device_mixed_input_tensorop_xe|ctest_unit_gemm_device_tensorop_xe_group_gemm|ctest_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm)$' --output-on-failure
+            ctest -V -R '^(ctest_unit_flash_attention_decode_h128_xe|ctest_unit_cute_core|ctest_unit_flash_attention_prefill_fp8e4m3_fp32_fp32_h96_xe|ctest_unit_flash_attention_prefill_fp8e4m3_fp32_fp8e4m3_h96_xe|ctest_unit_gemm_device_tensorop_cooperative_xe|ctest_unit_gemm_device_tensorop_epilogue_fusion_xe|ctest_unit_gemm_device_mixed_input_tensorop_xe|ctest_unit_gemm_device_tensorop_xe_group_gemm|ctest_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm|ctest_unit_gdn_attention_chunkwise)$' --output-on-failure
             ;;
         # benchmark) — handled by early exit above; add ctest pattern here when ready.
+
     esac
 
     echo ""

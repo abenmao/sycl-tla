@@ -120,6 +120,13 @@ if(SYCL_INTEL_TARGET)
   list(APPEND SUBDIRS flash_attention)
   list(APPEND SUBDIRS gemm/legacy)
   list(APPEND SUBDIRS grouped_gemm)
+  # GDN chunkwise attention builds on BMG (Xe20, the default Intel baseline)
+  # and CRI (Xe-3.5). PVC is excluded (kernels not validated there), so build
+  # by default and gate PVC out to keep cbenchmarks_gdn_xe out of PVC
+  # `ctest -R cbenchmarks` runs.
+  if(NOT SYCL_TARGET_INTEL_GPU_PVC)
+    list(APPEND SUBDIRS gdn)
+  endif()
 endif()
 
 foreach(SUBDIR ${SUBDIRS})

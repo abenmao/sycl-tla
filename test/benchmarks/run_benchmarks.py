@@ -91,7 +91,7 @@ def parse_benchmark_log(log_path):
 
     with open(log_path, "r") as handle:
         for line in handle:
-            if not re.search(r"(Gemm|manual_time)", line):
+            if not re.search(r"(Gemm|Gdn|gdn|manual_time)", line):
                 continue
 
             parts = line.strip().split()
