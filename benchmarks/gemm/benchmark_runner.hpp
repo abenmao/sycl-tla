@@ -103,6 +103,17 @@ static constexpr auto is_blocked_scaled = false;
 template <class T>
 static constexpr auto is_blocked_scaled<T, cute::void_t<typename T::ElementScaleA, typename T::ElementScaleB>> = true;
 
+// Block-scaled mainloops (MainloopIntelXeXMX16BlockScaled<Stages, GroupSize>) expose
+// the scale group size as CollectiveMainloop::GroupK. Default to 32 otherwise.
+template <class T, class = void>
+struct GroupKType {
+  static constexpr int value = 32;
+};
+template <class T>
+struct GroupKType<T, cute::void_t<decltype(T::GroupK)>> {
+  static constexpr int value = static_cast<int>(T::GroupK);
+};
+
 template <class T, class = void>
 struct ElementScaleAType {
   using type = int;
@@ -227,7 +238,7 @@ struct BenchmarkRunnerGemm {
   using ProblemShapeType = typename Gemm::GemmKernel::ProblemShape;
 
   int32_t count;
-    static constexpr int GROUP_SIZE = 32;
+    static constexpr int GROUP_SIZE = GroupKType<CollectiveMainloop>::value;
 
   //
   // Data members

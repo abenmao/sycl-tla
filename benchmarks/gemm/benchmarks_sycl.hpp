@@ -637,6 +637,22 @@ CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemmNonNative_E4M3E4M3FP32_RRR_Tile
 using CriBLockScalingGemmNonNative_E4M3E4M3FP32_RRR_TileShape_8_128_64_sg8x16 = BLockScalingGemmNonNative_Bench_E4M3E4M3FP32_RRR<CriBLockScalingGemm_E4M3E4M3FP32_TileShape_8_128_64, CriBLockScalingGemm_E4M3E4M3FP32_Tile_8_128_64_sg8x16, void, void>;
 CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemmNonNative_E4M3E4M3FP32_RRR_TileShape_8_128_64_sg8x16);
 
+// GroupSize=128 variant (mirrors example 50 run_mx_case<..., Shape<_512,_256,_64>, 128>).
+// Upstream threads GroupSize as a type param (default cute::Int<32>); pass _128 for GroupSize=128.
+using CriBLockScalingGemm_E4M3E4M3FP32_GroupSize128_RRR_TileShape_512_256_64 = cutlass::gemm::device::BlockScalingGemmConfiguration<
+    cutlass::arch::IntelXe,
+    E4M3ElementInputA, cutlass::layout::RowMajor,
+    E4M3ElementInputB, cutlass::layout::RowMajor,
+    float, cutlass::layout::RowMajor,
+    E4M3ElementScale,
+    cute::Stride<_1, int64_t, int64_t>,
+    float,
+    CriBLockScalingGemm_E4M3E4M3FP32_TileShape_512_256_64, Scheduler::Gemm,
+    CriBLockScalingGemm_E4M3E4M3FP32_Tile_512_256_64,
+    void, void, void, void,
+    _128>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E4M3E4M3FP32_GroupSize128_RRR_TileShape_512_256_64);
+
 template <
   typename TileShape,
   typename Tiler,
@@ -1493,6 +1509,7 @@ static void register_gemm_benchmarks() {
   CUTLASS_BENCHMARK(CriBLockScalingGemmNonNative_E5M2E5M2FP32_RRR_TileShape_8_128_64_sg8x16);
   CUTLASS_BENCHMARK(CriBLockScalingGemm_E2M1E2M1FP32_RCR_TileShape_512_256_128);
   CUTLASS_BENCHMARK(CriBLockScalingGemmNonNative_E4M3E4M3FP32_RRR_TileShape_512_256_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E4M3E4M3FP32_GroupSize128_RRR_TileShape_512_256_64);
   CUTLASS_BENCHMARK(CriBLockScalingGemmNonNative_E5M2E5M2FP32_RRR_TileShape_512_256_64);
   CUTLASS_BENCHMARK(CriBLockScalingGemmNonNative_E2M1E2M1FP32_RCR_TileShape_512_256_128);
   CUTLASS_BENCHMARK(CriBLockScalingGemm_E2M1E2M1FP32_RCR_TileShape_16_128_128);

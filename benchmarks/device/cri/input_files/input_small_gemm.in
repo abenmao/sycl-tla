@@ -125,6 +125,15 @@ CriBLockScalingGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m
 #CriBLockScalingGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=8192 --n=384 --k=3584
 #CriBLockScalingGemm_E4M3E4M3FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=8192 --n=4096 --k=1536
 
+# GroupSize=128 variant (mirrors example 50 run_mx_case<..., Shape<_512,_256,_64>, 128>).
+# K must be a multiple of GroupSize(=128). Aligned-M cases first, then M-unaligned
+# fallback cases (#570/#549/#444: M not a multiple of TileShape M=512).
+CriBLockScalingGemm_E4M3E4M3FP32_GroupSize128_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=1024 --n=1024 --k=1024
+CriBLockScalingGemm_E4M3E4M3FP32_GroupSize128_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=512 --n=256 --k=2048
+CriBLockScalingGemm_E4M3E4M3FP32_GroupSize128_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=257 --n=256 --k=1024
+CriBLockScalingGemm_E4M3E4M3FP32_GroupSize128_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=1000 --n=1024 --k=2048
+#CriBLockScalingGemm_E4M3E4M3FP32_GroupSize128_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=3200 --n=4096 --k=4096
+
 CriBLockScalingGemm_E5M2E5M2FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=1024 --n=1024 --k=1024
 #CriBLockScalingGemm_E5M2E5M2FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=2048 --n=2048 --k=2048
 #CriBLockScalingGemm_E5M2E5M2FP32_RRR_TileShape_512_256_64 --bm_name=cri_gemm --m=4096 --n=4096 --k=4096
