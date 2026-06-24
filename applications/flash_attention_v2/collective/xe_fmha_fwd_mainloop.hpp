@@ -571,6 +571,27 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
       }
     }
+
+    /* Preload scaleQ once; reused across all K iterations (BlockScale only).
+     * scaleQ depends on (q_coord, l_coord, D) only -- all KV-loop invariants. */
+    auto scaleQ_arr_ctx = [&]() {
+      if constexpr (BlockScale) {
+        using FragScaleQ_t = cute::remove_cvref_t<decltype(get<2>(get<0>(scale_context_qk)))>;
+        std::array<FragScaleQ_t, DTiles> arr{};
+        auto& tiled_copy_scaleQ = get<0>(get<0>(scale_context_qk));
+        auto  copy_iter_scaleQ = get<1>(get<0>(scale_context_qk));
+        const int q_coord_sc = get<0>(blk_qv) * BLK_Q + (subgroup_id / ATOM_K) * SG_Q;
+        copy_iter_scaleQ.data().coord_ = {q_coord_sc, 0, l_coord};
+        CUTLASS_PRAGMA_UNROLL
+        for (int D = 0; D < DTiles; D++) {
+          copy(tiled_copy_scaleQ, copy_iter_scaleQ(_, _, _, D), arr[D]);
+        }
+        return arr;
+      } else {
+        return cute::tuple<>{};
+      }
+    }();
+
     if (blk_k0 == 0) {
       clear(tArA);
       fill(tA_max, cutlass::platform::numeric_limits<ElementA>::lowest());
@@ -624,21 +645,18 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
           static_assert(SG_Q == SG_P && SG_K == SG_PV_D && BLK_P == BLK_Q);
 
-          const int q_coord = get<0>(blk_qv) * BLK_Q + (subgroup_id / ATOM_K)  * SG_Q;
           const int k_coord = K * BLK_K + (subgroup_id % ATOM_K)  * SG_K;
 
-          auto& tiled_copy_scaleQ = get<0>(get<0>(scale_context_qk));
-          auto  copy_iter_scaleQ = get<1>(get<0>(scale_context_qk));
-          auto  fragment_scaleQ = get<2>(get<0>(scale_context_qk));
           auto& tiled_copy_scaleK = get<0>(get<1>(scale_context_qk));
           auto  copy_iter_scaleK = get<1>(get<1>(scale_context_qk));
           auto  fragment_scaleK = get<2>(get<1>(scale_context_qk));
           auto [gemm_qm_offsets, gemm_kn_offsets, gemm_qk_offsets, gemm_kk_offsets] = get<4>(scale_context_qk);
 
-          using scaleQSize = decltype(size(fragment_scaleQ));
+          auto& fragment_scaleQ_d = scaleQ_arr_ctx[D];
+          using scaleQSize = decltype(size(fragment_scaleQ_d));
           using scaleKSize = decltype(size(fragment_scaleK));
 
-          Tensor scaleQ_view = make_tensor(recast<intel::vector_t<ElementScaleQ, scaleQSize::value>>(fragment_scaleQ).data(),
+          Tensor scaleQ_view = make_tensor(recast<intel::vector_t<ElementScaleQ, scaleQSize::value>>(fragment_scaleQ_d).data(),
                                            make_layout(Shape<_1, decltype(size<1>(tSrQ.shape())), _1>{}, Stride<_1, _0, _0>{}));
           Tensor scaleK_view = make_tensor(recast<intel::vector_t<ElementScaleK, scaleKSize::value>>(fragment_scaleK).data(),
                                            make_layout(Shape<_1, decltype(size<1>(tSrK.shape())), _1>{}, Stride<_1, _0, _0>{}));
@@ -646,10 +664,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           auto zipped_q = make_zip_tensor(tSrQ_arr[D], scaleQ_view, gemm_qm_offsets, gemm_qk_offsets);
           auto zipped_k = make_zip_tensor(tSrK, scaleK_view, gemm_kn_offsets, gemm_kk_offsets);
 
-          copy_iter_scaleQ.data().coord_ = {q_coord, 0, l_coord};
           copy_iter_scaleK.data().coord_ = {k_coord, 0, l_coord};
 
-          copy(tiled_copy_scaleQ, copy_iter_scaleQ(_, _, _, D), fragment_scaleQ);
           copy(tiled_copy_scaleK, copy_iter_scaleK(_, _, _, D), fragment_scaleK);
 
           if (D == 0) {
