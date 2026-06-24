@@ -305,17 +305,10 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
   }
 
   CUTLASS_DEVICE
-  int get_physical_k_tile(int K, int l_coord, int seq_len_kv_cache) {
-    int next_page_logical_idx = K * get<1>(TileShapeQK{}) / params.page_size;
-    // get<1>(TileShapeQK{}) usually smaller than page_size.
-    // assuming page_size is multiple of get<1>(TileShapeQK{})
-    int tiles_per_page = params.page_size / get<1>(TileShapeQK{});
-    int batch_offset = params.num_pages_per_seq ? params.num_pages_per_seq[l_coord] : l_coord * (seq_len_kv_cache / params.page_size);
-
-    return params.ptr_page_table[
-          batch_offset +                  
-          next_page_logical_idx] * tiles_per_page +            
-          K % tiles_per_page; 
+  int get_physical_k_tile(int K, int batch_offset, int tiles_per_page) {
+    int page_idx = K / tiles_per_page;
+    int tile_in_page = K % tiles_per_page;
+    return params.ptr_page_table[batch_offset + page_idx] * tiles_per_page + tile_in_page;
   }
 
   template <typename QVCoord>
@@ -509,6 +502,50 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     auto prepared_pk  = prepare_payloads(prefetch_k, pKgK(_,_,_,0), pKgK(_,_,_,0));
     auto prepared_pv  = prepare_payloads(prefetch_v, pVgV(_,_,_,0), pVgV(_,_,_,0));
     constexpr int kv_stride = get<1>(TileShapeQK{});
+    [[maybe_unused]] int const tiles_per_page = params.page_size / kv_stride;
+    [[maybe_unused]] int const batch_offset = params.num_pages_per_seq
+      ? params.num_pages_per_seq[l_coord]
+      : l_coord * (seq_len_kv_cache / params.page_size);
+
+    // Conservative optimization for cached non-paged path:
+    // keep legacy prefetch, but switch K/V copy to payload pipeline.
+    using PreparedK_cache_t = decltype(prepare_payloads(copy_k_cache, tKgK_cache(_,_,_,0,0), tKrK));
+    using PreparedV_cache_t = decltype(prepare_payloads(copy_v_cache, tVgV_cache(_,_,_,0,0), tVrV));
+    std::array<PreparedK_cache_t, DTiles> prepared_k_cache;
+    std::array<PreparedV_cache_t, VTiles> prepared_v_cache;
+    std::array<int, Stages> physical_k_tiles_cache{};
+
+    if constexpr (CachedKV && !PagedKV) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int d = 0; d < DTiles; d++) {
+        prepared_k_cache[d] = prepare_payloads(copy_k_cache, tKgK_cache(_,_,_,0,d), tKrK);
+      }
+      CUTLASS_PRAGMA_UNROLL
+      for (int VV = 0; VV < VTiles; VV++) {
+        prepared_v_cache[VV] = prepare_payloads(copy_v_cache, tVgV_cache(_,_,_,VV,0), tVrV);
+      }
+      if (blk_k0 > 0) {
+        int const cache_start_delta = blk_k0 * kv_stride;
+        CUTLASS_PRAGMA_UNROLL
+        for (int d = 0; d < DTiles; d++) {
+          update_payloads(prepared_k_cache[d], cache_start_delta);
+        }
+        CUTLASS_PRAGMA_UNROLL
+        for (int VV = 0; VV < VTiles; VV++) {
+          update_payloads(prepared_v_cache[VV], cache_start_delta);
+        }
+      }
+    }
+
+    if constexpr (CachedKV && PagedKV) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int s = 0; s < Stages; s++) {
+        int logical_k = blk_k0 + s;
+        if (logical_k < kblocks_cache) {
+          physical_k_tiles_cache[s] = get_physical_k_tile(logical_k, batch_offset, tiles_per_page);
+        }
+      }
+    }
 
     const int k_start = (blk_k0 > kblocks_cache ? blk_k0 : kblocks_cache) - kblocks_cache;
     if (k_start > 0) {
@@ -541,12 +578,13 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       for (int D = 0; D < size<4>(pKgK_cache); D++) {
         CUTLASS_PRAGMA_UNROLL
         for (int K = 0; K < Stages; K++) {
-          if (K < kblocks_cache) {
+          int logical_k = blk_k0 + K;
+          if (logical_k < kblocks_cache) {
             if constexpr (PagedKV) {
-              int physical_K_tile = get_physical_k_tile(K, l_coord, seq_len_kv_cache);
+              int physical_K_tile = physical_k_tiles_cache[K];
               prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_tile,D));
             } else {
-              prefetch(prefetch_k_cache, pKgK_cache(_,_,_,K,D));
+              prefetch(prefetch_k_cache, pKgK_cache(_,_,_,logical_k,D));
             }
           }
         }
@@ -614,11 +652,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       if constexpr (is_cache) {
         k_idx = K;
         if constexpr (PagedKV) {
-          k_idx = get_physical_k_tile(K, l_coord, seq_len_kv_cache);
+          k_idx = physical_k_tiles_cache[(K - blk_k0) % Stages];
         }
       } else {
         k_idx = K - kblocks_cache;
       }
+
       // V prefetch for next iteration (non-cache only; cache prefetch lives below).
       if constexpr (!is_cache) {
         prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
@@ -629,7 +668,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
       for (int D = 0; D < DTiles; D++) {
         if constexpr (is_cache) {
-          copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
+          if constexpr (!PagedKV) {
+            copy_with_multi_payloads(copy_k_cache, prepared_k_cache[D], tKrK);
+            update_payloads(prepared_k_cache[D], kv_stride);
+          } else {
+            copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
+          }
         } else {
           copy_with_multi_payloads(copy_k, prepared_k[D], tKrK);
           update_payloads(prepared_k[D], kv_stride);
@@ -797,7 +841,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       CUTLASS_PRAGMA_UNROLL
       for (int VV = 0; VV < VTiles; VV++) {
         if constexpr (is_cache) {
-          copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
+          if constexpr (!PagedKV) {
+            copy_with_multi_payloads(copy_v_cache, prepared_v_cache[VV], tVrV);
+            update_payloads(prepared_v_cache[VV], kv_stride);
+          } else {
+            copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
+          }
         } else {
           copy_with_multi_payloads(copy_v, prepared_v[VV], tVrV);
           update_payloads(prepared_v[VV], kv_stride);
@@ -856,7 +905,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         if (K_next < kblocks_cache) {
           int physical_K_next = K_next;
           if constexpr (PagedKV) {
-            physical_K_next = get_physical_k_tile(K_next, l_coord, seq_len_kv_cache);
+            int slot_next = (K_next - blk_k0) % Stages;
+            physical_k_tiles_cache[slot_next] = get_physical_k_tile(K_next, batch_offset, tiles_per_page);
+            physical_K_next = physical_k_tiles_cache[slot_next];
           }
           for (int D = 0; D < size<4>(pKgK_cache); D++) {
             prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_next,D));

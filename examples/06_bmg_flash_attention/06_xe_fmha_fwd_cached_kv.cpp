@@ -113,10 +113,10 @@ int main(int argc, const char **argv) {
   using ShapeOut = Shape<_256, _128>;
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 #else
-  using ShapeQK = Shape<_256, _64, _64>;
-  using ShapePV = Shape<_256, _64, _64>;
-  using ShapeOut = Shape<_256, _128>;
-  using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
+  using ShapeQK = Shape<_512, _64, _64>;
+  using ShapePV = Shape<_512, _64, _64>;
+  using ShapeOut = Shape<_512, _128>;
+  using SubgroupLayoutQK = Layout<Shape<_32, _1, _1>>;
 #endif
 #elif HEAD_DIM == 192
   using ShapeQK = Shape<_256, _64, _32>;
