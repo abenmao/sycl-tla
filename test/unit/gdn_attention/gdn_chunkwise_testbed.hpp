@@ -227,10 +227,13 @@ struct ChunkwiseTestbed {
 
     auto stats_recur_out = cutlass::gdn::perf::compare_with_stats(ref_recur_out, dev_out, atol, rtol);
     auto stats_recur_ssm = cutlass::gdn::perf::compare_with_stats(ref_recur_ssm, dev_ssm, atol, rtol);
+  /*
+    To print result analysis histogram, uncomment the following:
+
     std::cout << "[RECURRENT oracle]\n";
     cutlass::gdn::perf::print_compare_stats("  core_attn_out", stats_recur_out);
     cutlass::gdn::perf::print_compare_stats("  ssm_state    ", stats_recur_ssm);
-
+  */
     // -------- Reference 2: CHUNKWISE (5-stage, mirrors kernel decomposition) --------
     std::vector<T>      ref_chunk_out(d_out.size(), T{0});
     std::vector<StateT> ref_chunk_ssm(ssm_elems, StateT{0});
@@ -252,10 +255,13 @@ struct ChunkwiseTestbed {
 
     auto stats_chunk_out = cutlass::gdn::perf::compare_with_stats(ref_chunk_out, dev_out, atol, rtol);
     auto stats_chunk_ssm = cutlass::gdn::perf::compare_with_stats(ref_chunk_ssm, dev_ssm, atol, rtol);
+/*
+    To print result analysis histogram, uncomment the following:
+
     std::cout << "[CHUNKWISE oracle]\n";
     cutlass::gdn::perf::print_compare_stats("  core_attn_out", stats_chunk_out);
     cutlass::gdn::perf::print_compare_stats("  ssm_state    ", stats_chunk_ssm);
-
+*/
     // -------- Pass gate: BOTH oracles must pass (for now) --------
     bool recur_pass = stats_recur_out.passed() && stats_recur_ssm.passed();
     bool chunk_pass = stats_chunk_out.passed() && stats_chunk_ssm.passed();

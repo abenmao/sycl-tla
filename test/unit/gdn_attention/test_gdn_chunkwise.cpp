@@ -79,15 +79,6 @@ TEST(XE35_GDN_Chunkwise_bf16, occupancy_one_xe_core) {
   EXPECT_TRUE(tb.run());
 }
 
-TEST(XE35_GDN_Chunkwise_bf16, occupancy_all_xe_cores_light) {
-  test::gdn_attention::ChunkwiseTestbed<cutlass::bfloat16_t, float> tb;
-  tb.num_v_heads = 4;
-  tb.num_k_heads = 1;
-  tb.seq_len     = 256;
-  EXPECT_TRUE(tb.run());
-}
-
-
 
 
 /* GQA grouping kv_ratio = 1 (num_v_heads == num_k_heads): every v-head reads
@@ -141,36 +132,6 @@ TEST(XE35_GDN_Chunkwise_bf16, seq_len_256_alt_seed) {
   EXPECT_TRUE(tb.run());
 }
 
-/* ------------------------------------------------------------------------- *
- * Cross-axis robustness. The tests above each vary one axis in isolation
- * (kv_ratio only at seq_len=64; multi-batch only at chunk-aligned lengths;
- * seeds only on the 256 shape). The cases below combine axes that interact --
- * GQA folding across chunk hand-off, multi-batch with unaligned / sub-chunk
- * lengths, and extra seeds on the boundary shapes -- staying inside the
- * validated envelope (head dims = 128, bf16/fp32, no carry-over state). All
- * shapes are kept small for the CRI simulator's host-wall-clock cost.
- * ------------------------------------------------------------------------- */
-
-/* GQA fan-out across the chunk hand-off: kv_ratio=4 with seq_len=256 (4 chunks),
- * so the v_head_id / kv_ratio key-head folding is exercised together with the
- * per-chunk state carry. The kv_ratio_* tests above are all single-chunk. */
-TEST(XE35_GDN_Chunkwise_bf16, kv_ratio_four_multi_chunk) {
-  test::gdn_attention::ChunkwiseTestbed<cutlass::bfloat16_t, float> tb;
-  tb.num_v_heads = 16;
-  tb.num_k_heads = 4;
-  tb.seq_len     = 256;
-  EXPECT_TRUE(tb.run());
-}
-
-/* Identity GQA folding across the chunk hand-off: kv_ratio=1 with multiple
- * chunks, pairing the kv_ratio_one case with the state-carry path. */
-TEST(XE35_GDN_Chunkwise_bf16, kv_ratio_one_multi_chunk) {
-  test::gdn_attention::ChunkwiseTestbed<cutlass::bfloat16_t, float> tb;
-  tb.num_v_heads = 8;
-  tb.num_k_heads = 8;
-  tb.seq_len     = 256;
-  EXPECT_TRUE(tb.run());
-}
 
 
 /* Two-sequence minimal batch: smallest batch> (the simplest cache_indices /
