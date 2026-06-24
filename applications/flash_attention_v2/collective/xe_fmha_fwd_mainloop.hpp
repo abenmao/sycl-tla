@@ -88,6 +88,63 @@ cvt_f32x2_to_bf16x2_pack(cute::intel::uint2     const& tmp,
     : "rw"(tmp)
   );
 }
+
+template <class ElementP>
+struct PackedFP8PReorder;
+
+template <>
+struct PackedFP8PReorder<cutlass::float_e5m2_t> {
+  CUTE_DEVICE static void
+  pack(float const& src0, float const& src1, float const& src2, float const& src3,
+       cute::intel::uchar4& dst)
+  {
+    asm (
+      "{\n"
+      ".decl IN_F0 v_type=G type=F  num_elts=16 alias=<%1,0>\n"
+      ".decl IN_F1 v_type=G type=F  num_elts=16 alias=<%2,0>\n"
+      ".decl IN_F2 v_type=G type=F  num_elts=16 alias=<%3,0>\n"
+      ".decl IN_F3 v_type=G type=F  num_elts=16 alias=<%4,0>\n"
+      ".decl OUT_UB v_type=G type=UB num_elts=64 alias=<%0,0>\n"
+      ".decl TMP_HF v_type=G type=HF num_elts=64 align=64\n"
+      "mov  (M1, 16) TMP_HF(0,0)<1>  IN_F0(0,0)<1;1,0>\n"
+      "mov  (M1, 16) TMP_HF(0,16)<1> IN_F1(0,0)<1;1,0>\n"
+      "mov  (M1, 16) TMP_HF(1,0)<1>  IN_F2(0,0)<1;1,0>\n"
+      "mov  (M1, 16) TMP_HF(1,16)<1> IN_F3(0,0)<1;1,0>\n"
+      "fcvt (M1_NM, 32) OUT_UB(0,0)<1>  TMP_HF(0,0)<1;1,0>\n"
+      "fcvt (M1_NM, 32) OUT_UB(0,32)<1> TMP_HF(1,0)<1;1,0>\n"
+      "}\n"
+      : "=rw"(dst)
+      : "rw"(src0), "rw"(src1), "rw"(src2), "rw"(src3)
+    );
+  }
+};
+
+template <>
+struct PackedFP8PReorder<cutlass::float_e4m3_t> {
+  CUTE_DEVICE static void
+  pack(float const& src0, float const& src1, float const& src2, float const& src3,
+       cute::intel::uchar4& dst)
+  {
+    asm (
+      "{\n"
+      ".decl IN_F0 v_type=G type=F num_elts=16 alias=<%1,0>\n"
+      ".decl IN_F1 v_type=G type=F num_elts=16 alias=<%2,0>\n"
+      ".decl IN_F2 v_type=G type=F num_elts=16 alias=<%3,0>\n"
+      ".decl IN_F3 v_type=G type=F num_elts=16 alias=<%4,0>\n"
+      ".decl OUT_B v_type=G type=B num_elts=64 alias=<%0,0>\n"
+      ".decl TMP_HF v_type=G type=HF num_elts=64 align=64\n"
+      "mov  (M1, 16) TMP_HF(0,0)<1>  IN_F0(0,0)<1;1,0>\n"
+      "mov  (M1, 16) TMP_HF(0,16)<1> IN_F1(0,0)<1;1,0>\n"
+      "mov  (M1, 16) TMP_HF(1,0)<1>  IN_F2(0,0)<1;1,0>\n"
+      "mov  (M1, 16) TMP_HF(1,16)<1> IN_F3(0,0)<1;1,0>\n"
+      "fcvt (M1_NM, 32) OUT_B(0,0)<1>  TMP_HF(0,0)<1;1,0>\n"
+      "fcvt (M1_NM, 32) OUT_B(0,32)<1> TMP_HF(1,0)<1;1,0>\n"
+      "}\n"
+      : "=rw"(dst)
+      : "rw"(src0), "rw"(src1), "rw"(src2), "rw"(src3)
+    );
+  }
+};
 #else
 CUTE_DEVICE
 void
@@ -104,6 +161,15 @@ cvt_f32x2_to_bf16x2_pack(cute::intel::uint2     const& /*tmp*/,
 {
   CUTE_INVALID_CONTROL_PATH("cvt_f32x2_to_bf16x2_pack requires Intel Xe SYCL device target");
 }
+
+template <class ElementP>
+struct PackedFP8PReorder {
+  CUTE_DEVICE static void
+  pack(float const&, float const&, float const&, float const&, cute::intel::uchar4&)
+  {
+    CUTE_INVALID_CONTROL_PATH("PackedFP8PReorder requires Intel Xe SYCL device target");
+  }
+};
 #endif
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -805,18 +871,28 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           }
         }
       }
+      asm volatile("fence_sw");
       // Fold Q*K  scale into params.scale
       ElementS qk_scale = params.scale;
       if constexpr (PerTensorScale) {
         qk_scale = params.scale * ElementS(scale_q) * ElementS(scale_k);
       }
       auto [rescale, tS_partial_sum] = softmax(tSrS, tA_max, tA_sum, qk_scale);
+      asm volatile("fence_sw");
       auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
       constexpr int kSumSize = decltype(tA_sum.size())::value;
       constexpr bool kSumDivVT = (kSumSize % VTiles == 0);
       constexpr int kSumPerVT = kSumDivVT ? (kSumSize / VTiles) : 0;
       /* Apply softmax and scaling (tA rescaling fused into GEMM2 VTile loop) */
       using ElementP = typename TiledMMAPV::ValTypeA;
+      auto p_sl0 = cute::detail::subbyte_sg_tv_swizzle<ElementS>(project_strides(tSrS.tv_layout()));
+      auto p_dl0 = cute::detail::subbyte_sg_tv_swizzle<ElementP>(project_strides(tArP.tv_layout()));
+      using PReorderLayout = decltype(coalesce(composition(right_inverse(p_dl0), p_sl0)));
+      constexpr bool kCanUsePackedFP8Reorder =
+        std::is_same_v<ElementS, float> &&
+        (std::is_same_v<ElementP, cutlass::float_e5m2_t> ||
+         std::is_same_v<ElementP, cutlass::float_e4m3_t>) &&
+        std::is_same_v<PReorderLayout, Layout<Shape<_16, _16, _2, _2>, Stride<_1, _32, _16, _512>>>;
       if constexpr (std::is_same_v<ElementP, bfloat16_t>) {
         static_assert(decltype(tArP.size())::value % 2 == 0,
                       "tArP per-WI element count must be even for f32x2->bf16x2 packing");
@@ -832,9 +908,25 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
               reinterpret_cast<cute::intel::ushort2&>(tArP(2 * p)));
         }
       }
+      else if constexpr (kCanUsePackedFP8Reorder) {
+        static_assert(decltype(tArP.size())::value == 64,
+                      "Packed FP8 reorder expects 64 per-WI P elements");
+        CUTLASS_PRAGMA_UNROLL
+        for (int g = 0; g < 2; g++) {
+          CUTLASS_PRAGMA_UNROLL
+          for (int p = 0; p < 16; p += 2) {
+            int const src0 = g * 32 + p;
+            int const src1 = src0 + 16;
+            int const dst = g * 32 + 2 * p;
+            PackedFP8PReorder<ElementP>::pack(tSrS(src0), tSrS(src1), tSrS(src0 + 1), tSrS(src1 + 1),
+                reinterpret_cast<cute::intel::uchar4&>(tArP(dst)));
+          }
+        }
+      }
       else {
         reorder(tSrS, tArP);
       }
+      asm volatile("fence_sw");
 
       /* GEMM 2: A += P * V, split in v dimension.
         tArA rescaling is fused to per-VTile */
@@ -970,6 +1062,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     for (int i = 0; i < tS.size(); i++)
       tS(i) = qk_scale * tS(i) - broadcast<0>(tA_max, tS, i);
 
+    asm volatile("fence_sw");
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < tS.size(); i++)
       tS(i) = sycl::native::exp2(tS(i));
