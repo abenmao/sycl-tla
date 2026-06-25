@@ -59,4 +59,11 @@ cutlass_example_add_executable(
   TEST_SCALE
 )
 
+cutlass_example_add_executable(
+  51_xe35_grouped_gemm_bf16
+  51_xe35_grouped_gemm_bf16.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_SCALE
+)
+
 endif()

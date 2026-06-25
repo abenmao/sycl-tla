@@ -759,6 +759,8 @@ struct ExampleRunner {
         std::cout << "Datatype: float_e4m3_t"<< std::endl;
       } else if constexpr (std::is_same_v<ElementA, float_e5m2_t>) {
         std::cout << "Datatype: float_e5m2_t"<< std::endl;
+      } else if constexpr (std::is_same_v<ElementA, bfloat16_t>) {
+        std::cout << "Datatype: bfloat16_t"<< std::endl;
       }
       std::cout << "Groups: " << options.groups << std::endl;
       if constexpr (ScalePolicy::has_n_block_scale) {
