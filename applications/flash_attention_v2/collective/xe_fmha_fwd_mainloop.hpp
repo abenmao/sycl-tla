@@ -377,7 +377,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     return params.ptr_page_table[batch_offset + page_idx] * tiles_per_page + tile_in_page;
   }
 
-  template <typename QVCoord>
+  template <bool GqaFusion = false, typename QVCoord>
   CUTLASS_DEVICE
   void
   operator()(TensorQ2D const& Q_2D,     // (q,d)
@@ -396,6 +396,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
              int              l_coord,
              int              full_tile_offset,
              int              discard_seq_coord,
+             int              q_pos_base = 0,         // Tile-row offset of this block (GQA fusion / spec-decode)
+             int              gqa_fusion_q_per_head = 0,
              TensorK_cache2D const& K_cache_2D = TensorK_cache2D{},
              TensorV_cache2D const& V_cache_2D = TensorV_cache2D{},
              float            scale_k = 1.0f,
@@ -565,8 +567,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       prepared_v[VV] = prepare_payloads(copy_v, tVgV(_,_,_,VV,0), tVrV);
     }
 
-    auto prepared_pk  = prepare_payloads(prefetch_k, pKgK(_,_,_,0), pKgK(_,_,_,0));
-    auto prepared_pv  = prepare_payloads(prefetch_v, pVgV(_,_,_,0), pVgV(_,_,_,0));
+    [[maybe_unused]] auto prepared_pk  = prepare_payloads(prefetch_k, pKgK(_,_,_,0), pKgK(_,_,_,0));
+    [[maybe_unused]] auto prepared_pv  = prepare_payloads(prefetch_v, pVgV(_,_,_,0), pVgV(_,_,_,0));
     constexpr int kv_stride = get<1>(TileShapeQK{});
     [[maybe_unused]] int const tiles_per_page = params.page_size / kv_stride;
     [[maybe_unused]] int const batch_offset = params.num_pages_per_seq
@@ -627,18 +629,18 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       update_payloads(prepared_pk, k_start_delta);
       update_payloads(prepared_pv, k_start_delta);
     }
-
-    CUTLASS_PRAGMA_UNROLL
-    for (int K = 0; K < Stages; K++) {
-      prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
-      update_payloads(prepared_pk, kv_stride);
+    if constexpr (!GqaFusion) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int K = 0; K < Stages; K++) {
+        prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
+        update_payloads(prepared_pk, kv_stride);
+      }
+      CUTLASS_PRAGMA_UNROLL
+      for (int K = 0; K < Stages; K++) {
+        prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
+        update_payloads(prepared_pv, kv_stride);
+      }
     }
-    CUTLASS_PRAGMA_UNROLL
-    for (int K = 0; K < Stages; K++) {
-      prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
-      update_payloads(prepared_pv, kv_stride);
-    }
-
     // Cache K prefetch init, still uses legacy API.
     if constexpr (CachedKV) {
       for (int D = 0; D < size<4>(pKgK_cache); D++) {
@@ -696,11 +698,11 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       }
     }();
 
-    if (blk_k0 == 0) {
-      clear(tArA);
-      fill(tA_max, cutlass::platform::numeric_limits<ElementA>::lowest());
-      clear(tA_sum);
-    }
+
+    clear(tArA);
+    fill(tA_max, cutlass::platform::numeric_limits<ElementA>::lowest());
+    clear(tA_sum);
+
     constexpr int kAtomsPerD = decltype(get<2>(TileShapeQK{}))::value
                              / decltype(get<2>(typename TiledMMAQK::AtomShape_MNK{}))::value;
     /* Main loop body */
@@ -725,7 +727,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       }
 
       // V prefetch for next iteration (non-cache only; cache prefetch lives below).
-      if constexpr (!is_cache) {
+      if constexpr (!is_cache && !GqaFusion) {
         prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
         update_payloads(prepared_pv, kv_stride);
       }
@@ -806,7 +808,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         for (int VV = 0; VV < VTiles; VV++) {
           prefetch(prefetch_v_cache, pVgV_cache(_,_,_,VV,k_idx));
         }
-      } else {
+      } else if constexpr (!GqaFusion) {
         prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
         update_payloads(prepared_pk, kv_stride);
       }
@@ -839,7 +841,10 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
             // get<1>(cS_thread(i)) is the new-KV-local column; add seq_len_kv_cache
             // to get the logical full-sequence column coordinate.
             int col_idx = get<1>(cS_thread(i)) + seq_len_kv_cache;
-            if (col_idx - seq_len_kv_cache - full_tile_offset > row_idx - discard_seq_coord) {
+            int seq_coord = (gqa_fusion_q_per_head > 0)
+                          ? ((q_pos_base + row_idx) % gqa_fusion_q_per_head)
+                          : row_idx;
+            if (col_idx - seq_len_kv_cache - full_tile_offset > seq_coord - discard_seq_coord) {
               tSrS(i) = ElementS(-INFINITY);
             }
           }

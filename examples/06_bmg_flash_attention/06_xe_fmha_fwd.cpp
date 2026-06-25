@@ -144,40 +144,57 @@ int main(int argc, const char **argv) {
 #if PERSISTENT
 #define NUM_SG _8
 #define KV_TILE_SIZE _256
+#define Q_SIZE _8
 #else
 #define NUM_SG _8
 #define KV_TILE_SIZE _512
+#define Q_SIZE _1
 #endif
 
 #if HEAD_DIM == 16
   /* Tiny config for testing */
-  using ShapeQK = Shape<_1, _16, _16>;       // (q,k,d)
-  using ShapePV = Shape<_1, _16, _16>;       // (q,v,k)
-  using ShapeOut = Shape<_1, _16>;           // (q,v)
+  using ShapeQK = Shape<Q_SIZE, _16, _16>;       // (q,k,d)
+  using ShapePV = Shape<Q_SIZE, _16, _16>;       // (q,v,k)
+  using ShapeOut = Shape<Q_SIZE, _16>;           // (q,v)
   using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 64
-    using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
-    using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
-    using ShapeOut = Shape<_1, _64>;
-    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
+  using ShapeQK = Shape<Q_SIZE, KV_TILE_SIZE, _64>;
+  using ShapePV = Shape<Q_SIZE, _32, KV_TILE_SIZE>;
+  using ShapeOut = Shape<Q_SIZE, _64>;
+  using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 96
-    using ShapeQK = Shape<_1, KV_TILE_SIZE, _32>;
-    using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
-    using ShapeOut = Shape<_1, _96>;
-    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
+  using ShapeQK = Shape<Q_SIZE, KV_TILE_SIZE, _32>;
+  using ShapePV = Shape<Q_SIZE, _32, KV_TILE_SIZE>;
+  using ShapeOut = Shape<Q_SIZE, _96>;
+  using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 
 #elif HEAD_DIM == 128
-    using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
-    using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
-    using ShapeOut = Shape<_1, _128>;
-    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
+  using ShapeQK8 = Shape<_8, _256, _64>;
+  using ShapePV8 = Shape<_8, _32, _256>;
+  using ShapeOut8 = Shape<_8, _128>;
+  using SubgroupLayoutQK8 = Layout<Shape<_1, _8, _1>>;
+
+  using ShapeQK16 = Shape<_16, _256, _64>;
+  using ShapePV16 = Shape<_16, _32, _256>;
+  using ShapeOut16 = Shape<_16, _128>;
+  using SubgroupLayoutQK16 = Layout<Shape<_2, _8, _1>>;
+
+  using ShapeQK32 = Shape<_32, _256, _64>;
+  using ShapePV32 = Shape<_32, _32, _256>;
+  using ShapeOut32 = Shape<_32, _128>;
+  using SubgroupLayoutQK32 = Layout<Shape<_4, _8, _1>>;
+
+  using ShapeQK64 = Shape<_64, _256, _64>;
+  using ShapePV64 = Shape<_64, _32, _256>;
+  using ShapeOut64 = Shape<_64, _128>;
+  using SubgroupLayoutQK64 = Layout<Shape<_4, _8, _1>>;
 
 #elif HEAD_DIM == 192
-    using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
-    using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
-    using ShapeOut = Shape<_1, _192>;
+    using ShapeQK = Shape<Q_SIZE, KV_TILE_SIZE, _64>;
+    using ShapePV = Shape<Q_SIZE, _32, KV_TILE_SIZE>;
+    using ShapeOut = Shape<Q_SIZE, _192>;
     using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
 #endif
 #else
@@ -190,12 +207,57 @@ int main(int argc, const char **argv) {
   constexpr int PipelineStages = 2;
 #endif
 
+#if defined(DECODE) && HEAD_DIM == 128
+  const int gqa_group  = options.num_heads_q / options.num_heads_kv;
+  const int q_len      = options.seq_len_qo;
+  const int total_rows = gqa_group * q_len;
+
+  const int kv_tile    = 256;
+  const int kv_blocks  = (options.seq_len_kv + kv_tile - 1) / kv_tile;
+  const int base_units = options.batch * options.num_heads_kv;
+  const int sm_count   = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
+  const bool use_split = !options.use_paged_kv
+                      && options.seq_len_kv_cache == 0
+                      && total_rows <= 64
+                      && base_units < sm_count / 2
+                      && base_units * kv_blocks > sm_count / 2;
+
+#define FMHA_RUN_Q(QK, PV, OUT, SGL)                                                                  \
+    (use_split                                                                                        \
+       ? (options.is_causal                                                                           \
+           ? FMHAConfig</*CausalMask=*/true,  false, QK, PV, OUT, SGL, void, PipelineStages,          \
+                        ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::                  \
+                        template run<false, false, false,                                             \
+                        cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options)              \
+           : FMHAConfig</*CausalMask=*/false, false, QK, PV, OUT, SGL, void, PipelineStages,          \
+                        ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::                  \
+                        template run<false, false, false,                                             \
+                        cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options))             \
+       : (options.is_causal                                                                           \
+           ? FMHAConfig</*CausalMask=*/true,  false, QK, PV, OUT, SGL, void, PipelineStages,          \
+                        ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/true>::template run<      \
+                        false, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options) \
+           : FMHAConfig</*CausalMask=*/false, false, QK, PV, OUT, SGL, void, PipelineStages,          \
+                        ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/true>::template run<      \
+                        false, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options)))
+
+  if (total_rows <= 8)
+    return FMHA_RUN_Q(ShapeQK8,  ShapePV8,  ShapeOut8,  SubgroupLayoutQK8);
+  else if (total_rows <= 16)
+    return FMHA_RUN_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16);
+  else if (total_rows <= 32)
+    return FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32);
+  else
+    return FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64);
+
+#undef FMHA_RUN_Q
+#else
 #if PERSISTENT
   if (options.use_paged_kv || options.seq_len_kv_cache > 0) {
     std::cerr << "Error: Persistent kernel does not support paged/cached KV cache (use_paged_kv or seq_len_kv_cache > 0)." << std::endl;
     return -1;
   }
-  using FMHAPersistent = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, /*persistent=*/true, ElementQ, ElementK, ElementV>;
+  using FMHAPersistent = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
   return FMHAPersistent::template run<false, false, false, cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options);
 #elif HEAD_DIM == 128 && defined(PREFILL) && !(defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)) && (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
   if (options.seq_len_kv_cache > 0 || options.use_paged_kv) {
@@ -205,11 +267,11 @@ int main(int argc, const char **argv) {
 
   using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
 
-  using FMHACausal    = FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV>;
-  using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV>;
+  using FMHACausal    = FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
+  using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
 
-  using FMHACausal4    = FMHAConfig<true, false, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4, void, PipelineStages, false, ElementQ, ElementK, ElementV>;
-  using FMHANonCausal4 = FMHAConfig<false, false, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4, void, PipelineStages, false, ElementQ, ElementK, ElementV>;
+  using FMHACausal4    = FMHAConfig<true, false, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4, void, PipelineStages, ElementQ, ElementK, ElementV>;
+  using FMHANonCausal4 = FMHAConfig<false, false, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4, void, PipelineStages, ElementQ, ElementK, ElementV>;
   if (options.is_causal) {
     if (options.seq_len_qo <= 256) {
       if (options.varlen) {
@@ -245,8 +307,8 @@ int main(int argc, const char **argv) {
 
   using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
 
-  using FMHACausal    = FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV>;
-  using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, false, ElementQ, ElementK, ElementV>;
+  using FMHACausal    = FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
+  using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
 
   if (options.is_causal) {
     if (options.varlen) {
@@ -261,5 +323,6 @@ int main(int argc, const char **argv) {
       return FMHANonCausal::template run<false, false, false, Scheduler>(options);
     }
   }
+#endif
 #endif
 }

@@ -68,7 +68,7 @@ struct Options {
 
   Options()
       : help(false), error(false), is_causal(false), varlen(false), use_paged_kv(false), batch(32), num_heads_q(16), num_heads_kv(16), seq_len_qo(512), head_size_qk(128),
-        seq_len_kv(512), seq_len_kv_cache(0), page_size(128), head_size_vo(128), iterations(100), warmup(100), softmax_scale(1.f), verify(1), scheduler("Individual") {}
+        seq_len_kv(0), seq_len_kv_cache(0), page_size(128), head_size_vo(128), iterations(100), warmup(100), softmax_scale(1.f), verify(1), scheduler("Individual") {}
 
   // Parses the command line
   void parse(int argc, char const **args) {
@@ -93,18 +93,20 @@ struct Options {
     cmd.get_cmd_line_argument("batch", batch, 1);
     cmd.get_cmd_line_argument("num_heads_q", num_heads_q, 8);
     cmd.get_cmd_line_argument("num_heads_kv", num_heads_kv, 1);
-    cmd.get_cmd_line_argument("seq_len_kv", seq_len_kv, 4096);
 #else
     cmd.get_cmd_line_argument("batch", batch, 32);
     cmd.get_cmd_line_argument("num_heads_q", num_heads_q, 16);
     cmd.get_cmd_line_argument("num_heads_kv", num_heads_kv, num_heads_q);
-    cmd.get_cmd_line_argument("seq_len_kv", seq_len_kv, 512);
-    cmd.get_cmd_line_argument("seq_len_kv_cache", seq_len_kv_cache, 0);
 #endif
 #ifdef DECODE
+    bool const has_seq_len_kv = cmd.check_cmd_line_flag("seq_len_kv");
     cmd.get_cmd_line_argument("seq_len_qo", seq_len_qo, 1);
+    cmd.get_cmd_line_argument("seq_len_kv", seq_len_kv, 0);
+    cmd.get_cmd_line_argument("seq_len_kv_cache", seq_len_kv_cache, has_seq_len_kv ? 0 : 512);
 #else
-    cmd.get_cmd_line_argument("seq_len_qo", seq_len_qo, seq_len_kv);
+    cmd.get_cmd_line_argument("seq_len_qo", seq_len_qo, 512);
+    cmd.get_cmd_line_argument("seq_len_kv", seq_len_kv, seq_len_qo);
+    cmd.get_cmd_line_argument("seq_len_kv_cache", seq_len_kv_cache, 0);
 #endif
     cmd.get_cmd_line_argument("head_size_vo", head_size_vo, HEAD_DIM);
     cmd.get_cmd_line_argument("head_size_qk", head_size_qk, head_size_vo);
@@ -125,7 +127,13 @@ struct Options {
             return;
         }
     }
-
+    //TODO: Add seq_len_kv_cache to seq_len_kv, remove this when cached/pagedKV is optimized.
+    seq_len_kv += seq_len_kv_cache;
+    seq_len_kv_cache = 0;
+    if(seq_len_kv <= 0) {
+      std::cerr << "Invalid: seq_len_kv or seq_len_kv_cache must be > 0" << std::endl;
+      return;
+    }
     softmax_scale = 1 / sqrt(static_cast<float>(head_size_qk));
   }
 
@@ -224,16 +232,16 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   StrideV stride_V_cache;
   StrideO stride_O;
 
-#if PERSISTENT
-  static constexpr bool BlockScale = false;
-#else
+
+  static constexpr bool IsPersistent = is_same_v<typename FMHAKernel::TileScheduler, cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>;
+
   static constexpr bool BlockScale = FMHAKernel::BlockScale;
 
-  using ElementScale = typename FMHAKernel::ElementScale;
 
-  using StrideScaleQ = typename FMHAKernel::StrideScaleQ;
-  using StrideScaleK = typename FMHAKernel::StrideScaleK;
-  using StrideScaleV = typename FMHAKernel::StrideScaleV;
+  using ElementScale = typename CollectiveMainloop::TensorScaleQ::element_type;
+  using StrideScaleQ = decltype(cute::stride(typename CollectiveMainloop::TensorScaleQ{}));
+  using StrideScaleK = decltype(cute::stride(typename CollectiveMainloop::TensorScaleK{}));
+  using StrideScaleV = decltype(cute::stride(typename CollectiveMainloop::TensorScaleV{}));
 
   StrideScaleQ stride_SQ;
   StrideScaleK stride_SK;
@@ -246,7 +254,6 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   ElementScale scale_k = ElementScale(1);
   ElementScale scale_v = ElementScale(1);
   ElementScale scale_q = ElementScale(1);
-#endif
 
   std::vector<int> cumulative_scale_q;
   std::vector<int> cumulative_scale_kv;
@@ -972,52 +979,54 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
 
     ProblemShapeType shape = initialize(options);
 
-#if PERSISTENT
-    typename FMHAKernel::Arguments arguments{
-      {
-        shape,
-        block_Q.get(), stride_Q,
-        block_K.get(), stride_K,
-        block_V.get(), stride_V,
-        block_O.get(), stride_O,
-        block_K_cache.get(), stride_K_cache,
-        block_V_cache.get(), stride_V_cache,
-      },
-      {
-        options.softmax_scale,
-        options.use_paged_kv ? paged_kv_cache.page_table.get() : nullptr,
-        options.use_paged_kv ? paged_kv_cache.page_size : 0,
-        options.use_paged_kv ? paged_kv_cache.num_pages_per_seq.get() : nullptr
-      },
-      {},
-      hw_info
-    };
-#else
-    typename FMHAKernel::Arguments arguments{
-      {
-        shape,
-        block_Q.get(), stride_Q,
-        block_K.get(), stride_K,
-        block_V.get(), stride_V,
-        block_O.get(), stride_O,
-        block_scaleQ.get(), stride_SQ,
-        block_scaleK.get(), stride_SK,
-        block_scaleV.get(), stride_SV,
-        scale_k, scale_v, scale_q,
-        GROUP_SIZE,
-        block_K_cache.get(), stride_K_cache,
-        block_V_cache.get(), stride_V_cache
-      },
-      {
-        options.softmax_scale,
-        options.use_paged_kv ? paged_kv_cache.page_table.get() : nullptr,
-        options.use_paged_kv ? paged_kv_cache.page_size : 0,
-        options.use_paged_kv ? paged_kv_cache.num_pages_per_seq.get() : nullptr
-      },
-      {},
-      hw_info
-    };
-#endif
+    typename FMHAKernel::Arguments arguments = [&]() {
+      if constexpr (IsPersistent) {
+        return typename FMHAKernel::Arguments{
+          {
+            shape,
+            block_Q.get(), stride_Q,
+            block_K.get(), stride_K,
+            block_V.get(), stride_V,
+            block_O.get(), stride_O,
+            block_K_cache.get(), stride_K_cache,
+            block_V_cache.get(), stride_V_cache,
+          },
+          {
+            options.softmax_scale,
+            options.use_paged_kv ? paged_kv_cache.page_table.get() : nullptr,
+            options.use_paged_kv ? paged_kv_cache.page_size : 0,
+            options.use_paged_kv ? paged_kv_cache.num_pages_per_seq.get() : nullptr
+          },
+          {},
+          hw_info
+        };
+      } else {
+        return typename FMHAKernel::Arguments{
+          {
+            shape,
+            block_Q.get(), stride_Q,
+            block_K.get(), stride_K,
+            block_V.get(), stride_V,
+            block_O.get(), stride_O,
+            block_scaleQ.get(), stride_SQ,
+            block_scaleK.get(), stride_SK,
+            block_scaleV.get(), stride_SV,
+            scale_k, scale_v, scale_q,
+            GROUP_SIZE,
+            block_K_cache.get(), stride_K_cache,
+            block_V_cache.get(), stride_V_cache
+          },
+          {
+            options.softmax_scale,
+            options.use_paged_kv ? paged_kv_cache.page_table.get() : nullptr,
+            options.use_paged_kv ? paged_kv_cache.page_size : 0,
+            options.use_paged_kv ? paged_kv_cache.num_pages_per_seq.get() : nullptr
+          },
+          {},
+          hw_info
+        };
+      }
+    }();
 
     // Define device-global scratch memory
     size_t workspace_size = FMHAKernel::get_workspace_size(arguments);
@@ -1137,11 +1146,11 @@ template <bool Causal,
           typename SubgroupLayoutQK,
           typename SubgroupLayoutPV_,      /* void -> default */
           int PipelineStages,
-          bool persistent,
           typename ElementQ = bfloat16_t,
           typename ElementK = bfloat16_t,
           typename ElementV = bfloat16_t,
           typename ElementScale = float,
+          bool kGqaFusion = false,
           typename ElementO = float,
           typename MMAOperation_ = void,    /* void -> default */
           typename StrideQ = Stride<int, _1, int, int>,
@@ -1252,8 +1261,6 @@ struct FMHAConfig {
         GmemTiledCopyO
     >;
 
-    static_assert(!(persistent & Causal), "persistent SDPA kernel not support Causal yet");
-
     cutlass::Status status;
     if constexpr (is_same_v<Scheduler, cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>) {
       using FMHAKernel = cutlass::fmha::kernel::XeFMHAFwdDynamicSplitKernel<
@@ -1264,7 +1271,7 @@ struct FMHAConfig {
       auto run_with = [&](auto bo_t, auto hgo_t) -> cutlass::Status {
         constexpr bool BO  = decltype(bo_t)::value;
         constexpr bool HGO = decltype(hgo_t)::value;
-        using SchedulerSpec = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<BO, HGO>;
+        using SchedulerSpec = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<BO, HGO, kGqaFusion>;
         using FMHAKernel = cutlass::fmha::kernel::XeFMHAFwdKernel<
             ProblemShapeType, CollectiveMainloop, CollectiveEpilogue, SchedulerSpec>;
         ExampleRunner<FMHAKernel, isVarLen> runner;
@@ -1273,8 +1280,20 @@ struct FMHAConfig {
 
       const bool batch_one = (options.batch == 1);
       const bool no_gqa    = (options.num_heads_q == options.num_heads_kv);
-
-      if (batch_one && no_gqa) {
+      if constexpr (kGqaFusion) {
+        constexpr int QK_BLK_M = cute::get<0>(TileShapeQK{});
+        if (options.seq_len_qo < 1 || options.seq_len_qo > QK_BLK_M) {
+          std::cerr << "[FMHAConfig] kGqaFusion supports 1 <= seq_len_qo <= " << QK_BLK_M
+                    << " (got " << options.seq_len_qo << ")\n";
+          return -1;
+        }
+        if (batch_one) {
+          status = run_with(std::true_type{},  std::true_type{});
+        } else {
+          status = run_with(std::false_type{}, std::true_type{});
+        }
+      }
+      else if (batch_one && no_gqa) {
         status = run_with(std::true_type{},  std::true_type{});
       }
       else if (batch_one) {

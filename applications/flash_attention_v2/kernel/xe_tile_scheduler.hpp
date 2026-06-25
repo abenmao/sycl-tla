@@ -43,15 +43,17 @@ namespace detail {
 struct EmptyDivmod {};
 }
 
-template <bool OneBatch = false, bool NoGQA = false>
+template <bool OneBatch = false, bool NoGQA = false, bool GqaFusion = false>
 struct XeFHMAIndividualTileScheduler {
+  static constexpr bool kGqaFusion = GqaFusion;
   using NumHeadsDivmod   = cute::conditional_t<OneBatch, detail::EmptyDivmod, FastDivmod>;
-  using HeadGroupDivmod  = cute::conditional_t<NoGQA, detail::EmptyDivmod, FastDivmod>;
+  using HeadGroupDivmod  = cute::conditional_t<NoGQA || GqaFusion, detail::EmptyDivmod, FastDivmod>;
 
   struct Params {
     dim3 grid;
     NumHeadsDivmod  divmod_num_heads;
     HeadGroupDivmod divmod_head_group_q;
+    int gqa_group_size;
   };
 
   bool valid_ = true;
@@ -66,16 +68,17 @@ struct XeFHMAIndividualTileScheduler {
       TileShape const& tile_shape)
   {
     using namespace cute;
-
+    int heads_in_grid = GqaFusion ? shape.num_heads_kv : shape.num_heads_q;
     dim3 grid(size(ceil_div(shape.head_size_vo, get<1>(tile_shape))),     // V
               size(ceil_div(shape.seq_len_qo,   get<0>(tile_shape))),     // Q
-              size(shape.batch * shape.num_heads_q));                     // (h,b) -- split later
+              size(shape.batch * heads_in_grid));                         // (h,b) -- split later
     Params p{};
     p.grid = grid;
+    p.gqa_group_size = shape.num_heads_q / shape.num_heads_kv;
     if constexpr (!OneBatch) {
-      p.divmod_num_heads = FastDivmod(shape.num_heads_q);
+      p.divmod_num_heads = FastDivmod(heads_in_grid);
     }
-    if constexpr (!NoGQA) {
+    if constexpr (!NoGQA && !GqaFusion) {
       p.divmod_head_group_q = FastDivmod(shape.num_heads_q / shape.num_heads_kv);
     }
     return p;
@@ -97,7 +100,7 @@ struct XeFHMAIndividualTileScheduler {
     int head;
     int idx_b;
     if constexpr (OneBatch) {
-      // Single batch: grid.z == num_heads_q. No divmod needed.
+      // Single batch: grid.z == num_heads. No divmod needed.
       head  = BlockIdxZ();
       idx_b = 0;
     } else {
@@ -109,12 +112,15 @@ struct XeFHMAIndividualTileScheduler {
 
   CUTLASS_DEVICE
   int divide_head_group(int head_q) const {
-    if constexpr (NoGQA) {
+    if constexpr (NoGQA || GqaFusion) {
       return head_q;
     } else {
       return params.divmod_head_group_q.div(head_q);
     }
   }
+
+  CUTLASS_DEVICE
+  int get_gqa_group_size() const { return params.gqa_group_size; }
 
   CUTLASS_DEVICE
   XeFHMAIndividualTileScheduler& operator++() {
@@ -154,7 +160,7 @@ struct XeFHMAIndividualPersistentTileScheduler {
               size(ceil_div(shape.seq_len_qo,   get<0>(tile_shape))),     // Q
               size(shape.batch * shape.num_heads_q));                     // (h,b) -- split later
     int num_heads = shape.num_heads_q;
-    grid.z = hw_info.sm_count;
+    grid.z = hw_info.sm_count /2;
 
     return Params{grid, {num_heads}, {shape.num_heads_q / shape.num_heads_kv}};
   }
