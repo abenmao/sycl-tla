@@ -51,11 +51,17 @@
 #include "cutlass/util/reference/device/tensor_fill.h"
 #include "cutlass/util/reference/device/tensor_silu.h"
 #include "cutlass/util/initialize_block.hpp"
+#include "cutlass/util/reference/host/gemm.h"
+#include "cutlass/relatively_equal.h"
 
 #include "../common.hpp"
 #include <benchmark/benchmark.h>
 
+#include <algorithm>
+#include <array>
 #include <cfloat>
+#include <cmath>
+#include <random>
 
 using namespace cute;
 
@@ -152,22 +158,47 @@ struct GroupSizeType<T, cute::void_t<decltype(T::GROUP_K)>> {
   static constexpr int value = T::GROUP_K;
 };
 
+// SFINAE helper: reads DispatchPolicy::GroupSize only when it exists (block-scaled collectives).
+// Falls back to 32 for non-block-scaled collectives (BF16, plain FP8) that have no GroupSize.
+template <class T, class = void>
+struct DispatchGroupSizeType {
+  static constexpr int value = 32;
+};
+template <class T>
+struct DispatchGroupSizeType<T, cute::void_t<typename T::DispatchPolicy::GroupSize>> {
+  static constexpr int value = int(typename T::DispatchPolicy::GroupSize{});
+};
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Verification mode enum
+enum class VerifyMode {
+  None = 0,           // No verification (skip both device and host)
+  Device = 1,         // Device-only verification (default) - uses reference::device::GemmComplex
+  Host = 2            // Host verification - takes a long time, use only for small problem sizes
+};
 
 // Command line options parsing
 struct GroupedGEMMOptions {
 
   bool error;
+  VerifyMode verify_mode;
 
-  int m, n, k, l, groups;
+  int m, n, k, l, groups;  // groups is computed from num_experts/ep_size
+  int topk, num_experts, ep_size;
+  bool random_mode;
+  int seed;
   float alpha, beta;
   std::string bm_name;
   std::vector<typename ProblemShape::UnderlyingProblemShape> problem_sizes_host;
 
   GroupedGEMMOptions():
           error(false),
+          verify_mode(VerifyMode::Device),
           m(5120), n(4096), k(4096), l(1),
-          groups(2),
+          groups(128),  // Will be recomputed in parse()
+          topk(8), num_experts(128), ep_size(1),
+          random_mode(false), seed(42),
           alpha(1.f), beta(0.f),
           bm_name("GroupedGEMM")
   {
@@ -186,16 +217,75 @@ struct GroupedGEMMOptions {
     cmd.get_cmd_line_argument("n", n, 4096);
     cmd.get_cmd_line_argument("k", k, 4096);
     cmd.get_cmd_line_argument("l", l, 1);
-    cmd.get_cmd_line_argument("groups", groups, 2);
+    cmd.get_cmd_line_argument("topk", topk, 8);
+    cmd.get_cmd_line_argument("num_experts", num_experts, 128);
+    cmd.get_cmd_line_argument("ep_size", ep_size, 1);
     cmd.get_cmd_line_argument("alpha", alpha, 1.f);
     cmd.get_cmd_line_argument("beta", beta, 0.f);
     cmd.get_cmd_line_argument("bm_name", bm_name, std::string("GEMM"));
+    cmd.get_cmd_line_argument("seed", seed, 42);
+    random_mode = cmd.check_cmd_line_flag("random");
 
-    assert(groups > 2);
+    // Parse verification mode
+    std::string verify_str = "device";
+    cmd.get_cmd_line_argument("verify", verify_str, std::string("device"));
+    if (verify_str == "none") {
+      verify_mode = VerifyMode::None;
+    } else if (verify_str == "device") {
+      verify_mode = VerifyMode::Device;
+    } else if (verify_str == "host") {
+      verify_mode = VerifyMode::Host;
+    } else {
+      std::cerr << "Invalid verify mode or mode wasn't defined, using default Verify Mode as None" << std::endl;
+      verify_mode = VerifyMode::None;
+    }
+
+    // Validate basic dimensions
+    assert(m > 0 && "m must be positive");
+    assert(n > 0 && "n must be positive");
+    assert(k > 0 && "k must be positive");
+
+    // Validate MOE parameters
+    assert(topk > 0 && "topk must be positive");
+    assert(num_experts > 0 && "num_experts must be positive");
+    assert(ep_size > 0 && "ep_size must be positive");
+
     problem_sizes_host.clear();
+
+    // Compute groups and generate problem sizes using distribution logic
+    int experts_per_gpu = num_experts / ep_size;
+    int tokens_per_gpu = (m * topk) / ep_size;
+
+    groups = experts_per_gpu;
     problem_sizes_host.reserve(groups);
-    for(int i = 0; i < groups; i++) {
-      problem_sizes_host.push_back({m, n, k});
+
+    std::vector<int> m_per_expert(experts_per_gpu);
+
+    if (random_mode) {
+      // Deterministic random distribution using the seed value.
+      // Some experts may get 0 tokens.
+      std::mt19937 rng(seed);
+      int remaining = tokens_per_gpu;
+      for (int i = 0; i < experts_per_gpu - 1; i++) {
+        std::uniform_int_distribution<int> dist(0, remaining);
+        m_per_expert[i] = dist(rng);
+        remaining -= m_per_expert[i];
+      }
+      m_per_expert[experts_per_gpu - 1] = remaining;
+
+      // Shuffle to avoid bias toward later experts getting fewer tokens
+      std::shuffle(m_per_expert.begin(), m_per_expert.end(), rng);
+    } else {
+      // Default: uniform distribution — divide tokens evenly among experts.
+      // Some experts may get 0 if tokens_per_gpu < experts_per_gpu.
+      int base = tokens_per_gpu / experts_per_gpu;
+      int remainder = tokens_per_gpu % experts_per_gpu;
+      std::fill_n(m_per_expert.begin(), remainder, base + 1);
+      std::fill(m_per_expert.begin() + remainder, m_per_expert.end(), base);
+    }
+
+    for (int i = 0; i < groups; i++) {
+      problem_sizes_host.push_back({m_per_expert[i], n, k});
     }
   }
 
@@ -219,17 +309,54 @@ struct GroupedGEMMOptions {
   std::string benchmark_name() const {
     std::stringstream full_name;
     full_name << bm_name << "/";
-    std::string const test_name_suffix = std::to_string(m) + "x" +
-                                   std::to_string(n) + "x" +
-                                   std::to_string(k) + "x" +
-                                   std::to_string(l);
-    full_name << test_name_suffix;
+    int tokens_per_gpu = (m * topk) / ep_size;
+    int experts_per_gpu = num_experts / ep_size;
+    full_name << "t" << m << "_tpg" << tokens_per_gpu
+              << "_e" << experts_per_gpu << "x" << n << "x" << k;
+    if (random_mode) {
+      full_name << "_rng" << seed;
+    } else {
+      full_name << "_uniform";
+    }
 
     return full_name.str();
   }
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Non-owning view into a single pooled DeviceAllocation. Drop-in for the subset of
+// DeviceAllocation<T> API the grouped GEMM benchmark uses (.get()/.size()). Allocating one
+// big pool per tensor type and slicing it into per-group views avoids the many small device
+// allocations (~9 per group) that fragment / exhaust the simulated GPU address space at high
+// group counts, which made big-MOE block-scaled runs crawl and crash during allocation.
+template <class T>
+struct PooledView {
+  T* ptr_ = nullptr;
+  size_t size_ = 0;
+  PooledView() = default;
+  PooledView(T* p, size_t n) : ptr_(p), size_(n) {}
+  T* get() const { return ptr_; }
+  size_t size() const { return size_; }
+};
+
+// Helper functions for pooled allocation: convert element offsets to byte-aligned pointers.
+// Extracted as free functions to enable cross-call optimization and reuse.
+namespace detail {
+  template<typename T>
+  static inline T* slice_aligned(T* pool_ptr, int64_t elem_off, int bits_per_elem) {
+    int64_t byte_off = (elem_off * bits_per_elem + 7) / 8;  // logical elems -> bytes (round up)
+    byte_off = ((byte_off + 63) / 64) * 64;                 // 64-byte align the base
+    auto* base = reinterpret_cast<uint8_t*>(pool_ptr) + byte_off;
+    return reinterpret_cast<T*>(base);
+  }
+
+  static inline int64_t bump_aligned(int64_t elem_off, int64_t added, int bits_per_elem) {
+    int64_t byte_off = ((((elem_off * bits_per_elem + 7) / 8) + 63) / 64) * 64;
+    int64_t end_bytes = byte_off + (added * bits_per_elem + 7) / 8;
+    return (end_bytes * 8) / bits_per_elem;
+  }
+}
 
 template <class GemmConfiguration>
 struct BenchmarkRunnerGemm {
@@ -273,6 +400,20 @@ struct BenchmarkRunnerGemm {
 
   static constexpr int GROUP_SIZE = GroupSizeType<CollectiveMainloop>::value;
 
+  // 2D block load requires 4-byte aligned pitch
+  // Compile-time check: GROUP_SIZE must match the collective's actual GroupK
+  // Uses DispatchGroupSizeType which safely falls back to 32 for non-block-scaled collectives
+  // that don't have DispatchPolicy::GroupSize (e.g. BF16, plain FP8 grouped GEMM kernels).
+  static_assert(
+      GROUP_SIZE == DispatchGroupSizeType<CollectiveMainloop>::value,
+      "GROUP_SIZE does not match the kernel's actual GroupK. "
+      "Add 'static constexpr int GROUP_K = GroupSize;' to the collective.");
+
+  static constexpr int ScaleAlignA =
+      is_blocked_scaled<CollectiveMainloop> ? cute::ceil_div(4, (int)sizeof(ElementScaleA)) : 1;
+  static constexpr int ScaleAlignB =
+      is_blocked_scaled<CollectiveMainloop> ? cute::ceil_div(4, (int)sizeof(ElementScaleB)) : 1;
+
   //int32_t count;
 
   //
@@ -306,13 +447,22 @@ struct BenchmarkRunnerGemm {
 
   uint64_t seed = 0;
 
-  std::vector<DeviceAllocation<ElementA>> block_A;
-  std::vector<DeviceAllocation<ElementB>> block_B;
-  std::vector<DeviceAllocation<ElementC>> block_C;
-  std::vector<DeviceAllocation<ElementOutput>> block_D;
-  std::vector<cutlass::DeviceAllocation<ElementScaleA>> block_scaleA;
-  std::vector<cutlass::DeviceAllocation<ElementScaleB>> block_scaleB;
-  std::vector<DeviceAllocation<ElementOutput>> block_ref_D;
+  // Pooled allocation: one big DeviceAllocation per tensor type, sliced into per-group views.
+  std::vector<PooledView<ElementA>> block_A;
+  std::vector<PooledView<ElementB>> block_B;
+  std::vector<PooledView<ElementC>> block_C;
+  std::vector<PooledView<ElementOutput>> block_D;
+  std::vector<PooledView<ElementScaleA>> block_scaleA;
+  std::vector<PooledView<ElementScaleB>> block_scaleB;
+  std::vector<PooledView<ElementOutput>> block_ref_D;
+
+  cutlass::DeviceAllocation<ElementA> pool_A;
+  cutlass::DeviceAllocation<ElementB> pool_B;
+  cutlass::DeviceAllocation<ElementC> pool_C;
+  cutlass::DeviceAllocation<ElementOutput> pool_D;
+  cutlass::DeviceAllocation<ElementOutput> pool_ref_D;
+  cutlass::DeviceAllocation<ElementScaleA> pool_scaleA;
+  cutlass::DeviceAllocation<ElementScaleB> pool_scaleB;
 
   cutlass::DeviceAllocation<ElementAccumulator> block_alpha;
   cutlass::DeviceAllocation<ElementAccumulator> block_beta;
@@ -332,8 +482,10 @@ struct BenchmarkRunnerGemm {
   cutlass::DeviceAllocation<ElementAccumulator*> alpha_device;
   cutlass::DeviceAllocation<ElementAccumulator*> beta_device;
 
-  std::vector<cutlass::DeviceAllocation<ElementMMAVerify>> block_A_dq; // Dequantized copy of A for validation
-  std::vector<cutlass::DeviceAllocation<ElementMMAVerify>> block_B_dq; // Dequantized copy of B for validation
+  std::vector<PooledView<ElementMMAVerify>> block_A_dq; // Dequantized copy of A for validation
+  std::vector<PooledView<ElementMMAVerify>> block_B_dq; // Dequantized copy of B for validation
+  cutlass::DeviceAllocation<ElementMMAVerify> pool_A_dq;
+  cutlass::DeviceAllocation<ElementMMAVerify> pool_B_dq;
 
   BenchmarkRunnerGemm() : seed(0) {};
 
@@ -422,10 +574,144 @@ struct BenchmarkRunnerGemm {
 
     return passed;
   }
+  static float compute_rtol(int K) {
+    float base_tol;
+
+    // Check input element types (A or B) for quantization error, not output
+    // Use the looser tolerance if inputs differ
+    constexpr bool is_mxfp4 = std::is_same_v<ElementA, cutlass::float_e2m1_t> ||
+                              std::is_same_v<ElementB, cutlass::float_e2m1_t>;
+    constexpr bool is_mxfp8 = std::is_same_v<ElementA, cutlass::float_ue4m3_t> ||
+                              std::is_same_v<ElementB, cutlass::float_ue4m3_t>;
+    constexpr bool is_fp8 = std::is_same_v<ElementA, cutlass::float_e4m3_t> ||
+                            std::is_same_v<ElementB, cutlass::float_e4m3_t> ||
+                            std::is_same_v<ElementA, cutlass::float_e5m2_t> ||
+                            std::is_same_v<ElementB, cutlass::float_e5m2_t>;
+    constexpr bool is_bf16 = std::is_same_v<ElementA, cutlass::bfloat16_t> ||
+                             std::is_same_v<ElementB, cutlass::bfloat16_t>;
+
+    if constexpr (is_mxfp4) {
+      base_tol = 2e-2f;  // MXFP4: block-scaled 4-bit, very coarse
+    } else if constexpr (is_mxfp8) {
+      base_tol = 1e-2f;  // MXFP8: block-scaled FP8
+    } else if constexpr (is_fp8) {
+      base_tol = 8e-3f;  // FP8: 3-bit or 2-bit mantissa
+    } else if constexpr (is_bf16) {
+      base_tol = 4e-3f;  // BF16: ~7 bits mantissa
+    } else {
+      base_tol = 5e-4f;  // FP32, FP16, TF32
+    }
+
+    return base_tol * (1.0f + 0.1f * std::log2f(float(K)));
+  }
+
+  bool verify_host(::benchmark::State& state, const GroupedGEMMOptions& options) {
+    bool all_passed = true;
+
+    // Reuse buffers across groups to avoid repeated allocations
+    std::vector<float> host_A, host_B, host_C, host_D, host_ref_D;
+    std::vector<ElementC> host_C_raw;
+    std::vector<ElementOutput> host_D_raw;
+
+    for (int i = 0; i < options.groups; i++) {
+      auto problem = options.problem_sizes_host[i];
+      int M = get<0>(problem);
+      int N = get<1>(problem);
+      int K = get<2>(problem);
+
+      uint64_t flops = uint64_t(M) * uint64_t(N) * uint64_t(K) * 2;
+      if (flops > 20'000'000'000ULL) {  // 20 GFLOP threshold - may take significant CPU time
+        std::cerr << "[WARNING] Group " << i << " (" << M << "x" << N << "x" << K
+                  << "): Large problem size (" << flops/1e9 << " GFLOP), host verification may be slow" << std::endl;
+      }
+
+      size_t size_A = size_t(M) * K;
+      size_t size_B = size_t(N) * K;
+      size_t size_CD = size_t(M) * N;
+
+      host_A.resize(size_A);
+      host_B.resize(size_B);
+      host_C.resize(size_CD);
+      host_D.resize(size_CD);
+      host_ref_D.assign(size_CD, 0.0f);
+      host_C_raw.resize(size_CD);
+      host_D_raw.resize(size_CD);
+
+      // block_* are non-owning PooledView slices, so copy via the free function.
+      cutlass::device_memory::copy_to_host(host_A.data(), block_A_dq.at(i).get(), block_A_dq.at(i).size());
+      cutlass::device_memory::copy_to_host(host_B.data(), block_B_dq.at(i).get(), block_B_dq.at(i).size());
+      compat::wait();
+
+      cutlass::device_memory::copy_to_host(host_C_raw.data(), block_C.at(i).get(), block_C.at(i).size());
+      compat::wait();
+      for (size_t idx = 0; idx < size_CD; idx++) {
+        host_C[idx] = float(host_C_raw[idx]);
+      }
+
+      cutlass::device_memory::copy_to_host(host_D_raw.data(), block_D.at(i).get(), block_D.at(i).size());
+      compat::wait();
+      for (size_t idx = 0; idx < size_CD; idx++) {
+        host_D[idx] = float(host_D_raw[idx]);
+      }
+
+      cutlass::TensorRef<float, LayoutA> ref_A(host_A.data(), LayoutA::packed({M, K}));
+      cutlass::TensorRef<float, LayoutB> ref_B(host_B.data(), LayoutB::packed({K, N}));
+      cutlass::TensorRef<float, LayoutD> ref_C(host_C.data(), LayoutD::packed({M, N}));
+      cutlass::TensorRef<float, LayoutD> ref_D(host_ref_D.data(), LayoutD::packed({M, N}));
+
+      float alpha_f = float(alpha_host.at(i));
+      float beta_f = float(beta_host.at(i));
+
+      cutlass::reference::host::compute_gemm<
+        float, LayoutA,
+        float, LayoutB,
+        float, LayoutD,
+        float, float>(
+        {M, N, K},
+        alpha_f,
+        ref_A,
+        ref_B,
+        beta_f,
+        ref_C,
+        ref_D,
+        0.0f);
+
+      float rtol = compute_rtol(K);
+      float nonzero_floor = std::numeric_limits<float>::min();
+      int fail_count = 0;
+      float max_rel_error = 0.0f;
+
+      for (size_t idx = 0; idx < size_CD; idx++) {
+        if (!cutlass::relatively_equal(host_ref_D[idx], host_D[idx], rtol, nonzero_floor)) {
+          fail_count++;
+          float diff = std::abs(host_ref_D[idx] - host_D[idx]);
+          float denom = std::abs(host_ref_D[idx]) + std::abs(host_D[idx]);
+          if (denom > 0) {
+            max_rel_error = std::max(max_rel_error, diff / denom);
+          } else {
+            max_rel_error = std::max(max_rel_error, diff);
+          }
+        }
+      }
+
+      if (fail_count == 0) {
+        std::cerr << "[VERIFY] Group " << i << " (" << M << "x" << N << "x" << K
+                  << "): PASSED (rtol=" << rtol << ")" << std::endl;
+      } else {
+        std::cerr << "[VERIFY] Group " << i << " (" << M << "x" << N << "x" << K
+                  << "): FAILED (" << fail_count << "/" << size_CD
+                  << " mismatches, max_rel=" << max_rel_error << ", rtol=" << rtol << ")" << std::endl;
+        all_passed = false;
+      }
+    }
+
+    state.counters["verify_passed"] = all_passed ? 1.0 : 0.0;
+    return all_passed;
+  }
 
   template <class Element>
   bool initialize_scale(
-    cutlass::DeviceAllocation<Element>& block,
+    Element* block_ptr, size_t block_size,
     GroupedGEMMOptions const& options) {
     const float elt_max_f = float(cutlass::platform::numeric_limits<Element>::max());
     // Need to fix max_dequant_val and min_dequant_val?
@@ -434,7 +720,7 @@ struct BenchmarkRunnerGemm {
     const float scale_max = max_dequant_val / elt_max_f;
     const float scale_min = min_dequant_val / elt_max_f;
     cutlass::reference::device::BlockFillRandomUniform(
-        block.get(), block.size(), seed, Element(scale_max), Element(scale_min));
+        block_ptr, block_size, seed, Element(scale_max), Element(scale_min));
     return true;
   }
 
@@ -495,7 +781,7 @@ struct BenchmarkRunnerGemm {
             }
           }();
 
-          auto scale_data = (ret_type)(scale_tensor(mn, k / 32, l));
+          auto scale_data = (ret_type)(scale_tensor(mn, k / GROUP_SIZE, l));
 
           dst_tensor(mn, k, l) = (src_data) * scale_data;
         }
@@ -507,51 +793,91 @@ struct BenchmarkRunnerGemm {
   }
   
   void allocate(const GroupedGEMMOptions &options) {
-    for(int32_t i = 0; i < options.groups; ++i) {
-      auto problem = options.problem_sizes_host.at(i);
-      auto M = get<0>(problem);
-      auto N = get<1>(problem);
-      auto K = get<2>(problem);
+    constexpr bool is_bs = is_blocked_scaled<CollectiveMainloop>;
 
-      int64_t elements_A = M * K;
-      int64_t elements_B = N * K;
-      int64_t elements_C = M * N;
-      int64_t elements_D = M * N;
-      
-      cutlass::DeviceAllocation<ElementA> a;
-      a.reset(elements_A);
-      block_A.push_back(a);
-      cutlass::DeviceAllocation<ElementMMAVerify> ver_a;
-      ver_a.reset(elements_A);
-      block_A_dq.push_back(ver_a);      
-      cutlass::DeviceAllocation<ElementB> b;
-      b.reset(elements_B);
-      block_B.push_back(b);
-      cutlass::DeviceAllocation<ElementMMAVerify> ver_b;
-      ver_b.reset(elements_B);
-      block_B_dq.push_back(ver_b);
-      cutlass::DeviceAllocation<ElementC> c;
-      c.reset(elements_C);
-      block_C.push_back(c);
-      cutlass::DeviceAllocation<ElementOutput> d;
-      d.reset(elements_D);
-      block_D.push_back(d);
-      cutlass::DeviceAllocation<ElementOutput> ref_d;
-      ref_d.reset(elements_D);
-      block_ref_D.push_back(ref_d);
-      
-      if constexpr (is_blocked_scaled<CollectiveMainloop>) {
-        const int scale_k = cute::ceil_div(K, GROUP_SIZE);
-        int64_t elements_SFA = scale_k * M;
-        int64_t elements_SFB = scale_k * N;
-        cutlass::DeviceAllocation<ElementScaleA> sa;
-        sa.reset(elements_SFA);
-        block_scaleA.push_back(sa);
-        cutlass::DeviceAllocation<ElementScaleB> sb;
-        sb.reset(elements_SFB);
-        block_scaleB.push_back(sb);
+    // Compute and cache sizes once per group (avoid repeated calculations in pass 2)
+    struct GroupSizes { int64_t A, B, CD, SFA, SFB; };
+    std::vector<GroupSizes> cached_sizes;
+    cached_sizes.reserve(options.groups);
+
+    // Pass 1: compute sizes and sum totals in a single pass
+    int64_t tot_A = 0, tot_B = 0, tot_CD = 0, tot_SFA = 0, tot_SFB = 0;
+    for (int32_t i = 0; i < options.groups; ++i) {
+      auto problem = options.problem_sizes_host.at(i);
+      int64_t M = get<0>(problem), N = get<1>(problem), K = get<2>(problem);
+      int64_t scale_k = cute::ceil_div(K, GROUP_SIZE);
+      int64_t padded_M = cute::round_up(M, (int64_t)ScaleAlignA);
+      int64_t padded_N = cute::round_up(N, (int64_t)ScaleAlignB);
+
+      cached_sizes.push_back({M * K, N * K, M * N, scale_k * padded_M, scale_k * padded_N});
+      tot_A += cached_sizes.back().A;
+      tot_B += cached_sizes.back().B;
+      tot_CD += cached_sizes.back().CD;
+      tot_SFA += cached_sizes.back().SFA;
+      tot_SFB += cached_sizes.back().SFB;
+    }
+
+    // Pad each pool by one 64-byte block (in elements) per group, so the per-group 64-byte
+    // base alignment in Pass 2 can never overrun the pool.
+    auto pad = [&](int bits_per_elem) -> int64_t {
+      return int64_t(options.groups) * ((64 * 8 + bits_per_elem - 1) / bits_per_elem);
+    };
+    // One big reset() per pool (A_dq/B_dq are float verify copies; C and ref_D share D's shape).
+    pool_A.reset(tot_A + pad(cutlass::sizeof_bits<ElementA>::value));
+    pool_A_dq.reset(tot_A + pad(cutlass::sizeof_bits<ElementMMAVerify>::value));
+    pool_B.reset(tot_B + pad(cutlass::sizeof_bits<ElementB>::value));
+    pool_B_dq.reset(tot_B + pad(cutlass::sizeof_bits<ElementMMAVerify>::value));
+    pool_C.reset(tot_CD + pad(cutlass::sizeof_bits<ElementC>::value));
+    pool_D.reset(tot_CD + pad(cutlass::sizeof_bits<ElementOutput>::value));
+    // ref_D holds the device reference output, only needed for device verification.
+    if (options.verify_mode == VerifyMode::Device) {
+      pool_ref_D.reset(tot_CD + pad(cutlass::sizeof_bits<ElementOutput>::value));
+    }
+    if constexpr (is_bs) {
+      pool_scaleA.reset(tot_SFA + pad(cutlass::sizeof_bits<ElementScaleA>::value));
+      pool_scaleB.reset(tot_SFB + pad(cutlass::sizeof_bits<ElementScaleB>::value));
+    }
+
+    // Pass 2: carve non-owning per-group views out of each pool via running offsets.
+    //
+    // CRITICAL for sub-byte element types (4-bit E2M1 / mxfp4): pool.get() returns a typed
+    // pointer (e.g. float_e2m1_t*), and float_e2m1_t has sizeof()==1 byte but sizeof_bits==4.
+    // So `pool.get() + elem_off` advances elem_off WHOLE BYTES = 2x the intended 4-bit
+    // elements, sending every group i>0 to the wrong (out-of-range) address — the kernel then
+    // reads unmapped pages and the simulator hangs (thousands of uninitialized-PTE reads).
+    // Fix: compute every per-group base in BYTES (elem_off * sizeof_bits / 8), additionally
+    // rounded up to a 64-byte boundary (Xe block-2D loads need a 64-byte-aligned base, which
+    // per-group DeviceAllocation used to provide for free), then cast back to the element ptr.
+    const int bA  = cutlass::sizeof_bits<ElementA>::value;
+    const int bB  = cutlass::sizeof_bits<ElementB>::value;
+    const int bV  = cutlass::sizeof_bits<ElementMMAVerify>::value;
+    const int bC  = cutlass::sizeof_bits<ElementC>::value;
+    const int bO  = cutlass::sizeof_bits<ElementOutput>::value;
+    const int bSA = cutlass::sizeof_bits<ElementScaleA>::value;
+    const int bSB = cutlass::sizeof_bits<ElementScaleB>::value;
+    block_A.clear(); block_B.clear(); block_C.clear(); block_D.clear();
+    block_ref_D.clear(); block_A_dq.clear(); block_B_dq.clear();
+    block_scaleA.clear(); block_scaleB.clear();
+    int64_t oA = 0, oB = 0, oCD = 0, oSFA = 0, oSFB = 0;
+    for (int32_t i = 0; i < options.groups; ++i) {
+      const auto& s = cached_sizes[i];
+      block_A.emplace_back(detail::slice_aligned(pool_A.get(), oA, bA), s.A);
+      block_A_dq.emplace_back(detail::slice_aligned(pool_A_dq.get(), oA, bV), s.A);
+      block_B.emplace_back(detail::slice_aligned(pool_B.get(), oB, bB), s.B);
+      block_B_dq.emplace_back(detail::slice_aligned(pool_B_dq.get(), oB, bV), s.B);
+      block_C.emplace_back(detail::slice_aligned(pool_C.get(), oCD, bC), s.CD);
+      block_D.emplace_back(detail::slice_aligned(pool_D.get(), oCD, bO), s.CD);
+      if (options.verify_mode == VerifyMode::Device) {
+        block_ref_D.emplace_back(detail::slice_aligned(pool_ref_D.get(), oCD, bO), s.CD);
+      }
+      oA = detail::bump_aligned(oA, s.A, bA); oB = detail::bump_aligned(oB, s.B, bB); oCD = detail::bump_aligned(oCD, s.CD, bO);
+      if constexpr (is_bs) {
+        block_scaleA.emplace_back(detail::slice_aligned(pool_scaleA.get(), oSFA, bSA), s.SFA);
+        block_scaleB.emplace_back(detail::slice_aligned(pool_scaleB.get(), oSFB, bSB), s.SFB);
+        oSFA = detail::bump_aligned(oSFA, s.SFA, bSA); oSFB = detail::bump_aligned(oSFB, s.SFB, bSB);
       }
     }
+
     block_alpha.reset(options.groups);
     block_beta.reset(options.groups);
   }
@@ -595,42 +921,36 @@ struct BenchmarkRunnerGemm {
       stride_B_host.push_back(stride_b);
       stride_C_host.push_back(stride_c);
       stride_D_host.push_back(stride_d);
-      
+
+      initialize_block(block_A.at(i).get(), block_A.at(i).size(), seed + 2023 + i);
+      initialize_block(block_B.at(i).get(), block_B.at(i).size(), seed + 2022 + i);
+      initialize_block(block_C.at(i).get(), block_C.at(i).size(), seed + 2021 + i);
+
+      cutlass::benchmark::convert_dtype<ElementA, ElementMMAVerify, BenchmarkRunnerGemm>(
+          block_A.at(i).get(), block_A_dq.at(i).get(), block_A.at(i).size()
+      );
+      cutlass::benchmark::convert_dtype<ElementB, ElementMMAVerify, BenchmarkRunnerGemm>(
+          block_B.at(i).get(), block_B_dq.at(i).get(), block_B.at(i).size()
+      );
+
       if constexpr (is_blocked_scaled<CollectiveMainloop>) {
         const int scale_k = cute::ceil_div(K, GROUP_SIZE);
-        auto shape_scale_A = cute::make_shape(M, scale_k, L);
-        auto shape_scale_B = cute::make_shape(N, scale_k, L);
+        const int padded_M = cute::round_up(M, ScaleAlignA);
+        const int padded_N = cute::round_up(N, ScaleAlignB);
+        auto shape_scale_A = cute::make_shape(padded_M, scale_k, L);
+        auto shape_scale_B = cute::make_shape(padded_N, scale_k, L);
         auto stride_sfa = cutlass::make_cute_packed_stride(StrideScaleA{}, shape_scale_A);
         auto stride_sfb = cutlass::make_cute_packed_stride(StrideScaleB{}, shape_scale_B);
         stride_SFA_host.push_back(stride_sfa);
         stride_SFB_host.push_back(stride_sfb);
-      }
 
-      initialize_block(block_A.at(i), seed + 2023 + i);
-      initialize_block(block_B.at(i), seed + 2022 + i);
-      initialize_block(block_C.at(i), seed + 2021 + i);
-
-      cutlass::benchmark::convert_dtype<ElementA, ElementMMAVerify, BenchmarkRunnerGemm>(
-          block_A.at(i),
-          block_A_dq.at(i)
-      );
-      cutlass::benchmark::convert_dtype<ElementB, ElementMMAVerify, BenchmarkRunnerGemm>(
-          block_B.at(i),
-          block_B_dq.at(i)
-      );
-
-      if constexpr (is_blocked_scaled<CollectiveMainloop>) {
-        const int scale_k = cute::ceil_div(K, GROUP_SIZE);
-        auto shape_scale_A = cute::make_shape(M, scale_k, L);
-        auto shape_scale_B = cute::make_shape(N, scale_k, L);
-        
-        initialize_scale(block_scaleA.at(i), options);
-        initialize_scale(block_scaleB.at(i), options);
+        initialize_scale(block_scaleA.at(i).get(), block_scaleA.at(i).size(), options);
+        initialize_scale(block_scaleB.at(i).get(), block_scaleB.at(i).size(), options);
 
         auto layout_A = make_layout(shape_A, stride_a);
         auto layout_B = make_layout(shape_B, stride_b);
-        auto layout_scale_A = make_layout(shape_scale_A, stride_SFA_host.at(i));
-        auto layout_scale_B = make_layout(shape_scale_B, stride_SFB_host.at(i));
+        auto layout_scale_A = make_layout(shape_scale_A, stride_sfa);
+        auto layout_scale_B = make_layout(shape_scale_B, stride_sfb);
 
         apply_scale(block_A_dq.at(i).get(), block_A.at(i).get(), layout_A, block_scaleA.at(i).get(),  layout_scale_A);
         apply_scale(block_B_dq.at(i).get(), block_B.at(i).get(), layout_B, block_scaleB.at(i).get(),  layout_scale_B);
@@ -752,19 +1072,11 @@ struct BenchmarkRunnerGemm {
 
     if (state.error_occurred()) return;
 
-#ifdef CUTLASS_TEST_FOR_CRI
-    // disable warmup run and verification for CRI simulator as it's time-consuming
+#ifndef CUTLASS_TEST_FOR_CRI
+    // Run warmup on real hardware (skip on CRI simulator as it's time-consuming)
 #else
-    // Run the GEMM
     gemm_op.run();
-
     compat::wait();
-
-    // Verify that the result is correct
-    bool passed = verify(options);
-    if(not passed) {
-      state.SkipWithError("Disposition Failed.");
-    }
 #endif
 
     state.counters["m"] = options.m;
@@ -773,6 +1085,24 @@ struct BenchmarkRunnerGemm {
     state.counters["l"] = options.l;
     state.counters["alpha"] = options.alpha;
     state.counters["beta"] = options.beta;
+
+    // Report distribution parameters
+    state.counters["groups"] = options.groups;
+    state.counters["tokens_per_gpu"] = (options.m * options.topk) / options.ep_size;
+    state.counters["ep_size"] = options.ep_size;
+    state.counters["topk"] = options.topk;
+    state.counters["num_experts"] = options.num_experts;
+
+    for (int i = 0; i < options.groups; i++) {
+      state.counters["M_" + std::to_string(i)] = get<0>(options.problem_sizes_host[i]);
+    }
+
+    std::cerr << "[DIST] " << options.benchmark_name() << " M_per_expert=[";
+    for (int i = 0; i < options.groups; i++) {
+      std::cerr << get<0>(options.problem_sizes_host[i]);
+      if (i < options.groups - 1) std::cerr << ",";
+    }
+    std::cerr << "]" << std::endl;
 
     std::stringstream extra_label;
     if constexpr (cute::size<0>(StrideA{}) == 1) {
@@ -851,6 +1181,18 @@ struct BenchmarkRunnerGemm {
       state.SetIterationTime(ms_elapsed / 1000);
     }
     finalize_counters(state, gflop, mega_bytes_transferred);
+    if (options.verify_mode == VerifyMode::Host) {
+      bool passed = verify_host(state, options);
+      if (!passed) {
+        state.SkipWithError("Host reference verification FAILED.");
+      }
+    }
+    else if  (options.verify_mode == VerifyMode::Device) {
+      bool passed = verify(options);
+      if(not passed) {
+        state.SkipWithError("Disposition Failed.");
+      }
+    }
   }
 
 private:

@@ -205,6 +205,16 @@ public:
         implementable &= get<2>(InternalStrideA{}) % min_batch_aligned_elements_A == 0;
         implementable &= get<2>(InternalStrideB{}) % min_batch_aligned_elements_B == 0;
       }
+
+      if (M == 0) {
+        CUTLASS_TRACE_HOST("  CAN IMPLEMENT: group has M=0 tokens — zero-token expert groups are not supported for MXFP kernels.\n");
+        implementable = false;
+      }
+      if (M > 0 && (M % Base::ScaleAlignElems != 0 || N % Base::ScaleAlignElems != 0)) {
+        CUTLASS_TRACE_HOST("  CAN IMPLEMENT (warning): per-group logical M/N not 4-byte aligned. "
+                           "Scale buffer must be allocated with padded_M = round_up(M, ScaleAlignElems). "
+                           "Proceeding — will fail at runtime if scale buffer is not padded.\n");
+      }
     }
 
     if (!implementable) {

@@ -59,6 +59,9 @@ cutlass_benchmark_add_executable(
 
 target_include_directories(cutlass_benchmarks_grouped_gemm_sycl PRIVATE ${CUTLASS_MOE_EXAMPLE_DIR})
 
+# Enable Xe-specific block2D alignment asserts in MXFP scale load (xe_common_blockscaled_mxfp.hpp)
+target_compile_definitions(cutlass_benchmarks_grouped_gemm_sycl PRIVATE CUTE_ENABLE_XE_BLOCK_2D_ASSERT)
+
 endif()
 
 endif()

@@ -36,6 +36,7 @@ cutlass_example_add_executable(
   TEST_COMMAND_OPTIONS
   TEST_BASE
 )
+target_compile_definitions(51_xe35_block_scaled_grouped_gemm_e5m2 PRIVATE CUTE_ENABLE_XE_BLOCK_2D_ASSERT)
 
 cutlass_example_add_executable(
   51_xe35_block_scaled_grouped_gemm_e4m3
@@ -43,6 +44,7 @@ cutlass_example_add_executable(
   TEST_COMMAND_OPTIONS
   TEST_BASE
 )
+target_compile_definitions(51_xe35_block_scaled_grouped_gemm_e4m3 PRIVATE CUTE_ENABLE_XE_BLOCK_2D_ASSERT)
 
 cutlass_example_add_executable(
   51_xe35_block_scaled_grouped_gemm_e2m1
@@ -50,6 +52,7 @@ cutlass_example_add_executable(
   TEST_COMMAND_OPTIONS
   TEST_BASE
 )
+target_compile_definitions(51_xe35_block_scaled_grouped_gemm_e2m1 PRIVATE CUTE_ENABLE_XE_BLOCK_2D_ASSERT)
 
 cutlass_example_add_executable(
   51_xe35_block_scaled_grouped_gemm_fp8_e4m3
@@ -58,6 +61,7 @@ cutlass_example_add_executable(
   TEST_BASE
   TEST_SCALE
 )
+target_compile_definitions(51_xe35_block_scaled_grouped_gemm_fp8_e4m3 PRIVATE CUTE_ENABLE_XE_BLOCK_2D_ASSERT)
 
 cutlass_example_add_executable(
   51_xe35_grouped_gemm_bf16

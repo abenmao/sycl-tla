@@ -66,15 +66,28 @@ struct Copy_Traits<MXFP_SCALE_LOAD_2D<CopyBits, Height, Width, BlockWidth>, XMod
     uint32_t logical_width = (shape<XMode::value>(src) * SBits) >> 3;
     this->width = (logical_width + 3) & ~uint32_t(3);
     this->height = shape<YMode::value>(src);
-    this->pitch = (stride<YMode::value>(src) * SBits) >> 3;
+    uint32_t raw_pitch = (stride<YMode::value>(src) * SBits) >> 3;
+    this->pitch = (raw_pitch + 3) & ~uint32_t(3);
 
 #ifdef CUTE_ENABLE_XE_BLOCK_2D_ASSERT
-    assert((this->base_ptr % 64 == 0) && "CuTe runtime error: misaligned block 2D base pointer");
-    assert((this->width % 4 == 0) && "CuTe runtime error: misaligned block 2D tensor width");
-    assert((this->pitch % 4 == 0) && "CuTe runtime error: misaligned block 2D tensor pitch");
-    assert((this->width <= 0xFFFFFF) && "CuTe runtime error: block 2D tensor width exceeds 2^24");
-    assert((this->height <= 0xFFFFFF) && "CuTe runtime error: block 2D tensor height exceeds 2^24");
-    assert((this->pitch <= 0xFFFFFF) && "CuTe runtime error: block 2D tensor pitch exceeds 2^24");
+    // Asserts check BEFORE rounding so unpadded allocations and M=0 groups are caught.
+    // These constraints are Xe-hardware-specific (lsc_load_block2d DWord granularity).
+    // Enable by defining CUTE_ENABLE_XE_BLOCK_2D_ASSERT in Xe benchmark/example builds.
+    assert((logical_width > 0) &&
+        "MXFP scale width is 0 — M=0 token groups not supported. "
+        "Skip zero-token expert groups before launching the kernel.");
+    assert((logical_width % 4 == 0) &&
+        "MXFP scale width (M bytes) must be 4-byte aligned. "
+        "Allocate scale buffers with padded_M = round_up(M, ScaleAlignElems).");
+    assert((raw_pitch > 0) &&
+        "MXFP scale pitch is 0 — M=0 token groups not supported.");
+    assert((raw_pitch % 4 == 0) &&
+        "MXFP scale pitch (M bytes) must be 4-byte aligned. "
+        "Allocate scale buffers with padded_M = round_up(M, ScaleAlignElems).");
+    assert((this->base_ptr % 64 == 0) && "MXFP scale base pointer must be 64-byte aligned.");
+    assert((this->width  <= 0xFFFFFF) && "MXFP scale width exceeds 2^24 bytes (Xe block2D limit)." );
+    assert((this->height <= 0xFFFFFF) && "MXFP scale height exceeds 2^24 (Xe block2D limit)." );
+    assert((this->pitch  <= 0xFFFFFF) && "MXFP scale pitch exceeds 2^24 bytes (Xe block2D limit)." );
 #endif
     this->device_init();
   }
