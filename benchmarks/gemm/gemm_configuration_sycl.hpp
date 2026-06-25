@@ -56,266 +56,122 @@ namespace cutlass::gemm::device {
 
 enum class Scheduler { Gemm, GemmSplitK, GemmStreamK };
 
+// Primary template (unimplemented)
 template<
-  class ArchTag,
-  class ElementA, class LayoutA,
-  class ElementB, class LayoutB,
-  class ElementC, class LayoutC,
-  class ElementAccumulator,
-  class TileShape, Scheduler TileScheduler, class TiledMma = void,
-  class GmemTiledCopyA = void, class GmemTiledCopyB = void,
-  class EpilogueOp = epilogue::fusion::LinearCombination<float, float, float, float, FloatRoundStyle::round_to_nearest>>
+    class ArchTag,
+    class ElementA, class LayoutA,
+    class ElementB, class LayoutB,
+    class ElementC, class LayoutC,
+    class ElementD,
+    class TileShape, Scheduler TileScheduler,
+    class TiledMma = void,
+    class GmemTiledCopyA = void,
+    class GmemTiledCopyB = void,
+    class EpilogueOp = epilogue::fusion::LinearCombination<
+        float, float, float, float, FloatRoundStyle::round_to_nearest>>
 struct GemmConfiguration {
   static_assert(sizeof(ElementA) == 0, "No valid GemmConfiguration configuration exists.");
 };
 
+// Primary template (unimplemented)
 template<
-  class ArchTag,
-  class ElementA, class LayoutA,
-  class ElementB, class LayoutB,
-  class ElementC, class LayoutC,
-  class ElementScale, class StrideScale,
-  class ElementAccumulator,
-  class TileShape, Scheduler TileScheduler, class TiledMma = void,
-  class GmemTiledCopyA = void, class GmemTiledCopyB = void,
-  class GmemTiledCopyScaleA = void, class GmemTiledCopyScaleB = void,
-  class GroupSize = _32,
-  class EpilogueOp = epilogue::fusion::LinearCombination<float, float, float, float, FloatRoundStyle::round_to_nearest>>
+    class ArchTag,
+    class ElementA, class LayoutA,
+    class ElementB, class LayoutB,
+    class ElementC, class LayoutC,
+    class ElementScale, class StrideScale,
+    class ElementD,
+    class TileShape, Scheduler TileScheduler,
+    class TiledMma = void,
+    class GmemTiledCopyA = void,
+    class GmemTiledCopyB = void,
+    class GmemTiledCopyScaleA = void,
+    class GmemTiledCopyScaleB = void,
+    class GroupSize = _32,
+    class EpilogueOp = epilogue::fusion::LinearCombination<
+        float, float, float, float, FloatRoundStyle::round_to_nearest>>
 struct BlockScalingGemmConfiguration {
   static_assert(sizeof(ElementA) == 0, "No valid BlockScalingGemmConfiguration configuration exists.");
 };
 
 /////////////////////////////////////////////////////////////////////////
+// GemmConfiguration — IntelXe specialization
+/////////////////////////////////////////////////////////////////////////
 
-template<class ElementA, class LayoutA,
-  class ElementB, class LayoutB, typename LayoutC,
-  class TileShape, Scheduler TileScheduler,
-  class TiledMma, class GmemTiledCopyA, class GmemTiledCopyB,  class EpilogueOp>
+template<
+    class ElementA, class LayoutA,
+    class ElementB, class LayoutB,
+    class ElementC, class LayoutC,
+    class ElementD,
+    class TileShape, Scheduler TileScheduler,
+    class TiledMma, class GmemTiledCopyA, class GmemTiledCopyB,
+    class EpilogueOp>
 struct GemmConfiguration<
-      arch::IntelXe,
-      ElementA, LayoutA,
-      ElementB, LayoutB,
-      float, LayoutC,
-      float,
-      TileShape, TileScheduler, TiledMma,
-      GmemTiledCopyA, GmemTiledCopyB, EpilogueOp>
+    arch::IntelXe,
+    ElementA, LayoutA,
+    ElementB, LayoutB,
+    ElementC, LayoutC,
+    ElementD,
+    TileShape, TileScheduler, TiledMma,
+    GmemTiledCopyA, GmemTiledCopyB, EpilogueOp>
 {
   static constexpr int PipelineStages = 2;
-  // Match example 03_bmg_gemm_streamk: use KernelXeCooperative schedule + StreamKScheduler
-  // tag for StreamK/SplitK decompositions; default KernelXe for vanilla GEMM.
+
+  // Use KernelXeCooperative + StreamKScheduler for StreamK/SplitK; default KernelXe for vanilla GEMM.
   static constexpr bool UseStreamK =
       (TileScheduler == Scheduler::GemmStreamK) || (TileScheduler == Scheduler::GemmSplitK);
-  using KernelScheduleType = std::conditional_t<UseStreamK,
-      cutlass::gemm::KernelXeCooperative, cutlass::gemm::KernelXe>;
-  using GEMMDispatchPolicy = cutlass::gemm::MainloopXeL1Staged<PipelineStages, KernelScheduleType>;
+
+  using KernelScheduleType = std::conditional_t<
+      UseStreamK, cutlass::gemm::KernelXeCooperative, cutlass::gemm::KernelXe>;
+  using GEMMDispatchPolicy    = cutlass::gemm::MainloopXeL1Staged<PipelineStages, KernelScheduleType>;
   using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
 
-  // Configurations in benchmarks.hpp can pass either a layout tag (e.g. RowMajor) or a Stride directly
+  // Accept either a layout tag (e.g. RowMajor) or a Stride directly
   using StrideA = std::conditional_t<cute::is_tuple_v<LayoutA>, LayoutA, TagToStrideA_t<LayoutA>>;
   using StrideB = std::conditional_t<cute::is_tuple_v<LayoutB>, LayoutB, TagToStrideB_t<LayoutB>>;
 
   // Mainloop
-  using CollectiveMainloop =
-      collective::CollectiveMma<
-        GEMMDispatchPolicy, TileShape,
-        ElementA, StrideA,
-        ElementB, StrideB,
-        TiledMma,
-        GmemTiledCopyA, void, void, identity, // A
-        GmemTiledCopyB, void, void, identity // B
+  using CollectiveMainloop = collective::CollectiveMma<
+      GEMMDispatchPolicy, TileShape,
+      ElementA, StrideA,
+      ElementB, StrideB,
+      TiledMma,
+      GmemTiledCopyA, void, void, identity,  // A
+      GmemTiledCopyB, void, void, identity   // B
   >;
 
-  using FusionCallbacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueOp, TileShape,
-          decltype(tile_shape(TiledMma()))>;
+  // Epilogue
+  using FusionCallbacks = cutlass::epilogue::fusion::FusionCallbacks<
+      EpilogueDispatchPolicy, EpilogueOp, TileShape, decltype(tile_shape(TiledMma()))>;
+
   using LayoutD = cutlass::layout::RowMajor;
+
   using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
-          EpilogueDispatchPolicy,
-          TileShape,
-          void,                 // Epilogue tile (void = automatic)
-          float,// ElementAccumulator
-          cutlass::gemm::TagToStrideC_t<LayoutC>, // Converts CUTLASS 2.x to CUTLASS 3.x representation
-          float,// ElementOutput
-          cutlass::gemm::TagToStrideC_t<LayoutD>, // Converts CUTLASS 2.x to CUTLASS 3.x representation
-          FusionCallbacks,
-          void,                 // The copy atom used to load matrix C  (void = automatic)
-          void>;                // The copy atom used to store matrix D (void = automatic)
-  using TileSchedulerTag = std::conditional_t<UseStreamK,
-      cutlass::gemm::StreamKScheduler, void>;
-    using GemmKernel = kernel::GemmUniversal<
-    Shape<int, int, int, int>,
-    CollectiveMainloop,
-    CollectiveEpilogue,
-    TileSchedulerTag
-  >;
+      EpilogueDispatchPolicy,
+      TileShape,
+      Shape<_8, Int<64 / sizeof(ElementD)>>, // Epilogue tile (void = automatic)
+      ElementC,
+      cutlass::gemm::TagToStrideC_t<LayoutC>,
+      ElementD,
+      cutlass::gemm::TagToStrideC_t<LayoutD>,
+      FusionCallbacks,
+      void,
+      void>;
 
-  using Gemm = GemmUniversalAdapter<GemmKernel>;
+  // Tile scheduler
+  using TileSchedulerTag = std::conditional_t<UseStreamK, cutlass::gemm::StreamKScheduler, void>;
 
-  constexpr static typename GemmKernel::Arguments defaultArguments() {
-    using StreamKMode =
-      cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams::DecompositionMode;
-    if constexpr (TileScheduler == Scheduler::Gemm) {
-      return {};
-    } else if constexpr (TileScheduler == Scheduler::GemmStreamK) {
-      typename GemmKernel::Arguments arguments{};
-      arguments.scheduler = {1, StreamKMode::StreamK};
-      return arguments;
-    } else {
-      static_assert(TileScheduler == Scheduler::GemmSplitK);
-      typename GemmKernel::Arguments arguments{};
-      arguments.scheduler = {2, StreamKMode::SplitK};
-      return arguments;
-    }
-  }
-};
-
-template<class ElementA, class LayoutA,
-  class ElementB, class LayoutB, typename LayoutC,
-  class TileShape, Scheduler TileScheduler,
-  class TiledMma, class GmemTiledCopyA, class GmemTiledCopyB,  class EpilogueOp>
-struct GemmConfiguration<
-      arch::IntelXe,
-      ElementA, LayoutA,
-      ElementB, LayoutB,
-      bfloat16_t, LayoutC,
-      bfloat16_t,
-      TileShape, TileScheduler, TiledMma,
-      GmemTiledCopyA, GmemTiledCopyB, EpilogueOp>
-{
-  static constexpr int PipelineStages = 2;
-  static constexpr bool UseStreamK =
-      (TileScheduler == Scheduler::GemmStreamK) || (TileScheduler == Scheduler::GemmSplitK);
-  using KernelScheduleType = std::conditional_t<UseStreamK,
-      cutlass::gemm::KernelXeCooperative, cutlass::gemm::KernelXe>;
-  using GEMMDispatchPolicy = cutlass::gemm::MainloopXeL1Staged<PipelineStages, KernelScheduleType>;
-  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
-
-  using StrideA = std::conditional_t<cute::is_tuple_v<LayoutA>, LayoutA, TagToStrideA_t<LayoutA>>;
-  using StrideB = std::conditional_t<cute::is_tuple_v<LayoutB>, LayoutB, TagToStrideB_t<LayoutB>>;
-
-  using CollectiveMainloop =
-      collective::CollectiveMma<
-        GEMMDispatchPolicy, TileShape,
-        ElementA, StrideA,
-        ElementB, StrideB,
-        TiledMma,
-        GmemTiledCopyA, void, void, identity,
-        GmemTiledCopyB, void, void, identity
-  >;
-
-  using FusionCallbacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueOp, TileShape,
-          decltype(tile_shape(TiledMma()))>;
-  using LayoutD = cutlass::layout::RowMajor;
-  using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
-          EpilogueDispatchPolicy,
-          TileShape,
-          void,
-          bfloat16_t,
-          cutlass::gemm::TagToStrideC_t<LayoutC>,
-          bfloat16_t,
-          cutlass::gemm::TagToStrideC_t<LayoutD>,
-          FusionCallbacks,
-          void,
-          void>;
-  using TileSchedulerTag = std::conditional_t<UseStreamK,
-      cutlass::gemm::StreamKScheduler, void>;
   using GemmKernel = kernel::GemmUniversal<
-    Shape<int, int, int, int>,
-    CollectiveMainloop,
-    CollectiveEpilogue,
-    TileSchedulerTag
-  >;
+      Shape<int, int, int, int>,
+      CollectiveMainloop,
+      CollectiveEpilogue,
+      TileSchedulerTag>;
 
   using Gemm = GemmUniversalAdapter<GemmKernel>;
 
   constexpr static typename GemmKernel::Arguments defaultArguments() {
     using StreamKMode =
-      cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams::DecompositionMode;
-    if constexpr (TileScheduler == Scheduler::Gemm) {
-      return {};
-    } else if constexpr (TileScheduler == Scheduler::GemmStreamK) {
-      typename GemmKernel::Arguments arguments{};
-      arguments.scheduler = {1, StreamKMode::StreamK};
-      return arguments;
-    } else {
-      static_assert(TileScheduler == Scheduler::GemmSplitK);
-      typename GemmKernel::Arguments arguments{};
-      arguments.scheduler = {2, StreamKMode::SplitK};
-      return arguments;
-    }
-  }
-};
-
-// Generic specialization: the output element (ElementC / D) may be any type while the
-// accumulator stays float. Accumulation runs in float and the epilogue downcasts to
-// ElementC on store. This backs the "destination == source" benchmark variants
-// (e.g. TF32 output, FP16 output, FP8 output) added in benchmarks_sycl.hpp. The fully
-// fixed float/float and bfloat16_t/bfloat16_t specializations above are more specialized
-// and remain selected for those exact pairs.
-template<class ElementA, class LayoutA,
-  class ElementB, class LayoutB, class ElementC, typename LayoutC,
-  class TileShape, Scheduler TileScheduler,
-  class TiledMma, class GmemTiledCopyA, class GmemTiledCopyB,  class EpilogueOp>
-struct GemmConfiguration<
-      arch::IntelXe,
-      ElementA, LayoutA,
-      ElementB, LayoutB,
-      ElementC, LayoutC,
-      float,
-      TileShape, TileScheduler, TiledMma,
-      GmemTiledCopyA, GmemTiledCopyB, EpilogueOp>
-{
-  static constexpr int PipelineStages = 2;
-  static constexpr bool UseStreamK =
-      (TileScheduler == Scheduler::GemmStreamK) || (TileScheduler == Scheduler::GemmSplitK);
-  using KernelScheduleType = std::conditional_t<UseStreamK,
-      cutlass::gemm::KernelXeCooperative, cutlass::gemm::KernelXe>;
-  using GEMMDispatchPolicy = cutlass::gemm::MainloopXeL1Staged<PipelineStages, KernelScheduleType>;
-  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
-
-  using StrideA = std::conditional_t<cute::is_tuple_v<LayoutA>, LayoutA, TagToStrideA_t<LayoutA>>;
-  using StrideB = std::conditional_t<cute::is_tuple_v<LayoutB>, LayoutB, TagToStrideB_t<LayoutB>>;
-
-  using CollectiveMainloop =
-      collective::CollectiveMma<
-        GEMMDispatchPolicy, TileShape,
-        ElementA, StrideA,
-        ElementB, StrideB,
-        TiledMma,
-        GmemTiledCopyA, void, void, identity, // A
-        GmemTiledCopyB, void, void, identity // B
-  >;
-
-  // Accumulate in float, downcast/store as ElementC.
-  using FusionOp = cutlass::epilogue::fusion::LinearCombination<
-      ElementC, float, ElementC, float, FloatRoundStyle::round_to_nearest>;
-  using FusionCallbacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, FusionOp, TileShape,
-          decltype(tile_shape(TiledMma()))>;
-  using LayoutD = cutlass::layout::RowMajor;
-  using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
-          EpilogueDispatchPolicy,
-          TileShape,
-          void,                 // Epilogue tile (void = automatic)
-          float,                // ElementAccumulator
-          cutlass::gemm::TagToStrideC_t<LayoutC>,
-          ElementC,             // ElementOutput
-          cutlass::gemm::TagToStrideC_t<LayoutD>,
-          FusionCallbacks,
-          void,
-          void>;
-  using TileSchedulerTag = std::conditional_t<UseStreamK,
-      cutlass::gemm::StreamKScheduler, void>;
-  using GemmKernel = kernel::GemmUniversal<
-    Shape<int, int, int, int>,
-    CollectiveMainloop,
-    CollectiveEpilogue,
-    TileSchedulerTag
-  >;
-
-  using Gemm = GemmUniversalAdapter<GemmKernel>;
-
-  constexpr static typename GemmKernel::Arguments defaultArguments() {
-    using StreamKMode =
-      cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams::DecompositionMode;
+        cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams::DecompositionMode;
     if constexpr (TileScheduler == Scheduler::Gemm) {
       return {};
     } else if constexpr (TileScheduler == Scheduler::GemmStreamK) {
@@ -333,238 +189,85 @@ struct GemmConfiguration<
 
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
 
-// mxfp8/4
-template<class ElementA, class LayoutA,
-  class ElementB, class LayoutB, typename LayoutC,
-  class ElementScale, typename StrideScale,
-  class TileShape, Scheduler TileScheduler,
-  class TiledMma, class GmemTiledCopyA, class GmemTiledCopyB,  
-  class GmemTiledCopyScaleA, class GmemTiledCopyScaleB,
-  class GroupSize,
-  class EpilogueOp>
+/////////////////////////////////////////////////////////////////////////
+// BlockScalingGemmConfiguration — IntelXe specialization (mxfp8/4)
+/////////////////////////////////////////////////////////////////////////
+
+template<
+    class ElementA, class LayoutA,
+    class ElementB, class LayoutB,
+    class ElementC, class LayoutC,
+    class ElementScale, class StrideScale,
+    class ElementD,
+    class TileShape, Scheduler TileScheduler,
+    class TiledMma,
+    class GmemTiledCopyA, class GmemTiledCopyB,
+    class GmemTiledCopyScaleA, class GmemTiledCopyScaleB,
+    class GroupSize,
+    class EpilogueOp>
 struct BlockScalingGemmConfiguration<
-      arch::IntelXe,
-      ElementA, LayoutA,
-      ElementB, LayoutB,
-      float, LayoutC,
-      ElementScale, StrideScale,
-      float,
-      TileShape, TileScheduler, TiledMma,
-      GmemTiledCopyA, GmemTiledCopyB, 
-      GmemTiledCopyScaleA, GmemTiledCopyScaleB,
-      GroupSize,
-      EpilogueOp>
+    arch::IntelXe,
+    ElementA, LayoutA,
+    ElementB, LayoutB,
+    ElementC, LayoutC,
+    ElementScale, StrideScale,
+    ElementD,
+    TileShape, TileScheduler, TiledMma,
+    GmemTiledCopyA, GmemTiledCopyB,
+    GmemTiledCopyScaleA, GmemTiledCopyScaleB,
+    GroupSize,
+    EpilogueOp>
 {
   static constexpr int PipelineStages = 2;
-  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages, GroupSize>;
+
+  using GEMMDispatchPolicy     = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages, GroupSize>;
   using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
 
-  // Configurations in benchmarks.hpp can pass either a layout tag (e.g. RowMajor) or a Stride directly
+  // Accept either a layout tag (e.g. RowMajor) or a Stride directly
   using StrideA = std::conditional_t<cute::is_tuple_v<LayoutA>, LayoutA, TagToStrideA_t<LayoutA>>;
   using StrideB = std::conditional_t<cute::is_tuple_v<LayoutB>, LayoutB, TagToStrideB_t<LayoutB>>;
 
   // Mainloop
   using CollectiveMainloop = cutlass::gemm::collective::CollectiveMma<
-          GEMMDispatchPolicy,
-          TileShape,
-          cute::tuple<ElementA, ElementScale>,
-          cute::tuple<StrideA, StrideScale>,
-          cute::tuple<ElementB, ElementScale>,
-          cute::tuple<StrideB, StrideScale>,
-          TiledMma,
-          cute::tuple<GmemTiledCopyA, GmemTiledCopyScaleA>, void, void, cute::identity,  // A
-          cute::tuple<GmemTiledCopyB, GmemTiledCopyScaleB>, void, void, cute::identity   // B
+      GEMMDispatchPolicy,
+      TileShape,
+      cute::tuple<ElementA, ElementScale>,
+      cute::tuple<StrideA, StrideScale>,
+      cute::tuple<ElementB, ElementScale>,
+      cute::tuple<StrideB, StrideScale>,
+      TiledMma,
+      cute::tuple<GmemTiledCopyA, GmemTiledCopyScaleA>, void, void, cute::identity,  // A
+      cute::tuple<GmemTiledCopyB, GmemTiledCopyScaleB>, void, void, cute::identity   // B
   >;
 
-  using FusionCallbacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueOp, TileShape,
-          decltype(tile_shape(TiledMma()))>;
+  // Epilogue
+  using FusionCallbacks = cutlass::epilogue::fusion::FusionCallbacks<
+      EpilogueDispatchPolicy, EpilogueOp, TileShape, decltype(tile_shape(TiledMma()))>;
+
   using LayoutD = cutlass::layout::RowMajor;
+
   using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
-          EpilogueDispatchPolicy,
-          TileShape,
-          void,
-          float,                // ElementAccumulator
-          cutlass::gemm::TagToStrideC_t<LayoutC>,
-          float,                // ElementOutput
-          cutlass::gemm::TagToStrideC_t<LayoutD>,
-          FusionCallbacks,
-          void,
-          void>;
-    using GemmKernel = kernel::GemmUniversal<
-    Shape<int, int, int, int>,
-    CollectiveMainloop,
-    CollectiveEpilogue>;
+      EpilogueDispatchPolicy,
+      TileShape,
+      Shape<_8, Int<64 / sizeof(ElementD)>>, // Epilogue tile (void = automatic)
+      ElementC,
+      cutlass::gemm::TagToStrideC_t<LayoutC>,
+      ElementD,
+      cutlass::gemm::TagToStrideC_t<LayoutD>,
+      FusionCallbacks,
+      void,
+      void>;
+
+  using GemmKernel = kernel::GemmUniversal<
+      Shape<int, int, int, int>,
+      CollectiveMainloop,
+      CollectiveEpilogue>;
 
   using Gemm = GemmUniversalAdapter<GemmKernel>;
 
   constexpr static typename GemmKernel::Arguments defaultArguments() {
     using StreamKMode =
-      cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams::DecompositionMode;
-    if constexpr (TileScheduler == Scheduler::Gemm) {
-      return {};
-    } else if constexpr (TileScheduler == Scheduler::GemmStreamK) {
-      typename GemmKernel::Arguments arguments{};
-      arguments.scheduler = {1, StreamKMode::StreamK};
-      return arguments;
-    } else {
-      static_assert(TileScheduler == Scheduler::GemmSplitK);
-      typename GemmKernel::Arguments arguments{};
-      arguments.scheduler = {2, StreamKMode::SplitK};
-      return arguments;
-    }
-  }
-};
-
-template<class ElementA, class LayoutA,
-  class ElementB, class LayoutB, typename LayoutC,
-  class ElementScale, typename StrideScale,
-  class TileShape, Scheduler TileScheduler,
-  class TiledMma, class GmemTiledCopyA, class GmemTiledCopyB,
-  class GmemTiledCopyScaleA, class GmemTiledCopyScaleB,
-  class GroupSize,
-  class EpilogueOp>
-struct BlockScalingGemmConfiguration<
-      arch::IntelXe,
-      ElementA, LayoutA,
-      ElementB, LayoutB,
-      bfloat16_t, LayoutC,
-      ElementScale, StrideScale,
-      bfloat16_t,
-      TileShape, TileScheduler, TiledMma,
-      GmemTiledCopyA, GmemTiledCopyB,
-      GmemTiledCopyScaleA, GmemTiledCopyScaleB,
-      GroupSize,
-      EpilogueOp>
-{
-  static constexpr int PipelineStages = 2;
-  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages, GroupSize>;
-  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
-
-  using StrideA = std::conditional_t<cute::is_tuple_v<LayoutA>, LayoutA, TagToStrideA_t<LayoutA>>;
-  using StrideB = std::conditional_t<cute::is_tuple_v<LayoutB>, LayoutB, TagToStrideB_t<LayoutB>>;
-
-  using CollectiveMainloop = cutlass::gemm::collective::CollectiveMma<
-          GEMMDispatchPolicy,
-          TileShape,
-          cute::tuple<ElementA, ElementScale>,
-          cute::tuple<StrideA, StrideScale>,
-          cute::tuple<ElementB, ElementScale>,
-          cute::tuple<StrideB, StrideScale>,
-          TiledMma,
-          cute::tuple<GmemTiledCopyA, GmemTiledCopyScaleA>, void, void, cute::identity,
-          cute::tuple<GmemTiledCopyB, GmemTiledCopyScaleB>, void, void, cute::identity
-  >;
-
-  using FusionCallbacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueOp, TileShape,
-          decltype(tile_shape(TiledMma()))>;
-  using LayoutD = cutlass::layout::RowMajor;
-  using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
-          EpilogueDispatchPolicy,
-          TileShape,
-          void,
-          bfloat16_t,
-          cutlass::gemm::TagToStrideC_t<LayoutC>,
-          bfloat16_t,
-          cutlass::gemm::TagToStrideC_t<LayoutD>,
-          FusionCallbacks,
-          void,
-          void>;
-    using GemmKernel = kernel::GemmUniversal<
-    Shape<int, int, int, int>,
-    CollectiveMainloop,
-    CollectiveEpilogue>;
-
-  using Gemm = GemmUniversalAdapter<GemmKernel>;
-
-  constexpr static typename GemmKernel::Arguments defaultArguments() {
-    using StreamKMode =
-      cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams::DecompositionMode;
-    if constexpr (TileScheduler == Scheduler::Gemm) {
-      return {};
-    } else if constexpr (TileScheduler == Scheduler::GemmStreamK) {
-      typename GemmKernel::Arguments arguments{};
-      arguments.scheduler = {1, StreamKMode::StreamK};
-      return arguments;
-    } else {
-      static_assert(TileScheduler == Scheduler::GemmSplitK);
-      typename GemmKernel::Arguments arguments{};
-      arguments.scheduler = {2, StreamKMode::SplitK};
-      return arguments;
-    }
-  }
-};
-
-// Generic block-scaled specialization: output element (ElementC / D) may be any type
-// while the accumulator stays float. Backs the "destination == source" mxfp8/mxfp4
-// block-scaled benchmark variants. The fully fixed float/float and bfloat16_t/bfloat16_t
-// specializations above are more specialized and remain selected for those exact pairs.
-template<class ElementA, class LayoutA,
-  class ElementB, class LayoutB, class ElementC, typename LayoutC,
-  class ElementScale, typename StrideScale,
-  class TileShape, Scheduler TileScheduler,
-  class TiledMma, class GmemTiledCopyA, class GmemTiledCopyB,
-  class GmemTiledCopyScaleA, class GmemTiledCopyScaleB,
-  class GroupSize,
-  class EpilogueOp>
-struct BlockScalingGemmConfiguration<
-      arch::IntelXe,
-      ElementA, LayoutA,
-      ElementB, LayoutB,
-      ElementC, LayoutC,
-      ElementScale, StrideScale,
-      float,
-      TileShape, TileScheduler, TiledMma,
-      GmemTiledCopyA, GmemTiledCopyB,
-      GmemTiledCopyScaleA, GmemTiledCopyScaleB,
-      GroupSize,
-      EpilogueOp>
-{
-  static constexpr int PipelineStages = 2;
-  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages, GroupSize>;
-  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
-
-  using StrideA = std::conditional_t<cute::is_tuple_v<LayoutA>, LayoutA, TagToStrideA_t<LayoutA>>;
-  using StrideB = std::conditional_t<cute::is_tuple_v<LayoutB>, LayoutB, TagToStrideB_t<LayoutB>>;
-
-  using CollectiveMainloop = cutlass::gemm::collective::CollectiveMma<
-          GEMMDispatchPolicy,
-          TileShape,
-          cute::tuple<ElementA, ElementScale>,
-          cute::tuple<StrideA, StrideScale>,
-          cute::tuple<ElementB, ElementScale>,
-          cute::tuple<StrideB, StrideScale>,
-          TiledMma,
-          cute::tuple<GmemTiledCopyA, GmemTiledCopyScaleA>, void, void, cute::identity,
-          cute::tuple<GmemTiledCopyB, GmemTiledCopyScaleB>, void, void, cute::identity
-  >;
-
-  // Accumulate in float, downcast/store as ElementC.
-  using FusionOp = cutlass::epilogue::fusion::LinearCombination<
-      ElementC, float, ElementC, float, FloatRoundStyle::round_to_nearest>;
-  using FusionCallbacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, FusionOp, TileShape,
-          decltype(tile_shape(TiledMma()))>;
-  using LayoutD = cutlass::layout::RowMajor;
-  using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
-          EpilogueDispatchPolicy,
-          TileShape,
-          void,
-          float,                // ElementAccumulator
-          cutlass::gemm::TagToStrideC_t<LayoutC>,
-          ElementC,             // ElementOutput
-          cutlass::gemm::TagToStrideC_t<LayoutD>,
-          FusionCallbacks,
-          void,
-          void>;
-    using GemmKernel = kernel::GemmUniversal<
-    Shape<int, int, int, int>,
-    CollectiveMainloop,
-    CollectiveEpilogue>;
-
-  using Gemm = GemmUniversalAdapter<GemmKernel>;
-
-  constexpr static typename GemmKernel::Arguments defaultArguments() {
-    using StreamKMode =
-      cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams::DecompositionMode;
+        cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams::DecompositionMode;
     if constexpr (TileScheduler == Scheduler::Gemm) {
       return {};
     } else if constexpr (TileScheduler == Scheduler::GemmStreamK) {
@@ -583,64 +286,63 @@ struct BlockScalingGemmConfiguration<
 #endif
 
 /////////////////////////////////////////////////////////////////////////
-// W8A8 FP8 -> FP16-MMA fast path, mirrors examples/08_bmg_gemm_f8.
-// FP8 inputs (float_e4m3_t / float_e5m2_t) are upcast to FP16 inside the
-// W8A8 mainloop; MMA runs on XE_8x16x16_F32F16F16F32_TT (FP16 inputs,
-// FP32 accumulator). This is a distinct pipeline from the native-FP8
-// XE_DPAS_TT<8, float, float_e4m3_t> path used by GemmConfiguration.
+// W8A8GemmConfiguration — FP8 -> FP16-MMA fast path
+// Mirrors examples/08_bmg_gemm_f8. FP8 inputs are upcast to FP16 inside
+// the W8A8 mainloop; MMA runs XE_8x16x16_F32F16F16F32_TT.
 /////////////////////////////////////////////////////////////////////////
+
 template<
-  class ElementA, class LayoutA,
-  class ElementB, class LayoutB,
-  class ElementC, class LayoutC,
-  class ElementAccumulator,
-  class TileShape,
-  class TiledMma,
-  class GmemTiledCopyA = XE_2D_U8x32x32_LD_N,
-  class GmemTiledCopyB = XE_2D_U8x32x32_LD_V,
-  class EpilogueOp = epilogue::fusion::LinearCombination<float, float, float, float, FloatRoundStyle::round_to_nearest>>
+    class ElementA, class LayoutA,
+    class ElementB, class LayoutB,
+    class ElementC, class LayoutC,
+    class ElementAccumulator,
+    class TileShape,
+    class TiledMma,
+    class GmemTiledCopyA = XE_2D_U8x32x32_LD_N,
+    class GmemTiledCopyB = XE_2D_U8x32x32_LD_V,
+    class EpilogueOp = epilogue::fusion::LinearCombination<
+        float, float, float, float, FloatRoundStyle::round_to_nearest>>
 struct W8A8GemmConfiguration {
   static constexpr int PipelineStages = 2;
-  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelW8A8<PipelineStages>;
+
+  using GEMMDispatchPolicy     = cutlass::gemm::MainloopIntelW8A8<PipelineStages>;
   using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeXMX16;
 
   using StrideA = std::conditional_t<cute::is_tuple_v<LayoutA>, LayoutA, TagToStrideA_t<LayoutA>>;
   using StrideB = std::conditional_t<cute::is_tuple_v<LayoutB>, LayoutB, TagToStrideB_t<LayoutB>>;
 
+  // Mainloop
   using CollectiveMainloop = collective::CollectiveMma<
-        GEMMDispatchPolicy, TileShape,
-        ElementA, StrideA,
-        ElementB, StrideB,
-        TiledMma,
-        GmemTiledCopyA, void, void, cute::identity,
-        GmemTiledCopyB, void, void, cute::identity>;
+      GEMMDispatchPolicy, TileShape,
+      ElementA, StrideA,
+      ElementB, StrideB,
+      TiledMma,
+      GmemTiledCopyA, void, void, cute::identity,
+      GmemTiledCopyB, void, void, cute::identity>;
 
+  // Epilogue
   using FusionCallbacks = cutlass::epilogue::fusion::FusionCallbacks<
-        EpilogueDispatchPolicy, EpilogueOp, TileShape,
-        decltype(tile_shape(TiledMma()))>;
+      EpilogueDispatchPolicy, EpilogueOp, TileShape, decltype(tile_shape(TiledMma()))>;
 
   using LayoutD = cutlass::layout::RowMajor;
-  // Note: the ElementAccumulator template parameter is retained for signature
-  // symmetry with the rest of the file; the actual accumulator type is
-  // deduced inside the kernel from TiledMma::ValTypeC. The slot below is the
-  // C-matrix element type, so we pass ElementC (matches example 08).
+
   using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
-        EpilogueDispatchPolicy,
-        TileShape,
-        ElementC,
-        cutlass::gemm::TagToStrideC_t<LayoutC>,
-        float,
-        cutlass::gemm::TagToStrideC_t<LayoutD>,
-        FusionCallbacks,
-        XE_2D_U32x8x16_LD_N,
-        void, void,
-        XE_2D_U32x8x16_ST_N,
-        void, void>;
+      EpilogueDispatchPolicy,
+      TileShape,
+      ElementC,
+      cutlass::gemm::TagToStrideC_t<LayoutC>,
+      float,
+      cutlass::gemm::TagToStrideC_t<LayoutD>,
+      FusionCallbacks,
+      XE_2D_U32x8x16_LD_N,
+      void, void,
+      XE_2D_U32x8x16_ST_N,
+      void, void>;
 
   using GemmKernel = kernel::GemmUniversal<
-        Shape<int, int, int, int>,
-        CollectiveMainloop,
-        CollectiveEpilogue>;
+      Shape<int, int, int, int>,
+      CollectiveMainloop,
+      CollectiveEpilogue>;
 
   using Gemm = GemmUniversalAdapter<GemmKernel>;
 

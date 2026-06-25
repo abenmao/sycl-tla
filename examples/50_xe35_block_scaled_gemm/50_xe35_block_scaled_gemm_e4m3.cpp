@@ -60,7 +60,7 @@ cutlass::Status run_block_scaled_gemm(Options & options){
 
   using ElementAccumulator = float;
   using ElementComputeEpilogue = float;
-  using ElementOutput = float;
+  using ElementOutput = float_e4m3_t;
 
   using LayoutC = cutlass::layout::RowMajor;
   using LayoutD = cutlass::layout::RowMajor;
@@ -81,7 +81,7 @@ cutlass::Status run_block_scaled_gemm(Options & options){
   using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
           EpilogueDispatchPolicy,
           TileShape,
-          void,
+          Shape<_8, Int<64 / sizeof(ElementOutput)>>, // Epilogue tile (void = automatic)
           ElementAccumulator,
           cutlass::gemm::TagToStrideC_t<LayoutC>,
           ElementOutput,

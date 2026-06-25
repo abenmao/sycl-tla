@@ -1139,11 +1139,11 @@ struct BenchmarkRunnerGemm {
     constexpr double bits_per_byte = static_cast<double>(sizeof_bits_v<char>);
     constexpr double sizeof_a = sizeof_bits_v<ElementA> / bits_per_byte;
     constexpr double sizeof_b = sizeof_bits_v<ElementB> / bits_per_byte;
-    constexpr double sizeof_c = sizeof_bits_v<ElementC> / bits_per_byte;
+    constexpr double sizeof_o = sizeof_bits_v<ElementOutput> / bits_per_byte;
     auto mega_bytes_transferred = static_cast<double>(
         options.m * options.k * sizeof_a +
         options.k * options.n * sizeof_b +
-        (options.beta != 0 ? 2 : 1) * options.m * options.n * sizeof_c
+        (options.beta != 0 ? 2 : 1) * options.m * options.n * sizeof_o
       ) * 1e-6 * options.l;
 
     initialize_counters(state);
