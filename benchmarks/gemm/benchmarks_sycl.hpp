@@ -542,6 +542,140 @@ using CriGemm_TF32TF32FP32_Tile_8_128_16_sg8x16 = typename TiledMMAHelper<MMA_At
 using CriGemmTF32TF32FP32_RRR_TileShape_8_128_16_sg8x16 = Gemm_Bench_TF32TF32FP32_RRR<CriGemm_TF32TF32FP32_TileShape_8_128_16, CriGemm_TF32TF32FP32_Tile_8_128_16_sg8x16, void, void>;
 CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmTF32TF32FP32_RRR_TileShape_8_128_16_sg8x16);
 
+/////////////////////////////////////////////////////////////////////////////////////
+// "Destination == source" benchmark variants.
+//
+// These mirror the FP32-output benchmarks above but store the result in the same
+// element type as the inputs (e.g. BF16 in -> BF16 out). Accumulation still happens in
+// float; the epilogue downcasts to the source element on store. They are backed by the
+// generic GemmConfiguration / BlockScalingGemmConfiguration specializations
+// (ElementC free, float accumulator) added in gemm_configuration_sycl.hpp.
+//
+// The TileShape / Tiler (TiledMMA) aliases are output-independent (float accumulator),
+// so the existing *_TileShape_* / *_Tile_* aliases are reused.
+/////////////////////////////////////////////////////////////////////////////////////
+
+// Generic helper: output element == input element, float accumulator.
+template <typename Element, typename LayoutB, Scheduler Sched, typename TileShape, typename Tiler>
+using Gemm_Bench_SrcOut = cutlass::gemm::device::GemmConfiguration<
+    cutlass::arch::IntelXe,
+    Element, cutlass::layout::RowMajor,
+    Element, LayoutB,
+    Element, cutlass::layout::RowMajor,
+    float,
+    TileShape, Sched, Tiler,
+    void, void>;
+
+template <typename Element, typename LayoutB, typename TileShape, typename Tiler, int Splits>
+struct Gemm_Bench_SrcOut_SplitK :
+    Gemm_Bench_SrcOut<Element, LayoutB, Scheduler::GemmSplitK, TileShape, Tiler> {
+  using Base = Gemm_Bench_SrcOut<Element, LayoutB, Scheduler::GemmSplitK, TileShape, Tiler>;
+  using GemmKernel = typename Base::GemmKernel;
+  constexpr static typename GemmKernel::Arguments defaultArguments() {
+    using StreamKMode =
+        cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams::DecompositionMode;
+    typename GemmKernel::Arguments arguments{};
+    arguments.scheduler = {Splits, StreamKMode::SplitK};
+    return arguments;
+  }
+};
+
+// ---- BF16 -> BF16 ----
+using BmgGemmBF16BF16BF16_SplitK4_RRR_TileShape_512_256_32 =
+    Gemm_Bench_SrcOut_SplitK<cutlass::bfloat16_t, cutlass::layout::RowMajor, BmgGemm_BF16FP32_TileShape_512_256_32, BmgGemm_BF16FP32_Tile_512_256_32, 4>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmBF16BF16BF16_SplitK4_RRR_TileShape_512_256_32);
+using BmgGemmBF16BF16BF16_SplitK2_RRR_TileShape_512_256_32 =
+    Gemm_Bench_SrcOut_SplitK<cutlass::bfloat16_t, cutlass::layout::RowMajor, BmgGemm_BF16FP32_TileShape_512_256_32, BmgGemm_BF16FP32_Tile_512_256_32, 2>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmBF16BF16BF16_SplitK2_RRR_TileShape_512_256_32);
+using BmgGemmBF16BF16BF16_RRR_TileShape_512_256_32 =
+    Gemm_Bench_SrcOut<cutlass::bfloat16_t, cutlass::layout::RowMajor, Scheduler::Gemm, BmgGemm_BF16FP32_TileShape_512_256_32, BmgGemm_BF16FP32_Tile_512_256_32>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_512_256_32);
+using BmgGemmBF16BF16BF16_RRR_TileShape_16_128_32 =
+    Gemm_Bench_SrcOut<cutlass::bfloat16_t, cutlass::layout::RowMajor, Scheduler::Gemm, BmgGemm_BF16FP32_TileShape_16_128_32, BmgGemm_BF16FP32_Tile_16_128_32>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_16_128_32);
+using BmgGemmBF16BF16BF16_RRR_TileShape_64_128_32 =
+    Gemm_Bench_SrcOut<cutlass::bfloat16_t, cutlass::layout::RowMajor, Scheduler::Gemm, BmgGemm_BF16FP32_TileShape_64_128_32, BmgGemm_BF16FP32_Tile_64_128_32>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_64_128_32);
+using BmgGemmBF16BF16BF16_RRR_TileShape_256_128_32 =
+    Gemm_Bench_SrcOut<cutlass::bfloat16_t, cutlass::layout::RowMajor, Scheduler::Gemm, BmgGemm_BF16FP32_TileShape_256_128_32, BmgGemm_BF16FP32_Tile_256_128_32>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_256_128_32);
+using BmgGemmBF16BF16BF16_RRR_TileShape_8_128_32 =
+    Gemm_Bench_SrcOut<cutlass::bfloat16_t, cutlass::layout::RowMajor, Scheduler::Gemm, BmgGemm_BF16FP32_TileShape_8_128_32, BmgGemm_BF16FP32_Tile_8_128_32>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_8_128_32);
+using BmgGemmBF16BF16BF16_RRR_TileShape_4_128_32 =
+    Gemm_Bench_SrcOut<cutlass::bfloat16_t, cutlass::layout::RowMajor, Scheduler::Gemm, BmgGemm_BF16FP32_TileShape_4_128_32, BmgGemm_BF16FP32_Tile_4_128_32>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_4_128_32);
+using BmgGemmBF16BF16BF16_RRR_TileShape_8_256_32 =
+    Gemm_Bench_SrcOut<cutlass::bfloat16_t, cutlass::layout::RowMajor, Scheduler::Gemm, BmgGemm_BF16FP32_TileShape_8_256_32, BmgGemm_BF16FP32_Tile_8_256_32>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_8_256_32);
+using BmgGemmBF16BF16BF16_RRR_TileShape_8_128_32_sg8x16 =
+    Gemm_Bench_SrcOut<cutlass::bfloat16_t, cutlass::layout::RowMajor, Scheduler::Gemm, BmgGemm_BF16FP32_TileShape_8_128_32, BmgGemm_BF16FP32_Tile_8_128_32_sg8x16>;
+CUTLASS_CREATE_GEMM_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_8_128_32_sg8x16);
+
+// ---- FP16 -> FP16 ----
+using CriGemmFP16FP16FP16_SplitK4_RRR_TileShape_512_256_32 =
+    Gemm_Bench_SrcOut_SplitK<cutlass::half_t, cutlass::layout::RowMajor, CriGemm_FP16FP16FP32_TileShape_512_256_32, CriGemm_FP16FP16FP32_Tile_512_256_32, 4>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP16FP16FP16_SplitK4_RRR_TileShape_512_256_32);
+using CriGemmFP16FP16FP16_SplitK2_RRR_TileShape_512_256_32 =
+    Gemm_Bench_SrcOut_SplitK<cutlass::half_t, cutlass::layout::RowMajor, CriGemm_FP16FP16FP32_TileShape_512_256_32, CriGemm_FP16FP16FP32_Tile_512_256_32, 2>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP16FP16FP16_SplitK2_RRR_TileShape_512_256_32);
+using CriGemmFP16FP16FP16_RRR_TileShape_512_256_32 =
+    Gemm_Bench_SrcOut<cutlass::half_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_FP16FP16FP32_TileShape_512_256_32, CriGemm_FP16FP16FP32_Tile_512_256_32>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_512_256_32);
+using CriGemmFP16FP16FP16_RRR_TileShape_16_128_32 =
+    Gemm_Bench_SrcOut<cutlass::half_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_FP16FP16FP32_TileShape_16_128_32, CriGemm_FP16FP16FP32_Tile_16_128_32>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_16_128_32);
+using CriGemmFP16FP16FP16_RRR_TileShape_64_128_32 =
+    Gemm_Bench_SrcOut<cutlass::half_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_FP16FP16FP32_TileShape_64_128_32, CriGemm_FP16FP16FP32_Tile_64_128_32>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_64_128_32);
+using CriGemmFP16FP16FP16_RRR_TileShape_256_128_32 =
+    Gemm_Bench_SrcOut<cutlass::half_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_FP16FP16FP32_TileShape_256_128_32, CriGemm_FP16FP16FP32_Tile_256_128_32>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_256_128_32);
+using CriGemmFP16FP16FP16_RRR_TileShape_8_128_32 =
+    Gemm_Bench_SrcOut<cutlass::half_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_FP16FP16FP32_TileShape_8_128_32, CriGemm_FP16FP16FP32_Tile_8_128_32>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_8_128_32);
+using CriGemmFP16FP16FP16_RRR_TileShape_4_128_32 =
+    Gemm_Bench_SrcOut<cutlass::half_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_FP16FP16FP32_TileShape_4_128_32, CriGemm_FP16FP16FP32_Tile_4_128_32>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_4_128_32);
+using CriGemmFP16FP16FP16_RRR_TileShape_8_256_32 =
+    Gemm_Bench_SrcOut<cutlass::half_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_FP16FP16FP32_TileShape_8_256_32, CriGemm_FP16FP16FP32_Tile_8_256_32>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_8_256_32);
+using CriGemmFP16FP16FP16_RRR_TileShape_8_128_32_sg8x16 =
+    Gemm_Bench_SrcOut<cutlass::half_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_FP16FP16FP32_TileShape_8_128_32, CriGemm_FP16FP16FP32_Tile_8_128_32_sg8x16>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_8_128_32_sg8x16);
+
+// ---- TF32 -> TF32 ----
+using CriGemmTF32TF32TF32_SplitK4_RRR_TileShape_512_256_16 =
+    Gemm_Bench_SrcOut_SplitK<cutlass::tfloat32_t, cutlass::layout::RowMajor, CriGemm_TF32TF32FP32_TileShape_512_256_16, CriGemm_TF32TF32FP32_Tile_512_256_16, 4>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmTF32TF32TF32_SplitK4_RRR_TileShape_512_256_16);
+using CriGemmTF32TF32TF32_SplitK2_RRR_TileShape_512_256_16 =
+    Gemm_Bench_SrcOut_SplitK<cutlass::tfloat32_t, cutlass::layout::RowMajor, CriGemm_TF32TF32FP32_TileShape_512_256_16, CriGemm_TF32TF32FP32_Tile_512_256_16, 2>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmTF32TF32TF32_SplitK2_RRR_TileShape_512_256_16);
+using CriGemmTF32TF32TF32_RRR_TileShape_512_256_16 =
+    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_512_256_16, CriGemm_TF32TF32FP32_Tile_512_256_16>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_512_256_16);
+using CriGemmTF32TF32TF32_RRR_TileShape_16_128_16 =
+    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_16_128_16, CriGemm_TF32TF32FP32_Tile_16_128_16>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_16_128_16);
+using CriGemmTF32TF32TF32_RRR_TileShape_64_128_16 =
+    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_64_128_16, CriGemm_TF32TF32FP32_Tile_64_128_16>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_64_128_16);
+using CriGemmTF32TF32TF32_RRR_TileShape_256_128_16 =
+    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_256_128_16, CriGemm_TF32TF32FP32_Tile_256_128_16>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_256_128_16);
+using CriGemmTF32TF32TF32_RRR_TileShape_8_128_16 =
+    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_8_128_16, CriGemm_TF32TF32FP32_Tile_8_128_16>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_8_128_16);
+using CriGemmTF32TF32TF32_RRR_TileShape_4_128_16 =
+    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_4_128_16, CriGemm_TF32TF32FP32_Tile_4_128_16>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_4_128_16);
+using CriGemmTF32TF32TF32_RRR_TileShape_8_256_16 =
+    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_8_256_16, CriGemm_TF32TF32FP32_Tile_8_256_16>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_8_256_16);
+using CriGemmTF32TF32TF32_RRR_TileShape_8_128_16_sg8x16 =
+    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_8_128_16, CriGemm_TF32TF32FP32_Tile_8_128_16_sg8x16>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_8_128_16_sg8x16);
+
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
 
 using E4M3ElementType = cutlass::mx_float8_t<float_e4m3_t>;
@@ -1397,6 +1531,160 @@ using CriGemmE2M1E2M1BF16_RCR_TileShape_512_256_256 = Gemm_Bench_E2M1E2M1BF16_RC
 
 CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE2M1E2M1BF16_RCR_TileShape_512_256_256);
 
+/////////////////////////////////////////////////////////////////////////////////////
+// "Destination == source" benchmark variants (FP8 / FP4 / block-scaled).
+// See the matching note in the non-guarded section above; these reuse the existing
+// output-independent *_TileShape_* / *_Tile_* aliases and the generic config
+// specializations (ElementC free, float accumulator).
+/////////////////////////////////////////////////////////////////////////////////////
+
+// Generic block-scaled helpers: output element == input element, float accumulator.
+template <typename Element, typename ElementScale, typename LayoutB, typename TileShape, typename Tiler>
+using BLockScalingGemm_Bench_SrcOut = cutlass::gemm::device::BlockScalingGemmConfiguration<
+    cutlass::arch::IntelXe,
+    Element, cutlass::layout::RowMajor,
+    Element, LayoutB,
+    Element, cutlass::layout::RowMajor,
+    ElementScale,
+    cute::Stride<_1, int64_t, int64_t>,
+    float,
+    TileShape, Scheduler::Gemm, Tiler,
+    void, void, void, void>;
+
+template <typename Element, typename ElementScale, typename LayoutB, typename TileShape, typename Tiler>
+using BLockScalingGemmNonNative_Bench_SrcOut = cutlass::gemm::device::BlockScalingGemmConfiguration<
+    cutlass::arch::IntelXe,
+    Element, cutlass::layout::RowMajor,
+    Element, LayoutB,
+    Element, cutlass::layout::RowMajor,
+    ElementScale,
+    cute::Stride<_1, int64_t, int64_t>,
+    float,
+    TileShape, Scheduler::Gemm, Tiler,
+    void, void, void, void, cute::tuple<_1, _1, _32>>;
+
+// ---- FP8 (E5M2) -> E5M2 ----
+using CriGemmE5M2E5M2E5M2_SplitK4_RRR_TileShape_512_256_64 =
+    Gemm_Bench_SrcOut_SplitK<cutlass::float_e5m2_t, cutlass::layout::RowMajor, CriGemm_E5M2E5M2FP32_TileShape_512_256_64, CriGemm_E5M2E5M2FP32_Tile_512_256_64, 4>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE5M2E5M2E5M2_SplitK4_RRR_TileShape_512_256_64);
+using CriGemmE5M2E5M2E5M2_SplitK2_RRR_TileShape_512_256_64 =
+    Gemm_Bench_SrcOut_SplitK<cutlass::float_e5m2_t, cutlass::layout::RowMajor, CriGemm_E5M2E5M2FP32_TileShape_512_256_64, CriGemm_E5M2E5M2FP32_Tile_512_256_64, 2>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE5M2E5M2E5M2_SplitK2_RRR_TileShape_512_256_64);
+using CriGemmE5M2E5M2E5M2_RRR_TileShape_512_256_64 =
+    Gemm_Bench_SrcOut<cutlass::float_e5m2_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E5M2E5M2FP32_TileShape_512_256_64, CriGemm_E5M2E5M2FP32_Tile_512_256_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_512_256_64);
+using CriGemmE5M2E5M2E5M2_RRR_TileShape_16_128_64 =
+    Gemm_Bench_SrcOut<cutlass::float_e5m2_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E5M2E5M2FP32_TileShape_16_128_64, CriGemm_E5M2E5M2FP32_Tile_16_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_16_128_64);
+using CriGemmE5M2E5M2E5M2_RRR_TileShape_64_128_64 =
+    Gemm_Bench_SrcOut<cutlass::float_e5m2_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E5M2E5M2FP32_TileShape_64_128_64, CriGemm_E5M2E5M2FP32_Tile_64_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_64_128_64);
+using CriGemmE5M2E5M2E5M2_RRR_TileShape_256_128_64 =
+    Gemm_Bench_SrcOut<cutlass::float_e5m2_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E5M2E5M2FP32_TileShape_256_128_64, CriGemm_E5M2E5M2FP32_Tile_256_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_256_128_64);
+using CriGemmE5M2E5M2E5M2_RRR_TileShape_8_128_64 =
+    Gemm_Bench_SrcOut<cutlass::float_e5m2_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E5M2E5M2FP32_TileShape_8_128_64, CriGemm_E5M2E5M2FP32_Tile_8_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_8_128_64);
+using CriGemmE5M2E5M2E5M2_RRR_TileShape_4_128_64 =
+    Gemm_Bench_SrcOut<cutlass::float_e5m2_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E5M2E5M2FP32_TileShape_4_128_64, CriGemm_E5M2E5M2FP32_Tile_4_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_4_128_64);
+using CriGemmE5M2E5M2E5M2_RRR_TileShape_8_256_64 =
+    Gemm_Bench_SrcOut<cutlass::float_e5m2_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E5M2E5M2FP32_TileShape_8_256_64, CriGemm_E5M2E5M2FP32_Tile_8_256_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_8_256_64);
+using CriGemmE5M2E5M2E5M2_RRR_TileShape_8_128_64_sg8x16 =
+    Gemm_Bench_SrcOut<cutlass::float_e5m2_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E5M2E5M2FP32_TileShape_8_128_64, CriGemm_E5M2E5M2FP32_Tile_8_128_64_sg8x16>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_8_128_64_sg8x16);
+
+// ---- FP8 (E4M3) -> E4M3 ----
+using CriGemmE4M3E4M3E4M3_SplitK4_RRR_TileShape_512_256_64 =
+    Gemm_Bench_SrcOut_SplitK<cutlass::float_e4m3_t, cutlass::layout::RowMajor, CriGemm_E4M3E4M3FP32_TileShape_512_256_64, CriGemm_E4M3E4M3FP32_Tile_512_256_64, 4>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE4M3E4M3E4M3_SplitK4_RRR_TileShape_512_256_64);
+using CriGemmE4M3E4M3E4M3_SplitK2_RRR_TileShape_512_256_64 =
+    Gemm_Bench_SrcOut_SplitK<cutlass::float_e4m3_t, cutlass::layout::RowMajor, CriGemm_E4M3E4M3FP32_TileShape_512_256_64, CriGemm_E4M3E4M3FP32_Tile_512_256_64, 2>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE4M3E4M3E4M3_SplitK2_RRR_TileShape_512_256_64);
+using CriGemmE4M3E4M3E4M3_RRR_TileShape_512_256_64 =
+    Gemm_Bench_SrcOut<cutlass::float_e4m3_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E4M3E4M3FP32_TileShape_512_256_64, CriGemm_E4M3E4M3FP32_Tile_512_256_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_512_256_64);
+using CriGemmE4M3E4M3E4M3_RRR_TileShape_16_128_64 =
+    Gemm_Bench_SrcOut<cutlass::float_e4m3_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E4M3E4M3FP32_TileShape_16_128_64, CriGemm_E4M3E4M3FP32_Tile_16_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_16_128_64);
+using CriGemmE4M3E4M3E4M3_RRR_TileShape_64_128_64 =
+    Gemm_Bench_SrcOut<cutlass::float_e4m3_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E4M3E4M3FP32_TileShape_64_128_64, CriGemm_E4M3E4M3FP32_Tile_64_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_64_128_64);
+using CriGemmE4M3E4M3E4M3_RRR_TileShape_256_128_64 =
+    Gemm_Bench_SrcOut<cutlass::float_e4m3_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E4M3E4M3FP32_TileShape_256_128_64, CriGemm_E4M3E4M3FP32_Tile_256_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_256_128_64);
+using CriGemmE4M3E4M3E4M3_RRR_TileShape_8_128_64 =
+    Gemm_Bench_SrcOut<cutlass::float_e4m3_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E4M3E4M3FP32_TileShape_8_128_64, CriGemm_E4M3E4M3FP32_Tile_8_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_8_128_64);
+using CriGemmE4M3E4M3E4M3_RRR_TileShape_4_128_64 =
+    Gemm_Bench_SrcOut<cutlass::float_e4m3_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E4M3E4M3FP32_TileShape_4_128_64, CriGemm_E4M3E4M3FP32_Tile_4_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_4_128_64);
+using CriGemmE4M3E4M3E4M3_RRR_TileShape_8_256_64 =
+    Gemm_Bench_SrcOut<cutlass::float_e4m3_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E4M3E4M3FP32_TileShape_8_256_64, CriGemm_E4M3E4M3FP32_Tile_8_256_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_8_256_64);
+using CriGemmE4M3E4M3E4M3_RRR_TileShape_8_128_64_sg8x16 =
+    Gemm_Bench_SrcOut<cutlass::float_e4m3_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_E4M3E4M3FP32_TileShape_8_128_64, CriGemm_E4M3E4M3FP32_Tile_8_128_64_sg8x16>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_8_128_64_sg8x16);
+
+// ---- MXFP8 (E5M2) block-scaled -> E5M2 ----
+using CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_512_256_64 =
+    BLockScalingGemm_Bench_SrcOut<E5M2ElementInputA, E5M2ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E5M2E5M2FP32_TileShape_512_256_64, CriBLockScalingGemm_E5M2E5M2FP32_Tile_512_256_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_512_256_64);
+using CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_16_128_64 =
+    BLockScalingGemm_Bench_SrcOut<E5M2ElementInputA, E5M2ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E5M2E5M2FP32_TileShape_16_128_64, CriBLockScalingGemm_E5M2E5M2FP32_Tile_16_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_16_128_64);
+using CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_64_128_64 =
+    BLockScalingGemm_Bench_SrcOut<E5M2ElementInputA, E5M2ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E5M2E5M2FP32_TileShape_64_128_64, CriBLockScalingGemm_E5M2E5M2FP32_Tile_64_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_64_128_64);
+using CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_256_128_64 =
+    BLockScalingGemm_Bench_SrcOut<E5M2ElementInputA, E5M2ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E5M2E5M2FP32_TileShape_256_128_64, CriBLockScalingGemm_E5M2E5M2FP32_Tile_256_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_256_128_64);
+using CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_4_128_64 =
+    BLockScalingGemm_Bench_SrcOut<E5M2ElementInputA, E5M2ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E5M2E5M2FP32_TileShape_4_128_64, CriBLockScalingGemm_E5M2E5M2FP32_Tile_4_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_4_128_64);
+using CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_8_128_64 =
+    BLockScalingGemm_Bench_SrcOut<E5M2ElementInputA, E5M2ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E5M2E5M2FP32_TileShape_8_128_64, CriBLockScalingGemm_E5M2E5M2FP32_Tile_8_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_8_128_64);
+using CriBLockScalingGemmNonNative_E5M2E5M2E5M2_RRR_TileShape_8_128_64 =
+    BLockScalingGemmNonNative_Bench_SrcOut<E5M2ElementInputA, E5M2ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E5M2E5M2FP32_TileShape_8_128_64, CriBLockScalingGemm_E5M2E5M2FP32_Tile_8_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemmNonNative_E5M2E5M2E5M2_RRR_TileShape_8_128_64);
+using CriBLockScalingGemmNonNative_E5M2E5M2E5M2_RRR_TileShape_8_256_64 =
+    BLockScalingGemmNonNative_Bench_SrcOut<E5M2ElementInputA, E5M2ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E5M2E5M2FP32_TileShape_8_256_64, CriBLockScalingGemm_E5M2E5M2FP32_Tile_8_256_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemmNonNative_E5M2E5M2E5M2_RRR_TileShape_8_256_64);
+using CriBLockScalingGemmNonNative_E5M2E5M2E5M2_RRR_TileShape_8_128_64_sg8x16 =
+    BLockScalingGemmNonNative_Bench_SrcOut<E5M2ElementInputA, E5M2ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E5M2E5M2FP32_TileShape_8_128_64, CriBLockScalingGemm_E5M2E5M2FP32_Tile_8_128_64_sg8x16>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemmNonNative_E5M2E5M2E5M2_RRR_TileShape_8_128_64_sg8x16);
+
+// ---- MXFP8 (E4M3) block-scaled -> E4M3 ----
+using CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_512_256_64 =
+    BLockScalingGemm_Bench_SrcOut<E4M3ElementInputA, E4M3ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E4M3E4M3FP32_TileShape_512_256_64, CriBLockScalingGemm_E4M3E4M3FP32_Tile_512_256_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_512_256_64);
+using CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_16_128_64 =
+    BLockScalingGemm_Bench_SrcOut<E4M3ElementInputA, E4M3ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E4M3E4M3FP32_TileShape_16_128_64, CriBLockScalingGemm_E4M3E4M3FP32_Tile_16_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_16_128_64);
+using CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_64_128_64 =
+    BLockScalingGemm_Bench_SrcOut<E4M3ElementInputA, E4M3ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E4M3E4M3FP32_TileShape_64_128_64, CriBLockScalingGemm_E4M3E4M3FP32_Tile_64_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_64_128_64);
+using CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_256_128_64 =
+    BLockScalingGemm_Bench_SrcOut<E4M3ElementInputA, E4M3ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E4M3E4M3FP32_TileShape_256_128_64, CriBLockScalingGemm_E4M3E4M3FP32_Tile_256_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_256_128_64);
+using CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_4_128_64 =
+    BLockScalingGemm_Bench_SrcOut<E4M3ElementInputA, E4M3ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E4M3E4M3FP32_TileShape_4_128_64, CriBLockScalingGemm_E4M3E4M3FP32_Tile_4_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_4_128_64);
+using CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_8_128_64 =
+    BLockScalingGemm_Bench_SrcOut<E4M3ElementInputA, E4M3ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E4M3E4M3FP32_TileShape_8_128_64, CriBLockScalingGemm_E4M3E4M3FP32_Tile_8_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_8_128_64);
+using CriBLockScalingGemmNonNative_E4M3E4M3E4M3_RRR_TileShape_8_128_64 =
+    BLockScalingGemmNonNative_Bench_SrcOut<E4M3ElementInputA, E4M3ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E4M3E4M3FP32_TileShape_8_128_64, CriBLockScalingGemm_E4M3E4M3FP32_Tile_8_128_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemmNonNative_E4M3E4M3E4M3_RRR_TileShape_8_128_64);
+using CriBLockScalingGemmNonNative_E4M3E4M3E4M3_RRR_TileShape_8_256_64 =
+    BLockScalingGemmNonNative_Bench_SrcOut<E4M3ElementInputA, E4M3ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E4M3E4M3FP32_TileShape_8_256_64, CriBLockScalingGemm_E4M3E4M3FP32_Tile_8_256_64>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemmNonNative_E4M3E4M3E4M3_RRR_TileShape_8_256_64);
+using CriBLockScalingGemmNonNative_E4M3E4M3E4M3_RRR_TileShape_8_128_64_sg8x16 =
+    BLockScalingGemmNonNative_Bench_SrcOut<E4M3ElementInputA, E4M3ElementScale, cutlass::layout::RowMajor, CriBLockScalingGemm_E4M3E4M3FP32_TileShape_8_128_64, CriBLockScalingGemm_E4M3E4M3FP32_Tile_8_128_64_sg8x16>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriBLockScalingGemmNonNative_E4M3E4M3E4M3_RRR_TileShape_8_128_64_sg8x16);
+
 #endif
 
 static void register_gemm_benchmarks() {
@@ -1450,6 +1738,37 @@ static void register_gemm_benchmarks() {
   CUTLASS_BENCHMARK(CriGemmTF32TF32FP32_RRR_TileShape_4_128_16);
   CUTLASS_BENCHMARK(CriGemmTF32TF32FP32_RRR_TileShape_8_256_16);
   CUTLASS_BENCHMARK(CriGemmTF32TF32FP32_RRR_TileShape_8_128_16_sg8x16);
+  // Destination == source variants (output element matches input, float accumulator).
+  CUTLASS_BENCHMARK(BmgGemmBF16BF16BF16_SplitK4_RRR_TileShape_512_256_32);
+  CUTLASS_BENCHMARK(BmgGemmBF16BF16BF16_SplitK2_RRR_TileShape_512_256_32);
+  CUTLASS_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_512_256_32);
+  CUTLASS_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_16_128_32);
+  CUTLASS_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_64_128_32);
+  CUTLASS_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_256_128_32);
+  CUTLASS_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_8_128_32);
+  CUTLASS_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_4_128_32);
+  CUTLASS_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_8_256_32);
+  CUTLASS_BENCHMARK(BmgGemmBF16BF16BF16_RRR_TileShape_8_128_32_sg8x16);
+  CUTLASS_BENCHMARK(CriGemmFP16FP16FP16_SplitK4_RRR_TileShape_512_256_32);
+  CUTLASS_BENCHMARK(CriGemmFP16FP16FP16_SplitK2_RRR_TileShape_512_256_32);
+  CUTLASS_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_512_256_32);
+  CUTLASS_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_16_128_32);
+  CUTLASS_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_64_128_32);
+  CUTLASS_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_256_128_32);
+  CUTLASS_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_8_128_32);
+  CUTLASS_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_4_128_32);
+  CUTLASS_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_8_256_32);
+  CUTLASS_BENCHMARK(CriGemmFP16FP16FP16_RRR_TileShape_8_128_32_sg8x16);
+  CUTLASS_BENCHMARK(CriGemmTF32TF32TF32_SplitK4_RRR_TileShape_512_256_16);
+  CUTLASS_BENCHMARK(CriGemmTF32TF32TF32_SplitK2_RRR_TileShape_512_256_16);
+  CUTLASS_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_512_256_16);
+  CUTLASS_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_16_128_16);
+  CUTLASS_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_64_128_16);
+  CUTLASS_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_256_128_16);
+  CUTLASS_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_8_128_16);
+  CUTLASS_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_4_128_16);
+  CUTLASS_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_8_256_16);
+  CUTLASS_BENCHMARK(CriGemmTF32TF32TF32_RRR_TileShape_8_128_16_sg8x16);
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
   CUTLASS_BENCHMARK(CriGemmE5M2E5M2FP32_RRR_TileShape_256_256_32);
   CUTLASS_BENCHMARK(CriGemmE4M3E4M3FP32_RRR_TileShape_256_256_32);
@@ -1532,5 +1851,44 @@ static void register_gemm_benchmarks() {
   CUTLASS_BENCHMARK(CriBLockScalingGemmNonNative_E4M3E4M3BF16_RRR_TileShape_512_256_128);
   CUTLASS_BENCHMARK(CriBLockScalingGemmNonNative_E5M2E5M2BF16_RRR_TileShape_512_256_128);
   CUTLASS_BENCHMARK(CriBLockScalingGemmNonNative_E2M1E2M1BF16_RCR_TileShape_512_256_256);
+  // Destination == source variants (FP8 / FP4 / block-scaled).
+  CUTLASS_BENCHMARK(CriGemmE5M2E5M2E5M2_SplitK4_RRR_TileShape_512_256_64);
+  CUTLASS_BENCHMARK(CriGemmE5M2E5M2E5M2_SplitK2_RRR_TileShape_512_256_64);
+  CUTLASS_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_512_256_64);
+  CUTLASS_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_16_128_64);
+  CUTLASS_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_64_128_64);
+  CUTLASS_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_256_128_64);
+  CUTLASS_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_8_128_64);
+  CUTLASS_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_4_128_64);
+  CUTLASS_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_8_256_64);
+  CUTLASS_BENCHMARK(CriGemmE5M2E5M2E5M2_RRR_TileShape_8_128_64_sg8x16);
+  CUTLASS_BENCHMARK(CriGemmE4M3E4M3E4M3_SplitK4_RRR_TileShape_512_256_64);
+  CUTLASS_BENCHMARK(CriGemmE4M3E4M3E4M3_SplitK2_RRR_TileShape_512_256_64);
+  CUTLASS_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_512_256_64);
+  CUTLASS_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_16_128_64);
+  CUTLASS_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_64_128_64);
+  CUTLASS_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_256_128_64);
+  CUTLASS_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_8_128_64);
+  CUTLASS_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_4_128_64);
+  CUTLASS_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_8_256_64);
+  CUTLASS_BENCHMARK(CriGemmE4M3E4M3E4M3_RRR_TileShape_8_128_64_sg8x16);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_512_256_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_16_128_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_64_128_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_256_128_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_4_128_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E5M2E5M2E5M2_RRR_TileShape_8_128_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemmNonNative_E5M2E5M2E5M2_RRR_TileShape_8_128_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemmNonNative_E5M2E5M2E5M2_RRR_TileShape_8_256_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemmNonNative_E5M2E5M2E5M2_RRR_TileShape_8_128_64_sg8x16);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_512_256_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_16_128_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_64_128_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_256_128_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_4_128_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemm_E4M3E4M3E4M3_RRR_TileShape_8_128_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemmNonNative_E4M3E4M3E4M3_RRR_TileShape_8_128_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemmNonNative_E4M3E4M3E4M3_RRR_TileShape_8_256_64);
+  CUTLASS_BENCHMARK(CriBLockScalingGemmNonNative_E4M3E4M3E4M3_RRR_TileShape_8_128_64_sg8x16);
 #endif
 }
