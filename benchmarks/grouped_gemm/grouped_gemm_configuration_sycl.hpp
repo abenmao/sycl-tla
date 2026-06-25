@@ -152,7 +152,75 @@ struct GroupedGemmConfiguration<
   constexpr static typename GemmKernel::Arguments defaultArguments() {
     using RasterOrderOptions = typename cutlass::gemm::kernel::detail::
         PersistentTileSchedulerXeGroup<ProblemShape>::RasterOrderOptions;
-    
+
+    typename GemmKernel::Arguments arguments{};
+    arguments.scheduler = {1, RasterOrderOptions::AlongN};
+    return arguments;
+  }
+};
+
+// Grouped GEMM with bfloat16 output
+template<class ElementA, class LayoutA,
+  class ElementB, class LayoutB, typename LayoutC,
+  class TileShape,
+  class TiledMma, class GmemTiledCopyA, class GmemTiledCopyB, class EpilogueOp>
+struct GroupedGemmConfiguration<
+      arch::IntelXe,
+      ElementA, LayoutA,
+      ElementB, LayoutB,
+      cute::bfloat16_t, LayoutC,
+      float,
+      TileShape, TiledMma,
+      GmemTiledCopyA, GmemTiledCopyB, EpilogueOp>
+{
+  using ProblemShape = cutlass::gemm::GroupProblemShape<Shape<int,int,int>>; // <M,N,K> per group
+
+  static constexpr int PipelineStages = 2;
+  using GEMMDispatchPolicy = cutlass::gemm::MainloopXeL1StagedGroup<PipelineStages>;
+  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGenericGroup;
+
+  using StrideA = std::conditional_t<cute::is_tuple_v<LayoutA>, LayoutA, TagToStrideA_t<LayoutA>>;
+  using StrideB = std::conditional_t<cute::is_tuple_v<LayoutB>, LayoutB, TagToStrideB_t<LayoutB>>;
+
+  // Mainloop
+  using CollectiveMainloop =
+      collective::CollectiveMma<
+        GEMMDispatchPolicy, TileShape,
+        ElementA, TagToStrideA_t<LayoutA*>,
+        ElementB, TagToStrideB_t<LayoutB*>,
+        TiledMma,
+        GmemTiledCopyA, void, void, identity, // A
+        GmemTiledCopyB, void, void, identity  // B
+  >;
+
+  using FusionCallbacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueOp, TileShape,
+          decltype(tile_shape(TiledMma()))>;
+  using LayoutD = cutlass::layout::RowMajor;
+  using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
+          EpilogueDispatchPolicy,
+          TileShape,
+          void,                                       // Epilogue tile (void = automatic)
+          float,                                      // ElementAccumulator
+          cutlass::gemm::TagToStrideC_t<LayoutC*>,    // Pointer syntax for grouped
+          cute::bfloat16_t,                           // ElementOutput
+          cutlass::gemm::TagToStrideC_t<LayoutD*>,    // Pointer syntax for grouped
+          FusionCallbacks,
+          void,                                       // CopyOp G2R (void = automatic)
+          void>;                                      // CopyOp R2G (void = automatic)
+
+  using GemmKernel = kernel::GemmUniversal<
+    ProblemShape,
+    CollectiveMainloop,
+    CollectiveEpilogue,
+    cutlass::gemm::GroupScheduler
+  >;
+
+  using Gemm = GemmUniversalAdapter<GemmKernel>;
+
+  constexpr static typename GemmKernel::Arguments defaultArguments() {
+    using RasterOrderOptions = typename cutlass::gemm::kernel::detail::
+        PersistentTileSchedulerXeGroup<ProblemShape>::RasterOrderOptions;
+
     typename GemmKernel::Arguments arguments{};
     arguments.scheduler = {1, RasterOrderOptions::AlongN};
     return arguments;
@@ -173,7 +241,7 @@ struct BlockScalingGroupedGemmConfiguration<
       arch::IntelXe,
       ElementA, LayoutA,
       ElementB, LayoutB,
-      float, LayoutC,
+      cute::bfloat16_t, LayoutC,
       ElementScale, StrideScale,
       float,
       TileShape, TiledMma,
@@ -215,7 +283,7 @@ struct BlockScalingGroupedGemmConfiguration<
           void,                                       // Epilogue tile (void = automatic)
           float,                                      // ElementAccumulator
           cutlass::gemm::TagToStrideC_t<LayoutC*>,    // Pointer syntax for grouped
-          float,                                      // ElementOutput
+          cute::bfloat16_t,                           // ElementOutput
           cutlass::gemm::TagToStrideC_t<LayoutD*>,    // Pointer syntax for grouped
           FusionCallbacks,
           void,                                       // CopyOp G2R (void = automatic)
