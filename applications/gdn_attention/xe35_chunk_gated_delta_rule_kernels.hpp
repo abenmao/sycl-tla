@@ -1262,37 +1262,12 @@ void kernel_launcher(
   using Element_non_CV = cutlass::platform::remove_cv_t<T>;
   auto op = XE_DPAS_TT<8, float, Element_non_CV>{};
 
+  /* Machine-only grid: persistent kernels (prepare, compute_A, inverse,
+   * compute_wu) size their grid to the Xe-core array and let their internal
+   * grid-stride loops (`chunk_id += global_chunk_range`) sweep all chunks over
+   * as many passes as needed. */
   int xe_core_count =
       cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
-  /* On simulator / CRI the multiprocessor-count query can report 0 or a
-   * value too small to cover the persistent-grid kernels below (prepare,
-   * compute_A, inverse, compute_wu). When that happens those kernels do
-   * not produce a complete A/w/u workspace, and chunk_fwd_o_kernel ends up
-   * consuming garbage -- which presents as "only token 0 written" and
-   * huge magnitudes in ssm_state. Floor xe_core_count so every chunk is covered
-   * even on a single-Xe-core simulator. */
-  {
-    int needed_chunks =
-        (total_virtual_seqlen + chunk_size - 1) / chunk_size;
-    int min_xe_core = needed_chunks > 0 ? needed_chunks : 1;
-    /* chunk_prepare_kernel computes
-     *   chunk_range = total_sg_range / num_v_heads
-     * with total_sg_range = xe_core_count * (MaxThreadsPerXeCore / sub_group_size).
-     * If xe_core_count is too small, integer division underflows chunk_range to
-     * zero and the subsequent `total_sg_id % chunk_range` is undefined --
-     * on the CRI simulator (xe_core_count==1, num_v_heads==64) this dropped the
-     * entire stage-1b dt/a precompute. Ensure the prepare grid has at
-     * least one sub-group per v-head. */
-    constexpr int sg_per_workgroup = MaxThreadsPerXeCore / sub_group_size;
-    int min_xe_core_for_prepare =
-        (num_v_heads + sg_per_workgroup - 1) / sg_per_workgroup;
-    if (min_xe_core < min_xe_core_for_prepare) {
-      min_xe_core = min_xe_core_for_prepare;
-    }
-    if (xe_core_count < min_xe_core) {
-      xe_core_count = min_xe_core;
-    }
-  }
 
   namespace syclex = sycl::ext::oneapi::experimental;
   namespace intelex = sycl::ext::intel::experimental;
@@ -1382,15 +1357,13 @@ void kernel_launcher(
         SGLayoutInverse>::TiledMMA;
     int MaxThreadsPerWorkgroupInverse = size(MMAInverse{});  // 1 sub-group => 16
     sycl::range<3> local_inverse(1, 1, MaxThreadsPerWorkgroupInverse);
-    /* opt kernel decodes `v_head_id = group(1) % num_v_heads` and
-     * `chunk_id = group(1) / num_v_heads`, so the dim-1 grid covers
-     * (chunks * v_heads). The persistent while-loop inside the kernel
-     * amortizes any shortfall. */
+    /* Machine-sized grid, rounded up to a multiple of num_v_heads so the
+     * kernel's group(1) % / / num_v_heads head id and persistent stride of
+     * (group_range(1) / num_v_heads) divide exactly. */
     int inverse_groups =
         xe_core_count * MaxThreadsPerXeCore / MaxThreadsPerWorkgroupInverse;
-    int needed_inverse =
-        ((total_virtual_seqlen + chunk_size - 1) / chunk_size) * num_v_heads;
-    if (inverse_groups < needed_inverse) inverse_groups = needed_inverse;
+    inverse_groups =
+        (inverse_groups + num_v_heads - 1) / num_v_heads * num_v_heads;
     sycl::range<3> global_inverse(1, inverse_groups, 1);
 
     EventManager::getInstance().addEvent(queue.submit([&](sycl::handler& cgh) {
