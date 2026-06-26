@@ -303,6 +303,17 @@ public:
       }
     }();
 
+    // When the user-specified EpilogueTile groups multiple MMA iterations, the per-SG
+    // iteration count in each dimension must be evenly divisible.  Otherwise flat_divide
+    // creates phantom iterations that read out-of-bounds accumulator data and corrupt
+    // the output.  Fall back to the safe DefaultEpilogueTile when divisibility fails.
+    static constexpr auto _req_mma_per_epi = shape_div(RequestedEpilogueTile{}, MMATile{});
+    static constexpr auto _acc_mma_m = size<1>(Accumulator{});
+    static constexpr auto _acc_mma_n = size<2>(Accumulator{});
+    static constexpr bool _epi_divides = (_acc_mma_m % get<0>(_req_mma_per_epi) == 0) &&
+                                         (_acc_mma_n % get<1>(_req_mma_per_epi) == 0);
+    using EpilogueTile = conditional_t<_epi_divides, RequestedEpilogueTile, DefaultEpilogueTile>;
+
     // Check if C is in column-major layout or not
     constexpr bool IsColMajorC = cutlass::gemm::detail::is_major<0, StrideC>();
     // Actual transpose load supports either 32-bit or 64-bit data element size only
