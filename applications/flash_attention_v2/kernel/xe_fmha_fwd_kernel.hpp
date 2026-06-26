@@ -146,6 +146,10 @@ public:
     StrideK dK_cache{};
     const ElementV *V_cache;
     StrideV dV_cache{};
+#if defined(Q_PACKED_DECODE) && defined(DECODE)
+    void *workspace = nullptr;
+    bool is_causal = false;
+#endif
   };
   using KernelParams = KernelArguments;
 
@@ -169,7 +173,11 @@ public:
   //
 
   static Params to_underlying_arguments(Arguments const &args, void *workspace) {
-    return {args.kernel,
+    auto kernel_params = args.kernel;
+#if defined(Q_PACKED_DECODE) && defined(DECODE)
+    kernel_params.workspace = workspace;
+#endif
+    return {kernel_params,
             CollectiveMainloop::to_underlying_arguments(args.mainloop, workspace),
             CollectiveEpilogue::to_underlying_arguments(args.epilogue, workspace),
             TileScheduler::to_underlying_arguments(args.kernel.shape, args.hw_info, TileShapeO{})};
@@ -180,7 +188,25 @@ public:
         && CollectiveEpilogue::can_implement(args.epilogue);
   }
 
-  static int get_workspace_size(Arguments const &args) { return 0; }
+  static int get_workspace_size(Arguments const &args) {
+#if defined(Q_PACKED_DECODE) && defined(DECODE)
+    // q_packed (speculative) decode stages the gathered Q tile and the produced
+    // O tile per WG in a regularly-pitched global scratch so the mainloop/epilogue
+    // block-2D copies can run unchanged (the packed (head,token) rows are not
+    // contiguous in the user Q/O tensors for GQA, so a direct view is impossible).
+    auto const& s = args.kernel.shape;
+    int hg = s.num_heads_q / s.num_heads_kv;
+    int blk_q = get<0>(TileShapeQK{});
+    int m_pack = hg * int(s.seq_len_qo);
+    int num_m_tiles = (m_pack + blk_q - 1) / blk_q;
+    int total_wgs = s.batch * s.num_heads_kv * num_m_tiles;
+    int q_bytes = total_wgs * blk_q * s.head_size_qk * int(sizeof(ElementQ));
+    int o_bytes = total_wgs * blk_q * s.head_size_vo * int(sizeof(ElementO));
+    return q_bytes + o_bytes;
+#else
+    return 0;
+#endif
+  }
 
   static cutlass::Status initialize_workspace(Arguments const &args, void *workspace = nullptr,
                                               cudaStream_t stream = nullptr, CudaHostAdapter *cuda_adapter = nullptr) {
@@ -221,11 +247,24 @@ public:
     for (; tile_scheduler.is_valid(); ++tile_scheduler) {
       auto [blk_q, blk_v, head_q, idx_b] = tile_scheduler.get_block_coord(); // (Q,V,h,b)
       auto blk_qv = make_coord(blk_q, blk_v);
+#if defined(Q_PACKED_DECODE) && defined(DECODE)
+      // q_packed decode: the scheduler's head slot is the KV head (divmod by
+      // num_heads_kv). The query heads [head_q_base, head_q_base + head_group_q)
+      // that share this KV head are packed as the rows of the Q/O tiles.
+      int head = head_q;
+      int head_q_base = head * head_group_q;
+#else
       int head = tile_scheduler.divide_head_group(head_q);
+#endif
 
       auto sequence_length_shape = get_sequence_length_shape(s, idx_b);
       auto [seq_len_qo, seq_len_kv, seq_len_kv_cache] = sequence_length_shape;
+#if defined(Q_PACKED_DECODE) && defined(DECODE)
+      // Packed M dimension spans head_group_q * seq_len_qo rows (may be > 1 tile).
+      if (blk_q * get<0>(TileShapeQK{}) >= head_group_q * seq_len_qo) continue;
+#else
       if (blk_q * get<0>(TileShapeQK{}) >= seq_len_qo) continue;
+#endif
 
       int discard_seq_coord = 0;
       int full_tile_offset = 0;
@@ -321,6 +360,113 @@ public:
 
       // Main loop
       CollectiveMainloop mainloop(params.mainloop, shared_storage.mainloop);
+#if defined(Q_PACKED_DECODE) && defined(DECODE)
+      // q_packed (speculative) decode, SINGLE KV pass.
+      // Pack the head_group_q query heads sharing this KV head AND the seq_len_qo
+      // speculative tokens into the M (rows) dimension of one (or a few) QK tiles
+      // and run them as a single GEMM, reading each KV head ONCE per WG. Packed
+      // row g = token * head_group_q + h maps to query token g / head_group_q and
+      // query head head_q_base + g % head_group_q.
+      //
+      // The packed (head,token) rows are not contiguous in the user Q/O tensors
+      // (GQA: head stride != token stride), so a direct block-2D view is
+      // impossible. We gather Q into a regularly-pitched per-WG global scratch,
+      // run the existing block-2D mainloop/epilogue on it unchanged, then scatter
+      // O back. Per-token causality is realized inside the (non-causal) mainloop
+      // via q_pack_row_base / head_group_q.
+      const int M_pack = head_group_q * seq_len_qo;
+      const int M_tile = get<0>(TileShapeQK{});
+
+      // The mainloop is instantiated NON-causal (CausalMask=false), so the
+      // kernel's causal constexpr block above was skipped and full_tile_offset /
+      // discard_seq_coord are still 0. Recompute them here for the q_packed causal
+      // path so seq_len_pk and the per-row mask see the correct new-key window
+      // (decode: the single/last token attends to all preceding new keys).
+      if (p.is_causal) {
+        int causal_offset = cute::min(int(seq_len_qo), int(seq_len_kv));
+        discard_seq_coord = int(seq_len_qo) - causal_offset;
+        full_tile_offset  = int(seq_len_kv) - causal_offset;
+      }
+
+      // Largest query token represented in this M tile bounds the new keys read.
+      // Causal q_packed reads only the cache + the per-token-bounded new keys;
+      // non-causal lets every packed token attend to ALL new keys (and the
+      // per-row mask below is disabled by passing q_pack_hg = 0).
+      const int max_row = cute::min(blk_q * M_tile + M_tile - 1, M_pack - 1);
+      const int max_tok = max_row / head_group_q;
+      const int seq_len_pk = p.is_causal
+          ? seq_len_kv_cache + (full_tile_offset + max_tok - discard_seq_coord + 1)
+          : seq_len_kv_cache + seq_len_kv;
+      const int k_blocks_pk = cute::ceil_div(seq_len_pk, get<1>(TileShapeQK{}));
+
+      // Per-WG global scratch: Q region then O region, both regular pitch.
+      const int num_m_tiles = cute::ceil_div(M_pack, M_tile);
+      const int total_wgs = s.batch * s.num_heads_kv * num_m_tiles;
+      const int wg_id = (idx_b * s.num_heads_kv + head) * num_m_tiles + blk_q;
+      ElementQ* q_scratch = reinterpret_cast<ElementQ*>(p.workspace)
+                          + size_t(wg_id) * M_tile * s.head_size_qk;
+      ElementO* o_scratch = reinterpret_cast<ElementO*>(
+          reinterpret_cast<char*>(p.workspace)
+            + size_t(total_wgs) * M_tile * s.head_size_qk * sizeof(ElementQ))
+          + size_t(wg_id) * M_tile * s.head_size_vo;
+
+      const int num_threads = SGPerWG::value * intel::sg_size;
+
+      // Gather this tile's Q rows into contiguous scratch (zero-fill padding rows).
+      for (int e = thr_id; e < M_tile * s.head_size_qk; e += num_threads) {
+        int r = e / s.head_size_qk;
+        int d = e - r * s.head_size_qk;
+        int g = blk_q * M_tile + r;
+        ElementQ val = ElementQ(0);
+        if (g < M_pack) {
+          val = Q(g / head_group_q, d, head_q_base + (g % head_group_q), l_coord);
+        }
+        q_scratch[r * s.head_size_qk + d] = val;
+      }
+      sycl::group_barrier(get_work_group<3>());
+
+      auto Q_pk = make_tensor(make_gmem_ptr(q_scratch),
+                              make_layout(make_shape(M_tile, s.head_size_qk),
+                                          make_stride(s.head_size_qk, cute::_1{})));
+      auto O_pk = make_tensor(make_gmem_ptr(o_scratch),
+                              make_layout(make_shape(M_tile, s.head_size_vo),
+                                          make_stride(s.head_size_vo, cute::_1{})));
+      auto blk_qv_pk = make_coord(0, blk_v);
+
+      mainloop(Q_pk,
+               K(_,_,head,l_coord),
+               V(_,_,head,l_coord),
+               tArA, tA_max, tA_sum,
+               blk_qv_pk, 0, k_blocks_pk, k_blocks_pk,
+               thr_id, seq_len_pk, seq_len_kv_cache, idx_b,
+               full_tile_offset, discard_seq_coord,
+               K_cache(_,_,head,l_coord),
+               V_cache(_,_,head,l_coord),
+               p.scale_k, p.scale_v, p.scale_q,
+               typename CollectiveMainloop::TensorScaleQ2D{},
+               typename CollectiveMainloop::TensorScaleK2D{},
+               typename CollectiveMainloop::TensorScaleV2D{},
+               blk_q * M_tile, p.is_causal ? head_group_q : 0);
+
+      if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
+        sycl::group_barrier(get_work_group<3>());
+      }
+
+      CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
+      epilogue(O_pk, tArA, tA_max, tA_sum, blk_qv_pk, thr_id, p.scale_v);
+
+      // Scatter this tile's O rows back into the user tensor.
+      sycl::group_barrier(get_work_group<3>());
+      for (int e = thr_id; e < M_tile * s.head_size_vo; e += num_threads) {
+        int r = e / s.head_size_vo;
+        int d = e - r * s.head_size_vo;
+        int g = blk_q * M_tile + r;
+        if (g < M_pack) {
+          O(g / head_group_q, d, head_q_base + (g % head_group_q), l_coord) =
+              o_scratch[r * s.head_size_vo + d];
+        }
+      }
+#else
       if constexpr (BlockScale) {
         auto scale_q = cute::ceil_div(s.head_size_qk, p.group_size);
         auto scale_k = cute::ceil_div(s.head_size_qk, p.group_size);
@@ -391,6 +537,7 @@ public:
       epilogue(O(_,_,head_q,l_coord),
                tArA, tA_max, tA_sum,
                blk_qv, thr_id, p.scale_v);
+#endif
     }
   }
 };
