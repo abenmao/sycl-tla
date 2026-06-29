@@ -43,7 +43,7 @@ namespace detail {
 struct EmptyDivmod {};
 }
 
-template <bool OneBatch = false, bool NoGQA = false, bool GqaFusion = false>
+template <bool OneBatch = false, bool NoGQA = false, bool CausalMask = false, bool GqaFusion = false>
 struct XeFHMAIndividualTileScheduler {
   static constexpr bool kGqaFusion = GqaFusion;
   using NumHeadsDivmod   = cute::conditional_t<OneBatch, detail::EmptyDivmod, FastDivmod>;
@@ -68,10 +68,22 @@ struct XeFHMAIndividualTileScheduler {
       TileShape const& tile_shape)
   {
     using namespace cute;
+
     int heads_in_grid = GqaFusion ? shape.num_heads_kv : shape.num_heads_q;
-    dim3 grid(size(ceil_div(shape.head_size_vo, get<1>(tile_shape))),     // V
-              size(ceil_div(shape.seq_len_qo,   get<0>(tile_shape))),     // Q
-              size(shape.batch * heads_in_grid));                         // (h,b) -- split later
+
+    dim3 grid;
+    if constexpr (CausalMask) {
+      // Causal: grid layout (V, batch*heads, Q) groups all heads for the same
+      // Q tile adjacent, enabling wave-level load balancing under causal mask.
+      grid = dim3(size(ceil_div(shape.head_size_vo, get<1>(tile_shape))),   // V
+            size(shape.batch * heads_in_grid),                         // (h,b)
+                  size(ceil_div(shape.seq_len_qo,   get<0>(tile_shape))));  // Q
+    } else {
+      // Non-causal: original grid layout (V, Q, batch*heads).
+      grid = dim3(size(ceil_div(shape.head_size_vo, get<1>(tile_shape))),   // V
+                  size(ceil_div(shape.seq_len_qo,   get<0>(tile_shape))),   // Q
+            size(shape.batch * heads_in_grid));                        // (h,b)
+    }
     Params p{};
     p.grid = grid;
     p.gqa_group_size = shape.num_heads_q / shape.num_heads_kv;
@@ -99,15 +111,33 @@ struct XeFHMAIndividualTileScheduler {
     using namespace cute;
     int head;
     int idx_b;
-    if constexpr (OneBatch) {
-      // Single batch: grid.z == num_heads. No divmod needed.
-      head  = BlockIdxZ();
-      idx_b = 0;
+    if constexpr (CausalMask) {
+      // Causal grid layout: (V, batch*heads, Q).
+      if constexpr (OneBatch) {
+        // Single batch: grid.y == num_heads_q. No divmod needed.
+        head  = BlockIdxY();
+        idx_b = 0;
+      } else {
+        idx_b = BlockIdxY();
+        params.divmod_num_heads(idx_b, head, idx_b);
+      }
+      // Reverse Q dispatch: last Q tile first (causal mask: later Q tiles have more K-blocks)
+      int q_tile = params.grid.z - 1 - BlockIdxZ();
+      return make_coord(q_tile, BlockIdxX(), head, idx_b);
     } else {
-      idx_b = BlockIdxZ();
-      params.divmod_num_heads(idx_b, head, idx_b);
+      // Non-causal grid layout: (V, Q, batch*heads).
+      if constexpr (OneBatch) {
+        // Single batch: grid.z == num_heads_q. No divmod needed.
+        head  = BlockIdxZ();
+        idx_b = 0;
+      } else {
+        idx_b = BlockIdxZ();
+        params.divmod_num_heads(idx_b, head, idx_b);
+      }
+      // Reverse Q dispatch: last Q tile first.
+      int q_tile = params.grid.y - 1 - BlockIdxY();
+      return make_coord(q_tile, BlockIdxX(), head, idx_b);
     }
-    return make_coord(params.grid.y - 1 - BlockIdxY(), BlockIdxX(), head, idx_b);
   }
 
   CUTLASS_DEVICE

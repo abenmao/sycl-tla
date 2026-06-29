@@ -121,16 +121,20 @@ int main(int argc, const char **argv) {
   using ShapeQK = Shape<_512, _64, _128>;
 #else
   using ShapeQK = Shape<_512, _64, _64>;
-  using ShapeQK4 = Shape<_32, _64, _64>;
 #endif
   using ShapePV = Shape<_512, _64, _64>;
   using ShapeOut = Shape<_512, _128>;
   using SubgroupLayoutQK = Layout<Shape<_32, _1, _1>>;
 
-  using ShapeQK4 = Shape<_32, _64, _64>;
-  using ShapePV4 = Shape<_32, _64, _64>;
-  using ShapeOut4 = Shape<_32, _128>;
-  using SubgroupLayoutQK4 = Layout<Shape<_4, _1, _1>>;
+  using ShapeQK_Causal = Shape<_256, _64, _64>;
+  using ShapePV_Causal = Shape<_256, _64, _64>;
+  using ShapeOut_Causal = Shape<_256, _128>;
+  using SubgroupLayoutQK_Causal = Layout<Shape<_16, _1, _1>>;
+
+  using ShapeQK4 = Shape<_128, _64, _64>;
+  using ShapePV4 = Shape<_128, _64, _64>;
+  using ShapeOut4 = Shape<_128, _128>;
+  using SubgroupLayoutQK4 = Layout<Shape<_8, _1, _1>>;
 #endif
 #elif HEAD_DIM == 192
   using ShapeQK = Shape<_256, _64, _32>;
@@ -252,6 +256,7 @@ int main(int argc, const char **argv) {
 
 #undef FMHA_RUN_Q
 #else
+
 #if PERSISTENT
   if (options.use_paged_kv || options.seq_len_kv_cache > 0) {
     std::cerr << "Error: Persistent kernel does not support paged/cached KV cache (use_paged_kv or seq_len_kv_cache > 0)." << std::endl;
@@ -267,13 +272,21 @@ int main(int argc, const char **argv) {
 
   using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
 
-  using FMHACausal    = FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
+  using FMHACausal    = FMHAConfig<true, false, ShapeQK_Causal, ShapePV_Causal, ShapeOut_Causal, SubgroupLayoutQK_Causal, void, PipelineStages, ElementQ, ElementK, ElementV>;
   using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
 
   using FMHACausal4    = FMHAConfig<true, false, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4, void, PipelineStages, ElementQ, ElementK, ElementV>;
   using FMHANonCausal4 = FMHAConfig<false, false, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4, void, PipelineStages, ElementQ, ElementK, ElementV>;
+
+  // Adaptive smaller Q tile to ensure >=2 waves: if too few WGs with BLK_Q=256,
+  // use BLK_Q=128 for more waves and finer scheduling granularity.
+  const int num_xe_cores = cutlass::KernelHardwareInfo::query_device_multiprocessor_count();
+  int num_q_tiles_256 = (options.seq_len_qo + 255) / 256;
+  int total_wgs_256 = num_q_tiles_256 * options.num_heads_q * options.batch;
+  bool use_small = options.seq_len_qo < 512 || total_wgs_256 < 2 * num_xe_cores;
+
   if (options.is_causal) {
-    if (options.seq_len_qo <= 256) {
+    if (use_small) {
       if (options.varlen) {
         return FMHACausal4::template run<true, false, false, Scheduler>(options);
       } else {
@@ -286,7 +299,7 @@ int main(int argc, const char **argv) {
       return FMHACausal::template run<false, false, false, Scheduler>(options);
     }
   } else {
-    if (options.seq_len_qo <= 256) {
+    if (options.seq_len_qo < 512) {
       if (options.varlen) {
         return FMHANonCausal4::template run<true, false, false, Scheduler>(options);
       } else {

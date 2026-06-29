@@ -117,6 +117,16 @@ int main(int argc, const char **argv) {
   using ShapePV = Shape<_512, _64, _64>;
   using ShapeOut = Shape<_512, _128>;
   using SubgroupLayoutQK = Layout<Shape<_32, _1, _1>>;
+
+  using ShapeQK_Causal = Shape<_256, _64, _64>;
+  using ShapePV_Causal = Shape<_256, _64, _64>;
+  using ShapeOut_Causal = Shape<_256, _128>;
+  using SubgroupLayoutQK_Causal = Layout<Shape<_16, _1, _1>>;
+
+  using ShapeQK4 = Shape<_128, _64, _64>;
+  using ShapePV4 = Shape<_128, _64, _64>;
+  using ShapeOut4 = Shape<_128, _128>;
+  using SubgroupLayoutQK4 = Layout<Shape<_8, _1, _1>>;
 #endif
 #elif HEAD_DIM == 192
   using ShapeQK = Shape<_256, _64, _32>;
@@ -234,11 +244,46 @@ int main(int argc, const char **argv) {
 
 #undef FMHA_RUN_Q
 #else
-  // Directly instantiate only CachedKV=true, PagedKV=false kernels.
+  // Directly instantiate only CachedKV=true kernels.
   // Causal and VarLen are dispatched at runtime.
   // BlockScale (mxfp) is not supported with CachedKV.
   using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
 
+#if HEAD_DIM == 128 && defined(PREFILL) && !(defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)) && (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+  // CRI causal: adaptive Q tile selection to ensure >=2 waves. If too few WGs
+  // with BLK_Q=256, use BLK_Q=128 for more waves and finer scheduling granularity.
+  using FMHACausal     = FMHAConfig<true, false, ShapeQK_Causal, ShapePV_Causal, ShapeOut_Causal, SubgroupLayoutQK_Causal, void, PipelineStages, ElementQ, ElementK, ElementV>;
+  using FMHANonCausal  = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
+  using FMHACausal4    = FMHAConfig<true, false, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4, void, PipelineStages, ElementQ, ElementK, ElementV>;
+  using FMHANonCausal4 = FMHAConfig<false, false, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4, void, PipelineStages, ElementQ, ElementK, ElementV>;
+
+  const int num_xe_cores = cutlass::KernelHardwareInfo::query_device_multiprocessor_count();
+  int num_q_tiles_256 = (options.seq_len_qo + 255) / 256;
+  int total_wgs_256 = num_q_tiles_256 * options.num_heads_q * options.batch;
+  bool use_small = options.seq_len_qo < 512 || total_wgs_256 < 2 * num_xe_cores;
+
+#define FMHA_DISPATCH_PAGED(CFG)                                          \
+  ((options.use_paged_kv && options.varlen)                              \
+     ? CFG::template run<true, true, true, Scheduler>(options)           \
+   : (options.use_paged_kv && !options.varlen)                          \
+     ? CFG::template run<false, true, true, Scheduler>(options)          \
+   : (!options.use_paged_kv && options.varlen)                          \
+     ? CFG::template run<true, true, false, Scheduler>(options)          \
+     : CFG::template run<false, true, false, Scheduler>(options))
+
+  if (options.is_causal) {
+    if (use_small) {
+      return FMHA_DISPATCH_PAGED(FMHACausal4);
+    }
+    return FMHA_DISPATCH_PAGED(FMHACausal);
+  } else {
+    if (options.seq_len_qo < 512) {
+      return FMHA_DISPATCH_PAGED(FMHANonCausal4);
+    }
+    return FMHA_DISPATCH_PAGED(FMHANonCausal);
+  }
+#undef FMHA_DISPATCH_PAGED
+#else
   using FMHACausal    = FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
   using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
 
@@ -263,5 +308,6 @@ int main(int argc, const char **argv) {
       return FMHANonCausal::template run<false, true, false, Scheduler>(options);
     }
   }
+#endif
 #endif
 }
