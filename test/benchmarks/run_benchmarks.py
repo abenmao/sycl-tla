@@ -41,23 +41,23 @@ from utils.grafana_push import push_results
 TEST_SUITES = [
     {
         "name": "gemm_sycl",
-        "executable": "./benchmarks/gemm/cutlass_benchmarks_gemm_sycl",
-        "config_file": "../benchmarks/device/bmg/input_files/bmg_small_input.in",
+        "executable": "./benchmarks/00_gemm/cutlass_benchmarks_gemm_sycl",
+        "config_file": "../benchmarks/config_files/00_gemm/bmg/small.in",
     },
     {
         "name": "flash_attention_prefill",
-        "executable": "./benchmarks/flash_attention/cutlass_benchmarks_flash_attention_prefill_xe",
-        "config_file": "../benchmarks/device/bmg/input_files/input_flash_attention_prefill_bf16.in",
+        "executable": "./benchmarks/02_flash_attention/cutlass_benchmarks_flash_attention_prefill_xe",
+        "config_file": "../benchmarks/config_files/02_flash_attention/bmg/prefill/bf16.in",
     },
     {
         "name": "flash_attention_decode",
-        "executable": "./benchmarks/flash_attention/cutlass_benchmarks_flash_attention_decode_xe",
-        "config_file": "../benchmarks/device/bmg/input_files/input_flash_attention_decode_bf16.in",
+        "executable": "./benchmarks/02_flash_attention/cutlass_benchmarks_flash_attention_decode_xe",
+        "config_file": "../benchmarks/config_files/02_flash_attention/bmg/decode/bf16.in",
     },
     {
         "name": "cutlass_benchmarks_gemm_sycl_legacy",
-        "executable": "./benchmarks/gemm/legacy/cutlass_benchmarks_gemm_sycl_legacy",
-        "config_file": "../benchmarks/device/bmg/input_files/all_in_one.in",
+        "executable": "./benchmarks/00_gemm/legacy/cutlass_benchmarks_gemm_sycl_legacy",
+        "config_file": "../benchmarks/config_files/00_gemm/bmg/legacy/all_in_one.in",
     }
 ]
 

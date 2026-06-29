@@ -107,7 +107,7 @@ int main(int argc, const char** argv) {
   /* If the user supplied any shape flag on the CLI, honor it and run a
    * single case with the parsed Options. Otherwise iterate the hard-coded
    * sweep table below (mirroring the BF16 entries from
-   * benchmarks/device/cri/input_files/input_gdn_bf16.in). */
+   * benchmarks/config_files/03_gdn/cri/bf16.in). */
   if (base_options.shape_overridden) {
     std::cout << "\n========================================================\n"
               << " GDN case (CLI): batch=" << base_options.batch

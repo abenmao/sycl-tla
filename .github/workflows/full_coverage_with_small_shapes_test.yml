@@ -384,7 +384,7 @@ jobs:
           export CC=icx
           export CXX=icpx
           export CUTLASS_SYCL_PROFILING_ENABLED=ON
-          export LD_LIBRARY_PATH=${BUILD_DIR}/benchmarks/flash_attention:${BUILD_DIR}/benchmarks/flash_attention/legacy/flash_attention_decode:${BUILD_DIR}/deps/oneMKL/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+          export LD_LIBRARY_PATH=${BUILD_DIR}/benchmarks/02_flash_attention:${BUILD_DIR}/benchmarks/02_flash_attention/legacy/flash_attention_decode:${BUILD_DIR}/deps/oneMKL/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
           # Persist environment variables to following steps 
           env >> $GITHUB_ENV
           which $CXX

@@ -413,7 +413,7 @@ jobs:
           export CUTLASS_SYCL_PROFILING_ENABLED=ON
           # Runtime libs needed by benchmarks (FA shared libs + oneMKL).
           # Safe to set unconditionally — paths that don't exist are harmlessly ignored.
-          export LD_LIBRARY_PATH=${BUILD_DIR:-build}/benchmarks/flash_attention:${BUILD_DIR:-build}/benchmarks/flash_attention/legacy/flash_attention_decode:${BUILD_DIR:-build}/deps/oneMKL/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+          export LD_LIBRARY_PATH=${BUILD_DIR:-build}/benchmarks/02_flash_attention:${BUILD_DIR:-build}/benchmarks/02_flash_attention/legacy/flash_attention_decode:${BUILD_DIR:-build}/deps/oneMKL/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
           # Persist environment variables to following steps 
           env >> $GITHUB_ENV
           which $CXX

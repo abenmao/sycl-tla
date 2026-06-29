@@ -17,7 +17,7 @@
   Consumers
   ---------
     - examples/14_xe35_gdn_attention/xe35_gdn_attention_perf.hpp (re-exports these)
-    - benchmarks/gdn/benchmark_runner.hpp (optional --verify path)
+    - benchmarks/applications/03_gdn/benchmark_runner.hpp (optional --verify path)
     - test/unit/gdn_attention/gdn_chunkwise_testbed.hpp
 
   This header is self-contained: it carries its own `is_close` so it does not

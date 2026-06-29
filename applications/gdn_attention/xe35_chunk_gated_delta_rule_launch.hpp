@@ -59,7 +59,7 @@ inline cutlass::Status chunk_gated_delta_rule_launch(
   // computations in kernel_launcher (which assume strictly positive
   // num_v_heads / head_*_dim) never see a degenerate problem. Mirrors the
   // shape checks done in the public-API runners in
-  // examples/14_xe35_gdn_attention and benchmarks/gdn.
+  // examples/14_xe35_gdn_attention and benchmarks/applications/03_gdn.
   if (args.num_k_heads <= 0 || args.num_v_heads <= 0 ||
       args.head_k_dim <= 0 || args.head_v_dim <= 0) {
     return cutlass::Status::kErrorInvalidProblem;

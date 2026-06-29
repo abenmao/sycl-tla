@@ -50,7 +50,7 @@ consumers drive and validate it:
 | Consumer | Path | Role |
 |---|---|---|
 | Example | [`examples/14_xe35_gdn_attention/`](../../../examples/14_xe35_gdn_attention) | Driver + runner; verifies against the shared host reference |
-| Benchmark | [`benchmarks/gdn/`](../../../benchmarks/gdn) | Google Benchmark harness + configuration sweep |
+| Benchmark | [`benchmarks/applications/03_gdn/`](../../../benchmarks/applications/03_gdn) | Google Benchmark harness + configuration sweep |
 | Unit test | [`test/unit/gdn_attention/`](../../../test/unit/gdn_attention) | GoogleTest coverage (`cutlass_test_unit_gdn_attention_chunkwise`) |
 
 See the full [file map](#file-map) below for every header and its purpose.
@@ -461,7 +461,7 @@ the public header.
   ─────────                              ─────────────────────────────────────────
 
   examples/14_xe35_gdn_attention ─┐
-  benchmarks/gdn ─────────────────┼─include─▶ xe35_chunk_gated_delta_rule_launch.hpp
+  benchmarks/applications/03_gdn ──┼─include─▶ xe35_chunk_gated_delta_rule_launch.hpp
   test/unit/gdn_attention ────────┘            (inline launcher: validate + dispatch)
                                                   │ includes
                                                   ▼
@@ -486,5 +486,5 @@ the public header.
 | [xe35_gdn_attention_stage_references.hpp](../../../tools/util/include/cutlass/util/reference/host/xe35_gdn_attention_stage_references.hpp) | Per-stage host reference implementations (in `cutlass/util/reference/host/`) shared by the example and unit test |
 | [xe35_gdn_attention_compare.hpp](../../../tools/util/include/cutlass/util/reference/host/xe35_gdn_attention_compare.hpp) | Host verification comparator (`compare_with_stats`/`print_compare_stats`, in `cutlass/util/reference/host/`) used by the example runner |
 | [examples/14_xe35_gdn_attention/](../../../examples/14_xe35_gdn_attention) | Example driver, runner, and perf helpers (verifies via the shared host reference above) |
-| [benchmarks/gdn/](../../../benchmarks/gdn) | Google Benchmark harness, configuration sweep |
+| [benchmarks/applications/03_gdn/](../../../benchmarks/applications/03_gdn) | Google Benchmark harness, configuration sweep |
 | [test/unit/gdn_attention/](../../../test/unit/gdn_attention) | GoogleTest unit coverage (`cutlass_test_unit_gdn_attention_chunkwise`) |

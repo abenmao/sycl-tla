@@ -1327,7 +1327,9 @@ endif()
 
 if (CUTLASS_ENABLE_BENCHMARKS)
   include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/googlebenchmark.cmake)
-  add_subdirectory(benchmarks)
+  # Use binary dir "benchmarks" so the Ninja aggregate target is "benchmarks/all"
+  # while keeping the source layout under benchmarks/applications/.
+  add_subdirectory(benchmarks/applications benchmarks)
 endif()
 
 if (CUTLASS_INSTALL_TESTS)
