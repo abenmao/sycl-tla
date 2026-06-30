@@ -1,6 +1,5 @@
-/***************************************************************************************************
- * Copyright (c) 2024 - 2024 Codeplay Software Ltd. All rights reserved.
- * Copyright (C) 2025 - 2026 Intel Corporation, All rights reserved.
+/****************************************************************************************************
+ * Copyright (C) 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,8 +27,28 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- **************************************************************************************************/
+ ***************************************************************************************************/
 
-#pragma once
+#include "benchmarks_sycl.hpp"
 
-void register_gemm_benchmarks();
+void register_gemm_benchmarks_bf16();
+void register_gemm_benchmarks_fp16();
+void register_gemm_benchmarks_fp32();
+void register_gemm_benchmarks_tf32();
+void register_gemm_benchmarks_e4m3_native();
+void register_gemm_benchmarks_e4m3_block_scaled();
+void register_gemm_benchmarks_e5m2_native();
+void register_gemm_benchmarks_e5m2_block_scaled();
+void register_gemm_benchmarks_e2m1();
+
+void register_gemm_benchmarks() {
+  register_gemm_benchmarks_bf16();
+  register_gemm_benchmarks_fp16();
+  register_gemm_benchmarks_fp32();
+  register_gemm_benchmarks_tf32();
+  register_gemm_benchmarks_e4m3_native();
+  register_gemm_benchmarks_e4m3_block_scaled();
+  register_gemm_benchmarks_e5m2_native();
+  register_gemm_benchmarks_e5m2_block_scaled();
+  register_gemm_benchmarks_e2m1();
+}

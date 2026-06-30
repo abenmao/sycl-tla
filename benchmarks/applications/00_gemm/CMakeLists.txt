@@ -52,6 +52,16 @@ if(SYCL_INTEL_TARGET)
 cutlass_benchmark_add_executable(
     cutlass_benchmarks_gemm_sycl
     main.cpp
+    benchmarks_sycl_register.cpp
+    benchmarks_sycl_bf16.cpp
+    benchmarks_sycl_fp16.cpp
+    benchmarks_sycl_fp32.cpp
+    benchmarks_sycl_tf32.cpp
+    benchmarks_sycl_e4m3_native.cpp
+    benchmarks_sycl_e4m3_block_scaled.cpp
+    benchmarks_sycl_e5m2_native.cpp
+    benchmarks_sycl_e5m2_block_scaled.cpp
+    benchmarks_sycl_e2m1.cpp
     SUITE cutlass_benchmarks_gemm
     TEST_COMMAND_OPTIONS
     ${GEMM_CONFIG_ARGS}
