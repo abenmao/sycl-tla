@@ -13,31 +13,41 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Big-shape builds are offloaded to build server #1 "Hermes"
-  # (shliclel4165, 224 threads / ~500 GB RAM). The small-shape workflow uses
-  # build server #2 "Atlas"; splitting the two shapes across two servers
-  # load-balances the CI compile traffic.
-  BUILD_SERVER_NAME: "Hermes"           # build server #1 (big-shape builds)
+  # Offload targets per GPU:
+  #   BMG -> Hermes, failing over to Atlas only if Hermes is unreachable.
+  #   PVC -> first server in PVC_BUILD_SERVERS with free RAM >= its budget
+  #          (Atlas first, then Hyperion).
+  # Each server's budget drives compile parallelism (global -j = budget/5, heavy
+  # flash-attention pool = budget/10) and its own admission-gate threshold.
+  BUILD_SERVER_NAME: "Hermes"           # BMG default (overridden per GPU at runtime)
   BUILD_SERVER: "shliclel4165.sh.intel.com"
   BUILD_SERVER_USER: "gta"
-  # Per-build memory budget on the build server. Remote compile parallelism
-  # (global -j = budget/5, heavy flash-attention pool = budget/10) and the
-  # admission gate's free-memory threshold are all derived from this one value.
   BUILD_MEM_BUDGET_GB: "224"
-  # BMG common-shape failover target. Server choice is by reachability, not
-  # load: we only move off Hermes if Hermes is unreachable (a busy-but-reachable
-  # Hermes is waited on, not skipped). On Atlas, BMG common shapes get a smaller,
-  # memory-aware budget so Atlas keeps room for its own small-shape traffic:
-  # 256GB when Atlas has > 1TB free, otherwise 196GB.
+  # BMG common-shape failover target, used ONLY when Hermes is unreachable
+  # (reachability-based; a busy-but-reachable Hermes is waited on, not skipped).
+  # On Atlas, BMG common shapes get a smaller, memory-aware budget so Atlas keeps
+  # room for its own small-shape traffic: 256GB if Atlas has >1TB free, else 196.
+  # Host is Atlas's DNS FQDN (its own `hostname -f`, a MAC-derived DDNS name) not
+  # a raw IP, so it survives DHCP/IP changes; "gnr630188" is only a local alias.
   BMG_FAILOVER_NAME: "Atlas"
-  # Atlas's DNS FQDN (its own `hostname -f`, a MAC-derived DDNS name) instead of
-  # a raw IP, so it keeps resolving if Atlas's DHCP lease/IP changes. The short
-  # name "gnr630188" is only a local ssh-config alias and does NOT resolve in DNS.
   BMG_FAILOVER_HOST: "a4bf018cf32e.jf.intel.com"
   BMG_FAILOVER_USER: "gta"
   BMG_FAILOVER_FREE_HI_GB: "1024"
   BMG_FAILOVER_BUDGET_HI_GB: "256"
   BMG_FAILOVER_BUDGET_LO_GB: "196"
+  # PVC candidate pool, tried in order. Rows separated by ';', each row
+  # "NAME HOST USER BUDGET_GB". Kept on ONE line on purpose: a later
+  # `env >> $GITHUB_ENV` would choke on a multi-line value (its 2nd line
+  # would look like an invalid env assignment).
+  # Hosts are DNS FQDNs (each box's own `hostname -f`) not raw IPs, so they
+  # survive IP changes. Atlas is a dedicated build box; Hyperion (pvc125074)
+  # also runs PVC tests, so it is the fallback delegate with a smaller budget.
+  PVC_BUILD_SERVERS: "Atlas a4bf018cf32e.jf.intel.com gta 450;Hyperion pvc125074.jf.intel.com gta 350"
+  # Local/fallback builds size their budget from the runner's own RAM:
+  #   strong local build = RAM * LOCAL_BUILD_MEM_PCT%  (Hyperion 1003G -> ~500)
+  #   fallback build     = RAM * FALLBACK_MEM_PCT%
+  LOCAL_BUILD_MEM_PCT: "50"
+  FALLBACK_MEM_PCT: "90"
   SSH_OPTS: "-o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
   REMOTE_CPU_THRESHOLD: "32"
   REMOTE_RAM_THRESHOLD: "128"
@@ -97,11 +107,13 @@ jobs:
           fi
 
       # ---- Select build server + admission gate ----
-      # Pick a server by reachability, then wait on it for capacity. BMG common
-      # shapes prefer Hermes; if Hermes is unreachable they fail over to Atlas
-      # (with a smaller, memory-aware budget). A reachable-but-busy server is
-      # waited on (up to 3 checks, 15 min apart), not skipped. If no server is
-      # reachable, or the chosen one never frees up, fall back to a local build.
+      # Pick a build server, then wait on it for capacity. BMG prefers Hermes and
+      # fails over to Atlas only if Hermes is unreachable (reachability-based; a
+      # busy-but-reachable Hermes is waited on, not skipped). PVC tries
+      # PVC_BUILD_SERVERS in order (Atlas, then Hyperion) and takes the first with
+      # free RAM >= its budget (capacity-based). Re-checks up to 3x, 15 min apart;
+      # if nothing is admitted, fall back to a local build. The chosen server +
+      # budget are exported to $GITHUB_ENV for the steps that follow.
       - name: Select & Wait for Build Server Capacity
         id: admission
         if: steps.build-strategy.outputs.use_remote == 'true'
@@ -114,51 +126,77 @@ jobs:
               "awk '/MemAvailable/{print int(\$2/1048576)}' /proc/meminfo" 2>/dev/null)
             [ -z "$out" ] && echo -1 || echo "$out"
           }
-          # ---- Select server by reachability ----
-          SEL_NAME=""; SEL_HOST=""; SEL_USER=""; SEL_BUDGET=""; FIRST_FREE=-1
-          HF=$(free_gb "${BUILD_SERVER_USER}" "${BUILD_SERVER}")
-          if [ "$HF" -ge 0 ]; then
-            SEL_NAME="${BUILD_SERVER_NAME}"; SEL_HOST="${BUILD_SERVER}"
-            SEL_USER="${BUILD_SERVER_USER}"; SEL_BUDGET="${BUILD_MEM_BUDGET_GB}"; FIRST_FREE=$HF
-          elif [ "${{ matrix.gpu }}" = "BMG" ]; then
-            echo "${BUILD_SERVER_NAME} (${BUILD_SERVER}) unreachable; failing over to ${BMG_FAILOVER_NAME}."
-            AF=$(free_gb "${BMG_FAILOVER_USER}" "${BMG_FAILOVER_HOST}")
-            if [ "$AF" -ge 0 ]; then
-              SEL_NAME="${BMG_FAILOVER_NAME}"; SEL_HOST="${BMG_FAILOVER_HOST}"
-              SEL_USER="${BMG_FAILOVER_USER}"; FIRST_FREE=$AF
-              if [ "$AF" -gt "${BMG_FAILOVER_FREE_HI_GB}" ]; then
-                SEL_BUDGET="${BMG_FAILOVER_BUDGET_HI_GB}"
-              else
-                SEL_BUDGET="${BMG_FAILOVER_BUDGET_LO_GB}"
-              fi
-            fi
-          fi
-          # ---- Wait on the selected server for capacity ----
+          CHECKS=3
+          INTERVAL_MIN=15
           admitted=false
-          if [ -n "$SEL_NAME" ]; then
-            echo "Selected build server: ${SEL_NAME} (${SEL_HOST}), budget ${SEL_BUDGET}GB"
-            {
-              echo "BUILD_SERVER_NAME=${SEL_NAME}"
-              echo "BUILD_SERVER=${SEL_HOST}"
-              echo "BUILD_SERVER_USER=${SEL_USER}"
-              echo "BUILD_MEM_BUDGET_GB=${SEL_BUDGET}"
-            } >> $GITHUB_ENV
-            CHECKS=3
-            INTERVAL_MIN=15
+          if [ "${{ matrix.gpu }}" = "PVC" ]; then
+            # ---- PVC: capacity-based pool selection (Atlas, then Hyperion) ----
             for i in $(seq 1 $CHECKS); do
-              if [ "$i" -eq 1 ]; then FREE_GB=$FIRST_FREE; else FREE_GB=$(free_gb "${SEL_USER}" "${SEL_HOST}"); fi
-              echo "Capacity check ${i}/${CHECKS}: ${SEL_NAME} (${SEL_HOST}) MemAvailable=${FREE_GB}GB (gate ${SEL_BUDGET}GB)"
-              if [ "${FREE_GB:-0}" -ge "$SEL_BUDGET" ]; then
-                admitted=true
-                break
-              fi
+              while read -r NAME HOST RUSER BUDGET; do
+                [ -z "$NAME" ] && continue
+                FREE_GB=$(free_gb "$RUSER" "$HOST")
+                echo "Check ${i}/${CHECKS}: ${NAME} (${HOST}) MemAvailable=${FREE_GB}GB (gate ${BUDGET}GB)"
+                if [ "${FREE_GB:-0}" -ge "$BUDGET" ]; then
+                  echo "Selected build server: ${NAME} (${HOST}), budget ${BUDGET}GB"
+                  {
+                    echo "BUILD_SERVER_NAME=${NAME}"
+                    echo "BUILD_SERVER=${HOST}"
+                    echo "BUILD_SERVER_USER=${RUSER}"
+                    echo "BUILD_MEM_BUDGET_GB=${BUDGET}"
+                  } >> $GITHUB_ENV
+                  admitted=true
+                  break
+                fi
+              done <<< "$(echo "${PVC_BUILD_SERVERS}" | tr ';' '\n')"
+              [ "$admitted" = "true" ] && break
               if [ "$i" -lt "$CHECKS" ]; then
-                echo "Below gate; waiting ${INTERVAL_MIN}min before recheck..."
+                echo "All candidates below gate; waiting ${INTERVAL_MIN}min before recheck..."
                 sleep $((INTERVAL_MIN * 60))
               fi
             done
           else
-            echo "No build server reachable."
+            # ---- BMG: reachability failover (Hermes; Atlas only if Hermes unreachable) ----
+            SEL_NAME=""; SEL_HOST=""; SEL_USER=""; SEL_BUDGET=""; FIRST_FREE=-1
+            HF=$(free_gb "${BUILD_SERVER_USER}" "${BUILD_SERVER}")
+            if [ "$HF" -ge 0 ]; then
+              SEL_NAME="${BUILD_SERVER_NAME}"; SEL_HOST="${BUILD_SERVER}"
+              SEL_USER="${BUILD_SERVER_USER}"; SEL_BUDGET="${BUILD_MEM_BUDGET_GB}"; FIRST_FREE=$HF
+            else
+              echo "${BUILD_SERVER_NAME} (${BUILD_SERVER}) unreachable; failing over to ${BMG_FAILOVER_NAME}."
+              AF=$(free_gb "${BMG_FAILOVER_USER}" "${BMG_FAILOVER_HOST}")
+              if [ "$AF" -ge 0 ]; then
+                SEL_NAME="${BMG_FAILOVER_NAME}"; SEL_HOST="${BMG_FAILOVER_HOST}"
+                SEL_USER="${BMG_FAILOVER_USER}"; FIRST_FREE=$AF
+                if [ "$AF" -gt "${BMG_FAILOVER_FREE_HI_GB}" ]; then
+                  SEL_BUDGET="${BMG_FAILOVER_BUDGET_HI_GB}"
+                else
+                  SEL_BUDGET="${BMG_FAILOVER_BUDGET_LO_GB}"
+                fi
+              fi
+            fi
+            if [ -n "$SEL_NAME" ]; then
+              echo "Selected build server: ${SEL_NAME} (${SEL_HOST}), budget ${SEL_BUDGET}GB"
+              {
+                echo "BUILD_SERVER_NAME=${SEL_NAME}"
+                echo "BUILD_SERVER=${SEL_HOST}"
+                echo "BUILD_SERVER_USER=${SEL_USER}"
+                echo "BUILD_MEM_BUDGET_GB=${SEL_BUDGET}"
+              } >> $GITHUB_ENV
+              for i in $(seq 1 $CHECKS); do
+                if [ "$i" -eq 1 ]; then FREE_GB=$FIRST_FREE; else FREE_GB=$(free_gb "${SEL_USER}" "${SEL_HOST}"); fi
+                echo "Capacity check ${i}/${CHECKS}: ${SEL_NAME} (${SEL_HOST}) MemAvailable=${FREE_GB}GB (gate ${SEL_BUDGET}GB)"
+                if [ "${FREE_GB:-0}" -ge "$SEL_BUDGET" ]; then
+                  admitted=true
+                  break
+                fi
+                if [ "$i" -lt "$CHECKS" ]; then
+                  echo "Below gate; waiting ${INTERVAL_MIN}min before recheck..."
+                  sleep $((INTERVAL_MIN * 60))
+                fi
+              done
+            else
+              echo "No build server reachable."
+            fi
           fi
           echo "admitted=${admitted}" >> $GITHUB_OUTPUT
           if [ "$admitted" != "true" ]; then
@@ -169,7 +207,7 @@ jobs:
         id: remote-build
         if: steps.build-strategy.outputs.use_remote == 'true' && steps.admission.outputs.admitted == 'true'
         continue-on-error: true
-        timeout-minutes: ${{ env.BUILD_STEP_TIMEOUT_MIN }}
+        timeout-minutes: ${{ fromJSON(env.BUILD_STEP_TIMEOUT_MIN) }}
         shell: bash
         run: |
           BUILD_ID="${{ github.run_id }}-common-${{ runner.name }}-${{ github.run_attempt }}"
@@ -379,20 +417,25 @@ jobs:
              [ -f examples/06_bmg_flash_attention/CMakeLists.txt ]; then
             cat /dev/null > examples/06_bmg_flash_attention/CMakeLists.txt
           fi
-          # Limit ninja parallelism based on available RAM (~5GB per compile/link job)
+          # Budget from the runner's own RAM (RAM * FALLBACK_MEM_PCT%); same
+          # J=budget/5, heavy=budget/10 as the remote path so every build path is
+          # capped the same way.
           RAM_GB=$(awk '/MemTotal/{print int($2/1024/1024)}' /proc/meminfo)
-          NINJA_JOBS=$(( RAM_GB / 5 ))
+          BUDGET_GB=$(( RAM_GB * FALLBACK_MEM_PCT / 100 ))
+          NINJA_JOBS=$(( BUDGET_GB / 5 ))
+          HEAVY_J=$(( BUDGET_GB / 10 ))
           [ "$NINJA_JOBS" -lt 1 ] && NINJA_JOBS=1
-          [ "$NINJA_JOBS" -gt 10 ] && NINJA_JOBS=10
+          [ "$HEAVY_J" -lt 1 ] && HEAVY_J=1
           [ "$NINJA_JOBS" -gt "$(nproc)" ] && NINJA_JOBS=$(nproc)
-          echo "Fallback build: RAM=${RAM_GB}GB, using -j${NINJA_JOBS}"
+          echo "Fallback build: RAM=${RAM_GB}GB budget=${BUDGET_GB}GB -j${NINJA_JOBS} heavy=${HEAVY_J}"
           mkdir -p build && cd build
           cmake .. -G Ninja \
             -DCUTLASS_ENABLE_SYCL=ON \
             -DDPCPP_SYCL_TARGET=${{ matrix.sycl_target }} \
             -DCUTLASS_ENABLE_BENCHMARKS=ON \
             -DCUTLASS_SYCL_PROFILING_ENABLED=ON \
-            -DCUTLASS_SYCL_RUNNING_CI=ON
+            -DCUTLASS_SYCL_RUNNING_CI=ON \
+            -DCUTLASS_HEAVY_BUILD_JOBS=${HEAVY_J}
           ninja -j${NINJA_JOBS} test/all
           ninja -j${NINJA_JOBS} examples/all
           ninja -j${NINJA_JOBS} benchmarks/all
@@ -431,25 +474,39 @@ jobs:
           if [ "${{ matrix.sycl_target }}" = "intel_gpu_bmg_g21" ]; then
             cat /dev/null > examples/06_bmg_flash_attention/CMakeLists.txt
           fi
+          # Cap the local build by a memory budget too (was naked -j$(nproc)).
+          # Budget = RAM * LOCAL_BUILD_MEM_PCT%; J=budget/5, heavy=budget/10.
+          # Hyperion (1003G) -> budget ~500 -> -j100, heavy 50, leaving room for
+          # its own GPU tests and for serving as a fallback delegate.
+          RAM_GB=$(awk '/MemTotal/{print int($2/1024/1024)}' /proc/meminfo)
+          BUDGET_GB=$(( RAM_GB * LOCAL_BUILD_MEM_PCT / 100 ))
+          NINJA_J=$(( BUDGET_GB / 5 ))
+          HEAVY_J=$(( BUDGET_GB / 10 ))
+          [ "$NINJA_J" -lt 1 ] && NINJA_J=1
+          [ "$HEAVY_J" -lt 1 ] && HEAVY_J=1
+          [ "$NINJA_J" -gt "$(nproc)" ] && NINJA_J=$(nproc)
+          echo "Local build: RAM=${RAM_GB}GB budget=${BUDGET_GB}GB -j${NINJA_J} heavy=${HEAVY_J}"
+          echo "NINJA_J=${NINJA_J}" >> $GITHUB_ENV
           mkdir build && cd build
           cmake .. -G Ninja \
             -DCUTLASS_ENABLE_SYCL=ON \
             -DDPCPP_SYCL_TARGET=${{ matrix.sycl_target }} \
             -DCUTLASS_ENABLE_BENCHMARKS=ON \
             -DCUTLASS_SYCL_PROFILING_ENABLED=ON \
-            -DCUTLASS_SYCL_RUNNING_CI=ON
+            -DCUTLASS_SYCL_RUNNING_CI=ON \
+            -DCUTLASS_HEAVY_BUILD_JOBS=${HEAVY_J}
       - name: Build Unit Tests
         if: steps.build-strategy.outputs.use_remote != 'true'
         working-directory: build
         shell: bash
         run: |
-          ninja test/all
+          ninja -j${NINJA_J} test/all
       - name: Build Examples
         if: steps.build-strategy.outputs.use_remote != 'true'
         working-directory: build
         shell: bash
         run: |
-          ninja examples/all
+          ninja -j${NINJA_J} examples/all
 
       # ---- Verify remote build output ----
       - name: Verify Build Output
@@ -488,7 +545,7 @@ jobs:
         working-directory: build
         shell: bash
         run: |
-          ninja benchmarks/all
+          ninja -j${NINJA_J} benchmarks/all
 
       # ---- Common: Run benchmarks ----
       - name: Run Benchmarks

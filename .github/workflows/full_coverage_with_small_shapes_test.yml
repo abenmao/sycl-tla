@@ -116,7 +116,7 @@ jobs:
         id: remote-build
         if: steps.build-strategy.outputs.use_remote == 'true' && steps.admission.outputs.admitted == 'true'
         continue-on-error: true
-        timeout-minutes: ${{ env.BUILD_STEP_TIMEOUT_MIN }}
+        timeout-minutes: ${{ fromJSON(env.BUILD_STEP_TIMEOUT_MIN) }}
         shell: bash
         run: |
           BUILD_ID="${{ github.run_id }}-small-${{ runner.name }}-${{ github.run_attempt }}"
