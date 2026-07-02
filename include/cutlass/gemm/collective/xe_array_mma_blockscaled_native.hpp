@@ -99,7 +99,10 @@ struct CollectiveMma<
                               SmemCopyAtomB_,
                               TransformB_>
 {
-private:
+public:
+  //
+  // Type Aliases
+  //
   using Base = CollectiveMma<MainloopIntelXeXMX16BlockScaled<Stages, cute::Int<GroupSize>, KernelXe>,
                     TileShape_,
                     ElementPairA_,
@@ -116,9 +119,9 @@ private:
                     SmemCopyAtomB_,
                     TransformB_>;
 
-public:
   using DispatchPolicy = MainloopIntelXeXMX16BlockScaledGroup<Stages, cute::Int<GroupSize>, Schedule>;
   using BaseArguments = typename Base::Arguments;
+  using BaseParams = typename Base::Params;
 
   // Forward type aliases from base proxy (which handles native/fallback dispatch)
   using ElementA = typename Base::ElementA;
