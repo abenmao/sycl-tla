@@ -42,6 +42,48 @@ CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_4_128_16);
 CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_8_256_16);
 CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_8_128_16_sg8x16);
 
+// ---- FP32 -> FP32 (tuned memory-bound configs) ----
+using CriGemm_FP32FP32FP32_TileShape_16_128_32 = Shape<_16, _128, _32>;
+using CriGemm_FP32FP32FP32_Tile_16_128_32 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_FP32FP32FP32_TileShape_16_128_32>, Layout<Shape<_1, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGemmFP32FP32FP32_RRR_TileShape_16_128_32 = Gemm_Bench_FP32FP32FP32_RRR<CriGemm_FP32FP32FP32_TileShape_16_128_32, CriGemm_FP32FP32FP32_Tile_16_128_32, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_16_128_32);
+using CriGemm_FP32FP32FP32_TileShape_64_128_32 = Shape<_64, _128, _32>;
+using CriGemm_FP32FP32FP32_Tile_64_128_32 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_FP32FP32FP32_TileShape_64_128_32>, Layout<Shape<_1, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGemmFP32FP32FP32_RRR_TileShape_64_128_32 = Gemm_Bench_FP32FP32FP32_RRR<CriGemm_FP32FP32FP32_TileShape_64_128_32, CriGemm_FP32FP32FP32_Tile_64_128_32, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_64_128_32);
+using CriGemm_FP32FP32FP32_TileShape_192_128_16 = Shape<_192, _128, _16>;
+using CriGemm_FP32FP32FP32_Tile_192_128_16 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_FP32FP32FP32_TileShape_192_128_16>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGemmFP32FP32FP32_RRR_TileShape_192_128_16 = Gemm_Bench_FP32FP32FP32_RRR<CriGemm_FP32FP32FP32_TileShape_192_128_16, CriGemm_FP32FP32FP32_Tile_192_128_16, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_192_128_16);
+using CriGemm_FP32FP32FP32_TileShape_8_128_64 = Shape<_8, _128, _64>;
+using CriGemm_FP32FP32FP32_Tile_8_128_64 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_FP32FP32FP32_TileShape_8_128_64>, Layout<Shape<_1, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGemmFP32FP32FP32_RRR_TileShape_8_128_64 = Gemm_Bench_FP32FP32FP32_RRR<CriGemm_FP32FP32FP32_TileShape_8_128_64, CriGemm_FP32FP32FP32_Tile_8_128_64, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_8_128_64);
+using CriGemm_FP32FP32FP32_Tile_8_256_16_sg8x16 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_FP32FP32FP32_TileShape_8_256_16>, Layout<Shape<_1, _16, _1>, Stride<_16, _1, _0>>>::TiledMMA;
+using CriGemmFP32FP32FP32_RRR_TileShape_8_256_16_sg8x16 = Gemm_Bench_FP32FP32FP32_RRR<CriGemm_FP32FP32FP32_TileShape_8_256_16, CriGemm_FP32FP32FP32_Tile_8_256_16_sg8x16, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_8_256_16_sg8x16);
+using CriGemm_FP32FP32FP32_TileShape_8_128_128 = Shape<_8, _128, _128>;
+
+// ---- FP32 -> FP32 (tuned compute-bound configs) ----
+using CriGemm_FP32FP32FP32_TileShape_128_256_32 = Shape<_128, _256, _32>;
+using CriGemm_FP32FP32FP32_Tile_128_256_32 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_FP32FP32FP32_TileShape_128_256_32>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGemmFP32FP32FP32_RRR_TileShape_128_256_32 = Gemm_Bench_FP32FP32FP32_RRR<CriGemm_FP32FP32FP32_TileShape_128_256_32, CriGemm_FP32FP32FP32_Tile_128_256_32, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_128_256_32);
+using CriGemm_FP32FP32FP32_TileShape_256_256_32 = Shape<_256, _256, _32>;
+using CriGemm_FP32FP32FP32_Tile_256_256_32 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_FP32FP32FP32_TileShape_256_256_32>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGemmFP32FP32FP32_RRR_TileShape_256_256_32 = Gemm_Bench_FP32FP32FP32_RRR<CriGemm_FP32FP32FP32_TileShape_256_256_32, CriGemm_FP32FP32FP32_Tile_256_256_32, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_256_256_32);
+using CriGemm_FP32FP32FP32_Tile_256_128_16_sg64x16 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_FP32FP32FP32_TileShape_256_128_16>, Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriGemmFP32FP32FP32_RRR_TileShape_256_128_16_sg64x16 = Gemm_Bench_FP32FP32FP32_RRR<CriGemm_FP32FP32FP32_TileShape_256_128_16, CriGemm_FP32FP32FP32_Tile_256_128_16_sg64x16, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_256_128_16_sg64x16);
+using CriGemm_FP32FP32FP32_TileShape_256_256_16 = Shape<_256, _256, _16>;
+using CriGemm_FP32FP32FP32_Tile_256_256_16 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_FP32FP32FP32_TileShape_256_256_16>, Layout<Shape<_4, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
+using CriGemmFP32FP32FP32_RRR_TileShape_256_256_16 = Gemm_Bench_FP32FP32FP32_RRR<CriGemm_FP32FP32FP32_TileShape_256_256_16, CriGemm_FP32FP32FP32_Tile_256_256_16, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_256_256_16);
+using CriGemm_FP32FP32FP32_Tile_8_128_128 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_FP32FP32FP32_TileShape_8_128_128>, Layout<Shape<_1, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
+using CriGemmFP32FP32FP32_SplitK2_RRR_TileShape_8_128_128 = Gemm_Bench_FP32FP32FP32_RRR<CriGemm_FP32FP32FP32_TileShape_8_128_128, CriGemm_FP32FP32FP32_Tile_8_128_128, void, void>;
+CUTLASS_CREATE_GEMM_BENCHMARK(CriGemmFP32FP32FP32_SplitK2_RRR_TileShape_8_128_128);
+
 void register_gemm_benchmarks_fp32() {
   CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_512_256_16);
   CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_SplitK2_RRR_TileShape_512_256_16);
@@ -53,4 +95,14 @@ void register_gemm_benchmarks_fp32() {
   CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_4_128_16);
   CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_8_256_16);
   CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_8_128_16_sg8x16);
+  CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_16_128_32);
+  CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_64_128_32);
+  CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_192_128_16);
+  CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_8_128_64);
+  CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_8_256_16_sg8x16);
+  CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_128_256_32);
+  CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_256_256_32);
+  CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_256_128_16_sg64x16);
+  CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_RRR_TileShape_256_256_16);
+  CUTLASS_BENCHMARK(CriGemmFP32FP32FP32_SplitK2_RRR_TileShape_8_128_128);
 }

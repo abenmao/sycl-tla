@@ -53,10 +53,11 @@ using Gemm_Bench_SrcOut = cutlass::gemm::device::GemmConfiguration<
     cutlass::arch::IntelXe,
     Element, cutlass::layout::RowMajor,
     Element, LayoutB,
-    Element, cutlass::layout::RowMajor,
-    float,
+    float, cutlass::layout::RowMajor,
+    Element,
     TileShape, Sched, Tiler,
-    void, void>;
+    void, void,
+    cutlass::epilogue::fusion::LinearCombination<Element, float>>;
 
 template <typename Element, typename LayoutB, typename TileShape, typename Tiler, int Splits>
 struct Gemm_Bench_SrcOut_SplitK :
@@ -861,12 +862,13 @@ using BLockScalingGemm_Bench_SrcOut = cutlass::gemm::device::BlockScalingGemmCon
     cutlass::arch::IntelXe,
     Element, cutlass::layout::RowMajor,
     Element, LayoutB,
-    Element, cutlass::layout::RowMajor,
+    float, cutlass::layout::RowMajor,
     ElementScale,
     cute::Stride<_1, int64_t, int64_t>,
-    float,
+    Element,
     TileShape, Scheduler::Gemm, Tiler,
-    void, void, void, void>;
+    void, void, void, void, _32,
+    cutlass::epilogue::fusion::LinearCombination<Element, float>>;
 
 template <typename Element, typename ElementScale, typename LayoutB, typename TileShape, typename Tiler>
 using BLockScalingGemmNonNative_Bench_SrcOut = cutlass::gemm::device::BlockScalingGemmConfiguration<
@@ -878,7 +880,8 @@ using BLockScalingGemmNonNative_Bench_SrcOut = cutlass::gemm::device::BlockScali
     cute::Stride<_1, int64_t, int64_t>,
     float,
     TileShape, Scheduler::Gemm, Tiler,
-    void, void, void, void, cute::tuple<_1, _1, _32>>;
+    void, void, void, void, cute::tuple<_1, _1, _32>,
+    cutlass::epilogue::fusion::LinearCombination<Element, float>>;
 
 // ---- FP8 (E5M2) -> E5M2 ----
 using CriGemmE5M2E5M2E5M2_SplitK4_RRR_TileShape_512_256_64 =

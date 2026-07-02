@@ -141,10 +141,11 @@ using Gemm_Bench_SrcOut = cutlass::gemm::device::GemmConfiguration<
     cutlass::arch::IntelXe,
     Element, cutlass::layout::RowMajor,
     Element, LayoutB,
-    Element, cutlass::layout::RowMajor,
-    float,
+    float, cutlass::layout::RowMajor,
+    Element,
     TileShape, Sched, Tiler,
-    void, void>;
+    void, void,
+    cutlass::epilogue::fusion::LinearCombination<Element, float>>;
 
 template <typename Element, typename LayoutB, typename TileShape, typename Tiler, int Splits>
 struct Gemm_Bench_SrcOut_SplitK :
