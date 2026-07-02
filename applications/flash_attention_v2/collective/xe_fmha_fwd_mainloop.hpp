@@ -885,18 +885,18 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           Tensor cPgP = make_identity_tensor(make_shape(seq_len, seq_len));
           Tensor gP = local_tile(cPgP, take<0,2>(TileShapeQK{}), make_coord(get<0>(blk_qv), new_k_tile));
           auto cS_thread = thr_mma_qk.partition_C(gP);
+          // Block-style causal mask: build a per-element additive mask
+          // (NaN = keep, -INF = discard) and apply it to the whole score
+          // fragment with a single uniform fmin.
           CUTLASS_PRAGMA_UNROLL
           for (int i = 0; i < tSrS.size(); ++i) {
             int row_idx = get<0>(cS_thread(i));
-            // get<1>(cS_thread(i)) is the new-KV-local column; add seq_len_kv_cache
-            // to get the logical full-sequence column coordinate.
-            int col_idx = get<1>(cS_thread(i)) + seq_len_kv_cache;
+            int col_idx = get<1>(cS_thread(i));
             int seq_coord = (gqa_fusion_q_per_head > 0)
                           ? ((q_pos_base + row_idx) % gqa_fusion_q_per_head)
                           : row_idx;
-            if (col_idx - seq_len_kv_cache - full_tile_offset > seq_coord - discard_seq_coord) {
-              tSrS(i) = ElementS(-INFINITY);
-            }
+            bool masked = (col_idx - full_tile_offset) > (seq_coord - discard_seq_coord);
+            tSrS(i) = sycl::fmin(tSrS(i), masked ? ElementS(-INFINITY) : ElementS(sycl::nan(0u)));
           }
         }
       }
