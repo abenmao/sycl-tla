@@ -75,14 +75,15 @@ fi
 # cap (rarely binding). Heavy FA/FMHA TUs are the memory bottleneck, so they get the
 # smaller budget and are throttled via a Ninja job pool (CUTLASS_HEAVY_BUILD_JOBS),
 # while cheap TUs fill the larger global -j.
-#   heavy (FA/FMHA) : MEM_GB / 10   (validated safe ceiling)
+#   heavy (FA/FMHA) : MEM_GB / 12   (extra RAM headroom; wall-clock is DAG-bound, not
+#                                    heavy-pool-bound, so a smaller depth costs ~nothing)
 #   global -j (all) : MEM_GB / 5    (heavy capped above prevents an all-heavy thrash)
 if [[ "$MODE" == "build" ]] && [[ -z "${BUILD_JOBS:-}" ]]; then
     MEM_GB=$(awk '/MemAvailable/ {printf "%d", $2/1024/1024}' /proc/meminfo 2>/dev/null || echo 0)
     CPU_COUNT=$(nproc 2>/dev/null || echo 10)
     if [[ "$MEM_GB" -gt 0 ]]; then
         BUILD_JOBS=$((MEM_GB / 5))
-        HEAVY_JOBS=$((MEM_GB / 10))
+        HEAVY_JOBS=$((MEM_GB / 12))
         [[ "$BUILD_JOBS" -lt 4 ]] && BUILD_JOBS=4
         [[ "$HEAVY_JOBS" -lt 2 ]] && HEAVY_JOBS=2
         # Logical CPU count is only an upper cap (usually not reached).
@@ -234,6 +235,52 @@ setup_environment() {
 }
 
 # ============================================================
+# Selective build/test target lists — SINGLE SOURCE OF TRUTH
+#
+# Each CRI CI suite runs a fixed set of ctest cases; we compile ONLY the
+# CMake targets those cases exercise (instead of the whole tree) and run
+# exactly those cases. Both the build target list and the ctest -R regex
+# are derived from the arrays below, so they can never drift apart.
+#
+# ctest -> build-target mapping (from CMake source):
+#   examples: ctest_examples_<X>  -> target <X>
+#   unit    : ctest_unit_<Y>      -> target cutlass_test_unit_<Y>
+# ============================================================
+EXAMPLES_CTESTS=(
+    ctest_examples_03_bmg_gemm_streamk
+    ctest_examples_04_bmg_grouped_gemm
+    ctest_examples_05_bmg_gemm_with_epilogue_relu
+    ctest_examples_06_bmg_prefill_attention_cachedkv_hdim64
+    ctest_examples_08_bmg_gemm_f8
+    ctest_examples_cute_tutorial_tiled_copy
+    ctest_examples_cute_tutorial_bmg
+    ctest_examples_12_xe35_block_scaled_gemm_e2m1
+    ctest_examples_13_xe35_block_scaled_grouped_gemm_e5m2
+    ctest_examples_06_xe_fmha_fwd_decode_mx_float_e4m3_t_hdim64
+    ctest_examples_06_xe_fmha_fwd_decode_mx_float_e2m1_t_hdim64
+    ctest_examples_14_xe35_gdn_attention_bfloat16
+)
+UT_CTESTS=(
+    ctest_unit_flash_attention_decode_h128_xe
+    ctest_unit_cute_core
+    ctest_unit_flash_attention_prefill_fp8e4m3_fp32_fp32_h96_xe
+    ctest_unit_flash_attention_prefill_fp8e4m3_fp32_fp8e4m3_h96_xe
+    ctest_unit_gemm_device_tensorop_cooperative_xe
+    ctest_unit_gemm_device_tensorop_epilogue_fusion_xe
+    ctest_unit_gemm_device_mixed_input_tensorop_xe
+    ctest_unit_gemm_device_tensorop_xe_group_gemm
+    ctest_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
+    ctest_unit_gdn_attention_chunkwise
+)
+
+# Derive the CMake build targets for each suite from its ctest names.
+examples_targets() { local t; for t in "${EXAMPLES_CTESTS[@]}"; do echo "${t#ctest_examples_}"; done; }
+ut_targets()       { local t; for t in "${UT_CTESTS[@]}";       do echo "cutlass_test_unit_${t#ctest_unit_}"; done; }
+
+# Join the given ctest names into an anchored alternation regex for `ctest -R`.
+ctest_regex() { local IFS='|'; echo "^($*)\$"; }
+
+# ============================================================
 # Mode dispatch
 # ============================================================
 INITIAL_PWD="$(pwd)"
@@ -263,9 +310,46 @@ if [[ "$MODE" == "build" ]]; then
         -DCUTLASS_HEAVY_BUILD_JOBS="${HEAVY_JOBS:-0}" \
         -DCUTLASS_TEST_FOR_CRI=ON
 
+    # Selective compile: only the targets the CRI CI ctest suites actually run,
+    # derived from EXAMPLES_CTESTS / UT_CTESTS above (single source of truth).
+    #
+    # This workflow triggers on several branches (cri, cri_pathfinding,
+    # v0.1.0_next) whose example/test sets differ, so some listed targets may
+    # not exist on the branch being built. Mirror `ctest -R`, which silently
+    # skips regex entries with no matching test: build the targets that exist
+    # on this branch and WARN (do not abort) on the rest. This keeps the
+    # selective build and the targeted ctest run in lock-step across branches.
+    mapfile -t WANTED_TARGETS < <(examples_targets; ut_targets)
+
+    declare -A _known_targets=()
+    while IFS= read -r _t; do
+        [[ -n "$_t" ]] && _known_targets["$_t"]=1
+    done < <(ninja -t targets all 2>/dev/null | cut -d: -f1)
+
+    BUILD_TARGETS=()
+    MISSING_TARGETS=()
+    for _t in "${WANTED_TARGETS[@]}"; do
+        if [[ -n "${_known_targets[$_t]:-}" ]]; then
+            BUILD_TARGETS+=("$_t")
+        else
+            MISSING_TARGETS+=("$_t")
+        fi
+    done
+
+    if [[ "${#MISSING_TARGETS[@]}" -gt 0 ]]; then
+        echo ""
+        echo "WARNING: ${#MISSING_TARGETS[@]} listed target(s) do not exist on this branch and will be skipped (same as ctest -R):"
+        printf '    (skip) %s\n' "${MISSING_TARGETS[@]}"
+    fi
+    if [[ "${#BUILD_TARGETS[@]}" -eq 0 ]]; then
+        echo "ERROR: none of the selective targets exist in this build. Check EXAMPLES_CTESTS / UT_CTESTS against the current branch."
+        exit 1
+    fi
+
     echo ""
-    echo "--- Building (ninja -j${BUILD_JOBS}) ---"
-    cmake --build . -j"${BUILD_JOBS}"
+    echo "--- Building ${#BUILD_TARGETS[@]} selective targets (ninja -j${BUILD_JOBS}) ---"
+    printf '    %s\n' "${BUILD_TARGETS[@]}"
+    cmake --build . --target "${BUILD_TARGETS[@]}" -j"${BUILD_JOBS}"
 
     echo ""
     echo "=== Build complete ==="
@@ -336,12 +420,12 @@ if [[ "$MODE" == "test" ]]; then
         examples)
             echo ""
             echo "--- Running example tests ---"
-            ctest -V -R '^(ctest_examples_03_bmg_gemm_streamk|ctest_examples_04_bmg_grouped_gemm|ctest_examples_05_bmg_gemm_with_epilogue_relu|ctest_examples_06_bmg_prefill_attention_cachedkv_hdim64|ctest_examples_08_bmg_gemm_f8|ctest_examples_cute_tutorial_tiled_copy|ctest_examples_cute_tutorial_bmg|ctest_examples_12_xe35_block_scaled_gemm_e2m1|ctest_examples_13_xe35_block_scaled_grouped_gemm_e5m2|ctest_examples_06_xe_fmha_fwd_decode_mx_float_e4m3_t_hdim64|ctest_examples_06_xe_fmha_fwd_decode_mx_float_e2m1_t_hdim64|ctest_examples_14_xe35_gdn_attention_bfloat16)$' --output-on-failure
+            ctest -V -R "$(ctest_regex "${EXAMPLES_CTESTS[@]}")" --output-on-failure
             ;;
         ut)
             echo ""
             echo "--- Running unit tests ---"
-            ctest -V -R '^(ctest_unit_flash_attention_decode_h128_xe|ctest_unit_cute_core|ctest_unit_flash_attention_prefill_fp8e4m3_fp32_fp32_h96_xe|ctest_unit_flash_attention_prefill_fp8e4m3_fp32_fp8e4m3_h96_xe|ctest_unit_gemm_device_tensorop_cooperative_xe|ctest_unit_gemm_device_tensorop_epilogue_fusion_xe|ctest_unit_gemm_device_mixed_input_tensorop_xe|ctest_unit_gemm_device_tensorop_xe_group_gemm|ctest_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm|ctest_unit_gdn_attention_chunkwise)$' --output-on-failure
+            ctest -V -R "$(ctest_regex "${UT_CTESTS[@]}")" --output-on-failure
             ;;
         # benchmark) — handled by early exit above; add ctest pattern here when ready.
 
