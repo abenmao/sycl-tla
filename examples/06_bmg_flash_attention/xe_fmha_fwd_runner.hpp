@@ -122,10 +122,6 @@ struct Options {
             std::cerr << "Invalid: page_size must be a multiple of 128" << std::endl;
             return;
         }
-        if (seq_len_kv_cache % page_size != 0) {
-            std::cerr << "Invalid: seq_len_kv_cache must be divisible by page_size" << std::endl;
-            return;
-        }
     }
     //TODO: Add seq_len_kv_cache to seq_len_kv, remove this when cached/pagedKV is optimized.
     seq_len_kv += seq_len_kv_cache;

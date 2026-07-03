@@ -87,10 +87,6 @@ struct FMHAOptions {
 
     softmax_scale = 1 / std::sqrt(static_cast<float>(head_size_qk));
 
-    if (seq_len_kv_cache % page_size != 0) {
-      std::cerr << "Invalid: seq_len_kv_cache must be divisible by page_size" << std::endl;
-      return;
-    }
   }
 
   std::string benchmark_name() const {
