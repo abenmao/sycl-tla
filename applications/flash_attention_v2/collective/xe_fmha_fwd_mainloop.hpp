@@ -377,7 +377,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     return params.ptr_page_table[batch_offset + page_idx] * tiles_per_page + tile_in_page;
   }
 
-  template <bool GqaFusion = false, typename QVCoord>
+  template <bool GqaFusion = false, bool disable_V_prefetch = false, typename QVCoord>
   CUTLASS_DEVICE
   void
   operator()(TensorQ2D const& Q_2D,     // (q,d)
@@ -635,10 +635,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
         update_payloads(prepared_pk, kv_stride);
       }
-      CUTLASS_PRAGMA_UNROLL
-      for (int K = 0; K < Stages; K++) {
-        prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
-        update_payloads(prepared_pv, kv_stride);
+      if constexpr (!disable_V_prefetch) {
+        CUTLASS_PRAGMA_UNROLL
+        for (int K = 0; K < Stages; K++) {
+          prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
+          update_payloads(prepared_pv, kv_stride);
+        }
       }
     }
     // Cache K prefetch init, still uses legacy API.
@@ -705,6 +707,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
     constexpr int kAtomsPerD = decltype(get<2>(TileShapeQK{}))::value
                              / decltype(get<2>(typename TiledMMAQK::AtomShape_MNK{}))::value;
+
     /* Main loop body */
     auto mainloop_body = [&](auto cached_k, int K,
                              auto& copy_k_cur, auto& copy_v_cur,
@@ -727,7 +730,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       }
 
       // V prefetch for next iteration (non-cache only; cache prefetch lives below).
-      if constexpr (!is_cache && !GqaFusion) {
+      if constexpr (!is_cache && !GqaFusion && !disable_V_prefetch) {
         prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
         update_payloads(prepared_pv, kv_stride);
       }

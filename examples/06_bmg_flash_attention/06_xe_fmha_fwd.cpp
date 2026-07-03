@@ -131,6 +131,13 @@ int main(int argc, const char **argv) {
   using ShapeOut_Causal = Shape<_256, _128>;
   using SubgroupLayoutQK_Causal = Layout<Shape<_16, _1, _1>>;
 
+  // Best-known short-path tile for 64/8 GQA at 128x128 (prefill, TARGET==35).
+  using ShapeQK8 = Shape<_64, _32, _64>;
+  using ShapePV8 = Shape<_64, _64, _32>;
+  using ShapeOut8 = Shape<_64, _128>;
+  using SubgroupLayoutQK8 = Layout<Shape<_8, _1, _1>>;
+
+  // Keep a separate small-path tile for broader short-sequence coverage.
   using ShapeQK4 = Shape<_128, _64, _64>;
   using ShapePV4 = Shape<_128, _64, _64>;
   using ShapeOut4 = Shape<_128, _128>;
@@ -275,8 +282,11 @@ int main(int argc, const char **argv) {
   using FMHACausal    = FMHAConfig<true, false, ShapeQK_Causal, ShapePV_Causal, ShapeOut_Causal, SubgroupLayoutQK_Causal, void, PipelineStages, ElementQ, ElementK, ElementV>;
   using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
 
-  using FMHACausal4    = FMHAConfig<true, false, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4, void, PipelineStages, ElementQ, ElementK, ElementV>;
-  using FMHANonCausal4 = FMHAConfig<false, false, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4, void, PipelineStages, ElementQ, ElementK, ElementV>;
+  using FMHACausal8    = FMHAConfig<true, false, ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, void, 1, ElementQ, ElementK, ElementV>;
+  using FMHANonCausal8 = FMHAConfig<false, false, ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, void, 1, ElementQ, ElementK, ElementV>;
+
+  using FMHACausal4    = FMHAConfig<true, false, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4, void, 1, ElementQ, ElementK, ElementV>;
+  using FMHANonCausal4 = FMHAConfig<false, false, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4, void, 1, ElementQ, ElementK, ElementV>;
 
   // Adaptive smaller Q tile to ensure >=2 waves: if too few WGs with BLK_Q=256,
   // use BLK_Q=128 for more waves and finer scheduling granularity.
@@ -301,9 +311,9 @@ int main(int argc, const char **argv) {
   } else {
     if (options.seq_len_qo < 512) {
       if (options.varlen) {
-        return FMHANonCausal4::template run<true, false, false, Scheduler>(options);
+        return FMHANonCausal8::template run<true, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false,false,false,false,true>>(options);
       } else {
-        return FMHANonCausal4::template run<false, false, false, Scheduler>(options);
+        return FMHANonCausal8::template run<false, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false,false,false,false,true>>(options);
       }
     }
     if (options.varlen) {

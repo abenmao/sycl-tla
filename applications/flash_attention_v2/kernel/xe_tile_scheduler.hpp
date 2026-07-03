@@ -43,9 +43,10 @@ namespace detail {
 struct EmptyDivmod {};
 }
 
-template <bool OneBatch = false, bool NoGQA = false, bool CausalMask = false, bool GqaFusion = false>
+template <bool OneBatch = false, bool NoGQA = false, bool CausalMask = false, bool GqaFusion = false, bool DisablePrefetchV = false>
 struct XeFHMAIndividualTileScheduler {
   static constexpr bool kGqaFusion = GqaFusion;
+  static constexpr bool kDisablePrefetchV = DisablePrefetchV;
   using NumHeadsDivmod   = cute::conditional_t<OneBatch, detail::EmptyDivmod, FastDivmod>;
   using HeadGroupDivmod  = cute::conditional_t<NoGQA || GqaFusion, detail::EmptyDivmod, FastDivmod>;
 

@@ -324,6 +324,7 @@ public:
       CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
       static constexpr int QK_BLK_M = decltype(get<0>(TileShapeQK{}))::value;
       constexpr bool kGqaFusion = TileScheduler::kGqaFusion;
+      constexpr bool kDisablePrefetchV = TileScheduler::kDisablePrefetchV;
 
       if constexpr (kGqaFusion) {
         const int head_kv = head;
@@ -380,7 +381,7 @@ public:
           FragARow tA_max;
           FragSPartialRow tA_sum;
 
-          mainloop.template operator()<true>(
+          mainloop.template operator()<true, kDisablePrefetchV>(
                   make_gqa_view_q(),
                   K(_,_,head_kv,idx_b),
                   V(_,_,head_kv,idx_b),
@@ -440,7 +441,7 @@ public:
         auto ScaleK_head = ScaleK(_, _, head, l_coord);
         auto ScaleV_head = ScaleV(_, _, head, l_coord);
 
-        mainloop(Q(_,_,head_q,l_coord),
+        mainloop.template operator()<false, kDisablePrefetchV>(Q(_,_,head_q,l_coord),
                  K(_,_,head,l_coord),
                  V(_,_,head,l_coord),
                  tArA, tA_max, tA_sum,
@@ -455,7 +456,7 @@ public:
                  ScaleK_head,
                  ScaleV_head);
       } else {
-        mainloop(Q(_,_,head_q,l_coord),
+        mainloop.template operator()<false, kDisablePrefetchV>(Q(_,_,head_q,l_coord),
                  K(_,_,head,l_coord),
                  V(_,_,head,l_coord),
                  tArA, tA_max, tA_sum,
