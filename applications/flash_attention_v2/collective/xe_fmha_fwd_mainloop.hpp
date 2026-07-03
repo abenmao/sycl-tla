@@ -879,14 +879,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           }
         }
       }
-      asm volatile("fence_sw");
       // Fold Q*K  scale into params.scale
       ElementS qk_scale = params.scale;
       if constexpr (PerTensorScale) {
         qk_scale = params.scale * ElementS(scale_q) * ElementS(scale_k);
       }
       auto [rescale, tS_partial_sum] = softmax(tSrS, tA_max, tA_sum, qk_scale);
-      asm volatile("fence_sw");
       auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
       constexpr int kSumSize = decltype(tA_sum.size())::value;
       constexpr bool kSumDivVT = (kSumSize % VTiles == 0);
@@ -934,7 +932,6 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       else {
         reorder(tSrS, tArP);
       }
-      asm volatile("fence_sw");
 
       /* GEMM 2: A += P * V, split in v dimension.
         tArA rescaling is fused to per-VTile */
@@ -1070,7 +1067,6 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     for (int i = 0; i < tS.size(); i++)
       tS(i) = qk_scale * tS(i) - broadcast<0>(tA_max, tS, i);
 
-    asm volatile("fence_sw");
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < tS.size(); i++)
       tS(i) = sycl::native::exp2(tS(i));
