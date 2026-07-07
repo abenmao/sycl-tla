@@ -146,6 +146,8 @@ public:
     StrideK dK_cache{};
     const ElementV *V_cache;
     StrideV dV_cache{};
+    const ElementScale *scaleP = nullptr;
+    StrideScaleV dScaleP{};
   };
   using KernelParams = KernelArguments;
 
@@ -432,14 +434,17 @@ public:
         auto dcScaleQ = const_cast<ElementScale*>(p.scaleQ + offset_scaleQ);
         auto dcScaleK = const_cast<ElementScale*>(p.scaleK + offset_scaleK);
         auto dcScaleV = const_cast<ElementScale*>(p.scaleV + offset_scaleV);
+        auto dcScaleP = const_cast<ElementScale*>(p.scaleP + offset_scaleV);
 
         Tensor ScaleQ = make_tensor(make_gmem_ptr(dcScaleQ), make_layout(shape_scale_Q, stride_scaleQ));
         Tensor ScaleK = make_tensor(make_gmem_ptr(dcScaleK), make_layout(shape_scale_K, stride_scaleK));
         Tensor ScaleV = make_tensor(make_gmem_ptr(dcScaleV), make_layout(shape_scale_V, stride_scaleV));
+        Tensor ScaleP = make_tensor(make_gmem_ptr(dcScaleP), make_layout(shape_scale_V, stride_scaleV));
 
         auto ScaleQ_head = ScaleQ(_, _, head_q, l_coord);
         auto ScaleK_head = ScaleK(_, _, head, l_coord);
         auto ScaleV_head = ScaleV(_, _, head, l_coord);
+        auto ScaleP_head = ScaleP(_, _, head, l_coord);
 
         mainloop.template operator()<false, kDisablePrefetchV>(Q(_,_,head_q,l_coord),
                  K(_,_,head,l_coord),
@@ -454,7 +459,8 @@ public:
                  p.scale_k, p.scale_v, p.scale_q,
                  ScaleQ_head,
                  ScaleK_head,
-                 ScaleV_head);
+                 ScaleV_head,
+                 ScaleP_head);
       } else {
         mainloop.template operator()<false, kDisablePrefetchV>(Q(_,_,head_q,l_coord),
                  K(_,_,head,l_coord),

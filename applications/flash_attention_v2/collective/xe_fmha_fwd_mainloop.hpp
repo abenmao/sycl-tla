@@ -255,6 +255,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
   using TensorScaleQ2D = decltype(TensorScaleQ_{}(append<rank_v<TensorScaleQ_>>(make_coord(_,_),0)));
   using TensorScaleK2D = decltype(TensorScaleK_{}(append<rank_v<TensorScaleK_>>(make_coord(_,_),0)));
   using TensorScaleV2D = decltype(TensorScaleV_{}(append<rank_v<TensorScaleV_>>(make_coord(_,_),0)));
+  using TensorScaleP2D = TensorScaleV2D;
   using ElementScaleQ = typename TensorScaleQ::element_type;
   using ElementScaleK = typename TensorScaleK::element_type;
   using ElementScaleV = typename TensorScaleV::element_type;
@@ -405,7 +406,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
              float            scale_q = 1.0f,
              TensorScaleQ2D    const& scaleQ = TensorScaleQ2D{},
              TensorScaleK2D    const& scaleK = TensorScaleK2D{},
-             TensorScaleV2D    const& scaleV = TensorScaleV2D{}) {
+             TensorScaleV2D    const& scaleV = TensorScaleV2D{},
+             TensorScaleP2D    const& scaleP = TensorScaleP2D{}) {
     using namespace sycl::ext::oneapi::this_work_item;
 
     // Short dimension names:
@@ -520,7 +522,13 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
     auto scale_context_pv = [&]() {
       if constexpr (BlockScale) {
-        auto scale_copy_P = gemm::collective::make_scaled_copy<ScaleCopyPV, ElementScaleP, SG_P, SG_PV_D, GROUP_K>(scaleV);
+        // P-scale is loaded from a dedicated global buffer via the
+        // same copy path as V (built with the K extent blk_k1 so the iterator can be
+        // sliced by K below). This mirrors scaleV -- the only mechanism breaks compiler's
+        // uniform value optimization -- making compiler treat scale P as a non-uniform value,
+        // then avoiding the per-bdpas mov broadcast produced for vectorizing scale P.
+        auto scale_copy_P = gemm::collective::make_scaled_copy<ScaleCopyPV, ElementScaleP, SG_P, SG_PV_D, GROUP_K>(
+                                                      scaleP, 0, 0, blk_k1);
         auto scale_copy_V = gemm::collective::make_scaled_copy<ScaleCopyPV, ElementScaleV, SG_V, SG_PV_D, GROUP_K>(
                                                       scaleV, 0, 0, blk_k1);
         auto scale_prefetch_V = gemm::collective::make_scaled_prefetch<decltype(get<0>(scale_copy_V)), SG_V, SG_PV_D, GROUP_K>(
@@ -695,6 +703,24 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           copy(tiled_copy_scaleQ, copy_iter_scaleQ(_, _, _, D), arr[D]);
         }
         return arr;
+      } else {
+        return cute::tuple<>{};
+      }
+    }();
+
+    /* Preload scaleP once. */
+    auto scaleP_ctx = [&]() {
+      if constexpr (BlockScale && !FP4Input) {
+        using FragScaleP_t = cute::remove_cvref_t<decltype(get<2>(get<0>(scale_context_pv)))>;
+        FragScaleP_t frag{};
+        auto& tiled_copy_scaleP = get<0>(get<0>(scale_context_pv));
+        auto  copy_iter_scaleP = get<1>(get<0>(scale_context_pv));
+        // Any in-bounds coordinate reads 0x7f since the buffer is uniform; use the
+        // VV=0 coordinate (the same one the first PV iteration would have used).
+        const int v_coord = get<1>(blk_qv) * VTiles * BLK_V + (subgroup_id % ATOM_V) * SG_V;
+        copy_iter_scaleP.data().coord_ = {v_coord, 0, l_coord};
+        copy(tiled_copy_scaleP, copy_iter_scaleP(_, _, _, 0), frag);
+        return frag;
       } else {
         return cute::tuple<>{};
       }
@@ -963,9 +989,10 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
         if constexpr (BlockScale && !FP4Input) {
           const int v_coord = get<1>(blk_qv) * VTiles * BLK_V + VV * BLK_V + (subgroup_id % ATOM_V) * SG_V;
-          auto& tiled_copy_scaleP = get<0>(get<0>(scale_context_pv));
-          // P is dummy scale, just the same as V
-          auto  fragment_scaleP = get<2>(get<0>(scale_context_pv));
+          // P-scale is a KV-loop invariant; it was preloaded once
+          // into scaleP_ctx before the mainloop, so reuse it here instead of
+          // re-issuing a global load every (K, VV) iteration.
+          auto& fragment_scaleP = scaleP_ctx;
           auto& tiled_copy_scaleV = get<0>(get<1>(scale_context_pv));
           auto  copy_iter_scaleV = get<1>(get<1>(scale_context_pv));
           auto  fragment_scaleV = get<2>(get<1>(scale_context_pv));
@@ -983,8 +1010,6 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           auto zipped_v = make_zip_tensor(tArV, scaleV_view, gemm_v_offsets, gemm_vk_offsets);
 
           copy_iter_scaleV.data().coord_ = {v_coord, 0, l_coord};
-
-          fill(fragment_scaleP, ElementScaleV(1));
           copy(tiled_copy_scaleV, copy_iter_scaleV(_, _, _, K), fragment_scaleV);
 
           cute::gemm(mma_pv, zipped_p, zipped_v, tArA(_,_,_,VV));

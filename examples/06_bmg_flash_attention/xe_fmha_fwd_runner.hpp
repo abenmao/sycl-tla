@@ -246,6 +246,7 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
   cutlass::DeviceAllocation<ElementScale> block_scaleQ;
   cutlass::DeviceAllocation<ElementScale> block_scaleK;
   cutlass::DeviceAllocation<ElementScale> block_scaleV;
+  cutlass::DeviceAllocation<ElementScale> block_scaleP;
 
   ElementScale scale_k = ElementScale(1);
   ElementScale scale_v = ElementScale(1);
@@ -918,6 +919,10 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
       initialize_scale(block_scaleK, options);
       initialize_scale(block_scaleV, options);
 
+      block_scaleP.reset(cute::size(shape_scale_V));
+      std::vector<ElementScale> host_scaleP(cute::size(shape_scale_V), ElementScale(1));
+      block_scaleP.copy_from_host(host_scaleP.data(), host_scaleP.size());
+
       auto layout_Q = cute::make_layout(shape_Q, stride_Q);
       auto layout_K = cute::make_layout(shape_K, stride_K);
       auto layout_V = cute::make_layout(shape_V, stride_V);
@@ -1010,7 +1015,8 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
             scale_k, scale_v, scale_q,
             GROUP_SIZE,
             block_K_cache.get(), stride_K_cache,
-            block_V_cache.get(), stride_V_cache
+            block_V_cache.get(), stride_V_cache,
+            block_scaleP.get(), stride_SV
           },
           {
             options.softmax_scale,
