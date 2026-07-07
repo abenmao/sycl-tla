@@ -50,7 +50,9 @@
 #include "cutlass/util/reference/device/tensor_compare.h"
 #include "cutlass/util/reference/device/tensor_fill.h"
 #include "cutlass/util/reference/device/tensor_silu.h"
+#include "cutlass/util/reference/host/gemm_complex_mkl.h"
 #include "cutlass/util/initialize_block.hpp"
+#include "cutlass/relatively_equal.h"
 
 #include "../common.hpp"
 #include <benchmark/benchmark.h>
@@ -152,6 +154,13 @@ struct StrideScaleBType<T, cute::void_t<typename T::StrideScaleB>> {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Verification mode enum
+enum class VerifyMode {
+  None = 0,           // No verification (skip both device and host)
+  Device = 1,         // Device verification - uses reference::device::GemmComplex
+  Host = 2            // Host verification - uses reference::host::GemmComplexMkl
+};
+
 // Command line options parsing
 struct GEMMOptions {
 
@@ -160,12 +169,17 @@ struct GEMMOptions {
   int m, n, k, l;
   float alpha, beta;
   std::string bm_name;
+  // Selects how correctness is checked: on the device with
+  // reference::device::GemmComplex, on the host with reference::host::GemmComplexMkl,
+  // or skipped entirely.
+  VerifyMode verify_mode;
 
   GEMMOptions():
           error(false),
           m(5120), n(4096), k(4096), l(1),
           alpha(1.f), beta(0.f),
-          bm_name("GEMM")
+          bm_name("GEMM"),
+          verify_mode(VerifyMode::None)
   { }
 
   // Parses the command line
@@ -179,6 +193,27 @@ struct GEMMOptions {
     cmd.get_cmd_line_argument("alpha", alpha, 1.f);
     cmd.get_cmd_line_argument("beta", beta, 0.f);
     cmd.get_cmd_line_argument("bm_name", bm_name, std::string("GEMM"));
+
+    // Parse verification mode. Default to device verification on real hardware,
+    // but host verification on the CRI simulator where device verification +
+    // warmup are too time-consuming.
+#ifdef CUTLASS_TEST_FOR_CRI
+    std::string default_verify = "none";
+#else
+    std::string default_verify = "device";
+#endif
+    std::string verify_str = default_verify;
+    cmd.get_cmd_line_argument("verify", verify_str, default_verify);
+    if (verify_str == "none") {
+      verify_mode = VerifyMode::None;
+    } else if (verify_str == "device") {
+      verify_mode = VerifyMode::Device;
+    } else if (verify_str == "host") {
+      verify_mode = VerifyMode::Host;
+    } else {
+      std::cerr << "Invalid verify mode or mode wasn't defined, using default None" << std::endl;
+      verify_mode = VerifyMode::None;
+    }
   }
 
   std::string benchmark_name() const {
@@ -548,7 +583,7 @@ struct BenchmarkRunnerGemm {
   }
 
 
-  bool verify(const ProblemShapeType& problem_size, ElementCompute alpha, ElementCompute beta) {
+  bool verify_device(const ProblemShapeType& problem_size, ElementCompute alpha, ElementCompute beta, std::ostream& label) {
     auto& M = cute::get<0>(problem_size);
     auto& N = cute::get<1>(problem_size);
     auto& K = cute::get<2>(problem_size);
@@ -602,6 +637,67 @@ struct BenchmarkRunnerGemm {
       }
     }
 
+    label << "verify_status=" << (passed ? "passed" : "failed")
+          << "_with_device_ref_impl_gemm_complex ";
+    return passed;
+  }
+
+  bool verify_host(const ProblemShapeType& problem_size, ElementCompute alpha, ElementCompute beta, std::ostream& label) {
+    auto& M = cute::get<0>(problem_size);
+    auto& N = cute::get<1>(problem_size);
+    auto& K = cute::get<2>(problem_size);
+    auto& L = cute::get<3>(problem_size);
+
+
+    std::vector<ElementMMAVerify> host_A(block_A_dq.size());
+    std::vector<ElementMMAVerify> host_B(block_B_dq.size());
+    std::vector<ElementC> host_C(block_C.size());
+    std::vector<ElementOutput> host_D(block_D.size());
+
+    cutlass::device_memory::copy_to_host(host_A.data(), block_A_dq.get(), block_A_dq.size());
+    cutlass::device_memory::copy_to_host(host_B.data(), block_B_dq.get(), block_B_dq.size());
+    cutlass::device_memory::copy_to_host(host_C.data(), block_C.get(), block_C.size());
+    cutlass::device_memory::copy_to_host(host_D.data(), block_D.get(), block_D.size());
+    compat::wait();
+
+    std::vector<ElementOutput> host_ref_D(block_D.size());
+
+    TensorRef ref_A(host_A.data(), LayoutA::packed({M, K}));
+    TensorRef ref_B(host_B.data(), LayoutB::packed({K, N}));
+    TensorRef ref_C(host_C.data(), LayoutC::packed({M, N}));
+    TensorRef ref_D(host_ref_D.data(), LayoutD::packed({M, N}));
+
+    bool used_mkl = reference::host::GemmComplexMkl(
+            {M, N, K},
+            alpha,
+            ref_A,
+            ComplexTransform::kNone,
+            ref_B,
+            ComplexTransform::kNone,
+            beta,
+            ref_C,
+            ref_D,
+            ElementAccumulator(0),
+            L,     // batch_count
+            M * K, // batch_stride_A
+            N * K, // batch_stride_B
+            M * N, // batch_stride_C
+            M * N  // batch_stride_D
+    );
+
+    // Match the tolerances used by the device verification path.
+    ElementOutput const epsilon(1e-2f);
+    ElementOutput const non_zero_floor(1e-4f);
+    bool passed = true;
+    for (std::size_t i = 0; i < host_D.size(); ++i) {
+      if (!cutlass::relatively_equal(host_ref_D[i], host_D[i], epsilon, non_zero_floor)) {
+        passed = false;
+        printf("i: %zu , ref: %f, comp: %f\n", i, float(host_ref_D[i]), float(host_D[i]));
+      }
+    }
+
+    label << "verify_status=" << (passed ? "passed" : "failed")
+          << "_with_host_ref_impl_" << (used_mkl ? "mkl " : "gemm_complex ");
     return passed;
   }
 
@@ -727,11 +823,10 @@ struct BenchmarkRunnerGemm {
 
     if (state.error_occurred()) return;
 
-#ifdef CUTLASS_TEST_FOR_CRI
-    // disable warmup run and verification for CRI simulator as it's time-consuming
-#else
-    // Run the GEMM
-    gemm_op.run();
+    std::stringstream extra_label;
+    if (options.verify_mode != VerifyMode::None) {
+      // Run the GEMM
+      gemm_op.run();
 
 #if defined(CUTLASS_ENABLE_SYCL)
     compat::wait();
@@ -739,12 +834,15 @@ struct BenchmarkRunnerGemm {
     cudaDeviceSynchronize();
 #endif
 
-    // Verify that the result is correct
-    bool passed = verify(problem_size, ElementCompute(options.alpha), ElementCompute(options.beta));
-    if(not passed) {
-      state.SkipWithError("Disposition Failed.");
+      // Verify that the result is correct; each verify method appends its
+      // disposition (and reference implementation used) to extra_label.
+      bool passed = (options.verify_mode == VerifyMode::Host)
+          ? verify_host(problem_size, ElementCompute(options.alpha), ElementCompute(options.beta), extra_label)
+          : verify_device(problem_size, ElementCompute(options.alpha), ElementCompute(options.beta), extra_label);
+      if(not passed) {
+        state.SkipWithError("Disposition Failed.");
+      }
     }
-#endif
 
     state.counters["m"] = options.m;
     state.counters["n"] = options.n;
@@ -753,7 +851,6 @@ struct BenchmarkRunnerGemm {
     state.counters["alpha"] = options.alpha;
     state.counters["beta"] = options.beta;
 
-    std::stringstream extra_label;
     if constexpr (cute::size<0>(StrideA{}) == 1) {
       extra_label << "layoutA=ColumnMajor ";
     } else if constexpr (cute::size<1>(StrideA{}) == 1) {
