@@ -248,14 +248,15 @@ setup_environment() {
 # ============================================================
 EXAMPLES_CTESTS=(
     ctest_examples_03_bmg_gemm_streamk
-    ctest_examples_04_bmg_grouped_gemm
+    ctest_examples_04_bmg_grouped_gemm_test_groups_2
+    ctest_examples_04_bmg_grouped_gemm_test_groups_4
     ctest_examples_05_bmg_gemm_with_epilogue_relu
-    ctest_examples_06_bmg_prefill_attention_cachedkv_hdim64
+    ctest_examples_06_xe_fmha_fwd_prefill_cached_kv_bfloat16_t_hdim64
     ctest_examples_08_bmg_gemm_f8
     ctest_examples_cute_tutorial_tiled_copy
     ctest_examples_cute_tutorial_bmg
-    ctest_examples_12_xe35_block_scaled_gemm_e2m1
-    ctest_examples_13_xe35_block_scaled_grouped_gemm_e5m2
+    ctest_examples_50_xe35_block_scaled_gemm_e2m1
+    ctest_examples_51_xe35_block_scaled_grouped_gemm_e5m2
     ctest_examples_06_xe_fmha_fwd_decode_mx_float_e4m3_t_hdim64
     ctest_examples_06_xe_fmha_fwd_decode_mx_float_e2m1_t_hdim64
     ctest_examples_14_xe35_gdn_attention_bfloat16
@@ -274,7 +275,19 @@ UT_CTESTS=(
 )
 
 # Derive the CMake build targets for each suite from its ctest names.
-examples_targets() { local t; for t in "${EXAMPLES_CTESTS[@]}"; do echo "${t#ctest_examples_}"; done; }
+# Derive the CMake build target for each example ctest. A single example
+# executable can register several parameterized ctests (e.g.
+# 04_bmg_grouped_gemm -> ctest ..._test_groups_2 / ..._test_groups_4), so map
+# every such variant back to its shared build target by dropping the trailing
+# `_test_<variant>` segment, then de-duplicate. Names without `_test_` (the 1:1
+# case) pass through unchanged.
+examples_targets() {
+    local t
+    for t in "${EXAMPLES_CTESTS[@]}"; do
+        t="${t#ctest_examples_}"
+        echo "${t%%_test_*}"
+    done | awk '!seen[$0]++'
+}
 ut_targets()       { local t; for t in "${UT_CTESTS[@]}";       do echo "cutlass_test_unit_${t#ctest_unit_}"; done; }
 
 # Join the given ctest names into an anchored alternation regex for `ctest -R`.
