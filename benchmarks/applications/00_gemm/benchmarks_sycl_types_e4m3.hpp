@@ -139,4 +139,22 @@ using Gemm_E4M3E4M3FP32E4M3FP32_RRR_WG8x128x512_SG8x16x512 = E4M3_RRR_GEMM<float
 using Gemm_E4M3E4M3FP32E4M3FP32_RRR_WG8x128x512_SG8x16x512_SplitK2 = E4M3_RRR_GEMM<float, cutlass::float_e4m3_t, float, 8, 128, 512, 8, 16, 2>;
 
 using GemmW8A8_E4M3E4M3FP32FP32FP32_RRR_WG256x256x32_SG32x64x32 = E4M3_RRR_GEMM<float, float, float, 256, 256, 32, 32, 64, 0, true>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG128x192x128_SG16x48x128 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 128, 192, 128, 16, 48>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG256x192x128_SG32x48x128 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 256, 192, 128, 32, 48>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG256x128x64_SG64x16x64 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 256, 128, 64, 64, 16>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG128x256x128_SG32x32x128 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 128, 256, 128, 32, 32>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG256x256x128_SG64x32x128 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 256, 256, 128, 64, 32>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG256x256x64_SG32x64x64 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 256, 256, 64, 32, 64>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG256x256x64_SG64x64x64 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 256, 256, 64, 64, 64>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG128x256x128_SG16x64x128 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 128, 256, 128, 16, 64>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG512x256x64_SG64x64x64 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 512, 256, 64, 64, 64>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG16x256x256_SG16x16x256 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 16, 256, 256, 16, 16>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG64x128x256_SG16x16x256 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 64, 128, 256, 16, 16>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG192x128x64_SG24x32x64 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 192, 128, 64, 24, 32>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG8x128x256_SG8x32x256 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 8, 128, 256, 8, 32>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG4x128x64_SG4x32x64 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 4, 128, 64, 4, 32>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG8x256x64_SG8x32x64 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 8, 256, 64, 8, 32>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG8x256x64_SG8x16x64 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 8, 256, 64, 8, 16>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG4x128x256_SG4x16x256 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 4, 128, 256, 4, 16>;
+using Gemm_E4M3E4M3FP32BF16FP32_RRR_WG8x128x64_SG8x16x64 = E4M3_RRR_GEMM<float, cutlass::bfloat16_t, float, 8, 128, 64, 8, 16>;
 #endif
