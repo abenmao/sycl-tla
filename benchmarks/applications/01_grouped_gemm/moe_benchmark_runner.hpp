@@ -30,303 +30,449 @@
  **************************************************************************************************/
 
 /*! \file
-    \brief MoE GEMM benchmark runner.
+    \brief Google-Benchmark harness for the hand-written MoE grouped-GEMM kernel
+           (applications/moe_grouped_gemm/MoEGEMM), i.e. the same kernel that
+           example 12 launches.
 
-    Aligned with example 12_xe20_moe_gemm_cute_interface. The MoE GEMM uses the
-    custom MoE::MoEGEMM kernel together with the PersistentTileSchedulerXeMoE
-    tile scheduler (TileShape <256, 128, 32>), which is launched manually rather
-    than through GemmUniversalAdapter. This runner replicates the example's
-    MoEGEMMLauncher inside the google-benchmark timing loop, and reuses the
-    grouped-gemm BenchmarkRegistry<GroupedGEMMOptions> so the same config-file
-    dispatch mechanism applies.
+    The existing benchmarks/grouped_gemm harness is built around the standard
+    GemmUniversalAdapter (can_implement / initialize / run). The MoE kernel is a
+    raw parallel_for launch with a custom tile scheduler + packed-A + a device
+    num_rows_per_expert table, with no GemmUniversal interface, so it needs its
+    own runner. It still reuses the shared scaffolding from benchmarks/common.hpp
+    (BenchmarkRegistry, register_benchmarks, benchmark_main) and Google Benchmark.
 
-    The benchmark interprets the grouped-gemm options as a MoE problem:
-      groups -> number of experts
-      m      -> tokens routed to each expert (uniform distribution)
-      n / k  -> MoE GEMM N / K extents
+    All the kernel machinery (choose_tiled_mma, the Config structs, fill_scale,
+    MoE::MoEGEMM, the PersistentTileSchedulerXeMoE setup) is reused directly from
+    example 12's joint header. We only benchmark ONE GEMM of the exact N/K/experts
+    /M described in the config line (no up-gate 2x / down-proj expansion).
 */
 
 #pragma once
 
+// LEAN benchmark TU: this header (and main.cpp) compiles Google Benchmark +
+// common.hpp scaffolding but NOT the cute / MoE kernel, which lives only in
+// moe_kernel_launch.cpp behind the thin moe_kernel_launch.hpp interface. See
+// that header for the TU-split rationale (avoids the IGC ICE on CRI).
+#include "../common.hpp"
+#include <benchmark/benchmark.h>
+
+// THIN interface to the kernel launch. No cute / MoE / SYCL / oneMKL — just an
+// opaque handle + 3 free functions. The chosen Config (Bf16Config / ...) is
+// baked into moe_kernel_launch.cpp at build time via -DMOE_BENCH_CONFIG, so this
+// benchmark TU never names a cute Config type.
+#include "moe_kernel_launch.hpp"
+
 #include <algorithm>
-#include <cstdint>
-#include <exception>
+#include <cfloat>
 #include <limits>
+#include <random>
+#include <sstream>
 #include <vector>
-
-#include <cute/util/compat.hpp>
-#include <sycl/ext/intel/experimental/grf_size_properties.hpp>
-#include <sycl/sycl.hpp>
-
-#include <cute/tensor.hpp>
-
-#include "cutlass/kernel_hardware_info.h"
-#include "cutlass/platform/platform.h"
-#include "cutlass/util/GPU_Clock.hpp"
-#include "cutlass/util/device_memory.h"
-#include "cutlass/util/initialize_block.hpp"
-#include "cutlass/util/sycl_event_manager.hpp"
-
-// MoE example headers (added to the include path via benchmarks/grouped_gemm/CMakeLists.txt).
-#include "moe_grouped_gemm.hpp"
-#include "moe_tile_scheduler.hpp"
-
-// benchmark_runner.hpp (already included by main.cpp before this header) provides
-// cutlass::benchmark::GroupedGEMMOptions and the BenchmarkRegistry infrastructure.
-#include "benchmark_runner.hpp"
-
-#pragma clang diagnostic ignored "-Wpass-failed"
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
 namespace cutlass::benchmark {
 
-using namespace cute;
-
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Configuration describing a MoE GEMM benchmark instance, aligned with example 12.
-template <
-    typename ElementA_, typename ElementB_, typename ElementD_,
-    typename TileShape_, typename TiledMMA_,
-    typename GmemTiledCopyA_ = XE_LOAD_2D<16, 32, 32, 16>,
-    typename GmemTiledCopyB_ = XE_LOAD_2D_VNNI<16, 32, 16, 16>,
-    typename GmemTiledCopyD_ = XE_STORE_2D<16, 8, 32>>
-struct MoEGemmConfiguration {
-  using ElementA = ElementA_;
-  using ElementB = ElementB_;
-  using ElementD = ElementD_;
-  using TileShape = TileShape_;
-  using TiledMMA = TiledMMA_;
-  using GmemTiledCopyA = GmemTiledCopyA_;
-  using GmemTiledCopyB = GmemTiledCopyB_;
-  using GmemTiledCopyD = GmemTiledCopyD_;
+// Fixed seed for --random MoE routing so a given config line is reproducible.
+inline constexpr unsigned kRoutingSeed = 0x4D6F45u; // "MoE"
 
-  static constexpr char LayoutA = 'R';
-  static constexpr char LayoutB = 'R';
-  static constexpr char LayoutD = 'R';
+// Whether a benchmark line runs verification. `false` (default) is perf-only;
+// `true` routes to the example's VerificationHelper.
+
+// Command line options for one MoE grouped-GEMM benchmark line. Builds a
+// per-expert M vector from one of three shape sources (highest precedence first):
+//   1. --m_per_expert=<csv>   explicit per-expert M list
+//   2. --moe_mode (--m/--topk/--num_experts/--ep_size)  MoE routing math,
+//      following PR #687: experts_per_gpu = num_experts/ep_size,
+//      tokens_per_gpu = (m*topk)/ep_size spread uniformly over experts_per_gpu.
+//   3. --uniform_m            legacy uniform M per expert
+struct MoEBenchmarkOptions {
+
+  bool error;
+
+  int n, k, num_experts, uniform_m;
+  // MoE routing parameters (PR #687 semantics). moe_mode selects source #2.
+  bool moe_mode;
+  int m, topk, ep_size;
+  bool random_mode;
+  bool verify;
+  std::string m_per_expert; // comma-separated per-expert M list
+  std::string bm_name;
+
+  // ByteDance reference-API vocabulary (Yanfei/Wei thread, requirement #3:
+  // "changed to the MoE format, i.e., configured using
+  // experts_token_count/offset"). These are the canonical names; the legacy
+  // --m/--n/--k/--m_per_expert remain as silent aliases so the committed .in
+  // files keep working. BD name wins when both are given.
+  //   num_tokens          <- total routed tokens (== legacy --m)
+  //   hidden_size         <- model hidden dim
+  //   new_hidden_size     <- intermediate / expert dim
+  //   proj = up|down      <- which projection, decides the N/K assignment:
+  //                            up   : K=hidden_size,     N=new_hidden_size
+  //                            down : K=new_hidden_size, N=hidden_size
+  //   experts_token_count <- per-expert token counts (== legacy --m_per_expert)
+  //   experts_token_offset<- per-expert prefix-sum; if given, validated to be
+  //                          exactly the running sum of experts_token_count
+  //   num_experts_per_rank<- experts on this rank (== num_experts/ep_size); if
+  //                          given, overrides num_experts for the per-rank GEMM
+  int hidden_size, new_hidden_size, num_experts_per_rank;
+  std::string proj; // "up" | "down" | "" (raw n/k)
+  std::string experts_token_offset; // comma-separated prefix sum (optional)
+
+  // Per-expert M list (the "groups").
+  std::vector<int> rows_per_expert;
+
+  MoEBenchmarkOptions()
+      : error(false), n(2880), k(2880), num_experts(8), uniform_m(128),
+        moe_mode(false), m(4096), topk(1), ep_size(1), random_mode(false),
+        verify(false), m_per_expert(""), bm_name("MoEGEMM"),
+        hidden_size(0), new_hidden_size(0), num_experts_per_rank(0), proj(""),
+        experts_token_offset("") {
+    build_rows();
+  }
+
+  void build_rows() {
+    rows_per_expert.clear();
+    if (!m_per_expert.empty()) {
+      std::stringstream ss(m_per_expert);
+      std::string token;
+      while (std::getline(ss, token, ',')) {
+        if (token.empty())
+          continue;
+        rows_per_expert.push_back(std::stoi(token));
+      }
+      // num_experts follows the csv length.
+      num_experts = static_cast<int>(rows_per_expert.size());
+    } else if (moe_mode) {
+      // PR #687 MoE routing math: distribute the per-GPU token budget over the
+      // per-GPU experts. ep_size>1 shards experts across GPUs (expert
+      // parallelism); we benchmark one GPU's share.
+      const int experts_per_gpu = std::max(1, num_experts / ep_size);
+      const int tokens_per_gpu = (m * topk) / ep_size;
+      num_experts = experts_per_gpu;
+      if (random_mode) {
+        // Randomized routing: assign each token to a random expert, modelling
+        // the load imbalance of real top-k routing. Deterministically seeded so
+        // a given config line is reproducible across runs.
+        rows_per_expert.assign(experts_per_gpu, 0);
+        std::mt19937 rng(kRoutingSeed);
+        std::uniform_int_distribution<int> pick(0, experts_per_gpu - 1);
+        for (int t = 0; t < tokens_per_gpu; ++t)
+          rows_per_expert[pick(rng)] += 1;
+      } else {
+        // Uniform routing: even split, remainder spread so total M is exact.
+        const int base = tokens_per_gpu / experts_per_gpu;
+        const int rem = tokens_per_gpu % experts_per_gpu;
+        rows_per_expert.assign(experts_per_gpu, base);
+        for (int i = 0; i < rem && i < experts_per_gpu; ++i)
+          rows_per_expert[i] += 1;
+      }
+    } else {
+      int mm = (uniform_m > 0) ? uniform_m : 128;
+      rows_per_expert.assign(num_experts, mm);
+    }
+  }
+
+  // Parses the command line
+  void parse(int argc, char const **args) {
+    cutlass::CommandLine cmd(argc, args);
+
+    cmd.get_cmd_line_argument("n", n, 2880);
+    cmd.get_cmd_line_argument("k", k, 2880);
+    cmd.get_cmd_line_argument("num_experts", num_experts, 8);
+    cmd.get_cmd_line_argument("uniform_m", uniform_m, 128);
+    cmd.get_cmd_line_argument("m_per_expert", m_per_expert, std::string(""));
+    cmd.get_cmd_line_argument("bm_name", bm_name, std::string("MoEGEMM"));
+
+    // PR #687 MoE routing parameters.
+    moe_mode = cmd.check_cmd_line_flag("moe_mode");
+    cmd.get_cmd_line_argument("m", m, 4096);
+    cmd.get_cmd_line_argument("topk", topk, 1);
+    cmd.get_cmd_line_argument("ep_size", ep_size, 1);
+    random_mode = cmd.check_cmd_line_flag("random");
+
+    // ---- ByteDance reference-API names (requirement #3). Read after the
+    // legacy flags so a BD name, when present, overrides its alias. ----
+    int num_tokens = 0;
+    cmd.get_cmd_line_argument("num_tokens", num_tokens, 0);
+    int num_of_tokens = 0;
+    cmd.get_cmd_line_argument("num_of_tokens", num_of_tokens, 0);
+    if (num_of_tokens > 0)
+      m = num_of_tokens; // alias used by CRI .in files
+    else if (num_tokens > 0)
+      m = num_tokens; // total routed tokens == legacy --m
+
+    cmd.get_cmd_line_argument("hidden_size", hidden_size, 0);
+    cmd.get_cmd_line_argument("new_hidden_size", new_hidden_size, 0);
+    cmd.get_cmd_line_argument("proj", proj, std::string(""));
+    // Map (hidden_size, new_hidden_size, proj) -> raw (n, k). Up-projection
+    // reads hidden and writes new_hidden (K=hidden, N=new_hidden); down swaps.
+    if (hidden_size > 0 && new_hidden_size > 0) {
+      if (proj == "down") {
+        k = new_hidden_size;
+        n = hidden_size;
+      } else {
+        // default + "up": K=hidden, N=new_hidden.
+        if (!proj.empty() && proj != "up") {
+          std::cerr << "Error: --proj must be 'up' or 'down' (got '" << proj
+                    << "').\n";
+          error = true;
+        }
+        k = hidden_size;
+        n = new_hidden_size;
+      }
+    }
+
+    // experts_token_count is the BD name for the per-expert M list. It aliases
+    // --m_per_expert; BD name wins if both are present.
+    std::string experts_token_count;
+    cmd.get_cmd_line_argument("experts_token_count", experts_token_count,
+                              std::string(""));
+    if (!experts_token_count.empty())
+      m_per_expert = experts_token_count;
+
+    // num_experts_per_rank (BD) == experts on this rank. When given without the
+    // routing math, it sets num_experts directly for the per-rank GEMM.
+    cmd.get_cmd_line_argument("num_experts_per_rank", num_experts_per_rank, 0);
+    if (num_experts_per_rank > 0 && !moe_mode)
+      num_experts = num_experts_per_rank;
+
+    cmd.get_cmd_line_argument("experts_token_offset", experts_token_offset,
+                              std::string(""));
+
+    std::string verify_str;
+    cmd.get_cmd_line_argument("verify", verify_str, std::string("false"));
+    verify = (verify_str == "true" || verify_str == "1");
+
+    if (moe_mode && (topk <= 0 || ep_size <= 0 || num_experts <= 0)) {
+      std::cerr << "Error: --moe_mode requires positive --topk/--ep_size/"
+                   "--num_experts.\n";
+      error = true;
+    }
+
+    build_rows();
+
+    // If the BD experts_token_offset was supplied, validate it is exactly the
+    // running prefix-sum of the per-expert counts (the reference computes
+    // cur_token_start = experts_token_offset[i]; we derive the same internally,
+    // so this just guards a mismatched hand-written .in line).
+    if (!experts_token_offset.empty()) {
+      std::vector<int> off;
+      std::stringstream ss(experts_token_offset);
+      std::string tok;
+      while (std::getline(ss, tok, ',')) {
+        if (tok.empty())
+          continue;
+        off.push_back(std::stoi(tok));
+      }
+      if (off.size() != rows_per_expert.size()) {
+        std::cerr << "Error: experts_token_offset has " << off.size()
+                  << " entries but experts_token_count has "
+                  << rows_per_expert.size() << ".\n";
+        error = true;
+      } else {
+        int running = 0;
+        for (size_t i = 0; i < off.size(); ++i) {
+          if (off[i] != running) {
+            std::cerr << "Error: experts_token_offset[" << i << "]=" << off[i]
+                      << " != prefix-sum " << running
+                      << " of experts_token_count.\n";
+            error = true;
+            break;
+          }
+          running += rows_per_expert[i];
+        }
+      }
+    }
+  }
+
+  int total_m() const {
+    int t = 0;
+    for (int m : rows_per_expert)
+      t += m;
+    return t;
+  }
+
+  /// Compute performance in TFLOP/s over all per-expert problems.
+  double tflops(double runtime_s) const {
+    uint64_t fmas = 0;
+    for (int m : rows_per_expert) {
+      fmas += static_cast<uint64_t>(m) * static_cast<uint64_t>(n) *
+              static_cast<uint64_t>(k);
+    }
+    uint64_t flop = static_cast<uint64_t>(2) * fmas;
+    double tflop = double(flop) / double(1.0e12);
+    return tflop / runtime_s;
+  }
+
+  std::string benchmark_name() const {
+    std::stringstream full_name;
+    full_name << bm_name << "/" << std::to_string(n) << "x"
+              << std::to_string(k) << "x" << std::to_string(num_experts) << "x"
+              << std::to_string(total_m());
+    return full_name.str();
+  }
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Unique SYCL kernel name tag per configuration.
-template <typename Config> class MoEGemmBenchKernelName;
+// Runner for the one config this binary compiles. All device work — A/B/D +
+// scale allocation, scheduler/grid/mma setup, the MoE::MoEGEMM parallel_for, and
+// the GPU_Clock timing — lives in the LEAN moe_kernel_launch.cpp, reached via
+// moe_setup / moe_launch_once / moe_teardown. This runner only drives the
+// Google-Benchmark loop + counters; it instantiates NO cute / MoE / SYCL device
+// code, and is NOT templated on Config (the config is baked into the .cpp at
+// build time via -DMOE_BENCH_CONFIG), so this TU never names a cute Config type.
+// Perf only — no verification.
+struct MoEBenchmarkRunner {
 
-template <class Config>
-struct BenchmarkRunnerMoEGemm {
+  void run(::benchmark::State &state, MoEBenchmarkOptions const &options,
+           cutlass::KernelHardwareInfo const & /*hw_info*/,
+           const char *config_name) {
+    const int num_experts = options.num_experts;
+    const int N = options.n;
+    const int K = options.k;
 
-  using ElementA = typename Config::ElementA;
-  using ElementB = typename Config::ElementB;
-  using ElementD = typename Config::ElementD;
-  using TileShape = typename Config::TileShape;
-  using TiledMMA = typename Config::TiledMMA;
-  using GmemTiledCopyA = typename Config::GmemTiledCopyA;
-  using GmemTiledCopyB = typename Config::GmemTiledCopyB;
-  using GmemTiledCopyD = typename Config::GmemTiledCopyD;
-
-  using ProblemShape = MoE::ProblemShape;
-  using TileScheduler = MoE::PersistentTileSchedulerXeMoE<ProblemShape>;
-  using RasterOrderOptions = typename TileScheduler::RasterOrderOptions;
-  using ClusterShape = Shape<_1, _1, _1>;
-
-  //
-  // Data members
-  //
-  uint64_t seed = 0;
-
-  int num_experts = 0;
-  int gemm_n = 0;
-  int gemm_k = 0;
-  int64_t total_tokens = 0;
-
-  std::vector<int32_t> tokens_per_expert_host;
-
-  cutlass::DeviceAllocation<int32_t> num_rows_per_expert;
-  cutlass::DeviceAllocation<ElementA> block_A;
-  cutlass::DeviceAllocation<ElementB> block_B;
-  cutlass::DeviceAllocation<ElementD> block_D;
-
-  // Dummy problem shape kept as a member so it outlives the asynchronous kernel
-  // launch in launch(). scheduler_params (captured by value into the kernel)
-  // stores a pointer to it, while the caller waits only after launch() returns;
-  // stack-local storage here would dangle (use-after-scope).
-  cute::Shape<int, int, int> dummy_problem_shape_{};
-  ProblemShape dummy_group_problem_shape_{};
-
-  //
-  // Methods
-  //
-
-  void allocate(const GroupedGEMMOptions& options) {
-    num_experts = options.groups;
-    gemm_n = options.n;
-    gemm_k = options.k;
-
-    // Uniform token distribution: each expert receives options.m tokens.
-    tokens_per_expert_host.assign(num_experts, options.m);
-    total_tokens = static_cast<int64_t>(options.m) * num_experts;
-
-    int64_t a_size = total_tokens * gemm_k;
-    int64_t b_size = static_cast<int64_t>(num_experts) * gemm_n * gemm_k;
-    int64_t d_size = total_tokens * gemm_n;
-
-    num_rows_per_expert.reset(num_experts);
-    block_A.reset(a_size);
-    block_B.reset(b_size);
-    block_D.reset(d_size);
-  }
-
-  void initialize(::benchmark::State& state) {
-    try {
-      num_rows_per_expert.copy_from_host(tokens_per_expert_host.data());
-      initialize_block(block_A, seed + 2023);
-      initialize_block(block_B, seed + 2022);
-      initialize_block(block_D, seed + 2021);
-    } catch (std::exception const& e) {
-      state.SkipWithError(e.what());
+    std::vector<int> M_per_expert = options.rows_per_expert;
+    if (static_cast<int>(M_per_expert.size()) != num_experts) {
+      state.SkipWithError("num_experts does not match per-expert M list size.");
+      return;
     }
-  }
+    int num_tokens = options.total_m();
 
-  // Replicates example 12's MoEGEMMLauncher: build scheduler params, derive grid
-  // shape, and launch the custom MoE::MoEGEMM kernel.
-  sycl::event launch(const KernelHardwareInfo& hw_info) {
-    dummy_problem_shape_ = cute::Shape<int, int, int>{1, gemm_k, gemm_n};
-    dummy_group_problem_shape_ = ProblemShape{1, &dummy_problem_shape_, nullptr};
+    // Map the verify toggle to the TU-boundary int (kVerifyNone/kVerifyOn).
+    int verify_kind =
+        options.verify ? moe_bench::kVerifyOn : moe_bench::kVerifyNone;
 
-    auto scheduler_params = TileScheduler::to_underlying_arguments(
-        dummy_group_problem_shape_, TileShape{}, ClusterShape{}, hw_info,
-        typename TileScheduler::Arguments{1, RasterOrderOptions::AlongN});
-    auto group_distribution = TileScheduler::get_grid_shape(
-        scheduler_params, dummy_group_problem_shape_, TileShape{}, ClusterShape{},
-        hw_info, typename TileScheduler::Arguments{1, RasterOrderOptions::AlongN});
-
-    TiledMMA mma{};
-    auto MaxThreadsPerWorkgroup = size(mma);
-
-    sycl::range<3> local = {1, 1, static_cast<size_t>(MaxThreadsPerWorkgroup)};
-    sycl::range<3> groups = {group_distribution.z, group_distribution.y,
-                             group_distribution.x};
-    sycl::range<3> global = {local[0] * groups[0], local[1] * groups[1],
-                             local[2] * groups[2]};
-
-    namespace syclex = sycl::ext::oneapi::experimental;
-    namespace intelex = sycl::ext::intel::experimental;
-
-    syclex::properties kernel_props{syclex::sub_group_size<16>,
-#if (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
-                                    intelex::grf_size<512>
-#else
-                                    intelex::grf_size<256>
-#endif
-    };
-
-    const ElementA* activations = block_A.get();
-    const ElementB* weights = block_B.get();
-    ElementD* outputs = block_D.get();
-    const int32_t* num_rows = num_rows_per_expert.get();
-    const float* scales = nullptr;
-    const int n = gemm_n;
-    const int k = gemm_k;
-    const int experts = num_experts;
-
-    sycl::queue Q = compat::get_default_queue();
-    auto event = Q.parallel_for<MoEGemmBenchKernelName<Config>>(
-        sycl::nd_range<3>(global, local), kernel_props, [=](auto) {
-          MoE::MoEGEMM<GmemTiledCopyA, GmemTiledCopyB, GmemTiledCopyD,
-                       Config::LayoutA, Config::LayoutB, Config::LayoutD>(
-              activations, weights, scales, outputs, mma, num_rows, experts, n,
-              k, scheduler_params);
-        });
-    EventManager::getInstance().addEvent(event);
-    return event;
-  }
-
-  void run(::benchmark::State& state, const GroupedGEMMOptions& options,
-           const KernelHardwareInfo& hw_info) {
-    allocate(options);
-    initialize(state);
-    if (state.error_occurred()) return;
-
-#ifdef CUTLASS_TEST_FOR_CRI
-    // Disable warmup run for the CRI simulator as it's time-consuming.
-#else
-    launch(hw_info);
-    compat::wait();
-#endif
-
-    state.counters["m"] = options.m;
-    state.counters["n"] = options.n;
-    state.counters["k"] = options.k;
-    state.counters["groups"] = options.groups;
-
-    // Number of real-valued multiply-adds across all experts.
-    uint64_t fmas = uint64_t();
-    for (auto rows : tokens_per_expert_host) {
-      fmas += static_cast<uint64_t>(rows) * static_cast<uint64_t>(gemm_n) *
-              static_cast<uint64_t>(gemm_k);
+    // Allocate + warm up the kernel ONCE in the lean TU. The returned handle is
+    // opaque; this TU never sees the kernel type. If verify_kind != none, the
+    // lean TU also runs the example's VerificationHelper against this shape.
+    std::string error;
+    moe_bench::MoeRunHandle *handle =
+        moe_bench::moe_setup_by_name(config_name, N, K, num_experts,
+                                     M_per_expert, &error, verify_kind);
+    if (!handle) {
+      state.SkipWithError(error.empty() ? "moe_setup failed" : error.c_str());
+      return;
     }
-    uint64_t flop = static_cast<uint64_t>(2) * fmas;
-    double gflop = double(flop) / double(1.0e9);
 
-    constexpr double bits_per_byte = static_cast<double>(sizeof_bits_v<char>);
-    constexpr double sizeof_a = sizeof_bits_v<ElementA> / bits_per_byte;
-    constexpr double sizeof_b = sizeof_bits_v<ElementB> / bits_per_byte;
-    constexpr double sizeof_d = sizeof_bits_v<ElementD> / bits_per_byte;
-    auto mega_bytes_transferred = static_cast<double>(
-        total_tokens * gemm_k * sizeof_a +
-        static_cast<int64_t>(num_experts) * gemm_n * gemm_k * sizeof_b +
-        total_tokens * gemm_n * sizeof_d) * 1e-6;
+    // FLOP count over all per-expert problems.
+    uint64_t fmas = 0;
+    for (int m : M_per_expert) {
+      fmas += static_cast<uint64_t>(m) * static_cast<uint64_t>(N) *
+              static_cast<uint64_t>(K);
+    }
+    double gflop = double(static_cast<uint64_t>(2) * fmas) / double(1.0e9);
+
+    state.counters["n"] = N;
+    state.counters["k"] = K;
+    state.counters["num_experts"] = num_experts;
+    state.counters["total_m"] = num_tokens;
 
     initialize_counters(state);
     for (auto _ : state) {
-      GPU_Clock timer;
-      timer.start();
-      launch(hw_info);
-      compat::wait();
-      auto ms_elapsed = timer.milliseconds();
+      // Timed body lives entirely in the lean .cpp; returns elapsed ms.
+      double ms_elapsed = moe_bench::moe_launch_once(handle);
       update_counters(state, ms_elapsed);
       state.SetIterationTime(ms_elapsed / 1000);
     }
-    finalize_counters(state, gflop, mega_bytes_transferred);
+    finalize_counters(state, gflop);
+
+    moe_bench::moe_teardown(handle);
   }
 
 private:
-  static void initialize_counters(::benchmark::State& state) {
+  static void initialize_counters(::benchmark::State &state) {
     state.counters["avg_runtime_ms"] = 0;
     state.counters["best_runtime_ms"] = std::numeric_limits<double>::max();
     state.counters["worst_runtime_ms"] = std::numeric_limits<double>::lowest();
+    state.counters["total_runtime_ms"] = 0;
   }
 
-  static void update_counters(::benchmark::State& state, double ms_elapsed) {
+  static void update_counters(::benchmark::State &state, double ms_elapsed) {
     state.PauseTiming();
     state.counters["total_runtime_ms"] += ms_elapsed;
-    state.counters["best_runtime_ms"] = std::min<double>(state.counters["best_runtime_ms"], ms_elapsed);
-    state.counters["worst_runtime_ms"] = std::max<double>(state.counters["worst_runtime_ms"], ms_elapsed);
+    state.counters["best_runtime_ms"] =
+        std::min<double>(state.counters["best_runtime_ms"], ms_elapsed);
+    state.counters["worst_runtime_ms"] =
+        std::max<double>(state.counters["worst_runtime_ms"], ms_elapsed);
     state.ResumeTiming();
   }
 
-  static void finalize_counters(::benchmark::State& state, double gflop, double mega_bytes_transferred) {
-    auto denom = static_cast<double>(state.iterations());
-    if (state.iterations() > 2) {
+  static void finalize_counters(::benchmark::State &state, double gflop) {
+    auto iters = static_cast<double>(state.iterations());
+    if (iters > 2) {
       state.counters["avg_runtime_ms"] =
-          (state.counters["total_runtime_ms"] - state.counters["best_runtime_ms"] - state.counters["worst_runtime_ms"]) /
-          static_cast<double>(state.iterations() - 2);
+          (state.counters["total_runtime_ms"] -
+           state.counters["best_runtime_ms"] -
+           state.counters["worst_runtime_ms"]) /
+          (iters - 2);
     } else {
-      state.counters["avg_runtime_ms"] = state.counters["total_runtime_ms"] / denom;
+      state.counters["avg_runtime_ms"] =
+          state.counters["total_runtime_ms"] / iters;
     }
     state.counters["avg_tflops"] = gflop / state.counters["avg_runtime_ms"];
-    state.counters["avg_throughput"] = mega_bytes_transferred / state.counters["avg_runtime_ms"];
     state.counters["best_tflop"] = gflop / state.counters["best_runtime_ms"];
-    state.counters["best_bandwidth"] = mega_bytes_transferred / state.counters["best_runtime_ms"];
   }
 };
 
 } // namespace cutlass::benchmark
 
-#define CUTLASS_CREATE_MOE_GEMM_BENCHMARK(F)                              \
-  static void F##_func(                                                   \
-      ::benchmark::State& state,                                         \
-      cutlass::benchmark::GroupedGEMMOptions const& options,             \
-      cutlass::KernelHardwareInfo const& hw_info) {                      \
-    auto bench = cutlass::benchmark::BenchmarkRunnerMoEGemm<F>();         \
-    bench.run(state, options, hw_info);                                  \
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Two-level indirection so a MACRO argument (MOE_BENCH_NAME) is expanded BEFORE
+// the # / ## operators act on it. Using # / ## on the bare parameter would
+// stringize/paste the literal token "MOE_BENCH_NAME" instead of its value
+// (e.g. MoE_BF16) — which silently registers the benchmark under the wrong name
+// and yields "Benchmark not found" at run time.
+#define CUTLASS_MOE_STR_IMPL(s) #s
+#define CUTLASS_MOE_STR(s) CUTLASS_MOE_STR_IMPL(s)
+#define CUTLASS_MOE_CAT_IMPL(a, b) a##b
+#define CUTLASS_MOE_CAT(a, b) CUTLASS_MOE_CAT_IMPL(a, b)
+
+#define CUTLASS_GROUPED_GEMM_BENCHMARK(Name)                                   \
+  cutlass::benchmark::BenchmarkRegistry<                                       \
+      cutlass::benchmark::MoEBenchmarkOptions>::Register(                      \
+      CUTLASS_MOE_STR(Name), &CUTLASS_MOE_CAT(Name, _func))
+
+// The runner is no longer templated on Config (the config is baked into
+// moe_kernel_launch.cpp via -DMOE_BENCH_CONFIG), so this macro just builds the
+// registration thunk under the requested name.
+#define CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(Name)                            \
+  static void CUTLASS_MOE_CAT(Name, _func)(                                    \
+      ::benchmark::State &state,                                               \
+      cutlass::benchmark::MoEBenchmarkOptions const &options,                  \
+      cutlass::KernelHardwareInfo const &hw_info) {                            \
+    auto bench = cutlass::benchmark::MoEBenchmarkRunner();                     \
+    bench.run(state, options, hw_info, CUTLASS_MOE_STR(Name));                 \
   }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+// ONE config compiled per binary, selected by -DMOE_BENCH_CONFIG=<name> at
+// build time (consumed in moe_kernel_launch.cpp). Compiling all configs into a
+// single device image triggers an IGC internal compiler error on CRI, so — like
+// example 12, which is one .cpp/target per dtype — each benchmark executable
+// holds a single dtype. The registered benchmark name (the config-file token)
+// is fixed below per binary so the .in files stay stable regardless of which
+// binary is built. This benchmark TU only needs MOE_BENCH_NAME.
+// TILE SWEEP: this binary holds ALL tiles for its dtype (selected by
+// -DMOE_DTYPE_<TAG>). moe_tile_list.hpp expands to X(NAME,CONFIG) entries; we
+// create a registration thunk per NAME and register them all. The .in line's
+// first token selects which tile runs (grouped_gemm-style). moe_setup_by_name
+// in the .cpp maps the same NAME back to the right cute config.
+#include "moe_tile_list.hpp"
+
+#ifdef MOE_TILE_X_LIST
+#define X(NAME, CONFIG) CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(NAME)
+MOE_TILE_X_LIST
+#undef X
+#endif
+
+static void register_grouped_gemm_benchmarks() {
+#ifdef MOE_TILE_X_LIST
+#define X(NAME, CONFIG) CUTLASS_GROUPED_GEMM_BENCHMARK(NAME);
+  MOE_TILE_X_LIST
+#undef X
+#endif
+}
