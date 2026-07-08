@@ -346,7 +346,7 @@ private:
         (state.counters["total_runtime_ms"] - state.counters["best_runtime_ms"] - state.counters["worst_runtime_ms"]) /
         static_cast<double>(state.iterations() - 2);
     state.counters["avg_tflops"] = gflop / state.counters["avg_runtime_ms"];
-    state.counters["best_tflop"] = gflop / state.counters["best_runtime_ms"];
+    state.counters["best_tflops"] = gflop / state.counters["best_runtime_ms"];
   }
 };
 

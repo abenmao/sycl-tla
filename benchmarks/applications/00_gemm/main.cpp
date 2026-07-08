@@ -35,6 +35,7 @@
 #include "cutlass/util/command_line.h"
 
 #include "benchmark_runner.hpp"
+#include "tabular_console_reporter.hpp"
 #if defined(SYCL_NVIDIA_TARGET) || !defined(CUTLASS_ENABLE_SYCL)
 #include "benchmarks_cuda.hpp"
 #elif defined(SYCL_INTEL_TARGET)
@@ -83,7 +84,8 @@ int main(int argc, const char** argv) {
   ::benchmark::SetDefaultTimeUnit(::benchmark::kMillisecond);
   ::benchmark::Initialize(&argc_bm, nullptr);
 
-  ::benchmark::RunSpecifiedBenchmarks();
+  cutlass::benchmark::TabularConsoleReporter reporter;
+  ::benchmark::RunSpecifiedBenchmarks(&reporter);
   ::benchmark::Shutdown();
 
   return 0;

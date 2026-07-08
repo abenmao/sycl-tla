@@ -22,19 +22,19 @@
 #   ./examples/sycl/05_bmg_gemm_with_epilogues/05_bmg_gemm_with_epilogue_gelu --m=1024 --n=1024 --k=1024
 
 # --- ReLU ---
-#BmgGemmReLUBF16BF16FP32_RRR_TileShape_256_256_32 --bm_name=cri_gemm_relu --m=1024 --n=1024 --k=1024
-BmgGemmReLUBF16BF16FP32_RRR_TileShape_256_256_32 --bm_name=cri_gemm_relu --m=512 --n=256 --k=1024
-#BmgGemmReLUBF16BF16FP32_RRR_TileShape_256_256_32 --bm_name=cri_gemm_relu --m=512 --n=256 --k=2048
-#BmgGemmReLUBF16BF16FP32_RRR_TileShape_256_256_32 --bm_name=cri_gemm_relu --m=512 --n=256 --k=4096
+#GemmReLU_BF16BF16FP32FP32FP32_RRR_WG256x256x32_SG32x64x32 --m=1024 --n=1024 --k=1024
+GemmReLU_BF16BF16FP32FP32FP32_RRR_WG256x256x32_SG32x64x32 --m=512 --n=256 --k=1024
+#GemmReLU_BF16BF16FP32FP32FP32_RRR_WG256x256x32_SG32x64x32 --m=512 --n=256 --k=2048
+#GemmReLU_BF16BF16FP32FP32FP32_RRR_WG256x256x32_SG32x64x32 --m=512 --n=256 --k=4096
 
 # --- SiLU ---
-#BmgGemmSiLUBF16BF16FP32_RRR_TileShape_256_256_32 --bm_name=cri_gemm_silu --m=1024 --n=1024 --k=1024
-BmgGemmSiLUBF16BF16FP32_RRR_TileShape_256_256_32 --bm_name=cri_gemm_silu --m=512 --n=256 --k=1024
-#BmgGemmSiLUBF16BF16FP32_RRR_TileShape_256_256_32 --bm_name=cri_gemm_silu --m=512 --n=256 --k=2048
-#BmgGemmSiLUBF16BF16FP32_RRR_TileShape_256_256_32 --bm_name=cri_gemm_silu --m=512 --n=256 --k=4096
+#GemmSiLU_BF16BF16FP32FP32FP32_RRR_WG256x256x32_SG32x64x32 --m=1024 --n=1024 --k=1024
+GemmSiLU_BF16BF16FP32FP32FP32_RRR_WG256x256x32_SG32x64x32 --m=512 --n=256 --k=1024
+#GemmSiLU_BF16BF16FP32FP32FP32_RRR_WG256x256x32_SG32x64x32 --m=512 --n=256 --k=2048
+#GemmSiLU_BF16BF16FP32FP32FP32_RRR_WG256x256x32_SG32x64x32 --m=512 --n=256 --k=4096
 
 # --- GELU ---
-#BmgGemmGELUBF16BF16FP32_RRR_TileShape_256_256_32 --bm_name=cri_gemm_gelu --m=1024 --n=1024 --k=1024
-BmgGemmGELUBF16BF16FP32_RRR_TileShape_256_256_32 --bm_name=cri_gemm_gelu --m=512 --n=256 --k=1024
-#BmgGemmGELUBF16BF16FP32_RRR_TileShape_256_256_32 --bm_name=cri_gemm_gelu --m=512 --n=256 --k=2048
-#BmgGemmGELUBF16BF16FP32_RRR_TileShape_256_256_32 --bm_name=cri_gemm_gelu --m=512 --n=256 --k=4096
+#GemmGELU_BF16BF16FP32FP32FP32_RRR_WG256x256x32_SG32x64x32 --m=1024 --n=1024 --k=1024
+GemmGELU_BF16BF16FP32FP32FP32_RRR_WG256x256x32_SG32x64x32 --m=512 --n=256 --k=1024
+#GemmGELU_BF16BF16FP32FP32FP32_RRR_WG256x256x32_SG32x64x32 --m=512 --n=256 --k=2048
+#GemmGELU_BF16BF16FP32FP32FP32_RRR_WG256x256x32_SG32x64x32 --m=512 --n=256 --k=4096

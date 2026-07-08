@@ -22,7 +22,7 @@
 #############################################################################
 
 # Test case 1: example 07 default shape (m=5120 n=4096 k=4096)
-# BmgDualGemmBF16BF16FP32_RRR_TileShape_128_128_64 --bm_name=bmg_dual_gemm --m=5120 --n=4096 --k=4096
+# DualGemm_BF16BF16FP32FP32_RRR_WG128x128x64_SG16x32x64 --m=5120 --n=4096 --k=4096
 
 # Test case 2: small shape for fast simulator validation
-# BmgDualGemmBF16BF16FP32_RRR_TileShape_128_128_64 --bm_name=bmg_dual_gemm --m=256 --n=256 --k=256
+# DualGemm_BF16BF16FP32FP32_RRR_WG128x128x64_SG16x32x64 --m=256 --n=256 --k=256

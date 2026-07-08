@@ -35,152 +35,81 @@
 #include "cutlass/epilogue/thread/activation.h"
 
 using Scheduler = cutlass::gemm::device::Scheduler;
-template <
-  typename TileShape,
-  typename Tiler,
-  typename GmemTiledCopyA,
-  typename GmemTiledCopyB>
-using Gemm_Bench_TF32TF32FP32_RRR = cutlass::gemm::device::GemmConfiguration<
-    cutlass::arch::IntelXe,
-    cutlass::tfloat32_t, cutlass::layout::RowMajor,
-    cutlass::tfloat32_t, cutlass::layout::RowMajor,
-    float, cutlass::layout::RowMajor,
-    float,
-    TileShape, Scheduler::Gemm, Tiler,
-    GmemTiledCopyA, GmemTiledCopyB>;
-
-using CriGemm_TF32TF32FP32_TileShape_512_256_16 = Shape<_512, _256, _16>;
-using CriGemm_TF32TF32FP32_Tile_512_256_16 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_TF32TF32FP32_TileShape_512_256_16>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-using CriGemmTF32TF32FP32_RRR_TileShape_512_256_16 = Gemm_Bench_TF32TF32FP32_RRR<CriGemm_TF32TF32FP32_TileShape_512_256_16, CriGemm_TF32TF32FP32_Tile_512_256_16, void, void>;
 
 template <
+  typename ElementD,
+  typename LayoutB,
+  Scheduler Sched,
   typename TileShape,
   typename Tiler,
-  typename GmemTiledCopyA,
-  typename GmemTiledCopyB>
-using Gemm_Bench_TF32FP32_RRR_SplitK = cutlass::gemm::device::GemmConfiguration<
+  typename GmemTiledCopyA = void,
+  typename GmemTiledCopyB = void>
+using Gemm_Bench_TF32 = cutlass::gemm::device::GemmConfiguration<
     cutlass::arch::IntelXe,
     cutlass::tfloat32_t, cutlass::layout::RowMajor,
-    cutlass::tfloat32_t, cutlass::layout::RowMajor,
+    cutlass::tfloat32_t, LayoutB,
     float, cutlass::layout::RowMajor,
-    float,
-    TileShape, Scheduler::GemmSplitK, Tiler,
-    GmemTiledCopyA, GmemTiledCopyB>;
-
-template <int Splits>
-struct CriGemmTF32TF32FP32_SplitK_RRR_TileShape_512_256_16 :
-    Gemm_Bench_TF32FP32_RRR_SplitK<
-        CriGemm_TF32TF32FP32_TileShape_512_256_16,
-        CriGemm_TF32TF32FP32_Tile_512_256_16,
-        void,
-        void> {
-  using Base = Gemm_Bench_TF32FP32_RRR_SplitK<
-      CriGemm_TF32TF32FP32_TileShape_512_256_16,
-      CriGemm_TF32TF32FP32_Tile_512_256_16,
-      void,
-      void>;
-  using GemmKernel = typename Base::GemmKernel;
-
-  constexpr static typename GemmKernel::Arguments defaultArguments() {
-    using StreamKMode =
-        cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams::DecompositionMode;
-    typename GemmKernel::Arguments arguments{};
-    arguments.scheduler = {Splits, StreamKMode::SplitK};
-    return arguments;
-  }
-};
-
-using CriGemmTF32TF32FP32_SplitK2_RRR_TileShape_512_256_16 =
-  CriGemmTF32TF32FP32_SplitK_RRR_TileShape_512_256_16<2>;
-
-using CriGemmTF32TF32FP32_SplitK4_RRR_TileShape_512_256_16 =
-    CriGemmTF32TF32FP32_SplitK_RRR_TileShape_512_256_16<4>;
-
-using CriGemm_TF32TF32FP32_TileShape_8_128_16 = Shape<_8, _128, _16>;
-using CriGemm_TF32TF32FP32_Tile_8_128_16 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_TF32TF32FP32_TileShape_8_128_16>, Layout<Shape<_1, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-using CriGemmTF32TF32FP32_RRR_TileShape_8_128_16 = Gemm_Bench_TF32TF32FP32_RRR<CriGemm_TF32TF32FP32_TileShape_8_128_16, CriGemm_TF32TF32FP32_Tile_8_128_16, void, void>;
-
-using CriGemm_TF32TF32FP32_TileShape_16_128_16 = Shape<_16, _128, _16>;
-using CriGemm_TF32TF32FP32_Tile_16_128_16 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_TF32TF32FP32_TileShape_16_128_16>, Layout<Shape<_1, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-using CriGemmTF32TF32FP32_RRR_TileShape_16_128_16 = Gemm_Bench_TF32TF32FP32_RRR<CriGemm_TF32TF32FP32_TileShape_16_128_16, CriGemm_TF32TF32FP32_Tile_16_128_16, void, void>;
-
-using CriGemm_TF32TF32FP32_TileShape_64_128_16 = Shape<_64, _128, _16>;
-using CriGemm_TF32TF32FP32_Tile_64_128_16 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_TF32TF32FP32_TileShape_64_128_16>, Layout<Shape<_1, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-using CriGemmTF32TF32FP32_RRR_TileShape_64_128_16 = Gemm_Bench_TF32TF32FP32_RRR<CriGemm_TF32TF32FP32_TileShape_64_128_16, CriGemm_TF32TF32FP32_Tile_64_128_16, void, void>;
-
-using CriGemm_TF32TF32FP32_TileShape_256_128_16 = Shape<_256, _128, _16>;
-using CriGemm_TF32TF32FP32_Tile_256_128_16 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_TF32TF32FP32_TileShape_256_128_16>, Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-using CriGemmTF32TF32FP32_RRR_TileShape_256_128_16 = Gemm_Bench_TF32TF32FP32_RRR<CriGemm_TF32TF32FP32_TileShape_256_128_16, CriGemm_TF32TF32FP32_Tile_256_128_16, void, void>;
-
-using CriGemm_TF32TF32FP32_TileShape_4_128_16 = Shape<_4, _128, _16>;
-using CriGemm_TF32TF32FP32_Tile_4_128_16 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<4, float, cutlass::tfloat32_t>>, Layout<CriGemm_TF32TF32FP32_TileShape_4_128_16>, Layout<Shape<_1, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
-using CriGemmTF32TF32FP32_RRR_TileShape_4_128_16 = Gemm_Bench_TF32TF32FP32_RRR<CriGemm_TF32TF32FP32_TileShape_4_128_16, CriGemm_TF32TF32FP32_Tile_4_128_16, void, void>;
-
-using CriGemm_TF32TF32FP32_TileShape_8_256_16 = Shape<_8, _256, _16>;
-using CriGemm_TF32TF32FP32_Tile_8_256_16 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_TF32TF32FP32_TileShape_8_256_16>, Layout<Shape<_1, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
-using CriGemmTF32TF32FP32_RRR_TileShape_8_256_16 = Gemm_Bench_TF32TF32FP32_RRR<CriGemm_TF32TF32FP32_TileShape_8_256_16, CriGemm_TF32TF32FP32_Tile_8_256_16, void, void>;
-
-using CriGemm_TF32TF32FP32_Tile_8_128_16_sg8x16 = typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cutlass::tfloat32_t>>, Layout<CriGemm_TF32TF32FP32_TileShape_8_128_16>, Layout<Shape<_1, _8, _1>, Stride<_8, _1, _0>>>::TiledMMA;
-using CriGemmTF32TF32FP32_RRR_TileShape_8_128_16_sg8x16 = Gemm_Bench_TF32TF32FP32_RRR<CriGemm_TF32TF32FP32_TileShape_8_128_16, CriGemm_TF32TF32FP32_Tile_8_128_16_sg8x16, void, void>;
-
-/////////////////////////////////////////////////////////////////////////////////////
-// "Destination == source" benchmark variants.
-//
-// These mirror the FP32-output benchmarks above but store the result in the same
-// element type as the inputs (e.g. BF16 in -> BF16 out). Accumulation still happens in
-// float; the epilogue downcasts to the source element on store. They are backed by the
-// generic GemmConfiguration / BlockScalingGemmConfiguration specializations
-// (ElementC free, float accumulator) added in gemm_configuration_sycl.hpp.
-//
-// The TileShape / Tiler (TiledMMA) aliases are output-independent (float accumulator),
-// so the existing *_TileShape_* / *_Tile_* aliases are reused.
-/////////////////////////////////////////////////////////////////////////////////////
-
-// Generic helper: output element == input element, float accumulator.
-template <typename Element, typename LayoutB, Scheduler Sched, typename TileShape, typename Tiler>
-using Gemm_Bench_SrcOut = cutlass::gemm::device::GemmConfiguration<
-    cutlass::arch::IntelXe,
-    Element, cutlass::layout::RowMajor,
-    Element, LayoutB,
-    float, cutlass::layout::RowMajor,
-    Element,
+    ElementD,
     TileShape, Sched, Tiler,
-    void, void,
-    cutlass::epilogue::fusion::LinearCombination<Element, float>>;
+    GmemTiledCopyA, GmemTiledCopyB,
+    cutlass::epilogue::fusion::LinearCombination<ElementD, float>>;
 
-template <typename Element, typename LayoutB, typename TileShape, typename Tiler, int Splits>
-struct Gemm_Bench_SrcOut_SplitK :
-    Gemm_Bench_SrcOut<Element, LayoutB, Scheduler::GemmSplitK, TileShape, Tiler> {
-  using Base = Gemm_Bench_SrcOut<Element, LayoutB, Scheduler::GemmSplitK, TileShape, Tiler>;
+template <typename ElementD, int WG_M, int WG_N, int WG_K, int SG_M, int SG_N, int Splits = 0>
+using TF32_RRR_GEMM_Base = Gemm_Bench_TF32<ElementD, cutlass::layout::RowMajor,
+    (Splits > 0 ? Scheduler::GemmSplitK : Scheduler::Gemm),
+    Shape<Int<WG_M>, Int<WG_N>, Int<WG_K>>,
+    XeTiledMMA<WG_M, WG_N, WG_K, SG_M, SG_N, float, cutlass::tfloat32_t>>;
+
+template <typename ElementD, int WG_M, int WG_N, int WG_K, int SG_M, int SG_N, int Splits = 0>
+struct TF32_RRR_GEMM :
+    TF32_RRR_GEMM_Base<ElementD, WG_M, WG_N, WG_K, SG_M, SG_N, Splits> {
+  using Base = TF32_RRR_GEMM_Base<ElementD, WG_M, WG_N, WG_K, SG_M, SG_N, Splits>;
   using GemmKernel = typename Base::GemmKernel;
+  static_assert(WG_M % SG_M == 0, "WG_M must be divisible by SG_M");
+  static_assert(WG_N % SG_N == 0, "WG_N must be divisible by SG_N");
+
   constexpr static typename GemmKernel::Arguments defaultArguments() {
-    using StreamKMode =
-        cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams::DecompositionMode;
-    typename GemmKernel::Arguments arguments{};
-    arguments.scheduler = {Splits, StreamKMode::SplitK};
-    return arguments;
+    if constexpr (Splits > 0) {
+      using StreamKMode =
+          cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams::DecompositionMode;
+      typename GemmKernel::Arguments arguments{};
+      arguments.scheduler = {Splits, StreamKMode::SplitK};
+      return arguments;
+    } else {
+      return Base::defaultArguments();
+    }
   }
 };
 
-// ---- TF32 -> TF32 ----
-using CriGemmTF32TF32TF32_SplitK4_RRR_TileShape_512_256_16 =
-    Gemm_Bench_SrcOut_SplitK<cutlass::tfloat32_t, cutlass::layout::RowMajor, CriGemm_TF32TF32FP32_TileShape_512_256_16, CriGemm_TF32TF32FP32_Tile_512_256_16, 4>;
-using CriGemmTF32TF32TF32_SplitK2_RRR_TileShape_512_256_16 =
-    Gemm_Bench_SrcOut_SplitK<cutlass::tfloat32_t, cutlass::layout::RowMajor, CriGemm_TF32TF32FP32_TileShape_512_256_16, CriGemm_TF32TF32FP32_Tile_512_256_16, 2>;
-using CriGemmTF32TF32TF32_RRR_TileShape_512_256_16 =
-    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_512_256_16, CriGemm_TF32TF32FP32_Tile_512_256_16>;
-using CriGemmTF32TF32TF32_RRR_TileShape_16_128_16 =
-    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_16_128_16, CriGemm_TF32TF32FP32_Tile_16_128_16>;
-using CriGemmTF32TF32TF32_RRR_TileShape_64_128_16 =
-    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_64_128_16, CriGemm_TF32TF32FP32_Tile_64_128_16>;
-using CriGemmTF32TF32TF32_RRR_TileShape_256_128_16 =
-    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_256_128_16, CriGemm_TF32TF32FP32_Tile_256_128_16>;
-using CriGemmTF32TF32TF32_RRR_TileShape_8_128_16 =
-    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_8_128_16, CriGemm_TF32TF32FP32_Tile_8_128_16>;
-using CriGemmTF32TF32TF32_RRR_TileShape_4_128_16 =
-    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_4_128_16, CriGemm_TF32TF32FP32_Tile_4_128_16>;
-using CriGemmTF32TF32TF32_RRR_TileShape_8_256_16 =
-    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_8_256_16, CriGemm_TF32TF32FP32_Tile_8_256_16>;
-using CriGemmTF32TF32TF32_RRR_TileShape_8_128_16_sg8x16 =
-    Gemm_Bench_SrcOut<cutlass::tfloat32_t, cutlass::layout::RowMajor, Scheduler::Gemm, CriGemm_TF32TF32FP32_TileShape_8_128_16, CriGemm_TF32TF32FP32_Tile_8_128_16_sg8x16>;
+using Gemm_TF32TF32FP32FP32FP32_RRR_WG512x256x16_SG64x64x16 = TF32_RRR_GEMM<float, 512, 256, 16, 64, 64>;
+using Gemm_TF32TF32FP32FP32FP32_RRR_WG512x256x16_SG64x64x16_SplitK2 = TF32_RRR_GEMM<float, 512, 256, 16, 64, 64, 2>;
+using Gemm_TF32TF32FP32FP32FP32_RRR_WG512x256x16_SG64x64x16_SplitK4 = TF32_RRR_GEMM<float, 512, 256, 16, 64, 64, 4>;
+using Gemm_TF32TF32FP32FP32FP32_RRR_WG8x128x16_SG8x32x16 = TF32_RRR_GEMM<float, 8, 128, 16, 8, 32>;
+using Gemm_TF32TF32FP32FP32FP32_RRR_WG16x128x16_SG16x32x16 = TF32_RRR_GEMM<float, 16, 128, 16, 16, 32>;
+using Gemm_TF32TF32FP32FP32FP32_RRR_WG64x128x16_SG64x32x16 = TF32_RRR_GEMM<float, 64, 128, 16, 64, 32>;
+using Gemm_TF32TF32FP32FP32FP32_RRR_WG256x128x16_SG32x32x16 = TF32_RRR_GEMM<float, 256, 128, 16, 32, 32>;
+using Gemm_TF32TF32FP32FP32FP32_RRR_WG4x128x16_SG4x32x16 = TF32_RRR_GEMM<float, 4, 128, 16, 4, 32>;
+using Gemm_TF32TF32FP32FP32FP32_RRR_WG8x256x16_SG8x32x16 = TF32_RRR_GEMM<float, 8, 256, 16, 8, 32>;
+using Gemm_TF32TF32FP32FP32FP32_RRR_WG8x128x16_SG8x16x16 = TF32_RRR_GEMM<float, 8, 128, 16, 8, 16>;
 
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG512x256x16_SG64x64x16_SplitK4 = TF32_RRR_GEMM<cutlass::tfloat32_t, 512, 256, 16, 64, 64, 4>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG512x256x16_SG64x64x16_SplitK2 = TF32_RRR_GEMM<cutlass::tfloat32_t, 512, 256, 16, 64, 64, 2>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG512x256x16_SG64x64x16 = TF32_RRR_GEMM<cutlass::tfloat32_t, 512, 256, 16, 64, 64>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG16x128x16_SG16x32x16 = TF32_RRR_GEMM<cutlass::tfloat32_t, 16, 128, 16, 16, 32>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG64x128x16_SG64x32x16 = TF32_RRR_GEMM<cutlass::tfloat32_t, 64, 128, 16, 64, 32>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG256x128x16_SG32x32x16 = TF32_RRR_GEMM<cutlass::tfloat32_t, 256, 128, 16, 32, 32>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG8x128x16_SG8x32x16 = TF32_RRR_GEMM<cutlass::tfloat32_t, 8, 128, 16, 8, 32>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG4x128x16_SG4x32x16 = TF32_RRR_GEMM<cutlass::tfloat32_t, 4, 128, 16, 4, 32>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG8x256x16_SG8x32x16 = TF32_RRR_GEMM<cutlass::tfloat32_t, 8, 256, 16, 8, 32>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG8x128x16_SG8x16x16 = TF32_RRR_GEMM<cutlass::tfloat32_t, 8, 128, 16, 8, 16>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG16x128x32_SG16x32x32 = TF32_RRR_GEMM<cutlass::tfloat32_t, 16, 128, 32, 16, 32>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG64x128x32_SG64x32x32 = TF32_RRR_GEMM<cutlass::tfloat32_t, 64, 128, 32, 64, 32>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG192x128x16_SG24x32x16 = TF32_RRR_GEMM<cutlass::tfloat32_t, 192, 128, 16, 24, 32>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG8x128x64_SG8x32x64 = TF32_RRR_GEMM<cutlass::tfloat32_t, 8, 128, 64, 8, 32>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG8x256x16_SG8x16x16 = TF32_RRR_GEMM<cutlass::tfloat32_t, 8, 256, 16, 8, 16>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG128x256x32_SG16x64x32 = TF32_RRR_GEMM<cutlass::tfloat32_t, 128, 256, 32, 16, 64>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG256x256x32_SG32x64x32 = TF32_RRR_GEMM<cutlass::tfloat32_t, 256, 256, 32, 32, 64>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG256x128x16_SG64x16x16 = TF32_RRR_GEMM<cutlass::tfloat32_t, 256, 128, 16, 64, 16>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG256x256x16_SG64x64x16 = TF32_RRR_GEMM<cutlass::tfloat32_t, 256, 256, 16, 64, 64>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG8x128x128_SG8x16x128 = TF32_RRR_GEMM<cutlass::tfloat32_t, 8, 128, 128, 8, 16>;
+using Gemm_TF32TF32FP32TF32FP32_RRR_WG8x128x128_SG8x16x128_SplitK2 = TF32_RRR_GEMM<cutlass::tfloat32_t, 8, 128, 128, 8, 16, 2>;

@@ -57,11 +57,12 @@ cutlass_benchmark_add_executable(
     benchmarks_sycl_fp16.cpp
     benchmarks_sycl_fp32.cpp
     benchmarks_sycl_tf32.cpp
-    benchmarks_sycl_e4m3_native.cpp
+    benchmarks_sycl_e4m3.cpp
     benchmarks_sycl_e4m3_block_scaled.cpp
-    benchmarks_sycl_e5m2_native.cpp
+    benchmarks_sycl_e5m2.cpp
     benchmarks_sycl_e5m2_block_scaled.cpp
     benchmarks_sycl_e2m1.cpp
+    benchmarks_sycl_e2m1_block_scaled.cpp
     SUITE cutlass_benchmarks_gemm
     TEST_COMMAND_OPTIONS
     ${GEMM_CONFIG_ARGS}
@@ -74,6 +75,11 @@ cutlass_benchmark_add_executable(
     SUITE cutlass_benchmarks_gemm
 )
 endif()
+
+# Use the SYCL target passed via -DDPCPP_SYCL_TARGET as the default benchmark
+# name, so benchmark output is tagged with the target without needing --bm_name.
+target_compile_definitions(cutlass_benchmarks_gemm_sycl
+    PRIVATE CUTLASS_BENCHMARK_SYCL_TARGET="${DPCPP_SYCL_TARGET}")
 
 else()
 

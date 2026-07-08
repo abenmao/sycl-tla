@@ -35,20 +35,22 @@ void register_gemm_benchmarks_bf16();
 void register_gemm_benchmarks_fp16();
 void register_gemm_benchmarks_fp32();
 void register_gemm_benchmarks_tf32();
-void register_gemm_benchmarks_e4m3_native();
+void register_gemm_benchmarks_e4m3();
 void register_gemm_benchmarks_e4m3_block_scaled();
-void register_gemm_benchmarks_e5m2_native();
+void register_gemm_benchmarks_e5m2();
 void register_gemm_benchmarks_e5m2_block_scaled();
 void register_gemm_benchmarks_e2m1();
+void register_gemm_benchmarks_e2m1_block_scaled();
 
 void register_gemm_benchmarks() {
   register_gemm_benchmarks_bf16();
   register_gemm_benchmarks_fp16();
   register_gemm_benchmarks_fp32();
   register_gemm_benchmarks_tf32();
-  register_gemm_benchmarks_e4m3_native();
+  register_gemm_benchmarks_e4m3();
   register_gemm_benchmarks_e4m3_block_scaled();
-  register_gemm_benchmarks_e5m2_native();
+  register_gemm_benchmarks_e5m2();
   register_gemm_benchmarks_e5m2_block_scaled();
   register_gemm_benchmarks_e2m1();
+  register_gemm_benchmarks_e2m1_block_scaled();
 }

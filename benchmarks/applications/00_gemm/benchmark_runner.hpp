@@ -60,7 +60,56 @@
 
 using namespace cute;
 
+// ---------------------------------------------------------------------------
+// GEMM benchmark naming convention
+// ---------------------------------------------------------------------------
+// Benchmark names registered via CUTLASS_CREATE_GEMM_BENCHMARK (see the
+// `benchmarks_sycl_types_*.hpp` files) follow a fixed pattern, e.g.:
+//
+//   Gemm_BF16BF16FP32BF16FP32_RRR_WG128x192x64_SG16x48x64
+//   BLockScalingGemm_E4M3E4M3FP32BF16FP32_RRR_WG16x256x256_SG16x16x256_GS32
+//   BLockScalingGemmNonNative_E4M3E4M3FP32BF16FP32_RRR_WG8x128x256_SG8x32x256_GS32
+//
+// Reading left to right:
+//   - "Gemm" / "BLockScalingGemm" prefix (followed by "_")
+//       Plain GEMM, or an MX/OCP microscaling block-scaled GEMM
+//       (see the `GroupSize`/`GS` note below).
+//   - "NonNative" (block-scaled only, optional)
+//       Uses software dequantization of the scale factors before the MMA,
+//       as opposed to the default "native" path where the DPAS instruction
+//       consumes the scale factors directly.
+//   - Element/type sequence, e.g. "E4M3E4M3FP32BF16FP32"
+//       Five back-to-back type tags with no separator:
+//         ElementA, ElementB, ElementC, ElementD, AccType (accumulator /
+//         epilogue compute type). E.g. E4M3(A) E4M3(B) FP32(C) BF16(D) FP32(Acc).
+//   - "_RRR" (or "_RCR", etc.) layout tag
+//       One letter per operand, in order A / B / C: 'R' = RowMajor,
+//       'C' = ColumnMajor. E.g. "_RCR_" means A=RowMajor, B=ColumnMajor,
+//       C=RowMajor. A and C are RowMajor in every benchmark here; only the
+//       B letter actually varies.
+//   - "_WGmxnxk" workgroup tile shape
+//       WG_M x WG_N x WG_K: the tile computed by one workgroup/threadgroup.
+//   - "_SGmxnxk" subgroup tile shape
+//       SG_M x SG_N x SG_K: the tile computed by one subgroup within the
+//       workgroup (WG_M/SG_M and WG_N/SG_N give the subgroup grid).
+//   - "_GSn" group size (block-scaled only)
+//       The MX/OCP microscaling group size: the number of contiguous
+//       K-elements that share one scale factor (defaults to 32; some
+//       benchmarks use 128). See MainloopIntelXeXMX16BlockScaled's
+//       `GroupSize` template parameter in dispatch_policy.hpp.
+
+// The default benchmark name is the SYCL target passed to CMake via
+// -DDPCPP_SYCL_TARGET. Falls back to "GEMM" when unset/empty.
+#ifndef CUTLASS_BENCHMARK_SYCL_TARGET
+#define CUTLASS_BENCHMARK_SYCL_TARGET ""
+#endif
+
 namespace cutlass::benchmark {
+
+static inline std::string default_bm_name() {
+  std::string const target = CUTLASS_BENCHMARK_SYCL_TARGET;
+  return target.empty() ? std::string("GEMM") : target;
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -178,7 +227,7 @@ struct GEMMOptions {
           error(false),
           m(5120), n(4096), k(4096), l(1),
           alpha(1.f), beta(0.f),
-          bm_name("GEMM"),
+          bm_name(default_bm_name()),
           verify_mode(VerifyMode::None)
   { }
 
@@ -192,7 +241,7 @@ struct GEMMOptions {
     cmd.get_cmd_line_argument("l", l, 1);
     cmd.get_cmd_line_argument("alpha", alpha, 1.f);
     cmd.get_cmd_line_argument("beta", beta, 0.f);
-    cmd.get_cmd_line_argument("bm_name", bm_name, std::string("GEMM"));
+    cmd.get_cmd_line_argument("bm_name", bm_name, default_bm_name());
 
     // Parse verification mode. Default to device verification on real hardware,
     // but host verification on the CRI simulator where device verification +
@@ -219,7 +268,7 @@ struct GEMMOptions {
   std::string benchmark_name() const {
     std::stringstream full_name;
     full_name << bm_name << "/";
-    std::string const test_name_suffix = std::to_string(m) + "x" +
+    std::string const test_name_suffix = "MNKL_" + std::to_string(m) + "x" +
                                    std::to_string(n) + "x" +
                                    std::to_string(k) + "x" +
                                    std::to_string(l);
@@ -940,9 +989,9 @@ private:
     state.counters["avg_runtime_ms"] =
       (state.counters["total_runtime_ms"] -state.counters["best_runtime_ms"] - state.counters["worst_runtime_ms"] ) / static_cast<double>(state.iterations() - 2);
     state.counters["avg_tflops"] = gflop / state.counters["avg_runtime_ms"];
-    state.counters["avg_throughput"] = mega_bytes_transferred / state.counters["avg_runtime_ms"];
-    state.counters["best_tflop"] = gflop / state.counters["best_runtime_ms"];
-    state.counters["best_bandwidth"] = mega_bytes_transferred / state.counters["best_runtime_ms"];
+    state.counters["avg_bandwidth_gbs"] = mega_bytes_transferred / state.counters["avg_runtime_ms"];
+    state.counters["best_tflops"] = gflop / state.counters["best_runtime_ms"];
+    state.counters["best_bandwidth_gbs"] = mega_bytes_transferred / state.counters["best_runtime_ms"];
   }
 };
 

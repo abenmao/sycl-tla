@@ -52,6 +52,46 @@
 
 using namespace cute;
 
+// Compact WG/SG -> TiledMMA helper for benchmark declarations.
+//
+// Derives, from the work-group (WG) and sub-group (SG) tile dimensions:
+//   * the sub-group (atom) layout    = <WG_M/SG_M, WG_N/SG_N, 1>
+//   * the DPAS row-repeat (atom "M")  = min(SG_M, 8)
+// so a benchmark only needs to spell out its WG_MxWG_NxWG_K / SG_MxSG_NxSG_K tile
+// once instead of restating the Shape<> / TiledMMAHelper<> boilerplate.
+template <int WG_M, int WG_N, int WG_K, int SG_M, int SG_N,
+          typename AccType, typename InType,
+          int DpasM = (SG_M < 8 ? SG_M : 8)>
+using XeTiledMMA = typename cute::TiledMMAHelper<
+    cute::MMA_Atom<cute::XE_DPAS_TT<DpasM, AccType, InType>>,
+    cute::Layout<cute::Shape<cute::Int<WG_M>, cute::Int<WG_N>, cute::Int<WG_K>>>,
+    cute::Layout<cute::Shape<cute::Int<WG_M / SG_M>, cute::Int<WG_N / SG_N>, cute::_1>,
+                 cute::Stride<cute::Int<WG_N / SG_N>, cute::_1, cute::_0>>>::TiledMMA;
+
+// Block-scaled (MX) variant of XeTiledMMA. Uses the block-scaling DPAS atom
+// (XE_BDPAS_TT). The atom "M" repeat is fixed at 8 (unlike the plain-DPAS helper
+// above): the block-scaled kernels use the depth-8 systolic atom for every tile,
+// so DpasM is independent of SG_M here.
+template <int WG_M, int WG_N, int WG_K, int SG_M, int SG_N,
+          typename AccType, typename InType,
+          int DpasM = 8>
+using XeBlockScalingTiledMMA = typename cute::TiledMMAHelper<
+    cute::MMA_Atom<cute::XE_BDPAS_TT<DpasM, AccType, InType>>,
+    cute::Layout<cute::Shape<cute::Int<WG_M>, cute::Int<WG_N>, cute::Int<WG_K>>>,
+    cute::Layout<cute::Shape<cute::Int<WG_M / SG_M>, cute::Int<WG_N / SG_N>, cute::_1>,
+                 cute::Stride<cute::Int<WG_N / SG_N>, cute::_1, cute::_0>>>::TiledMMA;
+
+// W8A8 (FP8 -> FP16-MMA fast path) variant of XeTiledMMA. There is only one
+// supported MMA atom for this path (XE_8x16x16_F32F16F16F32_TT: FP16 inputs,
+// FP32 accumulate), so — unlike XeTiledMMA/XeBlockScalingTiledMMA — the atom
+// is not selected via AccType/InType template parameters.
+template <int WG_M, int WG_N, int WG_K, int SG_M, int SG_N>
+using XeW8A8TiledMMA = typename cute::TiledMMAHelper<
+    cute::MMA_Atom<cute::XE_8x16x16_F32F16F16F32_TT>,
+    cute::Layout<cute::Shape<cute::Int<WG_M>, cute::Int<WG_N>, cute::Int<WG_K>>>,
+    cute::Layout<cute::Shape<cute::Int<WG_M / SG_M>, cute::Int<WG_N / SG_N>, cute::_1>,
+                 cute::Stride<cute::Int<WG_N / SG_N>, cute::_1, cute::_0>>>::TiledMMA;
+
 namespace cutlass::gemm::device {
 
 enum class Scheduler { Gemm, GemmSplitK, GemmStreamK };
