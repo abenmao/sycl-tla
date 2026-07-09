@@ -256,7 +256,7 @@ public:
         const int kblocks_new = cute::ceil_div(seq_len_new, get<1>(TileShapeQK{}));
         k_blocks = kblocks_cache + kblocks_new;
       } else {
-        k_blocks = static_cast<int>(static_cast<unsigned>(seq_len) / static_cast<unsigned>(get<1>(TileShapeQK{})));
+        k_blocks = cute::ceil_div(seq_len, get<1>(TileShapeQK{}));
       }
 
       int offset_q = 0, offset_k = 0, offset_v = 0, offset_o = 0;
