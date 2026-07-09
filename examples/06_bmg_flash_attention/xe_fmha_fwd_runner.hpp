@@ -118,8 +118,8 @@ struct Options {
         use_paged_kv = true;
         cmd.get_cmd_line_argument("page_size", page_size, 128);
 
-        if (page_size % 128 != 0) {
-            std::cerr << "Invalid: page_size must be a multiple of 128" << std::endl;
+        if (page_size % 64 != 0) {
+            std::cerr << "Invalid: page_size must be a multiple of 64" << std::endl;
             return;
         }
     }
