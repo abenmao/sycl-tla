@@ -34,6 +34,7 @@
 #include "cute/tensor.hpp"
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/gemm.h"
+#include "cutlass/layout/matrix.h"
 #include "cutlass/gemm/group_array_problem_shape.hpp"
 #include "cutlass/gemm/kernel/tile_scheduler.hpp"
 #include "cutlass/kernel_hardware_info.hpp"
@@ -53,10 +54,14 @@ using ProblemShape = cutlass::gemm::GroupProblemShape<Shape<int, int, int>>;
 using TileScheduler = typename MoE::PersistentTileSchedulerXeMoE<ProblemShape>;
 using RasterOrderOptions = typename TileScheduler::RasterOrderOptions;
 
-template <typename T, char LayoutKind>
+// Build a 2D gmem tensor of shape (r, c) with the stride implied by Layout.
+//   ColumnMajor -> stride (1, r); RowMajor -> stride (c, 1). Layout is a real
+//   cutlass::layout type threaded down from the caller — no implicit transpose.
+template <typename T, class Layout>
 CUTE_DEVICE auto make_moe_tensor(T *ptr, int r, int c) {
   auto shape = make_shape(r, c);
-  if constexpr (LayoutKind == 'C')
+  constexpr bool is_col = cute::is_same_v<Layout, cutlass::layout::ColumnMajor>;
+  if constexpr (is_col)
     return make_tensor(make_gmem_ptr<T>(ptr),
                        make_layout(shape, make_stride(_1{}, r)));
   else
@@ -65,7 +70,7 @@ CUTE_DEVICE auto make_moe_tensor(T *ptr, int r, int c) {
 }
 
 template <class GmemTiledCopyA, class GmemTiledCopyB, class GmemTiledCopyD,
-          char LayoutKindA, char LayoutKindB, char LayoutKindD, class TiledMMA,
+          class LayoutA, class LayoutB, class LayoutD, class TiledMMA,
           typename ElementA, typename ElementB, typename ElementS,
           typename ElementD>
 CUTE_DEVICE void
@@ -79,7 +84,6 @@ MoEGEMM(const ElementA *Activations, const ElementB *Weights,
                           N, K, num_experts};
 
   auto work_tile_info = scheduler.initial_work_tile_info(Shape<_1, _1, _1>{});
-  constexpr char actual_layout_of_B = LayoutKindB ^ ('R' ^ 'C');
   bool did_group_change = true;
   int32_t curr_group = 0;
   int32_t prev_group = 0;
@@ -94,11 +98,11 @@ MoEGEMM(const ElementA *Activations, const ElementB *Weights,
     M = M_per_group[curr_group];
   }
 
-  auto A_tensor = make_moe_tensor<ElementA, LayoutKindA>(
+  auto A_tensor = make_moe_tensor<ElementA, LayoutA>(
       const_cast<ElementA *>(Activations), M, K);
-  auto B_tensor = make_moe_tensor<ElementB, actual_layout_of_B>(
+  auto B_tensor = make_moe_tensor<ElementB, LayoutB>(
       const_cast<ElementB *>(Weights), N, K);
-  auto D_tensor = make_moe_tensor<ElementD, LayoutKindD>(Outputs, M, N);
+  auto D_tensor = make_moe_tensor<ElementD, LayoutD>(Outputs, M, N);
 
   while (work_tile_info.is_valid()) {
     auto m_coord = work_tile_info.M_idx;
@@ -120,10 +124,10 @@ MoEGEMM(const ElementA *Activations, const ElementB *Weights,
           const_cast<ElementB *>(Weights) + int64_t(curr_group) * K * N;
       ElementD *ptr_D_curr_batch = Outputs + int64_t(cumulative_M) * N;
 
-      A_tensor = make_moe_tensor<ElementA, LayoutKindA>(ptr_A_curr_batch, M, K);
+      A_tensor = make_moe_tensor<ElementA, LayoutA>(ptr_A_curr_batch, M, K);
       B_tensor =
-          make_moe_tensor<ElementB, actual_layout_of_B>(ptr_B_curr_batch, N, K);
-      D_tensor = make_moe_tensor<ElementD, LayoutKindD>(ptr_D_curr_batch, M, N);
+          make_moe_tensor<ElementB, LayoutB>(ptr_B_curr_batch, N, K);
+      D_tensor = make_moe_tensor<ElementD, LayoutD>(ptr_D_curr_batch, M, N);
       did_group_change = false;
     }
 

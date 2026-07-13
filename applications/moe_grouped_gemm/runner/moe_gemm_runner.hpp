@@ -63,12 +63,12 @@
 
 #include <cute/tensor.hpp>
 #include <random>
+#include "cutlass/cutlass.h"
 
 #include <cute/util/compat.hpp>
 #include <sycl/ext/intel/experimental/grf_size_properties.hpp>
 #include <sycl/sycl.hpp>
 #include "cutlass/cutlass.h"
-
 #include "cutlass/kernel_hardware_info.h"
 #include "cutlass/platform/platform.h"
 #include "cutlass/tensor_ref.h"
@@ -84,6 +84,8 @@
 
 #include "moe_grouped_gemm/kernel/xe_moe_grouped_gemm.hpp"
 #include "moe_grouped_gemm/kernel/xe_moe_tile_scheduler.hpp"
+#include "moe_grouped_gemm/kernel/xe_moe_grouped_gemm_double_buffer.hpp"
+#include "moe_grouped_gemm/kernel/xe_moe_grouped_gemm_double_buffer_scaled.hpp"
 
 #pragma clang diagnostic ignored "-Wpass-failed"
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -95,9 +97,8 @@ using namespace MoE;
 
 using ElementAccumulator = float; // <- data type of accumulator
 
-// Block-scale load surface alignment (Intel Xe cache line = 64 bytes).
-// Per-expert scale buffers are padded to this so the hardware 2D block-scale
-// load surface is aligned.
+// Per-expert scale buffers are padded to this alignment for the 2D block-scale
+// load surface.
 constexpr int kBlockScaleAlign = 64;
 
 // Scale layout kind for a config.
@@ -134,13 +135,9 @@ struct VerificationHelper {
     }
   }
 
-  // BF16 verification via a host reference GEMM (no scaling). Like verify_scaled,
-  // the reference runs on the REAL CPU (cutlass::reference::host::compute_gemm),
-  // NOT the device path: "device" here is the cycle-accurate AubLoad simulator,
-  // which runs on the CPU and is orders of magnitude slower than a native host
-  // GEMM. A/B/D are copied to host, A/B upcast to FP32, and each expert is
-  // compared with a relative tolerance (bf16/half rounding needs tolerance, not
-  // an exact match against an FP32 reference).
+  // BF16 verification via a host reference GEMM (no scaling). A/B/D are copied
+  // to host, A/B upcast to FP32, and each expert is compared with a relative
+  // tolerance (bf16/half rounding needs tolerance, not exact match).
   template <class ElementA, class ElementB, class ElementD,
             class = std::enable_if_t<
                 is_any_of_v<ElementA, cute::bfloat16_t, cute::half_t> &&
@@ -196,17 +193,32 @@ struct VerificationHelper {
           float, LayoutA, float, LayoutB, float, LayoutD, float, float>(
           {Mg, n, k}, 1.0f, ref_A, ref_B, 0.0f, ref_C, ref_Dt, 0.0f);
 
+      int mismatch_count = 0;
       for (int64_t idx = 0; idx < int64_t(Mg) * n; idx++) {
         float got = float(h_D[d_off + idx]);
         if (!cutlass::relatively_equal(h_ref_D[idx], got, rtol, nonzero_floor)) {
           passed = false;
-          break;
+          if (mismatch_count < 10)
+            std::cerr << "  mismatch expert=" << g << " idx=" << idx
+                      << " got=" << got << " ref=" << h_ref_D[idx] << "\n";
+          if (++mismatch_count >= 100) {
+            std::cerr << "  Stopping after 100 mismatches..." << std::endl;
+            break;
+          }
         }
       }
-      if (!passed)
-        break;
+      // Always print first 10 elements of expert 0 for a sanity eye-check.
+      if (g == 0) {
+        std::cerr << "  [expert 0 first 10 elements]  got vs ref:" << std::endl;
+        for (int64_t i = 0; i < std::min<int64_t>(10, int64_t(Mg) * n); i++)
+          std::cerr << "    [" << i << "]  got=" << float(h_D[d_off + i])
+                    << "  ref=" << h_ref_D[i] << "\n";
+      }
       cumM += Mg;
     }
+    std::cerr << "\n=== Verification Summary ===" << std::endl
+              << "  Result: " << (passed ? "PASSED" : "FAILED") << std::endl
+              << "============================" << std::endl;
     return passed;
   }
 
@@ -226,14 +238,21 @@ struct VerificationHelper {
   //   kk, col] at g*N*K + kk*N + col.
   // The scale element type is generic (FP32 for tensor scale, E8M0 for MX),
   // read through float().
-  template <bool IsTensor, class ElementA, class ElementScale, class ElementD>
+  // BColMajor selects the WEIGHT (B) memory layout the kernel uses, matching
+  // Config::LayoutB (via the operand convention in make_moe_tensor):
+  //   false = RowMajor B    -> N-contiguous weights, element (kk,col) at kk*n+col
+  //   true  = ColumnMajor B -> K-contiguous weights, element (kk,col) at col*k+kk
+  // The device weight buffer is a flat array; only this indexing (fill + host
+  // reference) defines its layout, and it must match the kernel's B stride.
+  // Scale (SFB) storage is decoupled and stays N-major regardless (like ex51).
+  template <bool IsTensor, bool BColMajor, class ElementA, class ElementScale,
+            class ElementD>
   bool verify_scaled(sycl::queue &Q, const ElementA *d_A, const ElementA *d_B,
                      const ElementScale *d_sA, const ElementScale *d_sB,
-                     const ElementD *d_D, int GroupN, int GroupK) {
+                     const ElementD *d_D, int GroupN, int GroupK,
+                     int scaleB_padded_n_override = 0) {
     const int scale_k = (k + GroupK - 1) / GroupK;
     const int scale_n = (n + GroupN - 1) / GroupN;
-    // Block (MX) scale storage is padded so the hardware 2D scale load surface
-    // is aligned (must match the launcher). Tensor scale is contiguous.
     auto round_up_align = [](int v) {
       return ((v + kBlockScaleAlign - 1) / kBlockScaleAlign) * kBlockScaleAlign;
     };
@@ -264,18 +283,18 @@ struct VerificationHelper {
       Q.memcpy(h_B_full.data(), d_B, B_elems * sizeof(ElementA)).wait();
     }
 
-    // Per-expert padded M prefix sum and padded scale_n (Block path only).
+    // Per-expert padded M prefix sum for scale-A (2D block load requires padding).
     std::vector<int64_t> padded_offsetA(groups, 0);
     int64_t padded_M_total = 0;
     for (int g = 0; g < groups; g++) {
       padded_offsetA[g] = padded_M_total;
       int Mg = cute::get<0>(problem_sizes_host[g]);
-      padded_M_total += IsTensor ? Mg : round_up_align(Mg);
+      padded_M_total += round_up_align(Mg);
     }
-    const int padded_scale_n = IsTensor ? scale_n : round_up_align(scale_n);
+    const int padded_scale_n = (scaleB_padded_n_override > 0)
+        ? scaleB_padded_n_override : round_up_align(scale_n);
 
-    const int64_t sA_size =
-        IsTensor ? int64_t(m) * scale_k : padded_M_total * scale_k;
+    const int64_t sA_size = padded_M_total * scale_k;
     const int64_t sB_size = int64_t(groups) * padded_scale_n * scale_k;
     std::vector<ElementScale> h_sA(sA_size);
     std::vector<ElementScale> h_sB(sB_size);
@@ -302,19 +321,15 @@ struct VerificationHelper {
     };
 
     // Dequantize into FP32 host buffers (same layout as the quantized inputs).
+    // Both Tensor and Block paths now use padded MN-major 3D layout for scales.
     std::vector<float> h_A_dq(A_elems);
     std::vector<float> h_B_dq(B_elems);
     int cumM = 0;
     for (int g = 0; g < groups; g++) {
       int Mg = cute::get<0>(problem_sizes_host[g]);
-      const int rowsA = IsTensor ? Mg : round_up_align(Mg); // A kb stride
-      // A_dq[(cumM+row), kk] = A * scaleA[row, kk/GroupK]
-      // scaleA index:
-      //   Tensor: cumM*scale_k + row + kb*Mg          (contiguous (M,scale_k))
-      //   Block : padded_offsetA[g]*scale_k + row + kb*round_up(Mg,64)
-      //           (MN-major padded (M,scale_k,1) stride (1, round_up_M, ...))
-      const int64_t baseA =
-          IsTensor ? int64_t(cumM) * scale_k : padded_offsetA[g] * scale_k;
+      const int rowsA = round_up_align(Mg);
+      // scaleA: padded_offsetA[g]*scale_k + row + kb*round_up(Mg,64)
+      const int64_t baseA = padded_offsetA[g] * scale_k;
       for (int row = 0; row < Mg; row++) {
         for (int kk = 0; kk < k; kk++) {
           int kb = kk / GroupK;
@@ -323,12 +338,9 @@ struct VerificationHelper {
               get_A(int64_t(cumM + row) * k + kk) * sa;
         }
       }
-      // B_dq[g, kk, col] = B * scaleB[col/GroupN, kk/GroupK]
-      // scaleB index:
-      //   Tensor: g*scale_n*scale_k + nb*scale_k + kb  (row-major
-      //   (scale_n,scale_k)) Block : g*padded_scale_n*scale_k + col +
-      //   kb*padded_scale_n
-      //           (group_n==1 so nb==col; MN-major padded (scale_n,scale_k,1))
+      // Scale-B dequant: both paths use padded (scale_n, scale_k, 1) layout.
+      // Tensor: GroupN=N → nb = col/N = 0 (single broadcast scale per expert).
+      // Block:  GroupN=1 → nb = col (per-N-row scale).
       for (int kk = 0; kk < k; kk++) {
         int kb = kk / GroupK;
         for (int col = 0; col < n; col++) {
@@ -341,21 +353,27 @@ struct VerificationHelper {
             sb = float(h_sB[int64_t(g) * padded_scale_n * scale_k + col +
                             int64_t(kb) * padded_scale_n]);
           }
-          h_B_dq[int64_t(g) * n * k + int64_t(kk) * n + col] =
-              get_B(int64_t(g) * n * k + int64_t(kk) * n + col) * sb;
+          // B element (kk, col) offset within the expert's flat buffer:
+          //   RowMajor B (N-contiguous):  kk*n + col
+          //   ColumnMajor B (K-contiguous): col*k + kk
+          const int64_t b_elem = BColMajor ? (int64_t(col) * k + kk)
+                                           : (int64_t(kk) * n + col);
+          const int64_t b_idx = int64_t(g) * n * k + b_elem;
+          h_B_dq[b_idx] = get_B(b_idx) * sb;
         }
       }
       cumM += Mg;
     }
 
-    // Reference on the REAL CPU via cutlass::reference::host::compute_gemm (NOT
-    // the device path: "device" here is the cycle-accurate AubLoad simulator,
-    // which runs on the CPU and is orders of magnitude slower than a native host
-    // GEMM). A/B are already dequantized into FP32 host buffers (h_A_dq/h_B_dq);
-    // we copy the kernel output D to host and compare per expert with a relative
+    // A/B are already dequantized into FP32 host buffers (h_A_dq/h_B_dq);
+    // copy the kernel output D to host and compare per expert with a relative
     // tolerance (dequant + low-precision accumulation needs tolerance, not exact).
     using LayoutA = cutlass::layout::RowMajor;
-    using LayoutB = cutlass::layout::RowMajor;
+    // B reference layout mirrors the fill above (over the K×N operand {k,n}):
+    //   RowMajor B    -> N-contiguous (kk*n+col)
+    //   ColumnMajor B -> K-contiguous (col*k+kk)
+    using LayoutB = cute::conditional_t<BColMajor, cutlass::layout::ColumnMajor,
+                                        cutlass::layout::RowMajor>;
     using LayoutD = cutlass::layout::RowMajor;
 
     std::vector<ElementD> h_D_raw(int64_t(m) * n);
@@ -385,26 +403,42 @@ struct VerificationHelper {
           float, LayoutA, float, LayoutB, float, LayoutD, float, float>(
           {Mg, n, k}, 1.0f, ref_A, ref_B, 0.0f, ref_C, ref_Dt, 0.0f);
 
+      int mismatch_count = 0;
       for (int64_t idx = 0; idx < int64_t(Mg) * n; idx++) {
         float got = float(h_D_raw[d_off + idx]);
         if (!cutlass::relatively_equal(h_ref_D[idx], got, rtol, nonzero_floor)) {
-          passed = false; break;
+          passed = false;
+          if (mismatch_count < 10)
+            std::cerr << "  mismatch expert=" << g << " idx=" << idx
+                      << " got=" << got << " ref=" << h_ref_D[idx] << std::endl;
+          if (++mismatch_count >= 100) {
+            std::cerr << "  Stopping after 100 mismatches..." << std::endl;
+            break;
+          }
         }
       }
-      if (!passed) break;
+      // Always print first 10 elements of expert 0 for a sanity eye-check.
+      if (g == 0) {
+        std::cerr << "  [expert 0 first 10 elements]  got vs ref:" << std::endl;
+        for (int64_t i = 0; i < std::min<int64_t>(10, int64_t(Mg) * n); i++)
+          std::cerr << "    [" << i << "]  got=" << float(h_D_raw[d_off + i])
+                    << "  ref=" << h_ref_D[i] << std::endl;
+      }
       cumM += Mg;
     }
+    std::cerr << "\n=== Verification Summary ===" << std::endl
+              << "  Result: " << (passed ? "PASSED" : "FAILED") << std::endl
+              << "============================" << std::endl;
     return passed;
   }
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Selects the per-target workgroup tile from a Config (defined below): BMG
-// keeps its original tiles while CRI/xe35 gets the tuned wide/deep ones. The
-// preprocessor resolves this before parsing, so the alias is exactly one of the
-// two member tiles. Config::TileShape{Cri,Bmg} are dependent names, so this may
-// precede the config definitions.
+// Selects the per-target workgroup tile from a Config (defined below).
+// The preprocessor resolves this before parsing, so the alias is exactly one of
+// the two member tiles. Config::TileShape{Cri,Bmg} are dependent names, so this
+// may precede the config definitions.
 template <class Config>
 using MoETileShape =
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
@@ -431,13 +465,7 @@ auto choose_tiled_mma(TA *A, TB *B) {
   using TA_non_CV = cutlass::platform::remove_cv_t<TA>;
   using TB_non_CV = cutlass::platform::remove_cv_t<TB>;
 
-  // Subgroup tiling, n-major, chosen by hardware target. These are tuned for
-  // the hardcoded input shapes used in this benchmark, which correspond to a
-  // prefill step of the gpt-oss-20b model (the recorded per-expert token (M)
-  // distribution is highly skewed). Not an endorsement for all input shapes.
-  //   CRI / xe35 : 8x4 SGs (32 SGs / threads per WG, matching examples 50/51);
-  //                per-SG 32(M)x32(N) over the 256x128 WG tile.
-  //   xe20 / BMG : 8x2 SGs (16 SGs); per-SG 32(M)x64(N).
+  // Subgroup tiling, n-major, chosen by hardware target.
   // Note: the N subgroup count must keep per-SG N (BLK_N / SG_N) >= the GroupN
   // scale-broadcast width in the hand-written block-scale mainloop, so N is not
   // over-subdivided (e.g. a 4x8 layout -> per-SG N=16 breaks the broadcast).
@@ -478,7 +506,7 @@ auto choose_tiled_mma(TA *A, TB *B) {
 // vs mxfp8-e4m3 are both e4m3->bf16 at 256x256x64 but take different scale paths).
 // The trailing Config makes every (dtype, scale-kind, tile) a distinct name,
 // required once one binary compiles more than one config (the merged build).
-template <typename, typename, typename, char, char, typename, typename>
+template <typename, typename, typename, typename, typename, typename, typename>
 class GemmCuteName;
 
 // Verification-free, single-launch CORE of the MoE GEMM launch. This is the
@@ -487,7 +515,7 @@ class GemmCuteName;
 // The Google-Benchmark harness (benchmarks/applications/04_moe_gemm) times it in a loop.
 // Submits ONE N x K kernel (no up-gate 2x / down-proj expansion), waits, and
 // returns the elapsed device time in milliseconds.
-template <char layoutA, char layoutB, class Config, typename ElementA,
+template <class Config, typename ElementA,
           typename ElementB, typename ElementS, typename ElementD>
 double moe_launch_timed(const ElementA *activations, const ElementB *weights,
                         const ElementS *scalesA, const ElementS *scalesB,
@@ -516,6 +544,12 @@ double moe_launch_timed(const ElementA *activations, const ElementB *weights,
   // choose_tiled_mma() uses for the MMA WGTile, so the two can never drift.
   using TileShape = MoETileShape<Config>;
   using ClusterShape = Shape<_1, _1, _1>;
+  // Operand memory layouts come from the Config (single source of truth) and flow
+  // directly into the kernel — no hidden transpose. Default is RowMajor for every
+  // operand; mxfp4 configs set LayoutB = ColumnMajor via MxFp4ConfigSG.
+  using LayoutA = typename Config::LayoutA;
+  using LayoutB = typename Config::LayoutB;
+  using LayoutD = typename Config::LayoutD;
   auto scheduler_params =
       PersistentTileSchedulerXeMoE<ProblemShape>::to_underlying_arguments(
           dummy_group_problem_shape, TileShape{}, ClusterShape{}, hw_info,
@@ -552,17 +586,17 @@ double moe_launch_timed(const ElementA *activations, const ElementB *weights,
   GPU_Clock timer;
   timer.start();
   auto event = Q.parallel_for<
-      GemmCuteName<ElementA, ElementB, ElementD, layoutA, layoutB, TileShape,
+      GemmCuteName<ElementA, ElementB, ElementD, LayoutA, LayoutB, TileShape,
                    Config>>(
       sycl::nd_range<3>(global, local), kernel_props, [=](auto) {
         if constexpr (Config::scale_kind == ScaleKind::Plain) {
           MoE::MoEGEMM<void, void, void,
-                       'R', 'R', 'R'>(activations, weights, scalesA, scalesB,
+                       LayoutA, LayoutB, LayoutD>(activations, weights, scalesA, scalesB,
                                       outputs, mma, num_rows_per_expert_device,
                                       num_experts, gemm_n, gemm_k,
                                       scheduler_params);
         } else {
-          MoE::MoEGEMM<void, void, void, 'R', 'R', 'R',
+          MoE::MoEGEMM<void, void, void, LayoutA, LayoutB, LayoutD,
                        Config::group_n, Config::group_k>(
               activations, weights, scalesA, scalesB, outputs, mma,
               num_rows_per_expert_device, num_experts, gemm_n, gemm_k,
@@ -598,6 +632,44 @@ void fill_scale(cutlass::DeviceAllocation<Element> &block, uint64_t seed,
 #endif
 }
 
+// Fills a tensor-scale-A buffer with per-row random values, replicated across
+// K entries. Layout: (padded_M, scale_k) per expert, stride (1, padded_M).
+// Each row gets a unique random scale; both K-columns hold the same value.
+template <class Element>
+void fill_scale_per_row(cutlass::DeviceAllocation<Element> &block, uint64_t seed,
+                        int num_experts, const int *M_per_expert, int scale_k) {
+  constexpr int kAlign = 64;
+  const float elt_max_f =
+      float(cutlass::platform::numeric_limits<Element>::max());
+  const float max_dequant_val = elt_max_f * 0.25f;
+  const float min_dequant_val = 0.5f;
+  const Element scale_max = Element(max_dequant_val / elt_max_f);
+  const Element scale_min = Element(min_dequant_val / elt_max_f);
+
+  std::vector<Element> h_buf(block.size());
+  std::mt19937 rng(seed);
+  auto rand_scale = [&]() -> Element {
+    float u = std::uniform_real_distribution<float>(
+        float(scale_min), float(scale_max))(rng);
+    return Element(u);
+  };
+
+  int64_t offset = 0;
+  for (int g = 0; g < num_experts; g++) {
+    int padded_M = ((M_per_expert[g] + kAlign - 1) / kAlign) * kAlign;
+    for (int row = 0; row < padded_M; row++) {
+      Element val = rand_scale();
+      for (int ki = 0; ki < scale_k; ki++) {
+        h_buf[offset + row + int64_t(ki) * padded_M] = val;
+      }
+    }
+    offset += int64_t(padded_M) * scale_k;
+  }
+
+  sycl::queue Q = compat::get_default_queue();
+  Q.memcpy(block.get(), h_buf.data(), block.size() * sizeof(Element)).wait();
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Per-variant configs. moe_kernel_launch.cpp selects one via -DMOE_BENCH_CONFIG.
 //
@@ -611,23 +683,10 @@ void fill_scale(cutlass::DeviceAllocation<Element> &block, uint64_t seed,
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Workgroup tile (M, N, K) per config AND per hardware target. This is the #1
-// perf knob for the scaled paths and is meant to be tuned, so every (dtype,
-// target) tile is one named line below. Both the MMA atom tiling and the tile
-// scheduler read MoETileShape<Config>, so they can never drift apart. K must
-// be a multiple of the DPAS atom K (32 for 8-bit data, 64 for 4-bit).
-//
-// CRI (xe35): a deep K (2x atom-K) cuts the K-tile count and amortizes the
-//   per-K-tile scale-load + dequant that was starving the scaled paths -- K is
-//   the dominant lever for the MX dtypes. N widens to 256 (matches ex51); M
-//   stays 256 (a wider M=512 hurt the small-N down-proj GEMM in A/B testing and
-//   spilled the scalar tensor-scale path).
-//     bf16        256x128x32   (plain XE_DPAS_TT path)
-//     mxfp8       256x256x64   (K = 2x 8-bit atom-K)
-//     mxfp4       512x256x128  (K = 2x 4-bit atom-K)
-//     fp8-tensor  256x256x64   (K = 2x 8-bit atom-K)
-// BMG (xe20): only the plain bf16 path runs here (the low-precision variants
-//   are CRI-only), so bf16 is the only config that carries a BMG tile.
-//     bf16        256x128x32
+// perf knob for the scaled paths and is meant to be tuned. Both the MMA atom
+// tiling and the tile scheduler read MoETileShape<Config>, so they can never
+// drift apart. K must be a multiple of the DPAS atom K (32 for 8-bit data,
+// 64 for 4-bit).
 using Bf16TileCri = Shape<_256, _128, _32>;
 using MxFp8TileCri = Shape<_256, _256, _64>;
 using MxFp4TileCri = Shape<_512, _256, _128>;
@@ -638,9 +697,8 @@ using Bf16TileBmg = Shape<_256, _128, _32>;
 // Output (D) element type is declared per Config (Config::ElementOutput) so the
 // launcher reads it directly rather than inferring from scale_kind. All current
 // paths (bf16, fp8-tensor, mxfp8, mxfp4) emit bf16.
-// NOTE: fp8-tensor previously emitted fp16 (half_t); reverted to bf16 because the
-// fp16 output triggered a wide-M D-store miscompute (kernel wrote ~3/16 of outputs
-// as zero on the 352x256/128x896/320x512 tiles). See fp8 bf16-output fix.
+// NOTE: fp8-tensor emits bf16 (not fp16); fp16 output triggered incorrect D writes
+// on certain wide-M tiles.
 
 // BF16: no scaling. ElementScale = void so the kernel takes the plain path.
 struct Bf16Config {
@@ -649,6 +707,10 @@ struct Bf16Config {
   using ElementOutput = cutlass::bfloat16_t;
   using TileShapeCri = Bf16TileCri;
   using TileShapeBmg = Bf16TileBmg;
+  // Operand layouts (see make_moe_tensor for the operand convention).
+  using LayoutA = cutlass::layout::RowMajor;
+  using LayoutB = cutlass::layout::RowMajor;
+  using LayoutD = cutlass::layout::RowMajor;
   static constexpr int group_k = 0;
   static constexpr int group_n = 0;
   static constexpr ScaleKind scale_kind = ScaleKind::Plain;
@@ -661,6 +723,10 @@ struct LowpConfig {
   using ElementScale = TScale;
   using ElementOutput = TOut;
   using TileShapeCri = TTileCri;
+  // Operand layouts (see make_moe_tensor for the operand convention).
+  using LayoutA = cutlass::layout::RowMajor;
+  using LayoutB = cutlass::layout::RowMajor;
+  using LayoutD = cutlass::layout::RowMajor;
   static constexpr int group_k = GroupK;
   static constexpr int group_n = GroupN;
   static constexpr ScaleKind scale_kind = Kind;
@@ -677,18 +743,18 @@ using MxFp8E5m2Config =
 
 // MXFP4 — 4-bit data, E8M0 scale, MX-spec block size 32 (group_k = 32). The
 // 4-bit DPAS atom-K is 64, so each MMA K-step spans two K-scale blocks; the
-// hardware BDPAS path handles this via the scale K-offset (MMA_K / GroupK = 2)
-// in make_scaled_offsets_k. group_n = 1 (per-N-row, MX-exact).
+// scale K-offset (MMA_K / GroupK = 2) is handled in make_scaled_offsets_k.
+// group_n = 1 (per-N-row, MX-exact).
 using MxFp4E2m1Config =
     LowpConfig<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1,
                ScaleKind::Block, MxFp4TileCri>;
 
-// FP8 with a single global FP32 tensor scale (per operand / per expert weight).
-// On CRI uses the narrower-M 256x256x64 tile: the tensor-scale broadcast path
-// is scalar and register-heavy, so the wide 512-M MX tile spills.
+// FP8 with E8M0 per-row A / per-tensor B scale via the BDPAS path.
+// Scale-A: one E8M0 per M row, replicated to scale_k=K/32.
+// Scale-B: single E8M0 per expert, broadcast-filled into a padded surface.
 using Fp8TensorE4m3Config =
-    LowpConfig<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor,
-               Fp8TensorTileCri>;
+    LowpConfig<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0,
+               ScaleKind::Tensor, Fp8TensorTileCri>;
 
 // ===================== TILE-SWEEP:
 using SG_8x4 = Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>;
@@ -703,6 +769,12 @@ struct LowpConfigSG {
   using ElementOutput = TOut;
   using TileShapeCri = TTileCri;
   using SGLayout = TSG;
+  // Operand layouts (CUTLASS operand convention; see make_moe_tensor). RowMajor B
+  // = N-contiguous weights, matching the benchmark fill + host reference. mxfp4
+  // overrides LayoutB to ColumnMajor via MxFp4ConfigSG.
+  using LayoutA = cutlass::layout::RowMajor;
+  using LayoutB = cutlass::layout::RowMajor;
+  using LayoutD = cutlass::layout::RowMajor;
   static constexpr int group_k = GroupK;
   static constexpr int group_n = GroupN;
   static constexpr ScaleKind scale_kind = Kind;
@@ -715,9 +787,24 @@ struct Bf16ConfigSG {
   using TileShapeCri = TTileCri;
   using TileShapeBmg = TTileCri;
   using SGLayout = TSG;
+  // Operand memory layouts. RowMajor default for all operands.
+  using LayoutA = cutlass::layout::RowMajor;
+  using LayoutB = cutlass::layout::RowMajor;
+  using LayoutD = cutlass::layout::RowMajor;
   static constexpr int group_k = 0;
   static constexpr int group_n = 0;
   static constexpr ScaleKind scale_kind = ScaleKind::Plain;
+};
+
+// mxfp4 with ColumnMajor B (K-contiguous weights), matching example 51's e2m1
+// (LayoutB = ColumnMajor). The kernel reads B with a K-contiguous stride and the
+// host reference fill/read follow suit (verify_scaled BColMajor path). Everything
+// else is inherited from LowpConfigSG. All MxFp4_* typedefs use this wrapper.
+template <class TElement, class TScale, int GroupK, int GroupN, ScaleKind Kind,
+          class TTileCri, class TSG, class TOut = cutlass::bfloat16_t>
+struct MxFp4ConfigSG
+    : LowpConfigSG<TElement, TScale, GroupK, GroupN, Kind, TTileCri, TSG, TOut> {
+  using LayoutB = cutlass::layout::ColumnMajor;
 };
 
 using MoeTile_64_1280_64 = Shape<_64, cute::Int<1280>, _64>;
@@ -732,8 +819,12 @@ using MoeTile_128_896_128 = Shape<_128, cute::Int<896>, _128>;
 using MoeTile_192_512_128 = Shape<cute::Int<192>, _512, _128>;
 using MoeTile_192_640_64 = Shape<cute::Int<192>, cute::Int<640>, _64>;
 using MoeTile_192_640_128 = Shape<cute::Int<192>, cute::Int<640>, _128>;
+using MoeTile_32_128_32 = Shape<_32, _128, _32>;
+using MoeTile_224_512_32 = Shape<cute::Int<224>, _512, _32>;
 using MoeTile_256_128_32 = Shape<_256, _128, _32>;
 using MoeTile_256_256_32 = Shape<_256, _256, _32>;
+using MoeTile_256_512_32 = Shape<_256, _512, _32>;
+using MoeTile_448_256_32 = Shape<cute::Int<448>, _256, _32>;
 using MoeTile_256_256_64 = Shape<_256, _256, _64>;
 using MoeTile_256_256_128 = Shape<_256, _256, _128>;
 using MoeTile_320_512_64 = Shape<cute::Int<320>, _512, _64>;
@@ -748,8 +839,8 @@ using MoeTile_512_256_32 = Shape<_512, _256, _32>;
 using MoeTile_64_1536_32 = Shape<_64, cute::Int<1536>, _32>;
 using MoeTile_608_128_64 = Shape<cute::Int<608>, _128, _64>;
 using MoeTile_608_128_128 = Shape<cute::Int<608>, _128, _128>;
-// Added for the src0 shapes.xlsx sweep (best per-shape tiles from the
-// efficiency model). 8-bit dtypes use K-tile 64, 4-bit (mxfp4) uses K-tile 128.
+// Additional tiles from the efficiency-model tile sweep.
+// 8-bit dtypes use K-tile 64, 4-bit (mxfp4) uses K-tile 128.
 using MoeTile_256_448_64 = Shape<_256, cute::Int<448>, _64>;
 using MoeTile_256_448_128 = Shape<_256, cute::Int<448>, _128>;
 using MoeTile_256_512_64 = Shape<_256, _512, _64>;
@@ -757,19 +848,31 @@ using MoeTile_256_512_128 = Shape<_256, _512, _128>;
 using MoeTile_320_320_64 = Shape<cute::Int<320>, cute::Int<320>, _64>;
 using MoeTile_320_320_128 = Shape<cute::Int<320>, cute::Int<320>, _128>;
 using MoeTile_192_512_64 = Shape<cute::Int<192>, _512, _64>;
+// Double-buffer tile shapes
+using MoeTile_128_512_64  = Shape<_128, _512, _64>;
+using MoeTile_128_512_128 = Shape<_128, _512, _128>;
+using MoeTile_192_256_64  = Shape<cute::Int<192>, _256, _64>;
+using MoeTile_192_256_128 = Shape<cute::Int<192>, _256, _128>;
+using MoeTile_192_320_64  = Shape<cute::Int<192>, cute::Int<320>, _64>;
+using MoeTile_192_320_128 = Shape<cute::Int<192>, cute::Int<320>, _128>;
+using MoeTile_224_256_32  = Shape<cute::Int<224>, _256, _32>;
+using MoeTile_224_256_64  = Shape<cute::Int<224>, _256, _64>;
+using MoeTile_224_256_128 = Shape<cute::Int<224>, _256, _128>;
+using MoeTile_288_256_64  = Shape<cute::Int<288>, _256, _64>;
+using MoeTile_288_256_128 = Shape<cute::Int<288>, _256, _128>;
 
-using Fp8Tensor_352_256_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_352_256_64, SG_4x8>;
-using Fp8Tensor_128_896_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_128_896_64, SG_4x8>;
-using Fp8Tensor_320_512_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_320_512_64, SG_4x8>;
-using Fp8Tensor_64_1792_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_64_1792_64, SG_4x8>;
-using Fp8Tensor_96_896_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_96_896_64, SG_4x8>;
-using Fp8Tensor_64_896_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_64_896_64, SG_4x8>;
-using Fp8Tensor_448_256_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_448_256_64, SG_8x4>;
-using Fp8Tensor_608_128_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_608_128_64, SG_4x8>;
-using Fp8Tensor_192_640_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_192_640_64, SG_4x8>;
-using Fp8Tensor_448_320_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_448_320_64, SG_8x4>;
-using Fp8Tensor_64_1280_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_64_1280_64, SG_4x8>;
-using Fp8Tensor_256_256_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_256_256_64, SG_8x4>;
+using Fp8Tensor_352_256_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_352_256_64, SG_4x8>;
+using Fp8Tensor_128_896_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_128_896_64, SG_4x8>;
+using Fp8Tensor_320_512_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_320_512_64, SG_4x8>;
+using Fp8Tensor_64_1792_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_64_1792_64, SG_4x8>;
+using Fp8Tensor_96_896_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_96_896_64, SG_4x8>;
+using Fp8Tensor_64_896_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_64_896_64, SG_4x8>;
+using Fp8Tensor_448_256_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_448_256_64, SG_8x4>;
+using Fp8Tensor_608_128_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_608_128_64, SG_4x8>;
+using Fp8Tensor_192_640_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_192_640_64, SG_4x8>;
+using Fp8Tensor_448_320_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_448_320_64, SG_8x4>;
+using Fp8Tensor_64_1280_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_64_1280_64, SG_4x8>;
+using Fp8Tensor_256_256_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_256_256_64, SG_8x4>;
 using MxFp8_352_256_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_352_256_64, SG_4x8>;
 using MxFp8_128_896_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_128_896_64, SG_4x8>;
 using MxFp8_320_512_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_320_512_64, SG_4x8>;
@@ -782,8 +885,7 @@ using MxFp8_448_320_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m
 using MxFp8_64_1280_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_64_1280_64, SG_4x8>;
 using MxFp8_256_256_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_256_64, SG_8x4>;
 using MxFp8E5m2_256_256_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_256_64, SG_8x4>;
-// E5M2 tile-sweep set: mirrors the mxfp8 (e4m3) shapes/SG layouts above — same
-// 8-bit MX block path, only the data element differs (e5m2 vs e4m3).
+// E5M2 tile-sweep set: same 8-bit MX block path, only the data element differs.
 using MxFp8E5m2_352_256_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_352_256_64, SG_4x8>;
 using MxFp8E5m2_128_896_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_128_896_64, SG_4x8>;
 using MxFp8E5m2_320_512_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_320_512_64, SG_4x8>;
@@ -794,27 +896,25 @@ using MxFp8E5m2_608_128_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_
 using MxFp8E5m2_192_640_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_192_640_64, SG_4x8>;
 using MxFp8E5m2_448_320_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_448_320_64, SG_8x4>;
 using MxFp8E5m2_64_1280_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_64_1280_64, SG_4x8>;
-using MxFp4_352_256_128 = LowpConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_352_256_128, SG_4x8>;
-using MxFp4_128_896_128 = LowpConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_128_896_128, SG_4x8>;
-using MxFp4_320_512_128 = LowpConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_320_512_128, SG_4x8>;
-using MxFp4_96_896_128 = LowpConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_96_896_128, SG_4x8>;
-using MxFp4_192_512_128 = LowpConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_192_512_128, SG_4x8>;
-using MxFp4_448_256_128 = LowpConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_448_256_128, SG_8x4>;
-using MxFp4_96_640_128 = LowpConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_96_640_128, SG_4x8>;
-using MxFp4_608_128_128 = LowpConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_608_128_128, SG_4x8>;
-using MxFp4_192_640_128 = LowpConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_192_640_128, SG_4x8>;
-using MxFp4_448_320_128 = LowpConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_448_320_128, SG_8x4>;
-using MxFp4_96_1280_128 = LowpConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_96_1280_128, SG_4x8>;
-using MxFp4_256_256_128 = LowpConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_256_128, SG_8x4>;
+using MxFp4_352_256_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_352_256_128, SG_4x8>;
+using MxFp4_128_896_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_128_896_128, SG_4x8>;
+using MxFp4_320_512_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_320_512_128, SG_4x8>;
+using MxFp4_96_896_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_96_896_128, SG_4x8>;
+using MxFp4_192_512_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_192_512_128, SG_4x8>;
+using MxFp4_448_256_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_448_256_128, SG_8x4>;
+using MxFp4_96_640_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_96_640_128, SG_4x8>;
+using MxFp4_608_128_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_608_128_128, SG_4x8>;
+using MxFp4_192_640_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_192_640_128, SG_4x8>;
+using MxFp4_448_320_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_448_320_128, SG_8x4>;
+using MxFp4_96_1280_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_96_1280_128, SG_4x8>;
+using MxFp4_256_256_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_256_128, SG_8x4>;
 
-// ---- src0 shapes.xlsx best-per-shape tiles (added) ----
-// SG layouts are the model's Best_sg_layout; all divisibility-verified
-// (per-SG M %% 8 == 0, per-SG N %% 16 == 0). 256x448/320x320/448x256 use 8x4;
-// 256x512/192x512/192x640 use 4x8.
-using Fp8Tensor_256_448_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_256_448_64, SG_8x4>;
-using Fp8Tensor_256_512_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_256_512_64, SG_4x8>;
-using Fp8Tensor_320_320_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_320_320_64, SG_8x4>;
-using Fp8Tensor_192_512_64 = LowpConfigSG<cutlass::float_e4m3_t, float, 0, 0, ScaleKind::Tensor, MoeTile_192_512_64, SG_4x8>;
+// Best-per-shape tiles from the efficiency model sweep.
+// SG layouts are divisibility-verified (per-SG M % 8 == 0, per-SG N % 16 == 0).
+using Fp8Tensor_256_448_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_256_448_64, SG_8x4>;
+using Fp8Tensor_256_512_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_256_512_64, SG_4x8>;
+using Fp8Tensor_320_320_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_320_320_64, SG_8x4>;
+using Fp8Tensor_192_512_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_192_512_64, SG_4x8>;
 using MxFp8_256_448_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_448_64, SG_8x4>;
 using MxFp8_256_512_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_64, SG_4x8>;
 using MxFp8_320_320_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_320_320_64, SG_8x4>;
@@ -823,15 +923,263 @@ using MxFp8E5m2_256_448_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_
 using MxFp8E5m2_256_512_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_64, SG_4x8>;
 using MxFp8E5m2_320_320_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_320_320_64, SG_8x4>;
 using MxFp8E5m2_192_512_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_192_512_64, SG_4x8>;
-using MxFp4_256_448_128 = LowpConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_448_128, SG_8x4>;
-using MxFp4_256_512_128 = LowpConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, SG_4x8>;
-using MxFp4_320_320_128 = LowpConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_320_320_128, SG_8x4>;
+using MxFp4_256_448_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_448_128, SG_8x4>;
+using MxFp4_256_512_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, SG_4x8>;
+using MxFp4_320_320_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_320_320_128, SG_8x4>;
 // (MxFp4_192_512_128 already defined above)
 
+using Bf16_32_128_32 = Bf16ConfigSG<MoeTile_32_128_32, SG_4x8>;
+using Bf16_224_512_32 = Bf16ConfigSG<MoeTile_224_512_32, SG_4x8>;
 using Bf16_256_128_32 = Bf16ConfigSG<MoeTile_256_128_32, SG_8x2>;
 using Bf16_256_256_32 = Bf16ConfigSG<MoeTile_256_256_32, SG_8x4>;
+using Bf16_256_512_32 = Bf16ConfigSG<MoeTile_256_512_32, SG_4x8>;
+using Bf16_448_256_32 = Bf16ConfigSG<MoeTile_448_256_32, SG_8x4>;
 using Bf16_512_256_32 = Bf16ConfigSG<MoeTile_512_256_32, SG_8x4>;
 using Bf16_64_1536_32 = Bf16ConfigSG<MoeTile_64_1536_32, SG_4x8>;
 
+template <class TTileCri, class TSG>
+struct Bf16DoubleBufferConfigSG {
+  using Element = cutlass::bfloat16_t;
+  using ElementScale = void;
+  using ElementOutput = cutlass::bfloat16_t;
+  using TileShapeCri = TTileCri;
+  using TileShapeBmg = TTileCri;
+  using SGLayout = TSG;
+  using LayoutA = cutlass::layout::RowMajor;
+  using LayoutB = cutlass::layout::RowMajor;
+  using LayoutD = cutlass::layout::RowMajor;
+  static constexpr int group_k = 0;
+  static constexpr int group_n = 0;
+  static constexpr ScaleKind scale_kind = ScaleKind::Plain;
+  static constexpr bool uniform_m = true;
+};
+
+template <char layoutA, char layoutB, class Config, typename ElementA,
+          typename ElementD>
+double moe_launch_timed_double_buffer(const ElementA *activations,
+                                const ElementA *weights,
+                                ElementD *outputs,
+                                const int uniform_m,
+                                const int num_experts,
+                                const int gemm_n,
+                                const int gemm_k) {
+  static_assert(Config::scale_kind == ScaleKind::Plain,
+                "moe_launch_timed_double_buffer only supports plain BF16");
+
+  using LayoutA = typename Config::LayoutA;
+  using LayoutB = typename Config::LayoutB;
+  using LayoutD = typename Config::LayoutD;
+
+  int sm_count =
+      cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
+  cutlass::KernelHardwareInfo hw_info{0, sm_count};
+
+  auto dummy_problem_shape = cute::Shape<int, int, int>{1, gemm_k, gemm_n};
+  auto dummy_group_problem_shape =
+      cutlass::gemm::GroupProblemShape<Shape<int, int, int>>{
+          1, &dummy_problem_shape, nullptr};
+
+  using TileShape = MoETileShape<Config>;
+  using ClusterShape = Shape<_1, _1, _1>;
+
+  // Build scheduler params via the standard scheduler (same base class).
+  // The uniform kernel only reads raster_order_ from the params struct;
+  // grid is a flat sm_count x 1 x 1 — no tile-count math needed here.
+  auto scheduler_params =
+      PersistentTileSchedulerXeMoE<ProblemShape>::to_underlying_arguments(
+          dummy_group_problem_shape, TileShape{}, ClusterShape{}, hw_info,
+          PersistentTileSchedulerXeMoE<ProblemShape>::Arguments{
+              1, RasterOrderOptions::AlongN});
+
+  auto mma = choose_tiled_mma<Config>(activations, weights);
+  auto MaxThreadsPerWorkgroup = size(mma);
+  dim3 local_range{MaxThreadsPerWorkgroup, 1, 1};
+
+  sycl::range<3> local  = {1, 1, local_range.x};
+  sycl::range<3> groups = {1, 1, static_cast<size_t>(sm_count)};
+  sycl::range<3> global = {local[0] * groups[0], local[1] * groups[1],
+                           local[2] * groups[2]};
+
+  namespace syclex = sycl::ext::oneapi::experimental;
+  namespace intelex = sycl::ext::intel::experimental;
+
+  syclex::properties kernel_props{syclex::sub_group_size<16>,
+#if (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+                                  intelex::grf_size<512>
+#else
+                                  intelex::grf_size<256>
+#endif
+  };
+  sycl::queue Q = compat::get_default_queue();
+
+  GPU_Clock timer;
+  timer.start();
+  auto event = Q.parallel_for<
+      GemmCuteName<ElementA, ElementA, ElementD, LayoutA, LayoutB, TileShape,
+                   Config>>(
+      sycl::nd_range<3>(global, local), kernel_props, [=](auto) {
+        MoE::MoEGEMMDoubleBuffer<void, void, void,
+                                 LayoutA, LayoutB, LayoutD,
+                                 decltype(mma), ElementA, ElementA, void, ElementD>(
+            activations, weights, static_cast<const void *>(nullptr),
+            outputs, mma, uniform_m, num_experts, gemm_n, gemm_k,
+            scheduler_params);
+      });
+  EventManager::getInstance().addEvent(event);
+  Q.wait_and_throw();
+  return double(timer.seconds() * 1000);
+}
+
+using Bf16DoubleBuffer_32_128_32  = Bf16DoubleBufferConfigSG<MoeTile_32_128_32,  SG_4x8>;
+using Bf16DoubleBuffer_224_256_32 = Bf16DoubleBufferConfigSG<MoeTile_224_256_32, SG_4x8>;
+using Bf16DoubleBuffer_256_256_32 = Bf16DoubleBufferConfigSG<MoeTile_256_256_32, SG_4x8>;
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Scaled uniform-M double-buffer configs + launcher.
+// Mirrors LowpConfigSG but adds uniform_m = true so the benchmark wiring can
+// distinguish it from the variable-M path.
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <class TElement, class TScale, int GroupK, int GroupN, ScaleKind Kind,
+          class TTileCri, class TSG, class TOut = cutlass::bfloat16_t>
+struct ScaledDoubleBufferConfigSG {
+  using Element = TElement;
+  using ElementScale = TScale;
+  using ElementOutput = TOut;
+  using TileShapeCri = TTileCri;
+  using TileShapeBmg = TTileCri;
+  using SGLayout = TSG;
+  // Operand layouts — RowMajor by default; MxFp4 overrides LayoutB via
+  // MxFp4ScaledDoubleBufferConfigSG (K-contiguous ColumnMajor B).
+  using LayoutA = cutlass::layout::RowMajor;
+  using LayoutB = cutlass::layout::RowMajor;
+  using LayoutD = cutlass::layout::RowMajor;
+  static constexpr int group_k = GroupK;
+  static constexpr int group_n = GroupN;
+  static constexpr ScaleKind scale_kind = Kind;
+  static constexpr bool uniform_m = true;
+
+  // SG_N must be divisible by 16; violating this produces silent incorrect D
+  // writes for experts 1+.
+  static constexpr int SG_NUMS_N = get<1>(TSG{}.shape());
+  static constexpr int BLK_N    = get<1>(TTileCri{});
+  static constexpr int SG_N     = BLK_N / SG_NUMS_N;
+  static_assert(SG_N % 16 == 0,
+      "Double-buffer D store requires SG_N (BLK_N/NUMS_N) divisible by 16.");
+};
+
+// MxFp4 double-buffer wrapper: K-contiguous (ColumnMajor) B layout.
+// Mirrors MxFp4ConfigSG for the double-buffer path.
+template <class TElement, class TScale, int GroupK, int GroupN, ScaleKind Kind,
+          class TTileCri, class TSG, class TOut = cutlass::bfloat16_t>
+struct MxFp4ScaledDoubleBufferConfigSG
+    : ScaledDoubleBufferConfigSG<TElement, TScale, GroupK, GroupN, Kind, TTileCri, TSG, TOut> {
+  using LayoutB = cutlass::layout::ColumnMajor;
+};
+
+template <char layoutA, char layoutB, class Config,
+          typename ElementA, typename ElementS, typename ElementD>
+double moe_launch_timed_double_buffer_scaled(
+    const ElementA *activations, const ElementA *weights,
+    const ElementS *scalesA,    const ElementS *scalesB,
+    ElementD *outputs,
+    const int uniform_m, const int num_experts,
+    const int gemm_n,    const int gemm_k,
+    const int group_n,   const int group_k) {
+  static_assert(Config::scale_kind != ScaleKind::Plain,
+                "use moe_launch_timed_double_buffer for plain BF16");
+
+  using LayoutA = typename Config::LayoutA;
+  using LayoutB = typename Config::LayoutB;
+  using LayoutD = typename Config::LayoutD;
+
+  int sm_count =
+      cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
+  cutlass::KernelHardwareInfo hw_info{0, sm_count};
+
+  auto dummy_problem_shape = cute::Shape<int, int, int>{1, gemm_k, gemm_n};
+  auto dummy_group_problem_shape =
+      cutlass::gemm::GroupProblemShape<Shape<int, int, int>>{
+          1, &dummy_problem_shape, nullptr};
+
+  using TileShape    = MoETileShape<Config>;
+  using ClusterShape = Shape<_1, _1, _1>;
+
+  auto scheduler_params =
+      PersistentTileSchedulerXeMoE<ProblemShape>::to_underlying_arguments(
+          dummy_group_problem_shape, TileShape{}, ClusterShape{}, hw_info,
+          PersistentTileSchedulerXeMoE<ProblemShape>::Arguments{
+              1, RasterOrderOptions::AlongN});
+
+  auto mma = choose_tiled_mma<Config>(activations, weights);
+  auto MaxThreadsPerWorkgroup = size(mma);
+
+  sycl::range<3> local  = {1, 1, static_cast<size_t>(MaxThreadsPerWorkgroup)};
+  sycl::range<3> groups = {1, 1, static_cast<size_t>(sm_count)};
+  sycl::range<3> global = {local[0] * groups[0], local[1] * groups[1],
+                           local[2] * groups[2]};
+
+  namespace syclex = sycl::ext::oneapi::experimental;
+  namespace intelex = sycl::ext::intel::experimental;
+
+  syclex::properties kernel_props{syclex::sub_group_size<16>,
+#if (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+                                  intelex::grf_size<512>
+#else
+                                  intelex::grf_size<256>
+#endif
+  };
+  sycl::queue Q = compat::get_default_queue();
+
+  GPU_Clock timer;
+  timer.start();
+  auto event = Q.parallel_for<
+      GemmCuteName<ElementA, ElementA, ElementD, LayoutA, LayoutB, TileShape,
+                   Config>>(
+      sycl::nd_range<3>(global, local), kernel_props, [=](auto) {
+        MoE::MoEGEMMDoubleBufferScaled<void, void, void,
+                                       LayoutA, LayoutB, LayoutD,
+                                       Config::group_n, Config::group_k,
+                                       decltype(mma),
+                                       ElementA, ElementA, ElementS, ElementD>(
+            activations, weights, scalesA, scalesB,
+            outputs, mma, uniform_m, num_experts, gemm_n, gemm_k,
+            group_n, group_k, scheduler_params);
+      });
+  EventManager::getInstance().addEvent(event);
+  Q.wait_and_throw();
+  return double(timer.seconds() * 1000);
+}
+
+// Scaled double-buffer configs — one per dtype matching the existing LowpConfigSG set.
+// E4M3
+using MxFp8DoubleBuffer_256_256_64  = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_256_64,  SG_8x4>;
+using MxFp8DoubleBuffer_352_256_64  = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_352_256_64,  SG_4x8>;
+using MxFp8DoubleBuffer_320_512_64  = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_320_512_64,  SG_4x8>;
+using MxFp8DoubleBuffer_128_896_64  = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_128_896_64,  SG_4x8>;
+// E5M2
+using MxFp8E5m2DoubleBuffer_256_256_64  = ScaledDoubleBufferConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_256_64,  SG_8x4>;
+using MxFp8E5m2DoubleBuffer_352_256_64  = ScaledDoubleBufferConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_352_256_64,  SG_4x8>;
+using MxFp8E5m2DoubleBuffer_320_512_64  = ScaledDoubleBufferConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_320_512_64,  SG_4x8>;
+using MxFp8E5m2DoubleBuffer_128_896_64  = ScaledDoubleBufferConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_128_896_64,  SG_4x8>;
+using MxFp4DoubleBuffer_256_256_128 = MxFp4ScaledDoubleBufferConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_256_128, SG_8x4>;
+using MxFp4DoubleBuffer_352_256_128 = MxFp4ScaledDoubleBufferConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_352_256_128, SG_4x8>;
+using Fp8TensorDoubleBuffer_256_256_64 = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_256_256_64, SG_8x4>;
+// double_buffer_mxfp8.in tiles
+using MxFp8DoubleBuffer_128_512_64  = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_128_512_64,  SG_4x8>;
+using MxFp8DoubleBuffer_192_256_64  = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_192_256_64,  SG_4x8>;
+using MxFp8DoubleBuffer_192_320_64  = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_192_320_64,  SG_8x4>;
+using MxFp8DoubleBuffer_224_256_64  = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_224_256_64,  SG_4x8>;
+using MxFp8DoubleBuffer_288_256_64  = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_288_256_64,  SG_4x8>;
+using MxFp4DoubleBuffer_128_512_128 = MxFp4ScaledDoubleBufferConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_128_512_128, SG_4x8>;
+using MxFp4DoubleBuffer_192_256_128 = MxFp4ScaledDoubleBufferConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_192_256_128, SG_4x8>;
+using MxFp4DoubleBuffer_192_320_128 = MxFp4ScaledDoubleBufferConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_192_320_128, SG_8x4>;
+using MxFp4DoubleBuffer_224_256_128 = MxFp4ScaledDoubleBufferConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_224_256_128, SG_4x8>;
+using MxFp4DoubleBuffer_288_256_128 = MxFp4ScaledDoubleBufferConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_288_256_128, SG_4x8>;
+using Fp8TensorDoubleBuffer_128_512_64  = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_128_512_64,  SG_4x8>;
+using Fp8TensorDoubleBuffer_192_256_64  = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_192_256_64,  SG_4x8>;
+using Fp8TensorDoubleBuffer_192_320_64  = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_192_320_64,  SG_8x4>;
+using Fp8TensorDoubleBuffer_224_256_64  = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_224_256_64,  SG_4x8>;
+using Fp8TensorDoubleBuffer_288_256_64  = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_288_256_64,  SG_4x8>;
 
 } // namespace cutlass::moe

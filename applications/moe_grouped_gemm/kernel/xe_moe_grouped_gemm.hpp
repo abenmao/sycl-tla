@@ -34,6 +34,7 @@
 #include "cute/tensor.hpp"
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/gemm.h"
+#include "cutlass/layout/matrix.h"
 #include "cutlass/gemm/group_array_problem_shape.hpp"
 #include "cutlass/gemm/kernel/tile_scheduler.hpp"
 #include "cutlass/kernel_hardware_info.hpp"
@@ -53,21 +54,33 @@ using ProblemShape = cutlass::gemm::GroupProblemShape<Shape<int, int, int>>;
 using TileScheduler = typename MoE::PersistentTileSchedulerXeMoE<ProblemShape>;
 using RasterOrderOptions = typename TileScheduler::RasterOrderOptions;
 
-template <typename T, char LayoutKind>
+// Build a 2D gmem tensor of shape (r, c) using the CUTLASS *operand* layout
+// convention (same as TagToStride / examples 50/51), not textbook row/col-major:
+//   A/D:        RowMajor -> stride (c,1);  ColumnMajor -> stride (1,r)
+//   B (IsBOperand, passed as (N,K) but is the K×N operand):
+//               RowMajor -> stride (1,r) = N-contiguous (ldb=N);
+//               ColumnMajor -> stride (c,1) = K-contiguous (ldb=K)
+// B inverts the A/D mapping because it is stored (N,K) with operand shape K×N.
+// This replaces the old hidden `LayoutKindB ^ ('R'^'C')` flip.
+template <typename T, class Layout, bool IsBOperand = false>
 CUTE_DEVICE auto make_moe_tensor(T *ptr, int r, int c) {
   auto shape = make_shape(r, c);
+  constexpr bool is_row = cute::is_same_v<Layout, cutlass::layout::RowMajor>;
+  // Is the first mode (r) the unit-stride dim? A/D: only for ColumnMajor;
+  // B: only for RowMajor (operand-convention inversion).
+  constexpr bool unit_first = IsBOperand ? is_row : !is_row;
   if constexpr (cute::is_subbyte_v<T>) {
     // Sub-byte types (e.g. float_e2m1_t, 4-bit) must be accessed via
     // const pointers to avoid subbyte_iterator issues with 2D block loads.
     auto const_ptr = const_cast<T const*>(ptr);
-    if constexpr (LayoutKind == 'C')
+    if constexpr (unit_first)
       return make_tensor(make_gmem_ptr(const_ptr),
                          make_layout(shape, make_stride(_1{}, r)));
     else
       return make_tensor(make_gmem_ptr(const_ptr),
                          make_layout(shape, make_stride(c, _1{})));
   } else {
-    if constexpr (LayoutKind == 'C')
+    if constexpr (unit_first)
       return make_tensor(make_gmem_ptr<T>(ptr),
                          make_layout(shape, make_stride(_1{}, r)));
     else
@@ -77,7 +90,7 @@ CUTE_DEVICE auto make_moe_tensor(T *ptr, int r, int c) {
 }
 
 template <class GmemTiledCopyA, class GmemTiledCopyB, class GmemTiledCopyD,
-          char LayoutKindA, char LayoutKindB, char LayoutKindD,
+          class LayoutA, class LayoutB, class LayoutD,
           int CfgGroupN = 0, int CfgGroupK = 0, class TiledMMA = void,
           typename ElementA = void, typename ElementB = void,
           typename ElementS = void, typename ElementD = void>
@@ -97,7 +110,6 @@ MoEGEMM(const ElementA *Activations, const ElementB *Weights,
                           N, K, num_experts};
 
   auto work_tile_info = scheduler.initial_work_tile_info(Shape<_1, _1, _1>{});
-  constexpr char actual_layout_of_B = LayoutKindB ^ ('R' ^ 'C');
   bool did_group_change = true;
   int32_t curr_group = 0;
   int32_t prev_group = 0;
@@ -115,11 +127,11 @@ MoEGEMM(const ElementA *Activations, const ElementB *Weights,
     M = M_per_group[curr_group];
   }
 
-  auto A_tensor = make_moe_tensor<ElementA, LayoutKindA>(
+  auto A_tensor = make_moe_tensor<ElementA, LayoutA>(
       const_cast<ElementA *>(Activations), M, K);
-  auto B_tensor = make_moe_tensor<ElementB, actual_layout_of_B>(
+  auto B_tensor = make_moe_tensor<ElementB, LayoutB, /*IsBOperand=*/true>(
       const_cast<ElementB *>(Weights), N, K);
-  auto D_tensor = make_moe_tensor<ElementD, LayoutKindD>(Outputs, M, N);
+  auto D_tensor = make_moe_tensor<ElementD, LayoutD>(Outputs, M, N);
 
   while (work_tile_info.is_valid()) {
     auto m_coord = work_tile_info.M_idx;
@@ -150,10 +162,10 @@ MoEGEMM(const ElementA *Activations, const ElementB *Weights,
           byte_offset_B);
       ElementD *ptr_D_curr_batch = Outputs + int64_t(cumulative_M) * N;
 
-      A_tensor = make_moe_tensor<ElementA, LayoutKindA>(ptr_A_curr_batch, M, K);
+      A_tensor = make_moe_tensor<ElementA, LayoutA>(ptr_A_curr_batch, M, K);
       B_tensor =
-          make_moe_tensor<ElementB, actual_layout_of_B>(ptr_B_curr_batch, N, K);
-      D_tensor = make_moe_tensor<ElementD, LayoutKindD>(ptr_D_curr_batch, M, N);
+          make_moe_tensor<ElementB, LayoutB, /*IsBOperand=*/true>(ptr_B_curr_batch, N, K);
+      D_tensor = make_moe_tensor<ElementD, LayoutD>(ptr_D_curr_batch, M, N);
       did_group_change = false;
     }
 
@@ -161,23 +173,37 @@ MoEGEMM(const ElementA *Activations, const ElementB *Weights,
     // provided, otherwise the plain 16-bit path. The branch is resolved at
     // compile time so 16-bit kernels stay byte-identical.
     if constexpr (!cute::is_void_v<ElementS>) {
-      const int scale_k = ceil_div(int(K), int(GroupK));
-      const int scale_n = ceil_div(int(N), int(GroupN));
       if constexpr (CfgGroupK == 0) {
-        // TENSOR scale: legacy MN-major contiguous layout. (Byte-identical.)
+        // TENSOR scale: 8-bit E8M0, HW BDPAS. GroupK=K semantically (one scale
+        // per row/tensor). Physical scale_k=2 (Height=2 needed by BDPAS offset
+        // scheme). Both K entries hold the same value. Collective loads once.
+        constexpr int BLK_N_T = decltype(tile_size<1>(mma))::value;
+        constexpr int SG_NUMS_N_T = get<2>(typename TiledMMA::ThrLayoutVMNK{}.shape());
+        constexpr int SG_N_T = BLK_N_T / SG_NUMS_N_T;
+        const int M_def = int(M) < 0 ? 0 : int(M);
+        static_assert((kScaleAlign & (kScaleAlign - 1)) == 0,
+                      "kScaleAlign must be a power of two");
+        const int round_up_M = (M_def + (kScaleAlign - 1)) & ~(kScaleAlign - 1);
+        constexpr int padded_scale_n =
+            ((SG_N_T + kScaleAlign - 1) / kScaleAlign) * kScaleAlign;
+        constexpr int scale_k = 2;
         auto sA = make_tensor(
             make_gmem_ptr(const_cast<ElementS *>(ScalesA) +
-                          int64_t(cumulative_M) * scale_k),
-            make_layout(make_shape(M, scale_k), make_stride(_1{}, M)));
+                          int64_t(padded_cumulative_M) * scale_k),
+            make_layout(make_shape(M, scale_k, 1),
+                        make_stride(_1{}, round_up_M,
+                                    int64_t(round_up_M) * scale_k)));
         auto sB = make_tensor(
             make_gmem_ptr(const_cast<ElementS *>(ScalesB) +
-                          int64_t(curr_group) * scale_n * scale_k),
-            make_layout(make_shape(scale_n, scale_k),
-                        make_stride(scale_k, _1{})));
+                          int64_t(curr_group) * padded_scale_n * scale_k),
+            make_layout(make_shape(Int<padded_scale_n>{}, scale_k, 1),
+                        make_stride(_1{}, Int<padded_scale_n>{},
+                                    int64_t(padded_scale_n) * scale_k)));
         moe_gemm_scaled<CfgGroupN, CfgGroupK, GmemTiledCopyA, GmemTiledCopyB,
                         GmemTiledCopyD>(A_tensor, B_tensor, sA, sB, D_tensor,
                                         tile_coord, mma, GroupN, GroupK);
       } else {
+        const int scale_k = ceil_div(int(K), int(GroupK));
         // BLOCK (MX) scale: padded, MN-major, aligned 3D (MN, scale_k, 1)
         // layout for the hardware 2D block-scale load.
         // Workaround for an llvm-spirv getEntry "Id is not in map" crash (DPC++
@@ -187,6 +213,7 @@ MoEGEMM(const ElementA *Activations, const ElementB *Weights,
         // the SPIR-V binary writer mishandles. kScaleAlign is a power of two, so
         // use a division-free bitwise round-up and clamp M to non-negative here
         // (outside the phi cycle) to keep it provably defined.
+        const int scale_n = ceil_div(int(N), int(GroupN));
         const int M_def = int(M) < 0 ? 0 : int(M);
         static_assert((kScaleAlign & (kScaleAlign - 1)) == 0,
                       "kScaleAlign must be a power of two");

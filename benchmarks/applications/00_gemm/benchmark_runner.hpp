@@ -244,7 +244,7 @@ struct GEMMOptions {
     cmd.get_cmd_line_argument("bm_name", bm_name, default_bm_name());
 
     // Parse verification mode. Default to device verification on real hardware,
-    // but host verification on the CRI simulator where device verification +
+    // but skip verification on the simulator where device verification +
     // warmup are too time-consuming.
 #ifdef CUTLASS_TEST_FOR_CRI
     std::string default_verify = "none";

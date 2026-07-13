@@ -267,9 +267,9 @@ template <class TA, class TB> auto choose_tiled_mma(TA *A, TB *B) {
 }
 
 // type tag to define a unique sycl kernel name
-template <typename, typename, typename, char, char> class GemmCuteName;
+template <typename, typename, typename, typename, typename> class GemmCuteName;
 
-template <char layoutA, char layoutB, typename ElementA, typename ElementB,
+template <class LayoutA, class LayoutB, typename ElementA, typename ElementB,
           typename ElementS, typename ElementD>
 void MoEGEMMLauncher(const ElementA *activations, const ElementB *weights,
                      const ElementS *scales, ElementD *outputs,
@@ -332,13 +332,14 @@ void MoEGEMMLauncher(const ElementA *activations, const ElementB *weights,
   GPU_Clock timer;
   timer.start();
   auto event = Q.parallel_for<
-      GemmCuteName<ElementA, ElementB, ElementD, layoutA, layoutB>>(
+      GemmCuteName<ElementA, ElementB, ElementD, LayoutA, LayoutB>>(
       sycl::nd_range<3>(global, local), kernel_props, [=](auto) {
         // Can also use void for copy atoms.
         // In that case, they will be chosen automatically.
         MoE::MoEGEMM<XE_LOAD_2D<16, 32, 32, 16>,
                      XE_LOAD_2D_VNNI<16, 32, 16, 16>, XE_STORE_2D<16, 8, 32>,
-                     'R', 'R', 'R'>(activations, weights, scales, outputs, mma,
+                     LayoutA, LayoutB,
+                     cutlass::layout::RowMajor>(activations, weights, scales, outputs, mma,
                                     num_rows_per_expert_device, num_experts,
                                     gemm_n, gemm_k, scheduler_params);
       });
@@ -404,7 +405,8 @@ void launcher(int *M_per_expert, int N, int K, const int &num_experts, const boo
   initialize_block(weights_data, seed + 2022);
   initialize_block(output_data, seed + 2021);
 
-  MoEGEMMLauncher<'R', 'R'>(activations_data.get(), weights_data.get(),
+  MoEGEMMLauncher<cutlass::layout::RowMajor, cutlass::layout::RowMajor>(
+                            activations_data.get(), weights_data.get(),
                             static_cast<void *>(nullptr), output_data.get(),
                             n_moe, k_moe, num_rows_per_expert_device.get(),
                             M_per_expert, num_experts, verify);

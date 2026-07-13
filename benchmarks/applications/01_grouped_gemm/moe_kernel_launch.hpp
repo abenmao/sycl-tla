@@ -38,7 +38,7 @@
     benchmark TU (which compiles <benchmark/benchmark.h> + benchmarks/common.hpp,
     pulling in oneMKL / std::function / the BenchmarkRegistry) must NOT also
     instantiate the MoE::MoEGEMM cute device kernel. Doing both in one SPIR-V
-    module ICEs IGC during AOT device codegen on CRI (ocloc -device cri).
+    module ICEs IGC during AOT device codegen.
 
     So this header exposes only:
       - an OPAQUE handle (moe_bench::MoeRunHandle, defined entirely inside
@@ -70,7 +70,7 @@ namespace moe_bench {
 // VerificationHelper lives). 0=off, 1=on. The actual verify runs INSIDE
 // moe_kernel_launch.cpp (the heavy TU that already includes the example header +
 // VerificationHelper).
-enum VerifyKind { kVerifyNone = 0, kVerifyOn = 1 };
+enum VerifyKind { kVerifyNone = 0, kVerifyDevice = 1, kVerifyHost = 2, kVerifyOn = 1 };
 
 // Opaque handle. Fully defined only inside moe_kernel_launch.cpp; the benchmark
 // TU manipulates it solely through the pointer + the free functions below.

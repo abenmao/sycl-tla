@@ -172,8 +172,7 @@ moe_gemm(ATensor const &A, // (M,K)
 // ---------------------------------------------------------------------------
 // Block-scaled (mixed-precision) MoE GEMM mainloop.
 //
-// Two scale models live here, selected at compile time by the CfgGroupK
-// template parameter (Config::group_k):
+// Scale model is selected by CfgGroupK (Config::group_k):
 //
 //  * CfgGroupK == 0 -> TENSOR scale (ScaleKind::Tensor). A single global scale
 //    spans all of K and N (GroupN/GroupK are the runtime full extents). This
@@ -269,23 +268,86 @@ moe_gemm_scaled(ATensor const &A,        // (M,K)
   const int m_coord = wg_m * BLK_M + (sg_id / SG_NUMS_N) * SG_M;
   const int n_coord = wg_n * BLK_N + (sg_id % SG_NUMS_N) * SG_N;
 
-  // No clear(tCrD): the first K-tile MMA uses null-src0 (NoAcc) to write
-  // D = A*B directly, eliding the accumulator init (both scale sub-paths
-  // below).
+  // Both paths use NoAcc (null-src0) on the first K tile to skip
+  // accumulator init, then accumulate on subsequent tiles.
 
   constexpr SPIRVScope barrier_scope = ScopeWorkgroup;
   int k_start_idx = 0;
   int prefetch_k = k_start_idx;
-  const int prefetch_dist = 3;
+  const int prefetch_dist = 2;
   int k_tile_count = ceil_div(shape<1>(A), get<2>(wg_tile));
 
   if constexpr (CfgGroupK == 0) {
     // =========================================================================
-    // TENSOR scale path — simple DPAS + manual per-M scaling after K-loop.
-    // Tensor scaling is GroupK == K (one scale block for the entire GEMM).
-    // We perform unscaled DPAS accumulation across all K-tiles, then apply
-    // scale_A[m] * scale_B after the loop completes.
+    // TENSOR scale path — hardware BDPAS with 8-bit (E8M0) scale factors.
+    // Semantics: scale-A per M row (one scalar spanning all K),
+    //            scale-B per tensor (one scalar per expert).
+    // Implementation: GroupK=MMA_K keeps Height=ceil_div(SG_K,MMA_K)=2, which
+    // is required for the BDPAS register offset scheme to work correctly with
+    // large SG_M values. The scale surface has scale_k=2 (two identical K
+    // entries). Scales are loaded ONCE before the K-loop and reused for every
+    // K-tile. The K-offsets from make_scaled_offsets point at the same data
+    // (both K positions hold the same value), so BDPAS sees one constant scale.
     // =========================================================================
+    namespace coll = cutlass::gemm::collective;
+    using ElementScaleA = typename SATensor::element_type;
+    using ElementScaleB = typename SBTensor::element_type;
+
+    // K-elements processed by one DPAS instruction (e.g. 32 for FP8).
+    constexpr int MMA_K = get<2>(typename TiledMMA::Shape_MNK{});
+    // Number of K-elements that share one scale factor. Set to MMA_K so the
+    // scale surface has minimal height (ceil_div(SG_K, MMA_K) = 2). Both K
+    // slots hold the same duplicated value — satisfies BDPAS's 2D scale grid
+    // requirement while semantically applying one constant scale per row/tensor.
+    constexpr int TensorGroupK = MMA_K;
+
+    using GemmIterM = Int<decltype(size<1>(tCrA.shape()))::value>;
+    using GemmIterN = Int<decltype(size<1>(tCrB.shape()))::value>;
+    using GemmIterK = Int<decltype(size<2>(tCrB.shape()))::value>;
+
+    const int l_coord = 0;
+
+    auto [tiled_copy_scaleA, copy_iter_scaleA, fragment_scaleA] =
+        coll::make_scaled_copy<void, ElementScaleA, SG_M, SG_K, TensorGroupK>(
+            mAscale, m_coord, l_coord, 1);
+    auto [tiled_copy_scaleB, copy_iter_scaleB, fragment_scaleB] =
+        coll::make_scaled_copy<void, ElementScaleB, SG_N, SG_K, TensorGroupK>(
+            mBscale, 0, l_coord, 1);
+    auto [scale_m_offsets, scale_n_offsets, scale_ak_offsets,
+          scale_bk_offsets] =
+        coll::make_scaled_offsets<
+            GemmIterM::value, GemmIterN::value, GemmIterK::value, MMA_K,
+            TensorGroupK,
+            typename decltype(tiled_copy_scaleA)::BlockShape,
+            typename decltype(tiled_copy_scaleB)::BlockShape>();
+    auto [tiled_prefetch_scaleA, prefetch_iter_scaleA] =
+        coll::make_scaled_prefetch<decltype(tiled_copy_scaleA), SG_M, SG_K,
+                                   TensorGroupK>(tiled_copy_scaleA, m_coord,
+                                                 l_coord, 1);
+    auto [tiled_prefetch_scaleB, prefetch_iter_scaleB] =
+        coll::make_scaled_prefetch<decltype(tiled_copy_scaleB), SG_N, SG_K,
+                                   TensorGroupK>(tiled_copy_scaleB, 0, l_coord,
+                                                 1);
+
+    using scaleA_vec_t =
+        intel::vector_t<ElementScaleA, decltype(size(fragment_scaleA))::value>;
+    using scaleB_vec_t =
+        intel::vector_t<ElementScaleB, decltype(size(fragment_scaleB))::value>;
+
+    // Prefetch scales once (scale_k=2, loaded in one 2D block read).
+    prefetch(tiled_prefetch_scaleA, prefetch_iter_scaleA(_, _, _, 0));
+    prefetch(tiled_prefetch_scaleB, prefetch_iter_scaleB(_, _, _, 0));
+
+    // Load scales once before the K-loop.
+    copy(tiled_copy_scaleA, copy_iter_scaleA(_, _, _, 0), fragment_scaleA);
+    copy(tiled_copy_scaleB, copy_iter_scaleB(_, _, _, 0), fragment_scaleB);
+
+    Tensor scaleA = make_tensor(
+        recast<scaleA_vec_t>(fragment_scaleA).data(),
+        make_layout(Shape<_1, GemmIterM, _1>{}, Stride<_1, _0, _0>{}));
+    Tensor scaleB = make_tensor(
+        recast<scaleB_vec_t>(fragment_scaleB).data(),
+        make_layout(Shape<_1, GemmIterN, _1>{}, Stride<_1, _0, _0>{}));
 
     CUTE_UNROLL
     for (; prefetch_k < prefetch_dist; prefetch_k++) {
@@ -293,7 +355,6 @@ moe_gemm_scaled(ATensor const &A,        // (M,K)
       prefetch(prefetch_b, pBgB(_, _, _, prefetch_k));
     }
 
-    // K-loop: unscaled DPAS accumulation (D += A*B)
     for (int k_tile = k_start_idx; k_tile < k_tile_count;
          k_tile++, prefetch_k++) {
       barrier_arrive(barrier_scope);
@@ -309,51 +370,20 @@ moe_gemm_scaled(ATensor const &A,        // (M,K)
       reorder(tArA, tCrA);
       reorder(tBrB, tCrB);
 
-      // First K tile: null-src0 DPAS (D = A*B), no accumulator read/clear.
-      // Subsequent tiles accumulate (D += A*B).
       if (k_tile == k_start_idx) {
-        cute::gemm<true>(mma, tCrA, tCrB, tCrD);
+        cute::gemm<true>(
+            mma,
+            make_zip_tensor(tCrA, scaleA, scale_m_offsets, scale_ak_offsets),
+            make_zip_tensor(tCrB, scaleB, scale_n_offsets, scale_bk_offsets),
+            tCrD);
       } else {
-        cute::gemm<false>(mma, tCrA, tCrB, tCrD);
+        cute::gemm<false>(
+            mma,
+            make_zip_tensor(tCrA, scaleA, scale_m_offsets, scale_ak_offsets),
+            make_zip_tensor(tCrB, scaleB, scale_n_offsets, scale_bk_offsets),
+            tCrD);
       }
       barrier_wait(barrier_scope);
-    }
-
-    // =========================================================================
-    // Apply per-M scaling after K-loop completes.
-    // tCrD contains the unscaled accumulator D = sum_k(A_k * B_k).
-    // Apply scale: D[m,n] *= scale_A[m] * scale_B
-    // =========================================================================
-    using ElementScale = float;
-    using ElementD = typename decltype(tCrD)::value_type;
-    constexpr int ATOM_M = get<0>(typename TiledMMA::AtomShape_MNK{});
-    constexpr int FRAG_V = decltype(size<0>(tCrD.shape()))::value;
-    constexpr int M_ITERS = decltype(size<1>(tCrD.shape()))::value;
-    constexpr int N_ITERS = decltype(size<2>(tCrD.shape()))::value;
-
-    const int M_extent = size<0>(mAscale.shape());
-    const int N_scale_extent = size<0>(mBscale.shape());
-    const int n_scale_coord = cute::min(n_coord / GroupN, N_scale_extent - 1);
-    constexpr int k_scale_idx = 0; // Tensor scale: single K-block
-
-    const ElementScale sb = ElementScale(mBscale(n_scale_coord, k_scale_idx));
-
-    CUTE_UNROLL
-    for (int i = 0; i < FRAG_V; i++) {
-      CUTE_UNROLL
-      for (int mi = 0; mi < M_ITERS; mi++) {
-        const int m_abs = m_coord + mi * ATOM_M + (i % ATOM_M);
-        const ElementScale sa =
-            (m_abs < M_extent) ? ElementScale(mAscale(m_abs, k_scale_idx))
-                               : ElementScale(1);
-        const ElementScale scale = sa * sb;
-
-        CUTE_UNROLL
-        for (int ni = 0; ni < N_ITERS; ni++) {
-          float const acc = static_cast<float>(tCrD(i, mi, ni));
-          tCrD(i, mi, ni) = static_cast<ElementD>(acc * scale);
-        }
-      }
     }
   } else {
     // =========================================================================
@@ -443,7 +473,6 @@ moe_gemm_scaled(ATensor const &A,        // (M,K)
       Tensor scaleB = make_tensor(
           recast<scaleB_vec_t>(fragment_scaleB).data(),
           make_layout(Shape<_1, GemmIterN, _1>{}, Stride<_1, _0, _0>{}));
-
       // First K tile: null-src0 BDPAS (D = A*B), no accumulator read/clear.
       // Subsequent tiles accumulate (D += A*B).
       if (k_tile == k_start_idx) {

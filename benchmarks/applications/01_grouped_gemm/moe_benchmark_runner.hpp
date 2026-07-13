@@ -52,7 +52,7 @@
 // LEAN benchmark TU: this header (and main.cpp) compiles Google Benchmark +
 // common.hpp scaffolding but NOT the cute / MoE kernel, which lives only in
 // moe_kernel_launch.cpp behind the thin moe_kernel_launch.hpp interface. See
-// that header for the TU-split rationale (avoids the IGC ICE on CRI).
+// that header for the TU-split rationale.
 #include "../common.hpp"
 #include <benchmark/benchmark.h>
 
@@ -85,12 +85,12 @@ inline constexpr unsigned kRoutingSeed = 0x4D6F45u; // "MoE"
 //   2. --moe_mode (--m/--topk/--num_experts/--ep_size)  MoE routing math,
 //      following PR #687: experts_per_gpu = num_experts/ep_size,
 //      tokens_per_gpu = (m*topk)/ep_size spread uniformly over experts_per_gpu.
-//   3. --uniform_m            legacy uniform M per expert
+//   3. Default: M_i = (m * topk) / num_experts / ep_size  (uniform)
 struct MoEBenchmarkOptions {
 
   bool error;
 
-  int n, k, num_experts, uniform_m;
+  int n, k, num_experts;
   // MoE routing parameters (PR #687 semantics). moe_mode selects source #2.
   bool moe_mode;
   int m, topk, ep_size;
@@ -123,7 +123,7 @@ struct MoEBenchmarkOptions {
   std::vector<int> rows_per_expert;
 
   MoEBenchmarkOptions()
-      : error(false), n(2880), k(2880), num_experts(8), uniform_m(128),
+      : error(false), n(2880), k(2880), num_experts(8),
         moe_mode(false), m(4096), topk(1), ep_size(1), random_mode(false),
         verify(false), m_per_expert(""), bm_name("MoEGEMM"),
         hidden_size(0), new_hidden_size(0), num_experts_per_rank(0), proj(""),
@@ -168,8 +168,15 @@ struct MoEBenchmarkOptions {
           rows_per_expert[i] += 1;
       }
     } else {
-      int mm = (uniform_m > 0) ? uniform_m : 128;
-      rows_per_expert.assign(num_experts, mm);
+      // Default uniform routing: same formula as moe_mode but always uniform.
+      const int experts_per_gpu = std::max(1, num_experts / std::max(1, ep_size));
+      const int tokens_per_gpu = (m * std::max(1, topk)) / std::max(1, ep_size);
+      const int base = tokens_per_gpu / experts_per_gpu;
+      const int rem = tokens_per_gpu % experts_per_gpu;
+      rows_per_expert.assign(experts_per_gpu, base);
+      for (int i = 0; i < rem && i < experts_per_gpu; ++i)
+        rows_per_expert[i] += 1;
+      num_experts = experts_per_gpu;
     }
   }
 
@@ -180,8 +187,9 @@ struct MoEBenchmarkOptions {
     cmd.get_cmd_line_argument("n", n, 2880);
     cmd.get_cmd_line_argument("k", k, 2880);
     cmd.get_cmd_line_argument("num_experts", num_experts, 8);
-    cmd.get_cmd_line_argument("uniform_m", uniform_m, 128);
     cmd.get_cmd_line_argument("m_per_expert", m_per_expert, std::string(""));
+    // Consume legacy --uniform_m silently (backward compat with old .in files).
+    { int dummy = 0; cmd.get_cmd_line_argument("uniform_m", dummy, 0); }
     cmd.get_cmd_line_argument("bm_name", bm_name, std::string("MoEGEMM"));
 
     // PR #687 MoE routing parameters.
@@ -198,7 +206,7 @@ struct MoEBenchmarkOptions {
     int num_of_tokens = 0;
     cmd.get_cmd_line_argument("num_of_tokens", num_of_tokens, 0);
     if (num_of_tokens > 0)
-      m = num_of_tokens; // alias used by CRI .in files
+      m = num_of_tokens; // alias for num_tokens
     else if (num_tokens > 0)
       m = num_tokens; // total routed tokens == legacy --m
 
@@ -307,9 +315,9 @@ struct MoEBenchmarkOptions {
 
   std::string benchmark_name() const {
     std::stringstream full_name;
-    full_name << bm_name << "/" << std::to_string(n) << "x"
-              << std::to_string(k) << "x" << std::to_string(num_experts) << "x"
-              << std::to_string(total_m());
+    int tpg = total_m();
+    full_name << bm_name << "/t" << m << "_tpg" << tpg
+              << "_e" << num_experts << "x" << n << "x" << k << "_uniform";
     return full_name.str();
   }
 };
@@ -364,10 +372,18 @@ struct MoEBenchmarkRunner {
     }
     double gflop = double(static_cast<uint64_t>(2) * fmas) / double(1.0e9);
 
+    state.counters["m"] = options.m;
     state.counters["n"] = N;
     state.counters["k"] = K;
     state.counters["num_experts"] = num_experts;
+    state.counters["groups"] = num_experts;
+    state.counters["topk"] = options.topk;
+    state.counters["ep_size"] = options.ep_size;
+    state.counters["tokens_per_gpu"] = num_tokens;
     state.counters["total_m"] = num_tokens;
+    for (int i = 0; i < num_experts && i < 32; ++i) {
+      state.counters["M_" + std::to_string(i)] = M_per_expert[i];
+    }
 
     initialize_counters(state);
     for (auto _ : state) {
@@ -451,7 +467,7 @@ private:
 
 // ONE config compiled per binary, selected by -DMOE_BENCH_CONFIG=<name> at
 // build time (consumed in moe_kernel_launch.cpp). Compiling all configs into a
-// single device image triggers an IGC internal compiler error on CRI, so — like
+// single device image triggers an IGC internal compiler error, so — like
 // example 12, which is one .cpp/target per dtype — each benchmark executable
 // holds a single dtype. The registered benchmark name (the config-file token)
 // is fixed below per binary so the .in files stay stable regardless of which
@@ -465,14 +481,22 @@ private:
 
 #ifdef MOE_TILE_X_LIST
 #define X(NAME, CONFIG) CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(NAME)
+#define X_DOUBLE_BUFFER(NAME, CONFIG) CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(NAME)
+#define X_DOUBLE_BUFFER_SCALED(NAME, CONFIG) CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(NAME)
 MOE_TILE_X_LIST
 #undef X
+#undef X_DOUBLE_BUFFER
+#undef X_DOUBLE_BUFFER_SCALED
 #endif
 
 static void register_grouped_gemm_benchmarks() {
 #ifdef MOE_TILE_X_LIST
 #define X(NAME, CONFIG) CUTLASS_GROUPED_GEMM_BENCHMARK(NAME);
+#define X_DOUBLE_BUFFER(NAME, CONFIG) CUTLASS_GROUPED_GEMM_BENCHMARK(NAME);
+#define X_DOUBLE_BUFFER_SCALED(NAME, CONFIG) CUTLASS_GROUPED_GEMM_BENCHMARK(NAME);
   MOE_TILE_X_LIST
 #undef X
+#undef X_DOUBLE_BUFFER
+#undef X_DOUBLE_BUFFER_SCALED
 #endif
 }

@@ -1,0 +1,121 @@
+# Double-buffer supported (mn_per_expert even): 12/14 shapes.
+# Fallback to regular kernel (mn_per_expert odd): m=1366 tile=128x512 for both N values.
+
+# ════════════════════════════════════════════════════════════════════
+# DOUBLE BUFFER
+# ════════════════════════════════════════════════════════════════════
+
+# ---- n=3584 k=1280 ----
+# average_m=683  (mn=2x28=56)
+# regular best tile (352x256) for comparison
+CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64              --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=5464  --num_experts=8  --verify=true
+CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64  --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=5464  --num_experts=8  --verify=true
+# average_m=2560  (mn=10x14=140)
+CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64             --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=20480 --num_experts=8  --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=20480 --num_experts=8  --verify=true
+# average_m=2731  (mn=11x14=154)
+CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64             --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=43696 --num_experts=16 --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=43696 --num_experts=16 --verify=true
+# average_m=5462  (mn=19x14=266)
+CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64             --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=87392 --num_experts=16 --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=87392 --num_experts=16 --verify=true
+# average_m=171  (mn=1x14=14)
+CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_256_64             --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=2736  --num_experts=16 --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_256_64 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=2736  --num_experts=16 --verify=true
+# average_m=427  (mn=2x14=28)
+CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64             --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=3416  --num_experts=8  --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=3416  --num_experts=8  --verify=true
+
+# ---- n=2560 k=3584 ----
+# average_m=683  (mn=2x20=40)
+# regular best tile (352x256) for comparison
+CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64              --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=5464  --num_experts=8  --verify=true
+CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64  --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=5464  --num_experts=8  --verify=true
+# average_m=2560  (mn=10x10=100)
+CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64             --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=20480 --num_experts=8  --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=20480 --num_experts=8  --verify=true
+# average_m=2731  (mn=11x10=110)
+CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64             --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=43696 --num_experts=16 --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=43696 --num_experts=16 --verify=true
+# average_m=5462  (mn=19x10=190)
+CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64             --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=87392 --num_experts=16 --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=87392 --num_experts=16 --verify=true
+# average_m=171  (mn=1x8=8)
+CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_320_64             --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=684  --num_experts=4  --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_320_64 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=684  --num_experts=4  --verify=true
+# average_m=427  (mn=2x10=20)
+CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64             --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=3416  --num_experts=8  --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=3416  --num_experts=8  --verify=true
+
+# ════════════════════════════════════════════════════════════════════
+# NEW SHAPES — n=4096 k=3072 bf16 (all even mn)
+# ════════════════════════════════════════════════════════════════════
+
+# average_m=384   (mn=12x32=384)  tile=32x128
+CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_32_128_32    --bm_name=src_0_best_double_buffer --n=4096 --k=3072 --m=1536   --num_experts=4  --verify=true
+# average_m=896   (mn=4x16=64)    tile=224x256
+CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_224_256_32   --bm_name=src_0_best_double_buffer --n=4096 --k=3072 --m=3584   --num_experts=4  --verify=true
+# average_m=1024  (mn=4x16=64)    tile=256x256
+CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_256_256_32   --bm_name=src_0_best_double_buffer --n=4096 --k=3072 --m=4096  --num_experts=4  --verify=true
+# average_m=1792  (mn=8x16=128)   tile=224x256
+CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_224_256_32   --bm_name=src_0_best_double_buffer --n=4096 --k=3072 --m=7168  --num_experts=4  --verify=true
+# average_m=4096  (mn=16x16=256)  tile=256x256
+CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_256_256_32   --bm_name=src_0_best_double_buffer --n=4096 --k=3072 --m=16384  --num_experts=4  --verify=true
+# average_m=5120  (mn=20x16=320)  tile=256x256
+CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_256_256_32   --bm_name=src_0_best_double_buffer --n=4096 --k=3072 --m=20480  --num_experts=4  --verify=true
+# average_m=10240 (mn=40x16=640)  tile=256x256
+CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_256_256_32   --bm_name=src_0_best_double_buffer --n=4096 --k=3072 --m=40960 --num_experts=4  --verify=true
+# average_m=32768 (mn=128x16=2048) tile=256x256
+CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_256_256_32   --bm_name=src_0_best_double_buffer --n=4096 --k=3072 --m=131072 --num_experts=4  --verify=true
+
+# ════════════════════════════════════════════════════════════════════
+# REGULAR (mn_per_expert odd — double buffer not supported)
+# ════════════════════════════════════════════════════════════════════
+
+# average_m=1366 tile=352x256 (best from src0_best): mn=11x7=77 (n=3584), mn=11x5=55 (n=2560)
+CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64             --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=32784 --num_experts=24 --verify=true
+CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=32784 --num_experts=24 --verify=true
+CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64             --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=43712 --num_experts=32 --verify=true
+CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=43712 --num_experts=32 --verify=true
+CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64             --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=32784 --num_experts=24 --verify=true
+CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=32784 --num_experts=24 --verify=true
+CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64             --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=43712 --num_experts=32 --verify=true
+CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=43712 --num_experts=32 --verify=true
+
+# ════════════════════════════════════════════════════════════════════
+# MXFP4
+# ════════════════════════════════════════════════════════════════════
+CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_352_256_128 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=5464  --num_experts=8  --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=20480 --num_experts=8  --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=43696 --num_experts=16 --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_288_256_128 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=87392 --num_experts=16 --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_192_256_128 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=2736  --num_experts=16 --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_224_256_128 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=3416  --num_experts=8  --verify=true
+CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_352_256_128 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=5464  --num_experts=8  --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=20480 --num_experts=8  --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=43696 --num_experts=16 --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_288_256_128 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=87392 --num_experts=16 --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_192_320_128 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=684  --num_experts=4  --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_224_256_128 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=3416  --num_experts=8  --verify=true
+CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_352_256_128 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=32784 --num_experts=24 --verify=true
+CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_352_256_128 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=43712 --num_experts=32 --verify=true
+CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_352_256_128 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=32784 --num_experts=24 --verify=true
+CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_352_256_128 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=43712 --num_experts=32 --verify=true
+
+# ════════════════════════════════════════════════════════════════════
+# DISABLED — tile 352x128 (double buffer)
+# ════════════════════════════════════════════════════════════════════
+
+# ---- FP8 tensor / MxFP8 — n=3584 k=1280, average_m=683 (mn=2x28=56) ----
+# CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_352_128_64             --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=2732  --num_experts=4  --verify=true
+# CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_352_128_64 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=2732  --num_experts=4  --verify=true
+
+# ---- FP8 tensor / MxFP8 — n=2560 k=3584, average_m=683 (mn=2x20=40) ----
+# CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_352_128_64             --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=2732  --num_experts=4  --verify=true
+# CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_352_128_64 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=2732  --num_experts=4  --verify=true
+
+# ---- MXFP4 — n=3584 k=1280, average_m=683 (mn=2x28=56) ----
+# CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_352_128_128 --bm_name=src_0_best_double_buffer --n=3584 --k=1280 --m=2732  --num_experts=4  --verify=true
+
+# ---- MXFP4 — n=2560 k=3584, average_m=683 (mn=2x20=40) ----
+# CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_352_128_128 --bm_name=src_0_best_double_buffer --n=2560 --k=3584 --m=2732  --num_experts=4  --verify=true

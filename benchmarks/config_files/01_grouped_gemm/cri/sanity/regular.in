@@ -1,0 +1,20 @@
+# Regular (non-double-buffer) kernel coverage test.
+# All active tiles x all dtypes x two shapes:
+#   Case A: 4m-tiles x 2n-tiles x 4k-tiles, 20 experts
+#   Case B: 1m-tile  x 2n-tiles x 8k-tiles,  4 experts
+
+# ---- FP8 Tensor (tile 352x256x64) ----
+# Case A: m=4*352*20=28160  n=2*256=512  k=4*64=256
+CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64 --bm_name=regular_sanity --n=512  --k=256  --m=28160 --num_experts=20 --verify=true
+# Case B: m=1*352*4=1408    n=2*256=512  k=8*64=512
+CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64 --bm_name=regular_sanity --n=512  --k=512  --m=1408  --num_experts=4  --verify=true
+
+# ---- MxFP8 (tile 352x256x64) ----
+# Case A
+CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64 --bm_name=regular_sanity --n=512  --k=256  --m=28160 --num_experts=20 --verify=true
+# Case B
+CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64 --bm_name=regular_sanity --n=512  --k=512  --m=1408  --num_experts=4  --verify=true
+
+# ---- MxFP4 (tile 352x256x128) — disabled ----
+# CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_352_256_128 --bm_name=regular_sanity --n=512  --k=512  --m=28160 --num_experts=20 --verify=true
+# CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_352_256_128 --bm_name=regular_sanity --n=512  --k=1024 --m=1408  --num_experts=4  --verify=true
