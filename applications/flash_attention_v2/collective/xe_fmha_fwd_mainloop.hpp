@@ -892,34 +892,51 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, CachedKV_, PagedKV_,
           FragSRow & tS_sum) {    // Softmax row-wise sum accumulator
 #endif
     /* Compute row-wise maxima for this block */
+#ifndef FMHA_ABLATION_SKIP_REDUCE_MAX
     auto tS_bmax = reduce<1>(tS, sycl::maximum{});
+#else
+    FragSRow tS_bmax;
+    clear(tS_bmax);
+#endif
 
     FragSRow rescale;
+#ifndef FMHA_ABLATION_SKIP_MAX_EXP_LOOP
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < tS_max.size(); i++) {
       ElementS new_max = sycl::max(tS_max(i), params.scale * tS_bmax(i));
       rescale(i) = sycl::native::exp2(tS_max(i) - new_max);
       tS_max(i) = new_max;
     }
+#else
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < rescale.size(); i++)
+      rescale(i) = ElementS(1);
+#endif
 
     /* Scale S and subtract maxima, then exponentiate */
+#ifndef FMHA_ABLATION_SKIP_TS_EXP
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < tS.size(); i++)
       tS(i) = sycl::native::exp2(params.scale * tS(i) - broadcast<0>(tS_max, tS, i));
+#endif
 
     /* Rescale existing S sums */
     if (!first_block) {
+#ifndef FMHA_ABLATION_SKIP_RESCALE_SUM
       CUTLASS_PRAGMA_UNROLL
       for (int i = 0; i < tS_sum.size(); i++) {
         tS_sum(i) *= rescale(i);
       }
+#endif
     }
 
     /* Update sums */
+#ifndef FMHA_ABLATION_SKIP_REDUCE_SUM
     auto tS_bsum = reduce<1>(tS, sycl::plus<void>{});
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < tS_sum.size(); i++)
       tS_sum(i) += tS_bsum(i);
+#endif
 
     return rescale;
   }

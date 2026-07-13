@@ -74,7 +74,21 @@ int main(int argc, const char **argv) {
   // Define the work-group tile shape depending on the head-size of the second matmul
 
 #ifdef PREFILL
-#if HEAD_DIM == 16
+#if defined(TILE_Q) && defined(TILE_SEQ_LEN) && defined(TILE_HDIM) && defined(TILE_Q_SG)
+  /* Tuning override (env-guarded). When the TILE_* macros are injected -- only the
+     sweep targets generated under CMake -DFMHA_TUNE=ON / run_tuning_candidates.py do
+     this -- the work-group tile is taken from them instead of the default per-HEAD_DIM
+     shapes below. A normal build defines none of these macros, so this block is inert.
+       TILE_Q       : query (M) block          -> projection q_block
+       TILE_SEQ_LEN : KV (N of QK) block        -> projection kv_block
+       TILE_HDIM    : head-dim step (QK K / PV N) -> projection dim_block
+       TILE_Q_SG    : sub-groups along M        -> projection sg_m (sg_n fixed to 1) */
+  using ShapeQK = Shape<cute::Int<TILE_Q>, cute::Int<TILE_SEQ_LEN>, cute::Int<TILE_HDIM>>;
+  using ShapePV = Shape<cute::Int<TILE_Q>, cute::Int<TILE_HDIM>, cute::Int<TILE_SEQ_LEN>>;
+  using ShapeOut = Shape<cute::Int<TILE_Q>, cute::Int<HEAD_DIM>>;
+  using SubgroupLayoutQK = Layout<Shape<cute::Int<TILE_Q_SG>, _1, _1>>;
+
+#elif HEAD_DIM == 16
   /* Tiny config for testing */
   using ShapeQK = Shape<_1, _16, _16>;       // (q,k,d)
   using ShapePV = Shape<_1, _16, _16>;       // (q,v,k)
@@ -97,11 +111,21 @@ int main(int argc, const char **argv) {
   using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
 #endif
 
-#elif HEAD_DIM == 96
-  using ShapeQK = Shape<_128, _64, _32>;
-  using ShapePV = Shape<_128, _32, _64>;
+#elif HEAD_DIM == 72
+  /* head_dim=72: the runner pads the kernel-facing head to 96 (zero-filled, inert)
+     so every QK/PV tile is a clean 32-multiple with full-width 64B block-2D loads.
+     Mirror the hdim96 256q/16sg regime. Reported FLOPs / softmax scale use the true
+     72, so throughput is honest. */
+  using ShapeQK = Shape<_128, _32, _32>;
+  using ShapePV = Shape<_128, _32, _32>;
   using ShapeOut = Shape<_128, _96>;
   using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
+
+#elif HEAD_DIM == 96
+  using ShapeQK = Shape<_256, _32, _32>;
+  using ShapePV = Shape<_256, _32, _32>;
+  using ShapeOut = Shape<_256, _96>;
+  using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 
 #elif HEAD_DIM == 128
 #if defined(IS_INT8) && defined(INT8_KV128)
@@ -134,6 +158,25 @@ int main(int argc, const char **argv) {
 #else
 #define NUM_SG _4
 #define KV_TILE_SIZE _256
+#endif
+
+/* Decode tuning override. When TILE_KV and TILE_KV_SG are injected by the
+   -DFMHA_TUNE decode sweep (run_tuning_candidates.py), the tile is taken from
+   them instead of the per-HEAD_DIM defaults below. A normal build defines none
+   of these macros, so this block is inert.
+     TILE_KV    : KV block size (TileShapeQK[1] = KV_TILE_SIZE) -> projection kv_block
+     TILE_KV_SG : sub-groups along KV (NUM_SG = ReduceK split degree) -> projection sg_n
+   PERSISTENT and Q_PACKED_DECODE are still controlled by the target's compile defs
+   (separate target per variant, not a runtime flag), so they are not overridden here.
+   tile_q and tile_hdim are NOT search variables for decode: tile_q is determined by
+   head_group_q (Q_PACKED_DECODE) or fixed to 1 (plain decode), and tile_hdim is
+   always 64 for HD>=64 -- these are fixed by the ShapeQK/ShapePV definitions below.
+*/
+#if defined(TILE_KV) && defined(TILE_KV_SG)
+#undef NUM_SG
+#undef KV_TILE_SIZE
+#define NUM_SG cute::Int<TILE_KV_SG>
+#define KV_TILE_SIZE cute::Int<TILE_KV>
 #endif
 
 #if HEAD_DIM == 16

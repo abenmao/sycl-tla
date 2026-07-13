@@ -228,6 +228,11 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
 
   // int8 per-tensor (de)quant scales (set from Options in run()); 1.0 for non-int8.
   float q_scale_ = 1.f, k_scale_ = 1.f, v_scale_ = 1.f;
+  // softmax scale = 1/sqrt(TRUE head_size_qk) (set from Options in run()). Mirrored as a
+  // member so verify() uses the SAME scale the kernel got, NOT 1/sqrt(shape.head_size_qk):
+  // shape.head_size_qk is PADDED (72->96 for clean-pad), so recomputing 1/sqrt from it
+  // would apply the wrong (padded) scale in the reference and fail verify by ~sqrt(96/72).
+  float softmax_scale_ = 1.f;
 
   cutlass::DeviceAllocation<ElementQ> block_Q;
   cutlass::DeviceAllocation<ElementK> block_K;
@@ -514,8 +519,11 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
               int idx = row * seq_len_kv_total;
               int max_idx = row;
               for (int col = 0; col < seq_len_kv_total; col++, idx++) {
-                /* FIXME: use softmax_scale instead of assuming its value here */
-                host_S[idx] = expf((host_S[idx] - max_vec[max_idx]) * qk_dequant / sqrt(static_cast<ElementS>((head_size_qk))));
+                // Use the TRUE softmax scale the kernel got (1/sqrt(true head)), NOT
+                // 1/sqrt(head_size_qk): head_size_qk == shape.head_size_qk is the PADDED
+                // clean-pad head (72->96), so 1/sqrt(96) here would mismatch the kernel's
+                // 1/sqrt(72) and fail verify by ~sqrt(96/72). (Resolves the old FIXME.)
+                host_S[idx] = expf((host_S[idx] - max_vec[max_idx]) * qk_dequant * softmax_scale_);
               }
             }
 
@@ -664,14 +672,31 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
       shape.head_size_qk = options.head_size_qk;
       shape.head_size_vo = options.head_size_vo;
     }
+    // CALIBRATION: make the kernel run a clean 32-aligned head (zero-padded, inert)
+    // so all QK/PV tiles are full-width. options.head_size stays at the true value
+    // for honest FLOPs/scale; only the kernel-facing shape is padded.
+    {
+      auto pad32c = [](int x) { return (x + 31) / 32 * 32; };
+      shape.head_size_qk = pad32c(shape.head_size_qk);
+      shape.head_size_vo = pad32c(shape.head_size_vo);
+    }
 
     auto [batch, num_heads_q, num_heads_kv, seq_len_qo, seq_len_kv, seq_len_kv_cache, head_size_qk, head_size_vo] = problem_size;
-    auto shape_Q = cute::make_shape(seq_len_qo, head_size_qk, num_heads_q,  batch);
-    auto shape_K = cute::make_shape(seq_len_kv, head_size_qk, num_heads_kv, batch);
-    auto shape_V = cute::make_shape(head_size_vo, seq_len_kv, num_heads_kv, batch);
-    auto shape_K_cache = cute::make_shape(seq_len_kv_cache, head_size_qk, num_heads_kv, batch);
-    auto shape_V_cache = cute::make_shape(head_size_vo, seq_len_kv_cache, num_heads_kv, batch);
-    auto shape_O = cute::make_shape(seq_len_qo, head_size_vo, num_heads_q,  batch);
+    // Pad the head dim up to a multiple of 32 for the KERNEL-FACING problem so the
+    // block-2D loads keep a 32-element (64B for bf16) contiguous run and the QK/PV
+    // tiles divide evenly. The padded head columns are zero-filled, so they are
+    // numerically inert (zero K columns add 0 to the QK dot product; zero V rows
+    // add 0 to the PV output). The reported FLOPs and the softmax scale read
+    // options.head_size_qk/vo (the true 72), so throughput stays honest.
+    auto pad32 = [](int x) { return (x + 31) / 32 * 32; };
+    int khead_qk = pad32(head_size_qk);
+    int khead_vo = pad32(head_size_vo);
+    auto shape_Q = cute::make_shape(seq_len_qo, khead_qk, num_heads_q,  batch);
+    auto shape_K = cute::make_shape(seq_len_kv, khead_qk, num_heads_kv, batch);
+    auto shape_V = cute::make_shape(khead_vo, seq_len_kv, num_heads_kv, batch);
+    auto shape_K_cache = cute::make_shape(seq_len_kv_cache, khead_qk, num_heads_kv, batch);
+    auto shape_V_cache = cute::make_shape(khead_vo, seq_len_kv_cache, num_heads_kv, batch);
+    auto shape_O = cute::make_shape(seq_len_qo, khead_vo, num_heads_q,  batch);
 
     stride_Q = cutlass::make_cute_packed_stride(StrideQ{}, shape_Q);
     stride_K = cutlass::make_cute_packed_stride(StrideK{}, shape_K);
@@ -680,13 +705,23 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     stride_V_cache = cutlass::make_cute_packed_stride(StrideV{}, shape_V_cache);
     stride_O = cutlass::make_cute_packed_stride(StrideO{}, shape_O);
 
-    block_Q.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * head_size_qk);
-    block_K.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv * head_size_qk);
-    block_V.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv * head_size_vo);
-    block_K_cache.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv_cache * head_size_qk);
-    block_V_cache.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv_cache * head_size_vo);
-    block_O.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * head_size_vo);
-    block_ref_O.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * head_size_vo);
+    int ld_qk = khead_qk;
+    int ld_vo = khead_vo;
+    block_Q.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * ld_qk);
+    block_K.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv * ld_qk);
+    block_V.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv * ld_vo);
+    block_K_cache.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv_cache * ld_qk);
+    block_V_cache.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv_cache * ld_vo);
+    block_O.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * ld_vo);
+    block_ref_O.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * ld_vo);
+    // Zero the padded input buffers so the padded head columns/rows are inert.
+    if (khead_qk != head_size_qk || khead_vo != head_size_vo) {
+      compat::memset(block_Q.get(), 0, block_Q.size() * sizeof_bits_v<ElementQ> / 8);
+      compat::memset(block_K.get(), 0, block_K.size() * sizeof_bits_v<ElementK> / 8);
+      compat::memset(block_V.get(), 0, block_V.size() * sizeof_bits_v<ElementV> / 8);
+      compat::memset(block_K_cache.get(), 0, block_K_cache.size() * sizeof_bits_v<ElementK> / 8);
+      compat::memset(block_V_cache.get(), 0, block_V_cache.size() * sizeof_bits_v<ElementV> / 8);
+    }
     // Zero-initialize output buffer for the kernel result
     // block_ref_O is fully written in verify() before being read, so no initialization needed
     compat::memset(block_O.get(), 0, block_O.size() * sizeof_bits_v<ElementO> / 8);
@@ -787,6 +822,9 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     // Stash int8 (de)quant scales for the reference path.
     q_scale_ = options.q_scale;
     k_scale_ = options.k_scale;
+    // Stash the TRUE softmax scale (1/sqrt(true head)) for the reference path, so verify()
+    // matches the kernel (which is launched with options.softmax_scale below).
+    softmax_scale_ = options.softmax_scale;
     v_scale_ = options.v_scale;
 
     ProblemShapeType shape = initialize(options);
@@ -983,7 +1021,8 @@ struct FMHAConfig {
 
     static_assert(get<0>(TileShapeOutput{}) == get<0>(TileShapePV{}),
         "Output tile and P*V tile have different sizes in Q dimension");
-    constexpr int VTiles = get<1>(TileShapeOutput{}) / get<1>(TileShapePV{});
+    //constexpr int VTiles = get<1>(TileShapeOutput{}) / get<1>(TileShapePV{});
+    constexpr int VTiles = cute::ceil_div(get<1>(TileShapeOutput{}), get<1>(TileShapePV{}));
 
     auto make_dummy_tensor = [&](auto val, auto stride) {
       return make_tensor(make_gmem_ptr(&val),
