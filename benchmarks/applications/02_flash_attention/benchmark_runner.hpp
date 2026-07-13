@@ -597,7 +597,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
       }
     }
 
-    if (verify_on_device) {
+    if (!verify_on_device) {
       // Copy the fully-computed host reference output to device memory once, then compare on the device below.
       compat::memcpy<ElementO>(block_ref_O.get(), host_ref_O.data(), host_ref_O.size());
     }
@@ -1096,7 +1096,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
         run(params);
         compat::wait();
       }
-      bool passed = verify(problem_size, Causal, options.verify_mode == VerifyMode::Host);
+      bool passed = verify(problem_size, Causal, options.verify_mode == VerifyMode::Device);
       if (not passed) {
       state.SkipWithError("Disposition Failed.");
       }
