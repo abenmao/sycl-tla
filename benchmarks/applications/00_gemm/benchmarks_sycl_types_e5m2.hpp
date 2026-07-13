@@ -157,4 +157,7 @@ using Gemm_E5M2E5M2FP32BF16FP32_RRR_WG8x256x64_SG8x32x64 = E5M2_RRR_GEMM<float, 
 using Gemm_E5M2E5M2FP32BF16FP32_RRR_WG8x256x64_SG8x16x64 = E5M2_RRR_GEMM<float, cutlass::bfloat16_t, float, 8, 256, 64, 8, 16>;
 using Gemm_E5M2E5M2FP32BF16FP32_RRR_WG4x128x256_SG4x16x256 = E5M2_RRR_GEMM<float, cutlass::bfloat16_t, float, 4, 128, 256, 4, 16>;
 using Gemm_E5M2E5M2FP32BF16FP32_RRR_WG8x128x64_SG8x16x64 = E5M2_RRR_GEMM<float, cutlass::bfloat16_t, float, 8, 128, 64, 8, 16>;
+using Gemm_E5M2E5M2FP32BF16FP32_RRR_WG256x128x64_SG32x32x64 = E5M2_RRR_GEMM<float, cutlass::bfloat16_t, float, 256, 128, 64, 32, 32>;
+using Gemm_E5M2E5M2FP32BF16FP32_RRR_WG16x128x256_SG8x16x256 = E5M2_RRR_GEMM<float, cutlass::bfloat16_t, float, 16, 128, 256, 8, 16>;
+using Gemm_E5M2E5M2FP32BF16FP32_RRR_WG32x128x256_SG8x32x256 = E5M2_RRR_GEMM<float, cutlass::bfloat16_t, float, 32, 128, 256, 8, 32>;
 #endif

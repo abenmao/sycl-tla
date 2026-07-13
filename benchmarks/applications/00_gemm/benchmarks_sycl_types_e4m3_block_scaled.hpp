@@ -152,4 +152,7 @@ using BLockScalingGemmNonNative_E4M3E4M3FP32BF16FP32_RRR_WG8x256x64_SG8x32x64_GS
 using BLockScalingGemmNonNative_E4M3E4M3FP32BF16FP32_RRR_WG8x256x64_SG8x16x64_GS32 = E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 8, 256, 64, 8, 16, true>;
 using BLockScalingGemmNonNative_E4M3E4M3FP32BF16FP32_RRR_WG4x128x256_SG4x16x256_GS32 = E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 4, 128, 256, 4, 16, true>;
 using BLockScalingGemm_E4M3E4M3FP32BF16FP32_RRR_WG8x128x64_SG8x16x64_GS32 = E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 8, 128, 64, 8, 16>;
+using BLockScalingGemm_E4M3E4M3FP32BF16FP32_RRR_WG256x128x64_SG32x32x64_GS32 = E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 256, 128, 64, 32, 32>;
+using BLockScalingGemm_E4M3E4M3FP32BF16FP32_RRR_WG16x128x256_SG8x16x256_GS32 = E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 16, 128, 256, 8, 16>;
+using BLockScalingGemm_E4M3E4M3FP32BF16FP32_RRR_WG32x128x256_SG8x32x256_GS32 = E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 32, 128, 256, 8, 32>;
 #endif
