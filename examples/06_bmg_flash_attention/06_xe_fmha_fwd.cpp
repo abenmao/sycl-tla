@@ -300,7 +300,7 @@ int main(int argc, const char **argv) {
       if (options.varlen) {
         return FMHACausal4::template run<true, false, false, Scheduler>(options);
       } else {
-        return FMHACausal4::template run<false, false, false, Scheduler>(options);
+        return FMHACausal8::template run<false, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false,false,false,false,true>>(options);
       }
     }
     if (options.varlen) {
