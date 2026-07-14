@@ -91,29 +91,16 @@ bool initialize_block(Element* block, std::size_t size, uint64_t seed, Args_t&&.
     std::ranlux24_base rng(std::random_device{}());
     rng.seed(seed);
 
-    static constexpr auto array_size = 1024;
-
-    cute::array_subbyte<Element, array_size> block_host{};
-
-    for (int i = 0; i < block_host.size(); ++i) {
-      block_host[i] = static_cast<Element>(dist(rng));
-    }
-
     static constexpr auto elements_per_byte = cute::sizeof_bits_v<int8_t> / cute::sizeof_bits_v<Element>;
+    auto const num_bytes = cute::ceil_div(size, static_cast<std::size_t>(elements_per_byte));
 
-    int loop_cnt = size / array_size;
-    for (int i = 0; i < loop_cnt; i++) {
-      cutlass::device_memory::copy_to_device(((uint8_t*)(block)) + (i * array_size) / elements_per_byte,
-                                    (uint8_t*)(raw_pointer_cast(block_host.begin())),
-                                    array_size / elements_per_byte);
+    std::vector<uint8_t> host_buf(num_bytes);
+    cute::subbyte_iterator<Element> host_iter(host_buf.data());
+    for (std::size_t i = 0; i < size; ++i) {
+      host_iter[i] = static_cast<Element>(dist(rng));
     }
 
-    auto tail_size = size % array_size;
-    if (tail_size) {
-      cutlass::device_memory::copy_to_device(((uint8_t*)block) + (loop_cnt * array_size) / elements_per_byte,
-                                    (uint8_t*)(raw_pointer_cast(block_host.begin())),
-                                    tail_size / elements_per_byte);
-    }
+    cutlass::device_memory::copy_to_device((uint8_t*)block, host_buf.data(), num_bytes);
   }
 
   compat::wait();
@@ -161,37 +148,22 @@ void initialize_mixed_dtype_block(cutlass::DeviceAllocation<T1>& block_device,
     block_device.copy_from_host(block_host.data());
     block_device_dq.copy_from_host(block_host_dq.data());
   } else {
-    static constexpr auto array_size = 1024;
-
-    cute::array_subbyte<T1, array_size> block_host{};
-    auto block_host_dq = std::vector<T2>(array_size);
-
-    for (int i = 0; i < block_host.size(); ++i) {
-      block_host[i] = static_cast<T1>(dist(rng));
-      block_host_dq[i] = static_cast<T2>(block_host[i].get());
-    }
-
+    auto const size = block_device.size();
     static constexpr auto elements_per_byte = cute::sizeof_bits_v<int8_t> / cute::sizeof_bits_v<T1>;
+    auto const num_bytes = cute::ceil_div(size, static_cast<std::size_t>(elements_per_byte));
 
-    int loop_cnt = block_device.size() / array_size;
-    for (int i = 0; i < loop_cnt; i++) {
-      cutlass::device_memory::copy_to_device(((uint8_t*)(block_device.get())) + (i * array_size) / elements_per_byte,
-                                    (uint8_t*)(raw_pointer_cast(block_host.begin())),
-                                    array_size / elements_per_byte);
-      cutlass::device_memory::copy_to_device(block_device_dq.get() + i * array_size,
-                                    block_host_dq.data(),
-                                    array_size);
+    std::vector<uint8_t> block_host(num_bytes);
+    cute::subbyte_iterator<T1> block_host_iter(block_host.data());
+    auto block_host_dq = std::vector<T2>(size);
+
+    for (std::size_t i = 0; i < size; ++i) {
+      T1 val = static_cast<T1>(dist(rng));
+      block_host_iter[i] = val;
+      block_host_dq[i] = static_cast<T2>(val);
     }
 
-    auto tail_size = block_device.size() % array_size;
-    if (tail_size) {
-      cutlass::device_memory::copy_to_device(((uint8_t*)block_device.get()) + (loop_cnt * array_size) / elements_per_byte,
-                                    (uint8_t*)(raw_pointer_cast(block_host.begin())),
-                                    tail_size / elements_per_byte);
-      cutlass::device_memory::copy_to_device(block_device_dq.get() + loop_cnt * array_size,
-                                    block_host_dq.data(),
-                                    tail_size);
-    }
+    cutlass::device_memory::copy_to_device((uint8_t*)block_device.get(), block_host.data(), num_bytes);
+    cutlass::device_memory::copy_to_device(block_device_dq.get(), block_host_dq.data(), size);
   }
 
   compat::wait();
