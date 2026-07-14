@@ -39,6 +39,7 @@
 #include "cutlass/util/GPU_Clock.hpp"
 #include "cutlass/util/sycl_event_manager.hpp"
 #include <cute/tensor.hpp>
+#include <cassert>
 #include <random>
 
 #include "cutlass/util/command_line.h"
@@ -95,6 +96,16 @@ struct FMHAOptions {
     cmd.get_cmd_line_argument("bm_name", bm_name, std::string("Flash Attention v2"));
 
     softmax_scale = 1 / std::sqrt(static_cast<float>(head_size_qk));
+
+    // page_size == 0 means paged KV cache is disabled (contiguous KV), which is
+    // a valid configuration (e.g. prefill without a paged cache). Negative
+    // values are invalid. Reject them at runtime (not via assert, which is
+    // compiled out under NDEBUG) so Release builds abort registration too.
+    if (page_size < 0) {
+      std::cerr << "[ERROR] page_size must be non-negative." << std::endl;
+      error = true;
+      return;
+    }
 
     // Parse verification mode. Default to device verification on real hardware,
     // but host verification on the CRI simulator where device verification +
@@ -363,6 +374,9 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
 
           if (paged_kv_cache.page_size > 0) {
             int page_size = paged_kv_cache.page_size;
+            // Reached only when paging is enabled; page_size must be > 0 here
+            // because the following code divides by it.
+            assert(page_size > 0 && "page_size must be > 0 in the paged KV cache path");
             int start_page_idx = isVarLen ? num_pages_per_seq_host[b] : b * (seq_len_kv_cache / page_size);
             int num_pages = ceil_div(seq_len_kv_cache, page_size);
 
@@ -867,6 +881,9 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
     compat::memset(block_O.get(), 0, block_O.size() * sizeof(ElementO));
     if (PagedKV) {
       paged_kv_cache.page_size = options.page_size;
+      // PagedKV requires a real page size; ceil_div below divides by it, so a
+      // page_size of 0 would be an integer division-by-zero (SIGFPE).
+      assert(paged_kv_cache.page_size > 0 && "PagedKV requires page_size > 0");
       std::vector<int> num_pages_per_seq{0};
       int num_pages = 0;
       for(int b = 0; b < shape.batch; b++) {
@@ -1021,6 +1038,15 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
   }
 
   void run(::benchmark::State& state, const FMHAOptions &options, const cutlass::KernelHardwareInfo &hw_info) {
+
+    // Paged KV cache requires a positive page size. A page_size <= 0 would cause
+    // an integer division-by-zero (SIGFPE) during setup (ceil_div by page_size).
+    // Guard at runtime so this is caught in Release builds too, where the
+    // asserts above are compiled out under NDEBUG.
+    if (PagedKV && options.page_size <= 0) {
+      state.SkipWithError("Invalid config: PagedKV requires page_size > 0");
+      return;
+    }
 
     ProblemShapeType problem_size = initialize(options);
 
