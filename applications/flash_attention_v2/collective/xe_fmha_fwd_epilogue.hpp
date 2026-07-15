@@ -68,8 +68,19 @@ public:
   using ElementO = typename TensorO_::value_type;
 
   using TensorLSE = TensorLSE_;
-  using TensorLSE2D = conditional_t<is_void_v<TensorLSE_>, void, decltype(TensorLSE_{}(append<rank_v<TensorLSE_>>(make_coord(_,_),0)))>;
-  using ElementLSE = conditional_t<is_void_v<TensorLSE_>, void, typename TensorLSE_::value_type>;
+  // Lazily derive the 2D slice / element type: conditional_t eagerly instantiates
+  // both branches, so `typename void::value_type` (non-split path, TensorLSE_ = void)
+  // would be a hard error. Wrap the non-void case in a helper that is only
+  // instantiated when TensorLSE_ is an actual tensor type.
+  template <class T, bool = is_void_v<T>>
+  struct LSETraits { using Tensor2D = void; using Element = void; };
+  template <class T>
+  struct LSETraits<T, false> {
+    using Tensor2D = decltype(T{}(append<rank_v<T>>(make_coord(_,_),0)));
+    using Element  = typename T::value_type;
+  };
+  using TensorLSE2D = typename LSETraits<TensorLSE_>::Tensor2D;
+  using ElementLSE  = typename LSETraits<TensorLSE_>::Element;
 
   using FragA = typename CollectiveMainloop::FragA;
   using FragARow = typename CollectiveMainloop::FragARow;
