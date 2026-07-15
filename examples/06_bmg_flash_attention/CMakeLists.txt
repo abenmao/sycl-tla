@@ -120,6 +120,17 @@ foreach(HEAD_DIM 64 96 128 192)
         )
         target_compile_definitions(06_xe_fmha_fwd_decode_persistent_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE PERSISTENT SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
       endif()
+
+      if (HEAD_DIM EQUAL 128)
+        # Two-kernel split-KV (flash-decoding) target. Only implemented for hdim128.
+        cutlass_example_add_executable(
+          06_xe_fmha_fwd_decode_splitkv_${INPUT_TYPE}_hdim${HEAD_DIM}
+          06_xe_fmha_fwd.cpp
+          TEST_COMMAND_OPTIONS
+          TEST_NO_PAGED_DECODE
+        )
+        target_compile_definitions(06_xe_fmha_fwd_decode_splitkv_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE SPLITKV SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
+      endif()
     endif()
 
     target_compile_definitions(06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})

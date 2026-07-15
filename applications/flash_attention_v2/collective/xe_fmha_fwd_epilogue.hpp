@@ -50,7 +50,8 @@ using namespace cute;
 template <class CollectiveMainloop, // Attention mainloop
           class TileShapeO_,        // Shape of output tile, may be larger than P*V GEMM
           class TensorO_,           // 2D slice of global output tensor
-          class TiledCopyO_ = void> // Optional TiledCopy for loading O
+          class TiledCopyO_ = void, // Optional TiledCopy for loading O
+          class TensorLSE_ = void>  // Optional tensor for storing intermediate exp sums and max logits (split-KV)
 class FMHAFwdEpilogue {
 
 public:
@@ -65,6 +66,10 @@ public:
   using TensorO = TensorO_;
   using TensorO2D = decltype(TensorO_{}(append<rank_v<TensorO_>>(make_coord(_,_),0)));
   using ElementO = typename TensorO_::value_type;
+
+  using TensorLSE = TensorLSE_;
+  using TensorLSE2D = conditional_t<is_void_v<TensorLSE_>, void, decltype(TensorLSE_{}(append<rank_v<TensorLSE_>>(make_coord(_,_),0)))>;
+  using ElementLSE = conditional_t<is_void_v<TensorLSE_>, void, typename TensorLSE_::value_type>;
 
   using FragA = typename CollectiveMainloop::FragA;
   using FragARow = typename CollectiveMainloop::FragARow;
@@ -156,7 +161,8 @@ public:
     }();
 
     // Reduce k-blocks of A and A_sum across WG, if needed.
-    auto [rA, rA_sum, active] = reduce_A(tArA, tA_max, tA_sum_full, thr_id);
+    auto [rA, rA_max, rA_sum, active] = reduce_A(tArA, tA_max, tA_sum_full, thr_id);
+    (void) rA_max;
 
     /* Some subgroups may not have any work to do; if so, quit early. */
     if (!active) return;
@@ -187,6 +193,78 @@ public:
     copy(copy_o, tOrO, tOgO);
   }
 
+  // Split-KV version: computes the locally-normalized partial output for one KV
+  // split and stores the per-split softmax statistics (exp sum + max logit) so a
+  // subsequent reduction kernel can merge partitions with a numerically stable
+  // log-sum-exp rescale. Assumes decode with GQA query heads (and, when
+  // seq_len_qo > 1, the query positions) packed into the Q tile. Each packed row
+  // maps to work-item `thr_id` within its Q tile, so row `blk_q * TileQ + thr_id`.
+  template <bool SumIsReduced = false, typename QVCoord, typename FragSPRow, typename TensorLSE2DIn>
+  CUTLASS_DEVICE
+  void
+  operator()(TensorO2D const& O,               // Global partial O tensor: (q,v)
+             FragA          & tArA,            // O accumulator:   (q,v)
+             FragARow       & tA_max,          // Softmax row-wise max accumulator
+             FragSPRow      & tA_sum,          // Softmax row-wise partial sum
+             QVCoord          blk_qv,          // WG tile indices: (q,v)
+             int              thr_id,          // Work-item ID
+             TensorLSE2DIn const& exp_sums,    // Global exp sum tensor:   (q,kv_split)
+             TensorLSE2DIn const& max_logits,  // Global max logits tensor:(q,kv_split)
+             int              idx_kv_split,     // Which KV split this WG computed
+             int              num_packed_rows,  // Total packed Q rows (seq_len_qo * head_group_q)
+             float            v_scale = 1.0f) { // Per-tensor V dequant scale (fp8 path)
+
+    using namespace cute;
+    using ElementA = typename FragA::element_type;
+    auto tA_sum_full = [&]() -> decltype(auto) {
+      if constexpr (SumIsReduced)
+        return (tA_sum);
+      else
+        return reduce<0, ReduceMode::Horizontal>(tA_sum, sycl::plus<void>{});
+    }();
+
+    // Reduce k-blocks of A, A_max and A_sum across WG, if needed.
+    auto [rA, rA_max, rA_sum, active] = reduce_A(tArA, tA_max, tA_sum_full, thr_id);
+
+    // Store per-split softmax statistics. Work-item `thr_id` holds the reduced
+    // stats for row `thr_id` within this Q tile; offset by blk_q for the global
+    // packed row, and guard against the partial last tile.
+    constexpr int TileQ = get<0>(TileShapeO{});
+    int stats_row = get<0>(blk_qv) * TileQ + thr_id;
+    if (thr_id < TileQ && stats_row < num_packed_rows) {
+      exp_sums(stats_row, idx_kv_split) = static_cast<ElementLSE>(rA_sum(0));
+      max_logits(stats_row, idx_kv_split) = static_cast<ElementLSE>(rA_max(0));
+    }
+
+    /* Some subgroups may not have any work to do; if so, quit early. */
+    if (!active) return;
+
+    /* Complete local softmax normalization; the reduce kernel multiplies the sum back. */
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < rA_sum.size(); i++)
+      if constexpr (CollectiveMainloop::PerTensorScale)
+        rA_sum(i) = ElementA(v_scale) / rA_sum(i);
+      else
+        rA_sum(i) = ElementA(1) / rA_sum(i);
+
+    /* Tile output */
+    Tensor cO = make_identity_tensor(O.shape());          // (q,v)
+    Tensor gO = local_tile(cO, TileShapeO{}, blk_qv);     // (q,v)
+
+    /* Prepare slices */
+    TiledCopyO copy_o{O};
+    auto thr_copy_o = copy_o.get_slice(thr_id);
+
+    auto tOrO = thr_copy_o.partition_sg_fragment_S(gO);
+    auto tOgO = thr_copy_o.partition_D(gO);
+
+    /* Fused rescale + reorder */
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < rA.size(); i++)
+      tOrO(i) = static_cast<ElementO>(rA(i) * broadcast<0>(rA_sum, rA, i));
+    copy(copy_o, tOrO, tOgO);
+  }
+
   // Reduce k-blocks of A and A_sum across WG, if needed.
   // Note that each k block has its own scale factor based on A_max,
   //   so A/A_sum contributions need to be rescaled to match.
@@ -201,7 +279,7 @@ public:
     using namespace sycl::ext::oneapi::this_work_item;
 
     if constexpr (ReduceK{} == _1{}) {
-      return std::make_tuple(tArA, tA_sum, true);
+      return std::make_tuple(tArA, tA_max, tA_sum, true);
     } else {
       /* Identify A tile ID and k block for this subgroup. */
       auto thr_vak = group<1,3>(TiledMMAPV{}.get_thr_layout_vmnk()).get_flat_coord(assert_uniform(thr_id));
@@ -301,7 +379,7 @@ public:
           }
         }
       }
-      return std::make_tuple(rA, rA_sum, active);
+      return std::make_tuple(rA, rA_max, rA_sum, active);
     }
   }
 };

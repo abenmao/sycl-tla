@@ -235,6 +235,21 @@ int main(int argc, const char **argv) {
 #endif
 
 #if defined(DECODE) && HEAD_DIM == 128
+#if defined(SPLITKV)
+  // Two-kernel split-KV (flash-decoding) path: kernel 1 computes locally
+  // normalized partial outputs per KV split, kernel 2 merges them with a
+  // numerically-stable log-sum-exp rescale. GQA query heads are packed into the
+  // Q tile dimension, so the _8 Q-tile config is used.
+  return (options.is_causal
+    ? FMHAConfig</*CausalMask=*/true,  false, ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, void, PipelineStages,
+                 ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::template run<
+                 /*isVarLen=*/false, /*CachedKV=*/false, /*PagedKV=*/false,
+                 cutlass::fmha::kernel::XeFHMASplitKVTileScheduler, /*isSplitKV=*/true>(options)
+    : FMHAConfig</*CausalMask=*/false, false, ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, void, PipelineStages,
+                 ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::template run<
+                 /*isVarLen=*/false, /*CachedKV=*/false, /*PagedKV=*/false,
+                 cutlass::fmha::kernel::XeFHMASplitKVTileScheduler, /*isSplitKV=*/true>(options));
+#else
   const int gqa_group  = options.num_heads_q / options.num_heads_kv;
   const int q_len      = options.seq_len_qo;
   const int total_rows = gqa_group * q_len;
@@ -278,6 +293,7 @@ int main(int argc, const char **argv) {
     return FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64);
 
 #undef FMHA_RUN_Q
+#endif // SPLITKV
 #else
 
 #if PERSISTENT
