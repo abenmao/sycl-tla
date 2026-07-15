@@ -183,22 +183,38 @@ int main(int argc, const char **argv) {
 
 #elif HEAD_DIM == 128
   using ShapeQK8 = Shape<_8, _256, _64>;
+#if defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
+  using ShapePV8 = Shape<_8, _64, _256>;
+#else
   using ShapePV8 = Shape<_8, _32, _256>;
+#endif
   using ShapeOut8 = Shape<_8, _128>;
   using SubgroupLayoutQK8 = Layout<Shape<_1, _8, _1>>;
 
   using ShapeQK16 = Shape<_16, _256, _64>;
+#if defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
+  using ShapePV16 = Shape<_16, _64, _256>;
+#else
   using ShapePV16 = Shape<_16, _32, _256>;
+#endif
   using ShapeOut16 = Shape<_16, _128>;
   using SubgroupLayoutQK16 = Layout<Shape<_2, _8, _1>>;
 
   using ShapeQK32 = Shape<_32, _256, _64>;
+#if defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
+  using ShapePV32 = Shape<_32, _64, _256>;
+#else
   using ShapePV32 = Shape<_32, _32, _256>;
+#endif
   using ShapeOut32 = Shape<_32, _128>;
   using SubgroupLayoutQK32 = Layout<Shape<_4, _8, _1>>;
 
   using ShapeQK64 = Shape<_64, _256, _64>;
+#if defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
+  using ShapePV64 = Shape<_64, _64, _256>;
+#else
   using ShapePV64 = Shape<_64, _32, _256>;
+#endif
   using ShapeOut64 = Shape<_64, _128>;
   using SubgroupLayoutQK64 = Layout<Shape<_4, _8, _1>>;
 
