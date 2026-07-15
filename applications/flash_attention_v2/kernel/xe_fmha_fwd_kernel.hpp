@@ -595,7 +595,7 @@ public:
     // workspace for storing partial results of different KV partitions
     ElementA *partial_results_ptr = nullptr;
     // for atomic add
-    int32_t *atomic_reduce_cnt_ptr = nullptr;
+    int32_t *reduce_flags_ptr = nullptr;
     // max partitions per batch_head (computed from sm_count/2)
     int max_num_partitions = 0;
   };
@@ -604,21 +604,21 @@ public:
   // Methods
   //
 
-  static size_t partial_results_byte_offset(int num_batch_heads) {
-    return ((num_batch_heads * sizeof(int32_t) + size_t(15)) / 16) * 16;
+  static size_t reduce_flags_byte_size(int num_batch_heads, int max_parts) {
+    return ((size_t(num_batch_heads) * max_parts * sizeof(int32_t) + size_t(15)) / 16) * 16;
   }
 
   static Params to_underlying_arguments(Arguments const &args, void *workspace) {
     int num_batch_heads = args.kernel.shape.batch * args.kernel.shape.num_heads_kv;
     int max_parts = compute_max_num_partitions(args.hw_info.sm_count / 2, num_batch_heads);
-    int32_t *atomic_reduce_cnt_ptr = reinterpret_cast<int32_t *>(workspace);
+    int32_t *reduce_flags_ptr = reinterpret_cast<int32_t *>(workspace);
     ElementA *partial_results_ptr = reinterpret_cast<ElementA *>(
-        reinterpret_cast<char *>(workspace) + partial_results_byte_offset(num_batch_heads));
+        reinterpret_cast<char *>(workspace) + reduce_flags_byte_size(num_batch_heads, max_parts));
     return {args.kernel,
             CollectiveMainloop::to_underlying_arguments(args.mainloop, workspace),
             CollectiveEpilogue::to_underlying_arguments(args.epilogue, workspace),
             TileScheduler::to_underlying_arguments(args.kernel.shape, args.hw_info, TileShapeO{}),
-            partial_results_ptr, atomic_reduce_cnt_ptr, max_parts
+            partial_results_ptr, reduce_flags_ptr, max_parts
           };
   }
 
@@ -636,17 +636,18 @@ public:
     // partial attn outputs, exp sum and max logits
     ws_size += (max_parts * num_batch_heads) * wg_size * num_elem_per_thread * sizeof(ElementA);
     // atomic counter
-    ws_size += partial_results_byte_offset(num_batch_heads);
+    ws_size += reduce_flags_byte_size(num_batch_heads, max_parts);
     return ws_size;
   }
 
   static cutlass::Status initialize_workspace(Arguments const &args, void *workspace = nullptr,
                                               cudaStream_t stream = nullptr, CudaHostAdapter *cuda_adapter = nullptr) {
     int num_batch_heads = args.kernel.shape.batch * args.kernel.shape.num_heads_kv;
-    compat::fill(reinterpret_cast<int32_t*>(workspace), (int32_t)0, num_batch_heads);
-    size_t cnt_bytes = partial_results_byte_offset(num_batch_heads);
-    auto partial_ws_count = (get_workspace_size(args) - cnt_bytes) / sizeof(ElementA);
-    auto* partial_results_ptr = reinterpret_cast<ElementA*>(reinterpret_cast<char*>(workspace) + cnt_bytes);
+    int max_parts = compute_max_num_partitions(args.hw_info.sm_count / 2, num_batch_heads);
+    compat::fill(reinterpret_cast<int32_t*>(workspace), (int32_t)0, num_batch_heads * max_parts);
+    size_t flag_bytes = reduce_flags_byte_size(num_batch_heads, max_parts);
+    auto partial_ws_count = (get_workspace_size(args) - flag_bytes) / sizeof(ElementA);
+    auto* partial_results_ptr = reinterpret_cast<ElementA*>(reinterpret_cast<char*>(workspace) + flag_bytes);
     compat::fill(partial_results_ptr, (ElementA)0, partial_ws_count);
     return Status::kSuccess;
   }
@@ -770,16 +771,8 @@ public:
       FragSPartialRow tA_sum_partial;
 
       // compute num computed blocks for start batch head id
-      int num_computed_blocks = (start_batch_head_id == 0) ? (wg_id * num_blocks_per_wg) : (wg_id * num_blocks_per_wg - start_batch_head_id * local_k_blocks);
+      int num_computed_blocks = wg_id * num_blocks_per_wg - start_batch_head_id * local_k_blocks;
       int start_blk, end_blk, idx_b, head_kv;
-      // leader wg is also responsible for reducing partial results, while other
-      // worker wg only to compute partial results
-      bool is_leader_wg = wg_id < num_batch_heads;
-
-      if (thr_id == 0 && is_leader_wg) {
-        // reset atomic counter before computation
-        *(params.atomic_reduce_cnt_ptr + wg_id) = 0;
-      }
 
       // Main loop
       CollectiveMainloop mainloop(params.mainloop, shared_storage.mainloop);
@@ -864,15 +857,12 @@ public:
           merged_res(2 * i + 1 + size(FragA{}.shape())) = tA_sum(i);
         }
         copy(merged_res, tPartial);
-
+        if (thr_id == 0) {
+          params.reduce_flags_ptr[batch_head_id * params.max_num_partitions + partition_id] = 0;
+        }
         // Split barrier: arrive (flush stores) then wait (ensure all WG threads arrived)
         cute::barrier_arrive(ScopeWorkgroup, SemanticsRelease | SemanticsCrossWGMemory);
         cute::barrier_wait(ScopeWorkgroup, SemanticsAcquire | SemanticsCrossWGMemory);
-
-        // after store, set atomic cnt
-        if (thr_id == 0) {
-          atomicAdd(params.atomic_reduce_cnt_ptr + batch_head_id, 1);
-        }
 
         // advance to next batch head id
         if (is_update_batch_head_id) {
@@ -883,80 +873,117 @@ public:
         }
       }
 
-      if (is_leader_wg) {
-        int num_partitions = get_num_partitions(wg_id, num_blocks_per_wg, local_k_blocks);
+      auto load_partition = [&](int bh, int part, FragA &out, FragARow &mx, FragARow &sm) {
+        int offset = bh * params.max_num_partitions * SGPerWG::value * intel::sg_size * num_elem_per_thread
+                   + part * SGPerWG::value * intel::sg_size * num_elem_per_thread
+                   + sg_id * intel::sg_size * num_elem_per_thread
+                   + tid_in_sg * num_elem_per_thread;
+        Tensor tPartial = make_tensor(params.partial_results_ptr + offset, make_shape(Int<num_elem_per_thread>{}));
+        Tensor merged_res = make_tensor<ElementA>(Int<num_elem_per_thread>{});
+        copy(tPartial, merged_res);
+        CUTLASS_PRAGMA_UNROLL
+        for (int e = 0; e < size(FragA{}.shape()); ++e) {
+          out(e) = merged_res(e);
+        }
+        CUTLASS_PRAGMA_UNROLL
+        for (int e = 0; e < size(FragARow{}.shape()); ++e) {
+          mx(e) = merged_res(2 * e + size(FragA{}.shape()));
+          sm(e) = merged_res(2 * e + 1 + size(FragA{}.shape()));
+        }
+      };
+      auto store_partition = [&](int bh, int part, FragA const &out, FragARow const &mx, FragARow const &sm) {
+        int offset = bh * params.max_num_partitions * SGPerWG::value * intel::sg_size * num_elem_per_thread
+                   + part * SGPerWG::value * intel::sg_size * num_elem_per_thread
+                   + sg_id * intel::sg_size * num_elem_per_thread
+                   + tid_in_sg * num_elem_per_thread;
+        Tensor tPartial = make_tensor(params.partial_results_ptr + offset, make_shape(Int<num_elem_per_thread>{}));
+        Tensor merged_res = make_tensor<ElementA>(Int<num_elem_per_thread>{});
+        CUTLASS_PRAGMA_UNROLL
+        for (int e = 0; e < size(FragA{}.shape()); ++e) {
+          merged_res(e) = out(e);
+        }
+        CUTLASS_PRAGMA_UNROLL
+        for (int e = 0; e < size(FragARow{}.shape()); ++e) {
+          merged_res(2 * e + size(FragA{}.shape())) = mx(e);
+          merged_res(2 * e + 1 + size(FragA{}.shape())) = sm(e);
+        }
+        copy(merged_res, tPartial);
+      };
 
-        // check atomic to wait for partial results ready
-        while(atomicLoad(params.atomic_reduce_cnt_ptr + wg_id) != num_partitions) {}
+      CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
 
-        clear(tArA);
-        clear(tA_max);
-        clear(tA_sum);
-
-        for (int i = 0; i < num_partitions; ++i) {
-          int offset = wg_id * params.max_num_partitions * SGPerWG::value * intel::sg_size * num_elem_per_thread
-                     + i * SGPerWG::value * intel::sg_size * num_elem_per_thread
-                     + sg_id * intel::sg_size * num_elem_per_thread
-                     + tid_in_sg * num_elem_per_thread;
-          Tensor tPartial = make_tensor(params.partial_results_ptr + offset, make_shape(Int<num_elem_per_thread>{}));
-          Tensor merged_res = make_tensor<ElementA>(Int<num_elem_per_thread>{});
-          copy(tPartial, merged_res);
-
-          if (i == 0) {
-            CUTLASS_PRAGMA_UNROLL
-            for(int i = 0; i < size(FragA{}.shape()); ++i) {
-              tArA(i) = merged_res(i);
-            }
-
-            CUTLASS_PRAGMA_UNROLL
-            for (int i = 0; i < size(FragARow{}.shape()); ++i) {
-              tA_max(i) = merged_res(2 * i + size(FragA{}.shape()));
-              tA_sum(i) = merged_res(2 * i + 1 + size(FragA{}.shape()));
-            }
-
-            continue;
-          }
-
-          FragA tArA_2;
-          FragARow tA_max_2, tA_sum_2;
-          CUTLASS_PRAGMA_UNROLL
-          for(int i = 0; i < size(FragA{}.shape()); ++i) {
-            tArA_2(i) = merged_res(i);
-          }
-
-          CUTLASS_PRAGMA_UNROLL
-          for (int i = 0; i < size(FragARow{}.shape()); ++i) {
-            tA_max_2(i) = merged_res(2 * i + size(FragA{}.shape()));
-            tA_sum_2(i) = merged_res(2 * i + 1 + size(FragA{}.shape()));
-          }
-
-          reduce_split2(params, tArA, tA_max, tA_sum, tArA_2, tA_max_2, tA_sum_2);
+      int rd_computed = wg_id * num_blocks_per_wg - start_batch_head_id * local_k_blocks;
+      int rd_budget = num_blocks_per_wg;
+      int rd_bh = start_batch_head_id;
+      if (rd_bh >= num_batch_heads) rd_budget = 0;
+      while (rd_budget > 0) {
+        bool rd_advance;
+        int rd_new = local_k_blocks - rd_computed;
+        if (rd_new <= rd_budget) {
+          rd_computed = 0;
+          rd_budget -= rd_new;
+          rd_advance = true;
+        } else {
+          rd_budget = 0;
+          rd_advance = false;
         }
 
-        // require group barrier if using SLM
-        if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
-          sycl::group_barrier(get_work_group<3>());
+        int part = get_partition_id(wg_id, rd_bh, num_blocks_per_wg, local_k_blocks);
+        int num_partitions = get_num_partitions(rd_bh, num_blocks_per_wg, local_k_blocks);
+
+        FragA rdOut;
+        FragARow rdMax, rdSum;
+        load_partition(rd_bh, part, rdOut, rdMax, rdSum);
+
+        bool did_read = false;
+        for (int r = 0; (1 << r) < num_partitions; ++r) {
+          // stop once this partition is the one being consumed at round r
+          if ((part & ((1 << (r + 1)) - 1)) != 0) break;
+          int partner = part + (1 << r);
+          if (partner < num_partitions) {
+            int32_t *flag = params.reduce_flags_ptr + rd_bh * params.max_num_partitions + partner;
+            while (atomicLoad(flag) != 1) {}
+            FragA pOut;
+            FragARow pMax, pSum;
+            load_partition(rd_bh, partner, pOut, pMax, pSum);
+            reduce_split2(params, rdOut, rdMax, rdSum, pOut, pMax, pSum);
+            did_read = true;
+          }
         }
 
-        head_kv = wg_id % s.num_heads_kv;
-        idx_b = wg_id / s.num_heads_kv;
+        if (part == 0) {
+          // Root owns the fully reduced result -> run the epilogue for rd_bh.
+          if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
+            sycl::group_barrier(get_work_group<3>());
+          }
+          int hkv = rd_bh % s.num_heads_kv;
+          int idx_b_o = rd_bh / s.num_heads_kv;
+          const int total_rows_o = head_group_q * s.seq_len_qo;
+          const auto o_group_off = hkv * head_group_q * stride<2>(O.layout());
+          auto o_view = make_tensor(
+              O.data() + idx_b_o * stride<3>(O.layout()) + o_group_off,
+              make_layout(make_shape(total_rows_o, int(s.head_size_vo)),
+                          make_stride(int(stride<0>(O.layout())), stride<1>(O.layout()))));
+          epilogue.template operator()<true>(o_view, rdOut, rdMax, rdSum, blk_qv, thr_id);
+        } else {
+          // Non-root: publish this subtree (leaves already stored in Phase 1),
+          // then release the one-shot flag for the consumer WG.
+          if (did_read) {
+            store_partition(rd_bh, part, rdOut, rdMax, rdSum);
+          }
+          cute::barrier_arrive(ScopeWorkgroup, SemanticsRelease | SemanticsCrossWGMemory);
+          cute::barrier_wait(ScopeWorkgroup, SemanticsAcquire | SemanticsCrossWGMemory);
+          if (thr_id == 0) {
+            atomicAdd(params.reduce_flags_ptr + rd_bh * params.max_num_partitions + part, 1);
+          }
+        }
 
-        const int total_rows_o = head_group_q * s.seq_len_qo;
-        const auto o_group_off = head_kv * head_group_q * stride<2>(O.layout());
-        auto make_gqa_view_o = [&]() {
-          auto offset = idx_b * stride<3>(O.layout()) + o_group_off;
-          return make_tensor(
-            O.data() + offset,
-            make_layout(make_shape(total_rows_o, int(s.head_size_vo)),
-                        make_stride(int(stride<0>(O.layout())), stride<1>(O.layout()))));
-        };
-
-        // Epilogue
-        CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
-        epilogue.template operator()<true>(make_gqa_view_o(),
-                tArA, tA_max, tA_sum,
-                blk_qv, thr_id);
+        if (rd_advance) {
+          rd_bh += 1;
+          if (rd_bh >= num_batch_heads) break;
+        }
       }
+
     }
   }
 };
