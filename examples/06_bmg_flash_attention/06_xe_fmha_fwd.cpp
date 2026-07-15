@@ -265,10 +265,6 @@ int main(int argc, const char **argv) {
 #else
 
 #if PERSISTENT
-  if (options.use_paged_kv || options.seq_len_kv_cache > 0) {
-    std::cerr << "Error: Persistent kernel does not support paged/cached KV cache (use_paged_kv or seq_len_kv_cache > 0)." << std::endl;
-    return -1;
-  }
   using FMHAPersistent = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
   return FMHAPersistent::template run<false, false, false, cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options);
 #elif HEAD_DIM == 128 && defined(PREFILL) && !(defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)) && (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))

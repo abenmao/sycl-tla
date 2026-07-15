@@ -373,8 +373,20 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
   CUTLASS_DEVICE
   int get_physical_k_tile(int K, int batch_offset, int tiles_per_page) {
-    int page_idx = K / tiles_per_page;
-    int tile_in_page = K % tiles_per_page;
+    int page_idx;
+    int tile_in_page;
+
+    // Fast path for common paged-KV setups where tiles_per_page is power-of-two
+    // (e.g. page_size=512, BLK_K=128 => tiles_per_page=4).
+    if (tiles_per_page > 0 && (tiles_per_page & (tiles_per_page - 1)) == 0) {
+      unsigned shift = static_cast<unsigned>(__builtin_ctz(static_cast<unsigned>(tiles_per_page)));
+      page_idx = K >> shift;
+      tile_in_page = K & (tiles_per_page - 1);
+    } else {
+      page_idx = K / tiles_per_page;
+      tile_in_page = K % tiles_per_page;
+    }
+
     return params.ptr_page_table[batch_offset + page_idx] * tiles_per_page + tile_in_page;
   }
 
@@ -590,6 +602,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     std::array<PreparedK_cache_t, DTiles> prepared_k_cache;
     std::array<PreparedV_cache_t, VTiles> prepared_v_cache;
     std::array<int, Stages> physical_k_tiles_cache{};
+    [[maybe_unused]] int last_prefetched_logical_k = -1;
+    [[maybe_unused]] int last_prefetched_physical_k = 0;
 
     if constexpr (CachedKV && !PagedKV) {
       CUTLASS_PRAGMA_UNROLL
@@ -620,6 +634,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         if (logical_k < kblocks_cache) {
           physical_k_tiles_cache[s] = get_physical_k_tile(logical_k, batch_offset, tiles_per_page);
         }
+      }
+
+      int const init_last_logical_k = blk_k0 + (Stages - 1);
+      if (init_last_logical_k < kblocks_cache) {
+        last_prefetched_logical_k = init_last_logical_k;
+        last_prefetched_physical_k = physical_k_tiles_cache[(Stages - 1) % Stages];
       }
     }
 
@@ -749,7 +769,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       if constexpr (is_cache) {
         k_idx = K;
         if constexpr (PagedKV) {
-          k_idx = physical_k_tiles_cache[(K - blk_k0) % Stages];
+          constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
+          int slot = (stage_mask >= 0) ? ((K - blk_k0) & stage_mask) : ((K - blk_k0) % Stages);
+          k_idx = physical_k_tiles_cache[slot];
         }
       } else {
         k_idx = K - kblocks_cache;
@@ -1027,9 +1049,32 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         if (K_next < kblocks_cache) {
           int physical_K_next = K_next;
           if constexpr (PagedKV) {
-            int slot_next = (K_next - blk_k0) % Stages;
-            physical_k_tiles_cache[slot_next] = get_physical_k_tile(K_next, batch_offset, tiles_per_page);
-            physical_K_next = physical_k_tiles_cache[slot_next];
+            constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
+            int slot_next = (stage_mask >= 0) ? ((K_next - blk_k0) & stage_mask) : ((K_next - blk_k0) % Stages);
+            bool const is_continuous_next = (K_next == last_prefetched_logical_k + 1);
+            int physical_next;
+
+            if (is_continuous_next) {
+              if (tiles_per_page > 0 && (tiles_per_page & (tiles_per_page - 1)) == 0) {
+                int const page_mask = tiles_per_page - 1;
+                int const tile_in_page = K_next & page_mask;
+                physical_next = (tile_in_page != 0)
+                  ? (last_prefetched_physical_k + 1)
+                  : get_physical_k_tile(K_next, batch_offset, tiles_per_page);
+              } else {
+                int const tile_in_page = K_next % tiles_per_page;
+                physical_next = (tile_in_page != 0)
+                  ? (last_prefetched_physical_k + 1)
+                  : get_physical_k_tile(K_next, batch_offset, tiles_per_page);
+              }
+            } else {
+              physical_next = get_physical_k_tile(K_next, batch_offset, tiles_per_page);
+            }
+
+            physical_k_tiles_cache[slot_next] = physical_next;
+            physical_K_next = physical_next;
+            last_prefetched_logical_k = K_next;
+            last_prefetched_physical_k = physical_next;
           }
           for (int D = 0; D < size<4>(pKgK_cache); D++) {
             prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_next,D));

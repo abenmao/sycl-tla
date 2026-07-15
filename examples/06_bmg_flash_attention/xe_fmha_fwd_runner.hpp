@@ -124,10 +124,8 @@ struct Options {
             return;
         }
     }
-    //TODO: Add seq_len_kv_cache to seq_len_kv, remove this when cached/pagedKV is optimized.
-    seq_len_kv += seq_len_kv_cache;
-    seq_len_kv_cache = 0;
-    if(seq_len_kv <= 0) {
+
+    if (seq_len_kv <= 0 && seq_len_kv_cache <= 0) {
       std::cerr << "Invalid: seq_len_kv or seq_len_kv_cache must be > 0" << std::endl;
       return;
     }
