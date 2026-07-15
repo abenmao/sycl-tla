@@ -698,12 +698,35 @@ template <class FMHAKernel, bool isVarLen = false> struct ExampleRunner {
     auto shape_V_cache = cute::make_shape(khead_vo, seq_len_kv_cache, num_heads_kv, batch);
     auto shape_O = cute::make_shape(seq_len_qo, khead_vo, num_heads_q,  batch);
 
-    stride_Q = cutlass::make_cute_packed_stride(StrideQ{}, shape_Q);
-    stride_K = cutlass::make_cute_packed_stride(StrideK{}, shape_K);
-    stride_V = cutlass::make_cute_packed_stride(StrideV{}, shape_V);
-    stride_K_cache = cutlass::make_cute_packed_stride(StrideK{}, shape_K_cache);
-    stride_V_cache = cutlass::make_cute_packed_stride(StrideV{}, shape_V_cache);
-    stride_O = cutlass::make_cute_packed_stride(StrideO{}, shape_O);
+    // Layout switch: default = head-major (each head's [seq, dim] block is
+    // contiguous, dim innermost). Set env QKV_TOKEN_MAJOR=1 to lay Q/K/V out
+    // token-first (like a transformer's (B,S,H,D) output): dim stays innermost
+    // (stride 1) but the seq stride jumps by num_heads*dim and the head stride
+    // becomes dim, so per-head token reads are strided (models token-major
+    // input; use --verify=0, data values differ but the access pattern/perf is
+    // representative).
+    const char* qkv_tm_env = std::getenv("QKV_TOKEN_MAJOR");
+    const bool qkv_token_major = (qkv_tm_env && atoi(qkv_tm_env) != 0);
+    if (qkv_token_major) {
+      stride_Q = cute::make_stride(num_heads_q * head_size_qk, _1{}, head_size_qk,
+                                   seq_len_qo * num_heads_q * head_size_qk);
+      stride_K = cute::make_stride(num_heads_kv * head_size_qk, _1{}, head_size_qk,
+                                   seq_len_kv * num_heads_kv * head_size_qk);
+      stride_V = cute::make_stride(_1{}, num_heads_kv * head_size_vo, head_size_vo,
+                                   seq_len_kv * num_heads_kv * head_size_vo);
+      stride_K_cache = cute::make_stride(num_heads_kv * head_size_qk, _1{}, head_size_qk,
+                                         seq_len_kv_cache * num_heads_kv * head_size_qk);
+      stride_V_cache = cute::make_stride(_1{}, num_heads_kv * head_size_vo, head_size_vo,
+                                         seq_len_kv_cache * num_heads_kv * head_size_vo);
+      stride_O = cutlass::make_cute_packed_stride(StrideO{}, shape_O);
+    } else {
+      stride_Q = cutlass::make_cute_packed_stride(StrideQ{}, shape_Q);
+      stride_K = cutlass::make_cute_packed_stride(StrideK{}, shape_K);
+      stride_V = cutlass::make_cute_packed_stride(StrideV{}, shape_V);
+      stride_K_cache = cutlass::make_cute_packed_stride(StrideK{}, shape_K_cache);
+      stride_V_cache = cutlass::make_cute_packed_stride(StrideV{}, shape_V_cache);
+      stride_O = cutlass::make_cute_packed_stride(StrideO{}, shape_O);
+    }
 
     int ld_qk = khead_qk;
     int ld_vo = khead_vo;

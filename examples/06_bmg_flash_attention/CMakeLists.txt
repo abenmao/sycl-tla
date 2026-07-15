@@ -235,4 +235,54 @@ if(FMHA_TUNE)
       endforeach()
     endforeach()
   endforeach()
+
+  # ---- Asymmetric head_dim (QK=192, V/O=128) sweep ------------------------------------
+  # Decouples the 2nd-matmul (PV) + O-epilogue tile width from the QK=192 policy (mimics
+  # vllm-xpu-kernels chunk_policy_head192_vo128). One executable per (ASYM_KV_TILE x
+  # ASYM_Q_TILE x ASYM_D_STEP x ASYM_V_STEP x ASYM_SG), fed to the ASYM_VO128 block in
+  # 06_xe_fmha_fwd.cpp (#elif HEAD_DIM == 192). Run with --head_size_qk=192
+  # --head_size_vo=128. OpPerf/export_tuning_candidates.py shortlists which combos to
+  # build; run_tuning_candidates.py builds only those target names, not the full product.
+  if(NOT FMHA_TUNE_ASYM_KV_TILE)
+    set(FMHA_TUNE_ASYM_KV_TILE 16 32 64 128)
+  endif()
+  if(NOT FMHA_TUNE_ASYM_Q_TILE)
+    set(FMHA_TUNE_ASYM_Q_TILE 128 192 256)
+  endif()
+  if(NOT FMHA_TUNE_ASYM_D_STEP)
+    set(FMHA_TUNE_ASYM_D_STEP 16 32 64)
+  endif()
+  if(NOT FMHA_TUNE_ASYM_V_STEP)
+    set(FMHA_TUNE_ASYM_V_STEP 16 32 64 128)
+  endif()
+  if(NOT FMHA_TUNE_ASYM_SG)
+    set(FMHA_TUNE_ASYM_SG 8 16 32)
+  endif()
+  foreach(KV ${FMHA_TUNE_ASYM_KV_TILE})
+    foreach(Q ${FMHA_TUNE_ASYM_Q_TILE})
+      foreach(D ${FMHA_TUNE_ASYM_D_STEP})
+        foreach(V ${FMHA_TUNE_ASYM_V_STEP})
+          foreach(SG ${FMHA_TUNE_ASYM_SG})
+            set(ASYM_TARGET "06_xe_fmha_fwd_prefill_bfloat16_t_hdim192_vo128_kv${KV}_q${Q}_d${D}_v${V}_sg${SG}")
+            cutlass_example_add_executable(${ASYM_TARGET} 06_xe_fmha_fwd.cpp)
+            target_compile_definitions(${ASYM_TARGET} PRIVATE
+              HEAD_DIM=192 PREFILL ASYM_VO128 SHOW_DIFF=1 INPUT_TYPE=bfloat16_t IS_BFLOAT16
+              ASYM_KV_TILE=${KV} ASYM_Q_TILE=${Q} ASYM_D_STEP=${D} ASYM_V_STEP=${V} ASYM_SG=${SG})
+          endforeach()
+        endforeach()
+      endforeach()
+    endforeach()
+  endforeach()
 endif()
+
+# Asymmetric head_dim prefill reference default: QK=192, V/O=128 output tile (mimics
+# vllm-xpu-kernels chunk_policy_head192_vo128). Tuned defaults baked into the ASYM_VO128
+# block in 06_xe_fmha_fwd.cpp (KV=32, Q=256, D=32, V=64, SG=16). Always built (not gated
+# behind FMHA_TUNE) so it's available as the reference-default anchor mentioned in
+# optimization_skills/11_projection_guided_autotuning.md's cross-validation step. Run with
+# --head_size_qk=192 --head_size_vo=128.
+cutlass_example_add_executable(
+  06_xe_fmha_fwd_prefill_bfloat16_t_hdim192_vo128
+  06_xe_fmha_fwd.cpp
+)
+target_compile_definitions(06_xe_fmha_fwd_prefill_bfloat16_t_hdim192_vo128 PRIVATE HEAD_DIM=192 PREFILL ASYM_VO128 SHOW_DIFF=1 INPUT_TYPE=bfloat16_t IS_BFLOAT16)

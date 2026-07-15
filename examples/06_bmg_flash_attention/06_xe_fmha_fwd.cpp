@@ -144,10 +144,45 @@ int main(int argc, const char **argv) {
 #endif
 
 #elif HEAD_DIM == 192
+#ifdef ASYM_VO128
+  /* Asymmetric head_dim: QK=192 but V/O=128. Decouple the output tile width
+     (2nd matmul) from the QK=192 policy so the PV gemm + O epilogue process
+     only 128 columns instead of a 192-wide tile that clamps 64 OOB columns.
+     Run with --head_size_qk=192 --head_size_vo=128.
+     Tuned defaults (via sweep, all verify-Passed): SG=16 + KV-tile=32 + V-step=64
+     beats the naive ShapeOut-only decouple (SG=32/KV=64 inherited from symmetric
+     192) by ~1.4-1.5x (B60: 45% -> 66% MFU at B=1 S=8192). Key insight: the
+     symmetric-192 tiling was tuned for V=192; with V=128 the register budget
+     shifts, so fewer subgroups (16) + smaller KV block (32) + wider V-step (64)
+     hit a much better occupancy/reuse balance. SG=8 or KV=16 regress/fail. */
+#ifndef ASYM_KV_TILE
+#define ASYM_KV_TILE 32
+#endif
+#ifndef ASYM_Q_TILE
+#define ASYM_Q_TILE 256
+#endif
+#ifndef ASYM_D_STEP
+#define ASYM_D_STEP 32
+#endif
+#ifndef ASYM_V_STEP
+#define ASYM_V_STEP 64
+#endif
+#ifndef ASYM_SG
+#define ASYM_SG 16
+#endif
+  using ShapeQK = Shape<cute::Int<ASYM_Q_TILE>, cute::Int<ASYM_KV_TILE>, cute::Int<ASYM_D_STEP>>;
+  using ShapePV = Shape<cute::Int<ASYM_Q_TILE>, cute::Int<ASYM_V_STEP>, cute::Int<ASYM_KV_TILE>>;
+  using ShapeOut = Shape<cute::Int<ASYM_Q_TILE>, _128>;
+#else
   using ShapeQK = Shape<_256, _64, _32>;
   using ShapePV = Shape<_256, _32, _64>;
   using ShapeOut = Shape<_256, _192>;
+#endif
+#ifdef ASYM_VO128
+  using SubgroupLayoutQK = Layout<Shape<cute::Int<ASYM_SG>, _1, _1>>;
+#else
   using SubgroupLayoutQK = Layout<Shape<_32, _1, _1>>;
+#endif
 
 #endif
 #elif defined(DECODE)
