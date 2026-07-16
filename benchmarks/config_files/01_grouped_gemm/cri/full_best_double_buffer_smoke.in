@@ -1,43 +1,28 @@
-# Smoke test: M=tile_m, N=tile_n, K=tile_k, 1 expert — one launch per (dtype, tile shape).
-# mxfp4 K-tile is 128; fp8-tensor and mxfp8 K-tile is 64.
-
-
-
-
-# TileShape 32x128 (bf16 only)
-CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_32_128_32                --bm_name=src_0_best_double_buffer_smoke --n=128 --k=32  --m=64  --num_experts=1 --verify=true
-
-
-
+# Smoke test: M=tile_m*2, N=tile_n, K=tile_k, 1 expert — one launch per (dtype, tile shape).
+# mxfp4 K-tile is 128; fp8-tensor and mxfp8 K-tile is 64; bf16 K-tile is 32.
 
 # TileShape 256x256
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64             --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=512 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64 --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=512 --num_experts=1 --verify=true
+CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_256_256_32               --bm_name=src_1_best_double_buffer_smoke --n=256 --k=32  --m=512 --num_experts=1 --verify=true
+CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64              --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=512 --num_experts=1 --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=512 --num_experts=1 --verify=true
 CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128 --bm_name=src_0_best_double_buffer_smoke --n=256 --k=128 --m=512 --num_experts=1 --verify=true
 
 # TileShape 288x256
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64             --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=576 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64 --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=576 --num_experts=1 --verify=true
+CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64              --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=576 --num_experts=1 --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=576 --num_experts=1 --verify=true
 CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_288_256_128 --bm_name=src_0_best_double_buffer_smoke --n=256 --k=128 --m=576 --num_experts=1 --verify=true
 
 # TileShape 192x256
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_256_64             --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=384 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_256_64 --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=384 --num_experts=1 --verify=true
+CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_256_64              --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=384 --num_experts=1 --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_256_64  --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=384 --num_experts=1 --verify=true
 CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_192_256_128 --bm_name=src_0_best_double_buffer_smoke --n=256 --k=128 --m=384 --num_experts=1 --verify=true
 
 # TileShape 192x320
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_320_64             --bm_name=src_0_best_double_buffer_smoke --n=320 --k=64  --m=384 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_320_64 --bm_name=src_0_best_double_buffer_smoke --n=320 --k=64  --m=384 --num_experts=1 --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_320_64  --bm_name=src_0_best_double_buffer_smoke --n=320 --k=64  --m=384 --num_experts=1 --verify=true
 CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_192_320_128 --bm_name=src_0_best_double_buffer_smoke --n=320 --k=128 --m=384 --num_experts=1 --verify=true
 
 # TileShape 224x256
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64             --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=448 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64 --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=448 --num_experts=1 --verify=true
-CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_224_256_32               --bm_name=src_0_best_double_buffer_smoke --n=256 --k=32  --m=448 --num_experts=1 --verify=true
+CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_224_256_32               --bm_name=src_1_best_double_buffer_smoke --n=256 --k=32  --m=448 --num_experts=1 --verify=true
+CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64              --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=448 --num_experts=1 --verify=true
+CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64  --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=448 --num_experts=1 --verify=true
 CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_224_256_128 --bm_name=src_0_best_double_buffer_smoke --n=256 --k=128 --m=448 --num_experts=1 --verify=true
-
-
-# TileShape 352x256 (regular, for comparison)
-CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64                         --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=352 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64             --bm_name=src_0_best_double_buffer_smoke --n=256 --k=64  --m=352 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_352_256_128            --bm_name=src_0_best_double_buffer_smoke --n=256 --k=128 --m=352 --num_experts=1 --verify=true

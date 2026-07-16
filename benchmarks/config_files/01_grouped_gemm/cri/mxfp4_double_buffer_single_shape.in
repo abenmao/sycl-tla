@@ -1,3 +1,0 @@
-# MxFP4 double-buffer: m=2560*8=20480, n=2560, k=512, num_experts=8
-
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128 --bm_name=mxfp4_db_single_shape --n=2560 --k=512 --m=20480 --num_experts=8 --verify=true

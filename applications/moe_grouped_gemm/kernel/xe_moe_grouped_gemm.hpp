@@ -174,16 +174,16 @@ MoEGEMM(const ElementA *Activations, const ElementB *Weights,
     // compile time so 16-bit kernels stay byte-identical.
     if constexpr (!cute::is_void_v<ElementS>) {
       if constexpr (CfgGroupK == 0) {
-        // TENSOR scale: 8-bit E8M0, HW BDPAS. GroupK=K semantically (one scale
-        // per row/tensor). Physical scale_k=2 (Height=2 needed by BDPAS offset
-        // scheme). Both K entries hold the same value. Collective loads once.
-        constexpr int BLK_N_T = decltype(tile_size<1>(mma))::value;
-        constexpr int SG_NUMS_N_T = get<2>(typename TiledMMA::ThrLayoutVMNK{}.shape());
-        constexpr int SG_N_T = BLK_N_T / SG_NUMS_N_T;
+        // TENSOR scale: padded MN-major layout matching fill_scale_per_row and
+        // verify_scaled. scale_k=2 (fixed: BDPAS offset scheme requires Height=2).
+        // Both K slots hold the same value; pointer uses padded cumulative M.
         const int M_def = int(M) < 0 ? 0 : int(M);
         static_assert((kScaleAlign & (kScaleAlign - 1)) == 0,
                       "kScaleAlign must be a power of two");
         const int round_up_M = (M_def + (kScaleAlign - 1)) & ~(kScaleAlign - 1);
+        constexpr int BLK_N_T = decltype(tile_size<1>(mma))::value;
+        constexpr int SG_NUMS_N_T = get<2>(typename TiledMMA::ThrLayoutVMNK{}.shape());
+        constexpr int SG_N_T = BLK_N_T / SG_NUMS_N_T;
         constexpr int padded_scale_n =
             ((SG_N_T + kScaleAlign - 1) / kScaleAlign) * kScaleAlign;
         constexpr int scale_k = 2;
@@ -203,7 +203,6 @@ MoEGEMM(const ElementA *Activations, const ElementB *Weights,
                         GmemTiledCopyD>(A_tensor, B_tensor, sA, sB, D_tensor,
                                         tile_coord, mma, GroupN, GroupK);
       } else {
-        const int scale_k = ceil_div(int(K), int(GroupK));
         // BLOCK (MX) scale: padded, MN-major, aligned 3D (MN, scale_k, 1)
         // layout for the hardware 2D block-scale load.
         // Workaround for an llvm-spirv getEntry "Id is not in map" crash (DPC++
@@ -213,6 +212,7 @@ MoEGEMM(const ElementA *Activations, const ElementB *Weights,
         // the SPIR-V binary writer mishandles. kScaleAlign is a power of two, so
         // use a division-free bitwise round-up and clamp M to non-negative here
         // (outside the phi cycle) to keep it provably defined.
+        const int scale_k = ceil_div(int(K), int(GroupK));
         const int scale_n = ceil_div(int(N), int(GroupN));
         const int M_def = int(M) < 0 ? 0 : int(M);
         static_assert((kScaleAlign & (kScaleAlign - 1)) == 0,

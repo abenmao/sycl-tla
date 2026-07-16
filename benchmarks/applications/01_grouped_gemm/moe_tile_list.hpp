@@ -42,8 +42,8 @@
 // ---- Per-dtype named lists (256x256 only — all other tiles commented out) ----
 
 #ifdef MOE_DTYPE_FP8_TENSOR_E4M3
-#define MOE_TILE_LIST_FP8_TENSOR_E4M3 \
-  X(CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64, cutlass::moe::Fp8Tensor_352_256_64)
+#define MOE_TILE_LIST_FP8_TENSOR_E4M3
+/*  X(CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64, cutlass::moe::Fp8Tensor_352_256_64) */
 /*  X(CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_256_256_64, cutlass::moe::Fp8Tensor_256_256_64) */
 /*  X(CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_320_512_64, cutlass::moe::Fp8Tensor_320_512_64) */
 /*  X(CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_448_256_64, cutlass::moe::Fp8Tensor_448_256_64) */
@@ -63,8 +63,8 @@
 #endif
 
 #ifdef MOE_DTYPE_MXFP8_E4M3
-#define MOE_TILE_LIST_MXFP8_E4M3 \
-  X(CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64, cutlass::moe::MxFp8_352_256_64)
+#define MOE_TILE_LIST_MXFP8_E4M3
+/*  X(CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_352_256_64, cutlass::moe::MxFp8_352_256_64) */
 /*  X(CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_256_256_64, cutlass::moe::MxFp8_256_256_64) */
 /*  X(CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_256_256_32, cutlass::moe::MxFp8_256_256_64) */
 /*  X(CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_320_512_64, cutlass::moe::MxFp8_320_512_64) */
@@ -85,23 +85,22 @@
 #endif
 
 #ifdef MOE_DTYPE_MXFP4_E2M1
-#define MOE_TILE_LIST_MXFP4_E2M1 \
-  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_352_256_128, cutlass::moe::MxFp4_352_256_128)
-/*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_256_256_128, cutlass::moe::MxFp4_256_256_128) */
+#define MOE_TILE_LIST_MXFP4_E2M1
+/*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_352_256_128, cutlass::moe::MxFp4_352_256_128) */
+/*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_256_448_128, cutlass::moe::MxFp4_256_448_128) */
 /*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_256_512_128, cutlass::moe::MxFp4_256_512_128) */
-/*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_256_256_64, cutlass::moe::MxFp4_256_256_128) */
-/*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_320_512_128, cutlass::moe::MxFp4_320_512_128) */
 /*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_192_512_128, cutlass::moe::MxFp4_192_512_128) */
 /*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_448_256_128, cutlass::moe::MxFp4_448_256_128) */
+/*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_320_320_128, cutlass::moe::MxFp4_320_320_128) */
+/*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_192_640_128, cutlass::moe::MxFp4_192_640_128) */
+/*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_256_256_128, cutlass::moe::MxFp4_256_256_128) */
+/*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_320_512_128, cutlass::moe::MxFp4_320_512_128) */
 /*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_608_128_128, cutlass::moe::MxFp4_608_128_128) */
 /*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_96_1280_128, cutlass::moe::MxFp4_96_1280_128) */
 /*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_128_896_128, cutlass::moe::MxFp4_128_896_128) */
 /*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_96_896_128, cutlass::moe::MxFp4_96_896_128) */
 /*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_96_640_128, cutlass::moe::MxFp4_96_640_128) */
-/*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_192_640_128, cutlass::moe::MxFp4_192_640_128) */
 /*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_448_320_128, cutlass::moe::MxFp4_448_320_128) */
-/*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_256_448_128, cutlass::moe::MxFp4_256_448_128) */
-/*  X(CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_320_320_128, cutlass::moe::MxFp4_320_320_128) */
 #else
 #define MOE_TILE_LIST_MXFP4_E2M1
 #endif
@@ -146,7 +145,7 @@
 #ifdef MOE_DTYPE_DOUBLE_BUFFER_BF16
 #define MOE_TILE_LIST_DOUBLE_BUFFER_BF16 \
     X_DOUBLE_BUFFER(CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_256_256_32, cutlass::moe::Bf16DoubleBuffer_256_256_32) \
-    X_DOUBLE_BUFFER(CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_32_128_32,  cutlass::moe::Bf16DoubleBuffer_32_128_32)  \
+/*  X_DOUBLE_BUFFER(CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_32_128_32,  cutlass::moe::Bf16DoubleBuffer_32_128_32) */ \
     X_DOUBLE_BUFFER(CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_224_256_32, cutlass::moe::Bf16DoubleBuffer_224_256_32)
 #else
 #define MOE_TILE_LIST_DOUBLE_BUFFER_BF16
@@ -169,10 +168,10 @@
 #define MOE_TILE_LIST_DOUBLE_BUFFER_MXFP4_E2M1 \
     X_DOUBLE_BUFFER_SCALED(CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128, cutlass::moe::MxFp4DoubleBuffer_256_256_128) \
 /*  X_DOUBLE_BUFFER_SCALED(CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_352_128_128, cutlass::moe::MxFp4DoubleBuffer_352_128_128) */ \
+    X_DOUBLE_BUFFER_SCALED(CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_288_256_128, cutlass::moe::MxFp4DoubleBuffer_288_256_128) \
     X_DOUBLE_BUFFER_SCALED(CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_192_256_128, cutlass::moe::MxFp4DoubleBuffer_192_256_128) \
     X_DOUBLE_BUFFER_SCALED(CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_192_320_128, cutlass::moe::MxFp4DoubleBuffer_192_320_128) \
-    X_DOUBLE_BUFFER_SCALED(CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_224_256_128, cutlass::moe::MxFp4DoubleBuffer_224_256_128) \
-    X_DOUBLE_BUFFER_SCALED(CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_288_256_128, cutlass::moe::MxFp4DoubleBuffer_288_256_128)
+    X_DOUBLE_BUFFER_SCALED(CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_224_256_128, cutlass::moe::MxFp4DoubleBuffer_224_256_128)
 /*  X_DOUBLE_BUFFER_SCALED(CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_128_512_128, cutlass::moe::MxFp4DoubleBuffer_128_512_128) */
 #else
 #define MOE_TILE_LIST_DOUBLE_BUFFER_MXFP4_E2M1

@@ -357,7 +357,7 @@ MoeRunHandle *moe_setup_impl_double_buffer(int N, int K, int num_experts,
   const int cap_uniform_m    = uniform_m;
 
   auto timed_launch = [=]() -> double {
-    return moe_launch_timed_double_buffer<'R', 'R', Config>(
+    return moe_launch_timed_double_buffer<Config>(
         ptr_A, ptr_B, ptr_D, cap_uniform_m, num_experts, N, K);
   };
 
@@ -463,7 +463,7 @@ MoeRunHandle *moe_setup_impl_double_buffer_scaled(int N, int K, int num_experts,
   const int verify_group_k = is_tensor ? K : Config::group_k;
 
   auto timed_launch = [=]() -> double {
-    return moe_launch_timed_double_buffer_scaled<'R', 'R', Config>(
+    return moe_launch_timed_double_buffer_scaled<Config>(
         ptr_A, ptr_B, ptr_sA, ptr_sB, ptr_D,
         cap_uniform_m, num_experts, N, K, Config::group_n, Config::group_k);
   };

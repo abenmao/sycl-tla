@@ -954,8 +954,7 @@ struct Bf16DoubleBufferConfigSG {
   static constexpr bool uniform_m = true;
 };
 
-template <char layoutA, char layoutB, class Config, typename ElementA,
-          typename ElementD>
+template <class Config, typename ElementA, typename ElementD>
 double moe_launch_timed_double_buffer(const ElementA *activations,
                                 const ElementA *weights,
                                 ElementD *outputs,
@@ -1077,8 +1076,7 @@ struct MxFp4ScaledDoubleBufferConfigSG
   using LayoutB = cutlass::layout::ColumnMajor;
 };
 
-template <char layoutA, char layoutB, class Config,
-          typename ElementA, typename ElementS, typename ElementD>
+template <class Config, typename ElementA, typename ElementS, typename ElementD>
 double moe_launch_timed_double_buffer_scaled(
     const ElementA *activations, const ElementA *weights,
     const ElementS *scalesA,    const ElementS *scalesB,
