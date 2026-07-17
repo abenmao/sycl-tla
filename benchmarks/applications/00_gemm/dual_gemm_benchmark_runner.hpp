@@ -352,6 +352,20 @@ private:
 
 } // namespace cutlass::benchmark
 
+template <typename T>
+static void dual_gemm_bench_runner(
+    ::benchmark::State& state,
+    cutlass::benchmark::GEMMOptions const& options,
+    cutlass::KernelHardwareInfo const& hw_info) {
+  auto bench = cutlass::benchmark::BenchmarkRunnerDualGemm<T>();
+  bench.run(state, options, hw_info);
+}
+
+#define CUTLASS_BENCHMARK_DUAL_GEMM_T(name, ...)                                    \
+  cutlass::benchmark::BenchmarkRegistry<cutlass::benchmark::GEMMOptions>::Register( \
+      name,                                                                         \
+      &dual_gemm_bench_runner<__VA_ARGS__>)
+
 #define CUTLASS_CREATE_DUAL_GEMM_BENCHMARK(F)                    \
   static void F##_func(                                          \
       ::benchmark::State& state,                                 \

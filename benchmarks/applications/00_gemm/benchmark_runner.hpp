@@ -995,9 +995,26 @@ private:
   }
 };
 
+// Template-based benchmark runner
+template <class GemmConfig>
+void gemm_bench_runner(
+    ::benchmark::State& state,
+    GEMMOptions const& options,
+    KernelHardwareInfo const& hw_info) {
+  auto bench = BenchmarkRunnerGemm<GemmConfig>();
+  bench.run(state, options, hw_info);
+}
+
 }
 
 #define CUTLASS_BENCHMARK(F) cutlass::benchmark::BenchmarkRegistry<cutlass::benchmark::GEMMOptions>::Register(#F, &F##_func)
+
+// Template-based benchmark registration: takes a name string and a template type.
+// Usage: CUTLASS_BENCHMARK_T("MyBenchmarkName", MyGemmType<float, float, float, 256, 256, 64, 32, 64>);
+#define CUTLASS_BENCHMARK_T(name, ...)                                              \
+  cutlass::benchmark::BenchmarkRegistry<cutlass::benchmark::GEMMOptions>::Register( \
+      name,                                                                         \
+      &cutlass::benchmark::gemm_bench_runner<__VA_ARGS__>)
 
 #define CUTLASS_CREATE_GEMM_BENCHMARK(F)                          \
   static void F##_func(                                           \

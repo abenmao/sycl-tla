@@ -39,8 +39,41 @@
 #if defined(SYCL_NVIDIA_TARGET) || !defined(CUTLASS_ENABLE_SYCL)
 #include "benchmarks_cuda.hpp"
 #elif defined(SYCL_INTEL_TARGET)
-#include "benchmarks_sycl.hpp"
+
+// Weak default (empty) implementations. When a benchmark .o is linked, its
+// strong definition overrides the weak stub — no per-type recompilation of
+// main.cpp needed.
+#define _CUTLASS_BM_WEAK_REGISTER(fn) \
+  __attribute__((weak)) void fn() {}
+
+_CUTLASS_BM_WEAK_REGISTER(register_gemm_benchmarks_bf16)
+_CUTLASS_BM_WEAK_REGISTER(register_gemm_benchmarks_fp16)
+_CUTLASS_BM_WEAK_REGISTER(register_gemm_benchmarks_fp32)
+_CUTLASS_BM_WEAK_REGISTER(register_gemm_benchmarks_tf32)
+_CUTLASS_BM_WEAK_REGISTER(register_gemm_benchmarks_e4m3)
+_CUTLASS_BM_WEAK_REGISTER(register_gemm_benchmarks_e4m3_block_scaled)
+_CUTLASS_BM_WEAK_REGISTER(register_gemm_benchmarks_e5m2)
+_CUTLASS_BM_WEAK_REGISTER(register_gemm_benchmarks_e5m2_block_scaled)
+_CUTLASS_BM_WEAK_REGISTER(register_gemm_benchmarks_e2m1)
+_CUTLASS_BM_WEAK_REGISTER(register_gemm_benchmarks_e2m1_block_scaled)
+
+#undef _CUTLASS_BM_WEAK_REGISTER
 #endif
+
+static void register_gemm_benchmarks() {
+#if defined(SYCL_INTEL_TARGET)
+  register_gemm_benchmarks_bf16();
+  register_gemm_benchmarks_fp16();
+  register_gemm_benchmarks_fp32();
+  register_gemm_benchmarks_tf32();
+  register_gemm_benchmarks_e4m3();
+  register_gemm_benchmarks_e4m3_block_scaled();
+  register_gemm_benchmarks_e5m2();
+  register_gemm_benchmarks_e5m2_block_scaled();
+  register_gemm_benchmarks_e2m1();
+  register_gemm_benchmarks_e2m1_block_scaled();
+#endif
+}
 
 int main(int argc, const char** argv) {
 
