@@ -232,14 +232,20 @@ public:
       int discard_seq_coord = 0;
       int full_tile_offset = 0;
       int seq_len_new = seq_len_kv;
+      auto cS = make_identity_tensor(take<0,2>(TiledMMAQK{}.tile_mnk()));
+      auto tScS = TiledMMAQK{}.get_slice(thr_id).partition_C(cS);
+      auto q_offset_wi = get<0>(tScS(0));
+      auto q_offset_sg = group_broadcast(
+          sycl::ext::oneapi::this_work_item::get_sub_group(), q_offset_wi, 0);
+      constexpr bool kIndependentSubgroups =
+          is_empty_v<MainloopSharedStorage> && is_empty_v<EpilogueSharedStorage>
+          && !TileScheduler::kGqaFusion;
+      if constexpr (kIndependentSubgroups) {
+        if (blk_q * get<0>(TileShapeQK{}) + q_offset_sg >= seq_len_qo) continue;
+      }
+
       if constexpr (CollectiveMainloop::CausalMask) {
         int q_sg_tile = get<0>(shape_div(TileShapeQK{}, shape(SubgroupLayoutQK{})));
-        auto cS = make_identity_tensor(take<0,2>(TiledMMAQK{}.tile_mnk()));
-        auto tScS = TiledMMAQK{}.get_slice(thr_id).partition_C(cS);
-        auto q_offset_wi = get<0>(tScS(0));
-        auto q_offset_sg = group_broadcast(
-            sycl::ext::oneapi::this_work_item::get_sub_group(), q_offset_wi, 0);
-
         int offset = cute::min(seq_len_qo, seq_len_kv);
         discard_seq_coord = seq_len_qo - offset;
         full_tile_offset = seq_len_kv - offset;
