@@ -86,7 +86,7 @@ template <typename ElementC, typename ElementD, typename AccType,
 using E4M3_RRR_GEMM_BlockScaled_Base = cute::conditional_t<NonNative,
     BLockScalingGemmNonNative_Bench_E4M3<ElementC, ElementD, AccType, cutlass::layout::RowMajor,
         cute::Shape<cute::Int<WG_M>, cute::Int<WG_N>, cute::Int<WG_K>>,
-        XeBlockScalingTiledMMA<WG_M, WG_N, WG_K, SG_M, SG_N, AccType, E4M3ElementDataType>>,
+        XeTiledMMA<WG_M, WG_N, WG_K, SG_M, SG_N, AccType, E4M3ElementDataType>>,
     BLockScalingGemm_Bench_E4M3<ElementC, ElementD, AccType, cutlass::layout::RowMajor,
         cute::Shape<cute::Int<WG_M>, cute::Int<WG_N>, cute::Int<WG_K>>,
         XeBlockScalingTiledMMA<WG_M, WG_N, WG_K, SG_M, SG_N, AccType, E4M3ElementDataType>, GroupSize>>;

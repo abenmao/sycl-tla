@@ -73,10 +73,9 @@ using XeTiledMMA = typename cute::TiledMMAHelper<
 // above): the block-scaled kernels use the depth-8 systolic atom for every tile,
 // so DpasM is independent of SG_M here.
 template <int WG_M, int WG_N, int WG_K, int SG_M, int SG_N,
-          typename AccType, typename InType,
-          int DpasM = 8>
+          typename AccType, typename InType>
 using XeBlockScalingTiledMMA = typename cute::TiledMMAHelper<
-    cute::MMA_Atom<cute::XE_BDPAS_TT<DpasM, AccType, InType>>,
+    cute::MMA_Atom<cute::XE_BDPAS_TT<8, AccType, InType>>,
     cute::Layout<cute::Shape<cute::Int<WG_M>, cute::Int<WG_N>, cute::Int<WG_K>>>,
     cute::Layout<cute::Shape<cute::Int<WG_M / SG_M>, cute::Int<WG_N / SG_N>, cute::_1>,
                  cute::Stride<cute::Int<WG_N / SG_N>, cute::_1, cute::_0>>>::TiledMMA;

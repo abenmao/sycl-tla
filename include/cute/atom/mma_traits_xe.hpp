@@ -93,6 +93,95 @@ struct MMA_Traits<XE_DPAS_TT<M, TD, TA, TB, TC>>
   // C layout: (T,V) -> (M,N)
   //   M x 16 row major, work-items interleaved.
   using CLayout = Layout<Shape<_16, _M>, Stride<_M, _1>>;
+
+  template <bool NoAcc = false,
+            class TD1, class DLayout,
+            class TA1, class ALayout_,
+            class TB1, class BLayout_,
+            class TC1, class CLayout_>
+  CUTE_DEVICE friend void
+  mma_unpack(MMA_Traits          const& traits,
+            Tensor<TD1, DLayout>      & D,
+            Tensor<TA1, ALayout_> const& A_in,
+            Tensor<TB1, BLayout_> const& B_in,
+            Tensor<TC1, CLayout_> const& C)
+  {
+    static_assert(is_rmem<TD>::value, "Expected registers in MMA_Atom::call");
+    static_assert(is_rmem<TA>::value, "Expected registers in MMA_Atom::call");
+    static_assert(is_rmem<TB>::value, "Expected registers in MMA_Atom::call");
+    static_assert(is_rmem<TC>::value, "Expected registers in MMA_Atom::call");
+
+    using RegTypeD = typename remove_extent<typename Op::DRegisters>::type;
+    using RegTypeA = typename remove_extent<typename Op::ARegisters>::type;
+    using RegTypeB = typename remove_extent<typename Op::BRegisters>::type;
+    using RegTypeC = typename remove_extent<typename Op::CRegisters>::type;
+
+    constexpr int RegNumD = extent<typename Op::DRegisters>::value;
+    constexpr int RegNumA = extent<typename Op::ARegisters>::value;
+    constexpr int RegNumB = extent<typename Op::BRegisters>::value;
+    constexpr int RegNumC = extent<typename Op::CRegisters>::value;
+
+    Tensor rD = recast<RegTypeD>(D);
+    Tensor rC = recast<RegTypeC>(C);
+
+    CUTE_STATIC_ASSERT_V(size(rD) == Int<RegNumD>{});
+    CUTE_STATIC_ASSERT_V(size(rC) == Int<RegNumC>{});
+
+    using AValType = typename remove_cvref_t<decltype(A_in)>::value_type;
+    constexpr bool is_zip_input = is_tuple<AValType>::value;
+
+    if constexpr (!is_zip_input) {
+      // === Plain DPAS path (no scaling) ===
+      Tensor rA = recast<RegTypeA>(A_in);
+      Tensor rB = recast<RegTypeB>(B_in);
+
+      CUTE_STATIC_ASSERT_V(size(rA) == Int<RegNumA>{});
+      CUTE_STATIC_ASSERT_V(size(rB) == Int<RegNumB>{});
+
+      cute::detail::explode_mma<Op, NoAcc>(
+              rD, make_int_sequence<RegNumD>{},
+              rA, make_int_sequence<RegNumA>{},
+              rB, make_int_sequence<RegNumB>{},
+              rC, make_int_sequence<RegNumC>{});
+    } else {
+      // === Software-scaled DPAS path (2-element zip: data + scale) ===
+      auto unzipped_A = unzip_tensor(A_in);
+      auto unzipped_B = unzip_tensor(B_in);
+
+      auto& A = get<0>(unzipped_A);
+      auto& B = get<0>(unzipped_B);
+
+      Tensor rA = recast<RegTypeA>(A);
+      Tensor rB = recast<RegTypeB>(B);
+
+      constexpr auto zip_arity = tuple_size<decltype(unzipped_A)>::value;
+
+      static_assert(zip_arity == 2, "Unexpected zip arity for DPAS MMA input.");
+
+      CUTE_STATIC_ASSERT_V(size(rA) == Int<RegNumA>{});
+      CUTE_STATIC_ASSERT_V(size(rB) == Int<RegNumB>{});
+
+      auto& SFA = get<1>(unzipped_A);
+      auto& SFB = get<1>(unzipped_B);
+
+      RegTypeD product{};
+      RegTypeC zero{};
+      Op::template fma<true>(product, rA[0], rB[0], zero);
+
+      RegTypeD out{};
+      for (int i = 0; i < M; ++i) {
+        float const scale = static_cast<float>(SFA(i)) * static_cast<float>(SFB(i));
+        float const scaled = static_cast<float>(product[i]) * scale;
+        if constexpr (NoAcc) {
+          out[i] = static_cast<TD>(scaled);
+        } else {
+          out[i] = static_cast<TD>(scaled + static_cast<float>(rC[0][i]));
+        }
+      }
+
+      rD[0] = out;
+    }
+  }
 };
 
 template <int M, typename TD, typename TA, typename TB, typename TC>
