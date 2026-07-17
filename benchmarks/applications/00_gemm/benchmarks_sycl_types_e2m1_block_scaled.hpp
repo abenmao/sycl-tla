@@ -145,4 +145,5 @@ using BLockScalingGemm_E2M1E2M1FP32BF16FP32_RCR_WG8x128x128_SG8x16x128_GS32 = E2
 using BLockScalingGemm_E2M1E2M1FP32BF16FP32_RCR_WG256x128x128_SG32x32x128_GS32 = E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 256, 128, 128, 32, 32>;
 using BLockScalingGemm_E2M1E2M1FP32BF16FP32_RCR_WG16x128x512_SG8x16x512_GS32 = E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 16, 128, 512, 8, 16>;
 using BLockScalingGemm_E2M1E2M1FP32BF16FP32_RCR_WG32x128x512_SG8x32x512_GS32 = E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 32, 128, 512, 8, 32>;
+using BLockScalingGemm_E2M1E2M1FP32BF16FP32_RCR_WG128x192x256_SG32x48x256_GS32 = E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 128, 192, 256, 32, 48>;
 #endif
