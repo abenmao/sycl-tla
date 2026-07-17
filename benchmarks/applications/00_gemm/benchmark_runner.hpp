@@ -68,7 +68,7 @@ using namespace cute;
 //
 //   Gemm_BF16BF16FP32BF16FP32_RRR_WG128x192x64_SG16x48x64
 //   BLockScalingGemm_E4M3E4M3FP32BF16FP32_RRR_WG16x256x256_SG16x16x256_GS32
-//   BLockScalingGemmNonNative_E4M3E4M3FP32BF16FP32_RRR_WG8x128x256_SG8x32x256_GS32
+//   BLockScalingGemmNonNative_E2M1E2M1FP32FP32FP32_RCR_WG512x256x128_SG64x64x128_GS32
 //
 // Reading left to right:
 //   - "Gemm" / "BLockScalingGemm" prefix (followed by "_")

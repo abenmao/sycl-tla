@@ -1282,9 +1282,10 @@ template<int Stages_, class KernelSchedule = KernelXe>
 struct MainloopIntelXeXMX16MixedPrecision : MainloopIntelXeXMX16<Stages_, KernelSchedule> {
 };
 
-template<int Stages_, class GroupSize_ = cute::Int<32>, class KernelSchedule = KernelXe>
+template<int Stages_, class GroupSize_ = cute::Int<32>, class KernelSchedule = KernelXe, bool Use2DBlockLoadScaleA_ = true>
 struct MainloopIntelXeXMX16BlockScaled : MainloopIntelXeXMX16<Stages_, KernelSchedule> {
   using GroupSize = GroupSize_;
+  static constexpr bool Use2DBlockLoadScaleA = Use2DBlockLoadScaleA_;
 };
 
 template<int Stages_, class KernelSchedule = KernelXe>

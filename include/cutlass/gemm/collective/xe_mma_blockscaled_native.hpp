@@ -51,6 +51,7 @@ template <
   int Stages,
   int GroupSize,
   class KernelSchedule,
+  bool Use2DBlockLoadScaleA,
   class TileShape_,
   class ElementPairA_,
   class StridePairA_,
@@ -66,7 +67,7 @@ template <
   class SmemCopyAtomB_,
   class TransformB_>
 struct CollectiveMma<
-  MainloopIntelXeXMX16BlockScaled<Stages, cute::Int<GroupSize>, KernelSchedule>,
+  MainloopIntelXeXMX16BlockScaled<Stages, cute::Int<GroupSize>, KernelSchedule, Use2DBlockLoadScaleA>,
     TileShape_,
     ElementPairA_,
     StridePairA_,
@@ -86,7 +87,7 @@ public:
   //
   // Type Aliases
   //
-  using DispatchPolicy = MainloopIntelXeXMX16BlockScaled<Stages, cute::Int<GroupSize>, KernelSchedule>;
+  using DispatchPolicy = MainloopIntelXeXMX16BlockScaled<Stages, cute::Int<GroupSize>, KernelSchedule, Use2DBlockLoadScaleA>;
   using WorkgroupTileShape = TileShape_;
 
   using GmemTiledCopyPairA = GmemTiledCopyPairA_;
@@ -306,12 +307,15 @@ public:
       CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Problem Size doesn't meet the minimum alignment requirements for XE 2D copy.\n");
     }
 
-    // 2D block load requires M/N to be multiples of ScaleAlignElems (4 for 8-bit scales).
-    // For unaligned M/N, use the tuple-based MXFP block-scaled scalar scale-load variant instead.
-    if (M % ScaleAlignElems != 0 || N % ScaleAlignElems != 0) {
-      CUTLASS_TRACE_HOST("  CAN IMPLEMENT: physical scale extents are not aligned for 2D block load. "
-                         "Pad scale storage for MXFP scale factors.\n");
-      implementable = false;
+    if constexpr (Use2DBlockLoadScaleA) {
+      implementable &= M % ScaleAlignElems == 0;
+    } else {
+      implementable &= M >= 1 && M < ScaleAlignElems;
+    }
+    implementable &= N % ScaleAlignElems == 0;
+
+    if (!implementable) {
+      CUTLASS_TRACE_HOST("  CAN IMPLEMENT: scale extents do not match the selected ScaleA load policy.\n");
     }
 
     return implementable;
@@ -404,12 +408,18 @@ public:
     using scaleA_vec_t = intel::vector_t<ElementScaleA, decltype(size(fragment_scaleA))::value>;
     using scaleB_vec_t = intel::vector_t<ElementScaleB, decltype(size(fragment_scaleB))::value>;
 
+    [[maybe_unused]] const int M_extent = cute::size<0>(mainloop.mAscale.shape());
+    [[maybe_unused]] const int lane_id = thread_idx % SubgroupSize;
+    [[maybe_unused]] constexpr int k_groups_per_sg = SG_K / GroupK;
+
     int prefetch_k = k_start_idx;
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
       prefetch(prefetch_a, pAgA(_, _, _, prefetch_k));
       prefetch(prefetch_b, pBgB(_, _, _, prefetch_k));
-      prefetch(tiled_prefetch_scaleA, prefetch_iter_scaleA(_, _, _, prefetch_k / k_reload_factor));
+      if constexpr (Use2DBlockLoadScaleA) {
+        prefetch(tiled_prefetch_scaleA, prefetch_iter_scaleA(_, _, _, prefetch_k / k_reload_factor));
+      }
       prefetch(tiled_prefetch_scaleB, prefetch_iter_scaleB(_, _, _, prefetch_k / k_reload_factor));
     }
 
@@ -417,12 +427,29 @@ public:
       copy(copy_a, tAgA(_,_,_,k_tile), tArA);
       copy(copy_b, tBgB(_,_,_,k_tile), tBrB);
 
-      copy(tiled_copy_scaleA, copy_iter_scaleA(_, _, _, k_tile / k_reload_factor), fragment_scaleA);
+      if constexpr (Use2DBlockLoadScaleA) {
+        copy(tiled_copy_scaleA, copy_iter_scaleA(_, _, _, k_tile / k_reload_factor), fragment_scaleA);
+      } else {
+        const int k_group_base = (k_tile / k_reload_factor) * k_groups_per_sg;
+        CUTLASS_PRAGMA_UNROLL
+        for (int j = 0; j < k_groups_per_sg; j++) {
+          const int m0 = m_coord + lane_id;
+          const int m1 = m_coord + lane_id + SubgroupSize;
+          fragment_scaleA(2 * j, 0, 0) = (m0 < M_extent)
+              ? mainloop.mAscale(m0, k_group_base + j, l_coord)
+              : NonVoidElementScaleA(1);
+          fragment_scaleA(2 * j + 1, 0, 0) = (m1 < M_extent)
+              ? mainloop.mAscale(m1, k_group_base + j, l_coord)
+              : NonVoidElementScaleA(1);
+        }
+      }
       copy(tiled_copy_scaleB, copy_iter_scaleB(_, _, _, k_tile / k_reload_factor), fragment_scaleB);
 
       prefetch(prefetch_a, pAgA(_, _, _, prefetch_k));
       prefetch(prefetch_b, pBgB(_, _, _, prefetch_k));
-      prefetch(tiled_prefetch_scaleA, prefetch_iter_scaleA(_, _, _, prefetch_k / k_reload_factor));
+      if constexpr (Use2DBlockLoadScaleA) {
+        prefetch(tiled_prefetch_scaleA, prefetch_iter_scaleA(_, _, _, prefetch_k / k_reload_factor));
+      }
       prefetch(tiled_prefetch_scaleB, prefetch_iter_scaleB(_, _, _, prefetch_k / k_reload_factor));
       reorder(tArA, tCrA);
       reorder(tBrB, tCrB);

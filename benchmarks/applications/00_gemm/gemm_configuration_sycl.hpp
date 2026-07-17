@@ -128,7 +128,8 @@ template<
     class GmemTiledCopyScaleB = void,
     class GroupSize = _32,
     class EpilogueOp = epilogue::fusion::LinearCombination<
-        float, float, float, float, FloatRoundStyle::round_to_nearest>>
+      float, float, float, float, FloatRoundStyle::round_to_nearest>,
+    bool Use2DBlockLoadScaleA = true>
 struct BlockScalingGemmConfiguration {
   static_assert(sizeof(ElementA) == 0, "No valid BlockScalingGemmConfiguration configuration exists.");
 };
@@ -243,7 +244,8 @@ template<
     class GmemTiledCopyA, class GmemTiledCopyB,
     class GmemTiledCopyScaleA, class GmemTiledCopyScaleB,
     class GroupSize,
-    class EpilogueOp>
+    class EpilogueOp,
+    bool Use2DBlockLoadScaleA>
 struct BlockScalingGemmConfiguration<
     arch::IntelXe,
     ElementA, LayoutA,
@@ -255,11 +257,12 @@ struct BlockScalingGemmConfiguration<
     GmemTiledCopyA, GmemTiledCopyB,
     GmemTiledCopyScaleA, GmemTiledCopyScaleB,
     GroupSize,
-    EpilogueOp>
+    EpilogueOp,
+    Use2DBlockLoadScaleA>
 {
   static constexpr int PipelineStages = 2;
 
-  using GEMMDispatchPolicy     = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages, GroupSize>;
+  using GEMMDispatchPolicy     = cutlass::gemm::MainloopIntelXeXMX16BlockScaled<PipelineStages, GroupSize, cutlass::gemm::KernelXe, Use2DBlockLoadScaleA>;
   using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
 
   // Accept either a layout tag (e.g. RowMajor) or a Stride directly
