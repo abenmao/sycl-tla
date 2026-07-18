@@ -403,6 +403,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
              int              blk_k0,   // K block range: [K0,K1)
              int              blk_k1,
              int              total_blk, // Total # of K blocks
+             int              prefetch_k1, // WG-wide K-block bound for prefetch
              int              thr_id,
              int              seq_len,
              int              seq_len_kv_cache,
@@ -759,10 +760,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
                              auto& copy_k_cur, auto& copy_v_cur,
                              auto& prefetch_v_cur, auto& tKgK_cur,
                              auto& tVgV_cur, auto& pVgV_cur) {
-#if not defined(CUTLASS_TEST_FOR_CRI)
       /* Split barrier to keep threads together */
       barrier_arrive(ScopeWorkgroup);
-#endif
       constexpr bool is_cache = decltype(cached_k)::value;
 
       int k_idx;
@@ -1094,9 +1093,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           prefetch(tiled_prefetch_scaleK, prefetch_iter_scaleK(_, _, _, D));
         }
       }
-#if not defined(CUTLASS_TEST_FOR_CRI)
       barrier_wait(ScopeWorkgroup);
-#endif
     };
 
     /* Main loop, blocked in k. */
@@ -1114,6 +1111,21 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
                     copy_k, copy_v,
                     prefetch_v, tKgK,
                     tVgV, pVgV);
+    }
+
+    if constexpr (!GqaFusion) {
+      for (int K = blk_k1; K < prefetch_k1; K++) {
+        barrier_arrive(ScopeWorkgroup);
+
+        prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
+        update_payloads(prepared_pk, kv_stride);
+        if constexpr (!disable_V_prefetch) {
+          prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
+          update_payloads(prepared_pv, kv_stride);
+        }
+
+        barrier_wait(ScopeWorkgroup);
+      }
     }
   }
 

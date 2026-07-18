@@ -232,6 +232,7 @@ public:
       int discard_seq_coord = 0;
       int full_tile_offset = 0;
       int seq_len_new = seq_len_kv;
+      int seq_len_new_wg = seq_len_kv;
       auto cS = make_identity_tensor(take<0,2>(TiledMMAQK{}.tile_mnk()));
       auto tScS = TiledMMAQK{}.get_slice(thr_id).partition_C(cS);
       auto q_offset_wi = get<0>(tScS(0));
@@ -252,17 +253,25 @@ public:
         int seq_coord = cute::min(seq_len_qo, (blk_q * get<0>(TileShapeQK{}) + q_offset_sg));
         if (seq_coord < discard_seq_coord) continue;
         seq_len_new = full_tile_offset + cute::min(seq_len_kv, seq_coord - discard_seq_coord) + q_sg_tile;
+
+        int q_offset_sg_max = get<0>(TileShapeQK{}) - q_sg_tile;
+        int seq_coord_wg = cute::min(seq_len_qo, (blk_q * get<0>(TileShapeQK{}) + q_offset_sg_max));
+        seq_len_new_wg = full_tile_offset + cute::min(seq_len_kv, seq_coord_wg - discard_seq_coord) + q_sg_tile;
       }
       const int seq_len = seq_len_new + seq_len_kv_cache;
       // Compute k_blocks as sum of cache tiles + new tiles to avoid losing new data
       // when seq_len_kv_cache is not a multiple of the tile size.
       int k_blocks;
+      int k_blocks_prefetch;
       if constexpr (CollectiveMainloop::CausalMask || CollectiveMainloop::CachedKV) {
         const int kblocks_cache = CollectiveMainloop::CachedKV ? cute::ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{})) : 0;
         const int kblocks_new = cute::ceil_div(seq_len_new, get<1>(TileShapeQK{}));
         k_blocks = kblocks_cache + kblocks_new;
+        const int kblocks_new_wg = cute::ceil_div(seq_len_new_wg, get<1>(TileShapeQK{}));
+        k_blocks_prefetch = kblocks_cache + kblocks_new_wg;
       } else {
         k_blocks = cute::ceil_div(seq_len, get<1>(TileShapeQK{}));
+        k_blocks_prefetch = k_blocks;
       }
 
       int offset_q = 0, offset_k = 0, offset_v = 0, offset_o = 0;
@@ -394,7 +403,7 @@ public:
                   K(_,_,head_kv,idx_b),
                   V(_,_,head_kv,idx_b),
                   tArA, tA_max, tA_sum,
-                  blk_qv, 0, fusion_k_blocks, fusion_k_blocks,
+                  blk_qv, 0, fusion_k_blocks, fusion_k_blocks, fusion_k_blocks,
                   thr_id,
                   fusion_seq_len, seq_len_kv_cache, idx_b,
                   fusion_full_tile_offset, fusion_discard,
@@ -456,7 +465,7 @@ public:
                  K(_,_,head,l_coord),
                  V(_,_,head,l_coord),
                  tArA, tA_max, tA_sum,
-                 blk_qv, 0, k_blocks, k_blocks,
+                 blk_qv, 0, k_blocks, k_blocks, k_blocks,
                  thr_id, seq_len, 0, l_coord,
                  full_tile_offset, discard_seq_coord,
                  0,0,
@@ -472,7 +481,7 @@ public:
                  K(_,_,head,l_coord),
                  V(_,_,head,l_coord),
                  tArA, tA_max, tA_sum,
-                 blk_qv, 0, k_blocks, k_blocks,
+                 blk_qv, 0, k_blocks, k_blocks, k_blocks_prefetch,
                  thr_id, seq_len, seq_len_kv_cache, idx_b,
                  full_tile_offset, discard_seq_coord,
                  0,0,
@@ -836,7 +845,7 @@ public:
               K(_,_,head_kv,idx_b),
               V(_,_,head_kv,idx_b),
               tArA, tA_max, tA_sum_partial,
-              blk_qv, start_blk, end_blk, local_k_blocks,
+              blk_qv, start_blk, end_blk, local_k_blocks, end_blk,
               thr_id, s.seq_len_kv, 0, idx_b,
               split_full_tile_offset, 0, 0, split_q_per_head);
 
