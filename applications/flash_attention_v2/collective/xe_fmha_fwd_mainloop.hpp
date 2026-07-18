@@ -932,8 +932,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       if constexpr (PerTensorScale) {
         qk_scale = params.scale * ElementS(scale_q) * ElementS(scale_k);
       }
-      auto [rescale, tS_partial_sum] = softmax(tSrS, tA_max, tA_sum, qk_scale);
+      auto [rescale, tS_partial_sum, needs_rescale] = softmax(tSrS, tA_max, tA_sum, qk_scale);
       auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+      bool const subgroup_needs_rescale = sycl::any_of_group(sg, needs_rescale);
       constexpr int kSumSize = decltype(tA_sum.size())::value;
       constexpr bool kSumDivVT = (kSumSize % VTiles == 0);
       constexpr int kSumPerVT = kSumDivVT ? (kSumSize / VTiles) : 0;
@@ -998,9 +999,11 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
         reorder(tVrV, tArV);
 
-        CUTLASS_PRAGMA_UNROLL
-        for (int i = tArA.size() / VTiles - 1; i >= 0; i--)
-          tArA(_,_,_,VV)(i) *= broadcast<0>(rescale, tArA, i);
+        if (subgroup_needs_rescale) {
+          CUTLASS_PRAGMA_UNROLL
+          for (int i = tArA.size() / VTiles - 1; i >= 0; i--)
+            tArA(_,_,_,VV)(i) *= broadcast<0>(rescale, tArA, i);
+        }
         
         if constexpr (kSumDivVT) {
           CUTLASS_PRAGMA_UNROLL
@@ -1125,9 +1128,11 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     auto tS_bmax = reduce<1, ReduceMode::Full, /*EnableFast64Rows=*/!CausalMask>(tS, sycl::maximum<void>{});
 
     FragARow rescale;
+    bool needs_rescale = false;
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < tA_max.size(); i++) {
       ElementS new_max = sycl::max(tA_max(i), qk_scale * tS_bmax(i));
+      needs_rescale |= new_max != tA_max(i);
       rescale(i) = sycl::native::exp2(tA_max(i) - new_max);
       tA_max(i) = new_max;
     }
@@ -1157,7 +1162,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       }
     }
 
-    return cute::make_tuple(rescale, tS_partial_sum);
+    return cute::make_tuple(rescale, tS_partial_sum, needs_rescale);
   }
 };
 
