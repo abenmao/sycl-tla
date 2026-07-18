@@ -77,6 +77,9 @@ target_include_directories(_gemm_main_obj
     PRIVATE ${CUTLASS_APPLICATIONS_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(_gemm_main_obj
     PRIVATE CUTLASS_BENCHMARK_SYCL_TARGET="${DPCPP_SYCL_TARGET}")
+if(TARGET onemkl_project)
+ add_dependencies(_gemm_main_obj onemkl_project)
+endif()
 add_sycl_to_target(TARGET _gemm_main_obj)
 
 # Per-file OBJECT libraries for each benchmark .cpp.
@@ -90,6 +93,9 @@ foreach(_src IN LISTS _GEMM_BENCH_SRCS)
       PRIVATE CUTLASS cutlass_tools_util_includes benchmark::benchmark)
   target_include_directories(_gemm_obj_${_stem}
       PRIVATE ${CUTLASS_APPLICATIONS_DIR})
+  if(TARGET onemkl_project)
+    add_dependencies(_gemm_obj_${_stem} onemkl_project)
+  endif()
   add_sycl_to_target(TARGET _gemm_obj_${_stem})
 
   list(APPEND _ALL_BENCH_OBJ_LIBS _gemm_obj_${_stem})
