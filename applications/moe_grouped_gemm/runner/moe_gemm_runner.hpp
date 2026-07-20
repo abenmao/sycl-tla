@@ -848,6 +848,8 @@ using MoeTile_256_512_128 = Shape<_256, _512, _128>;
 using MoeTile_320_320_64 = Shape<cute::Int<320>, cute::Int<320>, _64>;
 using MoeTile_320_320_128 = Shape<cute::Int<320>, cute::Int<320>, _128>;
 using MoeTile_192_512_64 = Shape<cute::Int<192>, _512, _64>;
+using MoeTile_384_320_64 = Shape<cute::Int<384>, cute::Int<320>, _64>;
+using MoeTile_384_320_128 = Shape<cute::Int<384>, cute::Int<320>, _128>;
 // Double-buffer tile shapes
 using MoeTile_128_512_64  = Shape<_128, _512, _64>;
 using MoeTile_128_512_128 = Shape<_128, _512, _128>;
@@ -915,10 +917,12 @@ using Fp8Tensor_256_448_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_
 using Fp8Tensor_256_512_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_256_512_64, SG_4x8>;
 using Fp8Tensor_320_320_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_320_320_64, SG_8x4>;
 using Fp8Tensor_192_512_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_192_512_64, SG_4x8>;
+using Fp8Tensor_384_320_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_384_320_64, SG_8x4>;
 using MxFp8_256_448_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_448_64, SG_8x4>;
 using MxFp8_256_512_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_64, SG_4x8>;
 using MxFp8_320_320_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_320_320_64, SG_8x4>;
 using MxFp8_192_512_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_192_512_64, SG_4x8>;
+using MxFp8_384_320_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_384_320_64, SG_8x4>;
 using MxFp8E5m2_256_448_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_448_64, SG_8x4>;
 using MxFp8E5m2_256_512_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_64, SG_4x8>;
 using MxFp8E5m2_320_320_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_320_320_64, SG_8x4>;
@@ -926,6 +930,7 @@ using MxFp8E5m2_192_512_64 = LowpConfigSG<cutlass::float_e5m2_t, cutlass::float_
 using MxFp4_256_448_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_448_128, SG_8x4>;
 using MxFp4_256_512_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, SG_4x8>;
 using MxFp4_320_320_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_320_320_128, SG_8x4>;
+using MxFp4_384_320_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_384_320_128, SG_8x4>;
 // (MxFp4_192_512_128 already defined above)
 
 using Bf16_32_128_32 = Bf16ConfigSG<MoeTile_32_128_32, SG_4x8>;

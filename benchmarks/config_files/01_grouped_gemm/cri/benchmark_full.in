@@ -59,8 +59,10 @@ CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64  --bm_name=src0
 CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=3416  --num_experts=8  --verify=true
 # avg_m=427, m_tiles=16, n_tiles=14, total_mn_tiles=224 (even)
 CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_224_256_128  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=3416  --num_experts=8  --verify=true
-# avg_m=683, m_tiles=29, n_tiles=8, total_mn_tiles=232 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_320_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=5464  --num_experts=8  --verify=true
+# avg_m=683
+CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_384_320_64  --bm_name=src_0_regular --n=2560 --k=3584 --m=9562  --num_experts=14  --verify=true
+# avg_m=683
+CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_384_320_64  --bm_name=src_0_regular --n=2560 --k=3584 --m=9562  --num_experts=14  --verify=true
 # avg_m=1366, m_tiles=76, n_tiles=10, total_mn_tiles=760 (even)
 CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=21856  --num_experts=16  --verify=true
 # avg_m=2560, m_tiles=80, n_tiles=10, total_mn_tiles=800 (even)
@@ -69,8 +71,10 @@ CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0
 CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=32772  --num_experts=12  --verify=true
 # avg_m=5462, m_tiles=152, n_tiles=10, total_mn_tiles=1520 (even)
 CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=43696  --num_experts=8  --verify=true
-# avg_m=683, m_tiles=29, n_tiles=8, total_mn_tiles=232 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_320_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=5464  --num_experts=8  --verify=true
+# avg_m=683
+CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_384_320_64  --bm_name=src_0_regular --n=2560 --k=3584 --m=9562  --num_experts=14  --verify=true
+# avg_m=683
+CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_384_320_64  --bm_name=src_0_regular --n=2560 --k=3584 --m=9562  --num_experts=14  --verify=true
 # avg_m=1366, m_tiles=76, n_tiles=10, total_mn_tiles=760 (even)
 CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=21856  --num_experts=16  --verify=true
 # avg_m=2560, m_tiles=80, n_tiles=10, total_mn_tiles=800 (even)
@@ -79,8 +83,10 @@ CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --
 CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=32772  --num_experts=12  --verify=true
 # avg_m=5462, m_tiles=152, n_tiles=10, total_mn_tiles=1520 (even)
 CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=43696  --num_experts=8  --verify=true
-# avg_m=683, m_tiles=29, n_tiles=8, total_mn_tiles=232 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_192_320_128  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=5464  --num_experts=8  --verify=true
+# avg_m=683
+CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_384_320_128  --bm_name=src_0_regular --n=2560 --k=3584 --m=9562  --num_experts=14  --verify=true
+# avg_m=683
+CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_384_320_128  --bm_name=src_0_regular --n=2560 --k=3584 --m=9562  --num_experts=14  --verify=true
 # avg_m=1366, m_tiles=76, n_tiles=10, total_mn_tiles=760 (even)
 CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_288_256_128  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=21856  --num_experts=16  --verify=true
 # avg_m=2560, m_tiles=80, n_tiles=10, total_mn_tiles=800 (even)
@@ -107,12 +113,12 @@ CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128  -
 CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_288_256_128  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=21856  --num_experts=16  --verify=true
 # avg_m=2731, m_tiles=129, n_tiles=10, total_mn_tiles=1290 (even)
 CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=32772  --num_experts=12  --verify=true
-# avg_m=171, m_tiles=25, n_tiles=8, total_mn_tiles=200 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_320_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=4788  --num_experts=28  --verify=true
-# avg_m=171, m_tiles=25, n_tiles=8, total_mn_tiles=200 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_320_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=4788  --num_experts=28  --verify=true
-# avg_m=171, m_tiles=25, n_tiles=8, total_mn_tiles=200 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_192_320_128  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=4788  --num_experts=28  --verify=true
+# avg_m=171
+CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_192_512_64  --bm_name=src_0_regular --n=2560 --k=3584 --m=4788  --num_experts=28  --verify=true
+# avg_m=171
+CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_192_512_64  --bm_name=src_0_regular --n=2560 --k=3584 --m=4788  --num_experts=28  --verify=true
+# avg_m=171
+CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_192_512_128  --bm_name=src_0_regular --n=2560 --k=3584 --m=4788  --num_experts=28  --verify=true
 # avg_m=427, m_tiles=31, n_tiles=10, total_mn_tiles=310 (even)
 CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=6832  --num_experts=16  --verify=true
 # avg_m=427, m_tiles=31, n_tiles=10, total_mn_tiles=310 (even)
