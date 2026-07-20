@@ -1,0 +1,41 @@
+# Real-world decode workload shapes pulled from the framework-team CRI benchmark sheet (temp.md).
+# Causal masking is enabled per team request even though the source sheet marked these rows
+# as "Causal Mask: No" (the compiled _Causal_FixedLen variant matches the same tile shape).
+# Weekly run: ALL cases enabled, including the long-running / timeout ones excluded from the
+# daily config (see daily_bf16_workloads.in).
+
+# src2.row36 - execution time: 426.05s
+BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_FixedLen --bm_name=decode_bf16_row36 --batch=1 --num_heads_q=4 --num_heads_kv=1 --seq_len_qo=4 --seq_len_kv=131072 --head_size_qk=128 --head_size_vo=128
+
+# src2.row16 - execution time: 2507.51s
+BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_FixedLen --bm_name=decode_bf16_row16 --batch=1 --num_heads_q=48 --num_heads_kv=8 --seq_len_qo=4 --seq_len_kv=65536 --head_size_qk=128 --head_size_vo=128
+
+# src2.row651 - execution time: 32.80s
+BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_FixedLen --bm_name=decode_bf16_row651 --batch=16 --num_heads_q=8 --num_heads_kv=1 --seq_len_qo=1 --seq_len_kv=384 --head_size_qk=128 --head_size_vo=128
+
+# src2.row652 - execution time: 63.43s
+BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_FixedLen --bm_name=decode_bf16_row652 --batch=16 --num_heads_q=8 --num_heads_kv=1 --seq_len_qo=4 --seq_len_kv=384 --head_size_qk=128 --head_size_vo=128
+
+# src2.row3709 - execution time: 1933.15s
+BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_FixedLen --bm_name=decode_bf16_row3709 --batch=16 --num_heads_q=64 --num_heads_kv=8 --seq_len_qo=1 --seq_len_kv=4096 --head_size_qk=128 --head_size_vo=128
+
+# src2.row2307 - execution time: Timeout
+BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_FixedLen --bm_name=decode_bf16_row2307 --batch=12 --num_heads_q=64 --num_heads_kv=8 --seq_len_qo=1 --seq_len_kv=131072 --head_size_qk=128 --head_size_vo=128
+
+# src2.row4229 - execution time: Timeout
+BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_FixedLen --bm_name=decode_bf16_row4229 --batch=32 --num_heads_q=64 --num_heads_kv=8 --seq_len_qo=1 --seq_len_kv=32768 --head_size_qk=128 --head_size_vo=128
+
+# src2.row529 - execution time: 6128.50s
+BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_FixedLen --bm_name=decode_bf16_row529 --batch=16 --num_heads_q=80 --num_heads_kv=8 --seq_len_qo=1 --seq_len_kv=10240 --head_size_qk=128 --head_size_vo=128
+
+# src2.row622 - execution time: 636.74s
+BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_FixedLen --bm_name=decode_bf16_row622 --batch=16 --num_heads_q=80 --num_heads_kv=8 --seq_len_qo=4 --seq_len_kv=384 --head_size_qk=128 --head_size_vo=128
+
+# src2.row85 - execution time: 6054.35s
+BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_FixedLen --bm_name=decode_bf16_row85 --batch=16 --num_heads_q=96 --num_heads_kv=8 --seq_len_qo=1 --seq_len_kv=10240 --head_size_qk=128 --head_size_vo=128
+
+# src2.row561 - execution time: 43.05s
+BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_FixedLen --bm_name=decode_bf16_row561 --batch=16 --num_heads_q=16 --num_heads_kv=1 --seq_len_qo=1 --seq_len_kv=384 --head_size_qk=128 --head_size_vo=128
+
+# src2.row565 - execution time: 487.77s
+BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_FixedLen --bm_name=decode_bf16_row565 --batch=16 --num_heads_q=16 --num_heads_kv=1 --seq_len_qo=1 --seq_len_kv=10240 --head_size_qk=128 --head_size_vo=128

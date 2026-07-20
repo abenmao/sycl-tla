@@ -1,0 +1,34 @@
+# Real-world prefill workload shapes pulled from the framework-team CRI benchmark sheet (temp.md).
+# All rows are causal per the source sheet. Since no compiled Causal_FixedLen variant exists for
+# these CRI tile shapes, the Causal_VarLen class is used with fixed seq_len values instead.
+# Cases whose measured execution time exceeded 10000s are commented out.
+
+# src0.row1 - execution time: 2504.20s
+CriFMHAPrefill_BF16_BF16_BF16_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen --bm_name=prefill_bf16_row1 --batch=1 --num_heads_q=4 --num_heads_kv=4 --seq_len_qo=4096 --seq_len_kv=4096 --head_size_qk=128 --head_size_vo=128
+
+# src0.row15 - execution time: 47162.77s (>10000s, disabled)
+# CriFMHAPrefill_BF16_BF16_BF16_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen --bm_name=prefill_bf16_row15 --batch=6 --num_heads_q=2 --num_heads_kv=1 --seq_len_qo=10240 --seq_len_kv=10240 --head_size_qk=128 --head_size_vo=128
+
+# src1.row183 - execution time: 588.83s
+CriFMHAPrefill_BF16_BF16_BF16_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen --bm_name=prefill_bf16_row183 --batch=1 --num_heads_q=64 --num_heads_kv=8 --seq_len_qo=384 --seq_len_kv=384 --head_size_qk=128 --head_size_vo=128
+
+# src1.row184 - execution time: 3663.16s
+CriFMHAPrefill_BF16_BF16_BF16_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen --bm_name=prefill_bf16_row184 --batch=1 --num_heads_q=64 --num_heads_kv=8 --seq_len_qo=1024 --seq_len_kv=1024 --head_size_qk=128 --head_size_vo=128
+
+# src1.row186 - execution time: 35932.50s (>10000s, disabled)
+# CriFMHAPrefill_BF16_BF16_BF16_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen --bm_name=prefill_bf16_row186 --batch=1 --num_heads_q=64 --num_heads_kv=8 --seq_len_qo=4096 --seq_len_kv=4096 --head_size_qk=128 --head_size_vo=128
+
+# src1.row1919 - execution time: 4233.75s
+CriFMHAPrefill_BF16_BF16_BF16_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen --bm_name=prefill_bf16_row1919 --batch=1 --num_heads_q=80 --num_heads_kv=8 --seq_len_qo=1024 --seq_len_kv=1024 --head_size_qk=128 --head_size_vo=128
+
+# src1.row440 - execution time: 9611.81s
+CriFMHAPrefill_BF16_BF16_BF16_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen --bm_name=prefill_bf16_row440 --batch=1 --num_heads_q=80 --num_heads_kv=8 --seq_len_qo=896 --seq_len_kv=1792 --head_size_qk=128 --head_size_vo=128
+
+# src1.row315 - execution time: 953.13s
+CriFMHAPrefill_BF16_BF16_BF16_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen --bm_name=prefill_bf16_row315 --batch=1 --num_heads_q=16 --num_heads_kv=1 --seq_len_qo=896 --seq_len_kv=1088 --head_size_qk=128 --head_size_vo=128
+
+# src1.row516 - execution time: 7027.66s
+CriFMHAPrefill_BF16_BF16_BF16_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen --bm_name=prefill_bf16_row516 --batch=1 --num_heads_q=16 --num_heads_kv=1 --seq_len_qo=896 --seq_len_kv=6016 --head_size_qk=128 --head_size_vo=128
+
+# src2.row1267 - execution time: 61590.00s (>10000s, disabled)
+# CriFMHAPrefill_BF16_BF16_BF16_BF16_RCR_WgQ512K64V64_SgQ16K64_HDimQK64V128_Causal_VarLen --bm_name=prefill_bf16_row1267 --batch=1 --num_heads_q=64 --num_heads_kv=8 --seq_len_qo=4096 --seq_len_kv=5120 --head_size_qk=128 --head_size_vo=128

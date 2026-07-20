@@ -44,6 +44,14 @@ cutlass_benchmark_add_suite(cutlass_benchmarks_flash_attention)
 if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
   set(CONFIG_FILE_CRI_PREFILL_BF16 --config_file=${CUTLASS_DIR}/benchmarks/config_files/02_flash_attention/cri/prefill/bf16.in)
 
+  # Real-world workload shapes pulled from the framework-team CRI benchmark sheet.
+  # Daily: excludes cases whose measured execution time exceeded 10000s.
+  # Weekly: runs every case, including the long-running / timeout ones.
+  set(CONFIG_FILE_CRI_DECODE_BF16_DAILY_WORKLOADS --config_file=${CUTLASS_DIR}/benchmarks/config_files/02_flash_attention/cri/decode/daily_bf16_workloads.in)
+  set(CONFIG_FILE_CRI_DECODE_BF16_WEEKLY_WORKLOADS --config_file=${CUTLASS_DIR}/benchmarks/config_files/02_flash_attention/cri/decode/weekly_bf16_workloads.in)
+  set(CONFIG_FILE_CRI_PREFILL_BF16_DAILY_WORKLOADS --config_file=${CUTLASS_DIR}/benchmarks/config_files/02_flash_attention/cri/prefill/daily_bf16_workloads.in)
+  set(CONFIG_FILE_CRI_PREFILL_BF16_WEEKLY_WORKLOADS --config_file=${CUTLASS_DIR}/benchmarks/config_files/02_flash_attention/cri/prefill/weekly_bf16_workloads.in)
+
   # test1 real-scenario LLM shapes from xpu-perf/micro_perf workloads
   set(CONFIG_FILE_TEST1_DECODE_FP8 --config_file=${CUTLASS_DIR}/benchmarks/config_files/02_flash_attention/cri/decode/test1/fp8.in)
   set(CONFIG_FILE_TEST1_DECODE_FP8KV_FP16MMA --config_file=${CUTLASS_DIR}/benchmarks/config_files/02_flash_attention/cri/decode/test1/fp8kv_fp16mma.in)
@@ -55,10 +63,14 @@ if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
   set(DECODE_TEST_COMMAND_OPTIONS
       CONFIG_FILE_CRI_DECODE_FP8
       CONFIG_FILE_CRI_DECODE_FP8KV_FP16MMA
+      CONFIG_FILE_CRI_DECODE_BF16_DAILY_WORKLOADS
+      CONFIG_FILE_CRI_DECODE_BF16_WEEKLY_WORKLOADS
       CONFIG_FILE_TEST1_DECODE_FP8
       CONFIG_FILE_TEST1_DECODE_FP8KV_FP16MMA)
   set(PREFILL_TEST_COMMAND_OPTIONS
       CONFIG_FILE_CRI_PREFILL_BF16
+      CONFIG_FILE_CRI_PREFILL_BF16_DAILY_WORKLOADS
+      CONFIG_FILE_CRI_PREFILL_BF16_WEEKLY_WORKLOADS
       CONFIG_FILE_CRI_PREFILL_FP8
       CONFIG_FILE_CRI_PREFILL_FP8KV_FP16MMA
       CONFIG_FILE_CRI_PREFILL_MXFP8
@@ -79,10 +91,8 @@ cutlass_benchmark_add_suite(cutlass_benchmarks_flash_attention_decode
 set(DECODE_SOURCES
     benchmarks_decode_fp8.cpp
     benchmarks_decode_fp8kv_fp16mma.cpp
+    benchmarks_decode_bf16.cpp
 )
-if(NOT (CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI))
-  list(APPEND DECODE_SOURCES benchmarks_decode_bf16.cpp)
-endif()
 
 add_library(decode_lib SHARED ${DECODE_SOURCES})
 
@@ -93,10 +103,8 @@ cutlass_benchmark_add_suite(cutlass_benchmarks_flash_attention_prefill
 set(PREFILL_SOURCES
     benchmarks_prefill_fp8.cpp
     benchmarks_prefill_fp8kv_fp16mma.cpp
+    benchmarks_prefill_bf16.cpp
 )
-if(NOT (CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI))
-  list(APPEND PREFILL_SOURCES benchmarks_prefill_bf16.cpp)
-endif()
 
 if(SYCL_TARGET_INTEL_GPU_CRI)
   list(APPEND PREFILL_SOURCES
