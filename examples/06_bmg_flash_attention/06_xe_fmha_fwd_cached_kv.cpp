@@ -196,10 +196,13 @@ int main(int argc, const char **argv) {
   constexpr int PipelineStages = 2;
 #endif
 
-  if (options.use_paged_kv && options.seq_len_kv_cache <= 0) {
-    std::cerr << "Error: --use_paged_kv requires --seq_len_kv_cache > 0 to exercise the real paged-cache path." << std::endl;
-    return -1;
-  }
+  //TODO: Add seq_len_kv_cache to seq_len_kv, remove this when cached/pagedKV
+  // is optimized in splitKV kernel and prefill kernels.
+
+  // if (options.use_paged_kv && options.seq_len_kv_cache <= 0) {
+  //   std::cerr << "Error: --use_paged_kv requires --seq_len_kv_cache > 0 to exercise the real paged-cache path." << std::endl;
+  //   return -1;
+  // }
 
 #if defined(DECODE) && HEAD_DIM == 128
   const int gqa_group  = options.num_heads_q / options.num_heads_kv;
