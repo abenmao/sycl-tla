@@ -43,6 +43,24 @@ namespace detail {
 struct EmptyDivmod {};
 }
 
+#ifndef FMHA_SATURATION_CORES
+#define FMHA_SATURATION_CORES 0   // 0 => use the caller-provided fallback
+#endif
+
+template <int DefaultCores = FMHA_SATURATION_CORES>
+inline int fmha_split_saturation_cores(int fallback_cores) {
+  // //TODO: remove this after we tuned the saturation cores
+  // static const int env_cores = [] {
+  //   const char* env = std::getenv("FMHA_SATURATION_CORES");
+  //   if (env == nullptr) { return -1; }
+  //   int v = std::atoi(env);
+  //   return v > 0 ? v : -1;
+  // }();
+  // if (env_cores > 0) { return env_cores; }
+  if constexpr (DefaultCores > 0) { return DefaultCores; }
+  return fallback_cores;
+}
+
 template <bool OneBatch = false, bool NoGQA = false, bool CausalMask = false, bool GqaFusion = false, bool DisablePrefetchV = false>
 struct XeFHMAIndividualTileScheduler {
   static constexpr bool kGqaFusion = GqaFusion;
@@ -183,7 +201,7 @@ struct XeFHMAIndividualPersistentTileScheduler {
   template <class ProblemShape, class TileShape>
   static Params to_underlying_arguments(
       ProblemShape const& shape, KernelHardwareInfo hw_info,
-      TileShape const& tile_shape)
+      TileShape const& tile_shape, int saturation_cores_hint)
   {
     using namespace cute;
 
@@ -191,7 +209,7 @@ struct XeFHMAIndividualPersistentTileScheduler {
               size(ceil_div(shape.seq_len_qo,   get<0>(tile_shape))),     // Q
               size(shape.batch * shape.num_heads_q));                     // (h,b) -- split later
     int num_heads = shape.num_heads_q;
-    grid.z = hw_info.sm_count /2;
+    grid.z = fmha_split_saturation_cores(saturation_cores_hint);
 
     return Params{grid, {num_heads}, {shape.num_heads_q / shape.num_heads_kv}};
   }

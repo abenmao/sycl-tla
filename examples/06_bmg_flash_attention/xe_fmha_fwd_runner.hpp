@@ -53,6 +53,23 @@
 
 #include <sycl/ext/intel/experimental/grf_size_properties.hpp>
 
+// Split-K saturation core count ladder
+inline int estimate_saturation_cores(int base_units, int kv_blocks) {
+  int total = cute::max(1, base_units) * cute::max(1, kv_blocks);
+  if      (total < 16)  { return 8;  }
+  else if (total < 60)  { return 16; }
+  else if (total < 150) { return 22; }
+  else if (total < 400) { return 26; }
+  else                  { return 32; }
+}
+
+// TODO: Need to refine new saturation core estimation strategy for split-K, currently using a simple heuristic based on total.
+inline int estimate_saturation_cores_for_shape(int batch, int num_heads_kv, int seq_len_kv, int kv_tile_size = 256) {
+  int base_units = batch * num_heads_kv;
+  int kv_blocks  = cute::ceil_div(seq_len_kv, kv_tile_size);
+  return estimate_saturation_cores(base_units, kv_blocks);
+}
+
 using namespace cute;
 
 // Command line options parsing
@@ -1122,6 +1139,14 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
 
     ProblemShapeType shape = initialize(options);
 
+    // Shape-driven default saturation core count, threaded into the kernel
+    // via Arguments::saturation_cores_hint.
+    int saturation_cores_hint = 0;
+    if constexpr (IsPersistent) {
+      saturation_cores_hint = estimate_saturation_cores_for_shape(
+          shape.batch, shape.num_heads_kv, shape.seq_len_kv);
+    }
+
     typename FMHAKernel::Arguments arguments = [&]() {
       if constexpr (isSplitKV) {
         return typename FMHAKernel::Arguments{
@@ -1163,7 +1188,8 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
             options.use_paged_kv ? paged_kv_cache.num_pages_per_seq.get() : nullptr
           },
           {},
-          hw_info
+          hw_info,
+          saturation_cores_hint
         };
       } else {
         return typename FMHAKernel::Arguments{

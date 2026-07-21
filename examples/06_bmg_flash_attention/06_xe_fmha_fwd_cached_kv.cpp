@@ -137,55 +137,55 @@ int main(int argc, const char **argv) {
 #endif
 #elif defined(DECODE)
 
-#define NUM_SG _8
-#define KV_TILE_SIZE _512
+#define KV_TILE_SIZE _256
 
 #if HEAD_DIM == 16
   /* Tiny config for testing */
-  using ShapeQK = Shape<_1, _16, _16>;       // (q,k,d)
-  using ShapePV = Shape<_1, _16, _16>;       // (q,v,k)
-  using ShapeOut = Shape<_1, _16>;           // (q,v)
-  using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
-
+  using PVTileN  = _16;
+  using QKTileK    = _16;
+  using HeadDimSize = _16;
 #elif HEAD_DIM == 64
-    using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
-    using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
-    using ShapeOut = Shape<_1, _64>;
-    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
-
+  using PVTileN  = _32;
+  using QKTileK    = _64;
+  using HeadDimSize = _64;
 #elif HEAD_DIM == 96
-    using ShapeQK = Shape<_1, KV_TILE_SIZE, _32>;
-    using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
-    using ShapeOut = Shape<_1, _96>;
-    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
-
+  using PVTileN  = _32;
+  using QKTileK    = _32;
+  using HeadDimSize = _96;
 #elif HEAD_DIM == 128
-  using ShapeQK8 = Shape<_8, _256, _64>;
-  using ShapePV8 = Shape<_8, _32, _256>;
-  using ShapeOut8 = Shape<_8, _128>;
-  using SubgroupLayoutQK8 = Layout<Shape<_1, _8, _1>>;
+#if defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
+  using PVTileN  = _64;
+#else
+  using PVTileN  = _32;
+#endif
+  using QKTileK    = _64;
+  using HeadDimSize = _128;
+#elif HEAD_DIM == 192
+  using PVTileN  = _32;
+  using QKTileK    = _64;
+  using HeadDimSize = _192;
+#endif
 
-  using ShapeQK16 = Shape<_16, _256, _64>;
-  using ShapePV16 = Shape<_16, _32, _256>;
-  using ShapeOut16 = Shape<_16, _128>;
+  using ShapeQK8  = Shape<_8,   KV_TILE_SIZE, QKTileK>;   // (q,k,d)
+  using ShapePV8  = Shape<_8,  PVTileN,  KV_TILE_SIZE>; // (q,v,k)
+  using ShapeOut8 = Shape<_8,  HeadDimSize>;        // (q,v)
+  using SubgroupLayoutQK8  = Layout<Shape<_1, _8, _1>>;
+
+  using ShapeQK16  = Shape<_16,  KV_TILE_SIZE, QKTileK>;
+  using ShapePV16  = Shape<_16, PVTileN,  KV_TILE_SIZE>;
+  using ShapeOut16 = Shape<_16, HeadDimSize>;
   using SubgroupLayoutQK16 = Layout<Shape<_2, _8, _1>>;
 
-  using ShapeQK32 = Shape<_32, _256, _64>;
-  using ShapePV32 = Shape<_32, _32, _256>;
-  using ShapeOut32 = Shape<_32, _128>;
+  using ShapeQK32  = Shape<_32,  KV_TILE_SIZE, QKTileK>;
+  using ShapePV32  = Shape<_32, PVTileN,  KV_TILE_SIZE>;
+  using ShapeOut32 = Shape<_32, HeadDimSize>;
   using SubgroupLayoutQK32 = Layout<Shape<_4, _8, _1>>;
 
-  using ShapeQK64 = Shape<_64, _256, _64>;
-  using ShapePV64 = Shape<_64, _32, _256>;
-  using ShapeOut64 = Shape<_64, _128>;
+  using ShapeQK64  = Shape<_64,  KV_TILE_SIZE, QKTileK>;
+  using ShapePV64  = Shape<_64, PVTileN,  KV_TILE_SIZE>;
+  using ShapeOut64 = Shape<_64, HeadDimSize>;
   using SubgroupLayoutQK64 = Layout<Shape<_4, _8, _1>>;
 
-#elif HEAD_DIM == 192
-    using ShapeQK = Shape<_1, KV_TILE_SIZE, _64>;
-    using ShapePV = Shape<_1, _32, KV_TILE_SIZE>;
-    using ShapeOut = Shape<_1, _192>;
-    using SubgroupLayoutQK = Layout<Shape<_1, NUM_SG, _1>>;
-#endif
 #else
 #error Either DECODE or PREFILL should be defined.
 #endif
@@ -196,26 +196,16 @@ int main(int argc, const char **argv) {
   constexpr int PipelineStages = 2;
 #endif
 
-  //TODO: Add seq_len_kv_cache to seq_len_kv, remove this when cached/pagedKV
-  // is optimized in splitKV kernel and prefill kernels.
-
-  // if (options.use_paged_kv && options.seq_len_kv_cache <= 0) {
-  //   std::cerr << "Error: --use_paged_kv requires --seq_len_kv_cache > 0 to exercise the real paged-cache path." << std::endl;
-  //   return -1;
-  // }
-
-#if defined(DECODE) && HEAD_DIM == 128
+#if defined(DECODE)
   const int gqa_group  = options.num_heads_q / options.num_heads_kv;
   const int q_len      = options.seq_len_qo;
   const int total_rows = gqa_group * q_len;
 
-  const int kv_tile    = 256;
+  const int kv_tile    = int(KV_TILE_SIZE::value);
   const int kv_blocks  = (options.seq_len_kv + kv_tile - 1) / kv_tile;
   const int base_units = options.batch * options.num_heads_kv;
-  const int sm_count   = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
-  const bool use_split = total_rows <= 64
-                      && base_units < sm_count / 2
-                      && base_units * kv_blocks > sm_count / 2;
+  const int saturation_cores_default = estimate_saturation_cores(base_units, kv_blocks);
+  const bool use_split = total_rows <= 64 && base_units < cutlass::fmha::kernel::fmha_split_saturation_cores(saturation_cores_default);
 
   #define FMHA_RUN_Q(QK, PV, OUT, SGL)                                                                  \
     (use_split                                                                                        \

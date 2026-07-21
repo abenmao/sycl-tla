@@ -601,6 +601,8 @@ public:
     MainloopArguments mainloop{};
     EpilogueArguments epilogue{};
     KernelHardwareInfo hw_info{};
+    // Split-K saturation core count
+    int saturation_cores_hint = 0;
   };
 
   // Kernel entry point API
@@ -613,7 +615,7 @@ public:
     ElementA *partial_results_ptr = nullptr;
     // for atomic add
     int32_t *reduce_flags_ptr = nullptr;
-    // max partitions per batch_head (computed from sm_count/2)
+    // max partitions per batch_head (from saturation_cores_hint)
     int max_num_partitions = 0;
   };
 
@@ -627,14 +629,15 @@ public:
 
   static Params to_underlying_arguments(Arguments const &args, void *workspace) {
     int num_batch_heads = args.kernel.shape.batch * args.kernel.shape.num_heads_kv;
-    int max_parts = compute_max_num_partitions(args.hw_info.sm_count / 2, num_batch_heads);
+    int max_parts = compute_max_num_partitions(
+        fmha_split_saturation_cores(args.saturation_cores_hint), num_batch_heads);
     int32_t *reduce_flags_ptr = reinterpret_cast<int32_t *>(workspace);
     ElementA *partial_results_ptr = reinterpret_cast<ElementA *>(
         reinterpret_cast<char *>(workspace) + reduce_flags_byte_size(num_batch_heads, max_parts));
     return {args.kernel,
             CollectiveMainloop::to_underlying_arguments(args.mainloop, workspace),
             CollectiveEpilogue::to_underlying_arguments(args.epilogue, workspace),
-            TileScheduler::to_underlying_arguments(args.kernel.shape, args.hw_info, TileShapeO{}),
+            TileScheduler::to_underlying_arguments(args.kernel.shape, args.hw_info, TileShapeO{}, args.saturation_cores_hint),
             partial_results_ptr, reduce_flags_ptr, max_parts
           };
   }
@@ -647,7 +650,8 @@ public:
   static int get_workspace_size(Arguments const &args) {
     int ws_size = 0;
     int num_batch_heads = args.kernel.shape.batch * args.kernel.shape.num_heads_kv;
-    int max_parts = compute_max_num_partitions(args.hw_info.sm_count / 2, num_batch_heads);
+    int max_parts = compute_max_num_partitions(
+        fmha_split_saturation_cores(args.saturation_cores_hint), num_batch_heads);
     const int wg_size = SGPerWG::value * intel::sg_size;
 
     // partial attn outputs, exp sum and max logits
@@ -660,7 +664,8 @@ public:
   static cutlass::Status initialize_workspace(Arguments const &args, void *workspace = nullptr,
                                               cudaStream_t stream = nullptr, CudaHostAdapter *cuda_adapter = nullptr) {
     int num_batch_heads = args.kernel.shape.batch * args.kernel.shape.num_heads_kv;
-    int max_parts = compute_max_num_partitions(args.hw_info.sm_count / 2, num_batch_heads);
+    int max_parts = compute_max_num_partitions(
+        fmha_split_saturation_cores(args.saturation_cores_hint), num_batch_heads);
     compat::fill(reinterpret_cast<int32_t*>(workspace), (int32_t)0, num_batch_heads * max_parts);
     size_t flag_bytes = reduce_flags_byte_size(num_batch_heads, max_parts);
     auto partial_ws_count = (get_workspace_size(args) - flag_bytes) / sizeof(ElementA);
@@ -1318,12 +1323,12 @@ public:
 
       CollectiveMainloop mainloop(params.mainloop, shared_storage.mainloop);
 
-      mainloop.template operator()<false, false>(
+      mainloop.template operator()<>(
               Q(_,_,head,l_coord),
               K(_,_,head,l_coord),
               V(_,_,head,l_coord),
               tArA, tA_max, tA_sum,
-              blk_qv, start_blk, end_blk, k_blocks,
+              blk_qv, start_blk, end_blk, k_blocks, end_blk,
               thr_id, seq_len, seq_len_kv_cache, idx_b,
               full_tile_offset, discard_seq_coord,
               0, 0,
