@@ -90,6 +90,7 @@ struct Xe_Reorder<ReorderKind::UU_Universal, float, cutlass::float_e5m2_t>
 {
   using SRegisters = intel::vector_t<float, 1>[1];
   using DRegisters = intel::vector_t<uint8_t, 1>[1];
+  using CoalescedStage = intel::half4;
 
   CUTE_HOST_DEVICE static void
   reorder(intel::vector_t<float, 1> const& src, intel::vector_t<uint8_t, 1>& dst)
@@ -97,18 +98,71 @@ struct Xe_Reorder<ReorderKind::UU_Universal, float, cutlass::float_e5m2_t>
 #if defined(CUTE_ARCH_REORDER_XE_ENABLED)
     asm (
       "{\n"
-      ".decl IN_F v_type=G type=F num_elts=16 alias=<%1,0>\n" 
       ".decl OUT_UB v_type=G type=UB num_elts=16 alias=<%0,0>\n"
+      ".decl IN_F v_type=G type=F num_elts=16 alias=<%1,0>\n"
       ".decl TMP_HF v_type=G type=HF num_elts=16 align=32\n"
       "mov (M1, 16) TMP_HF(0,0)<1> IN_F(0,0)<1;1,0>\n"
       "fcvt (M1_NM, 16) OUT_UB(0,0)<1> TMP_HF(0,0)<1;1,0>\n"
       "}\n"
-      : "=rw"(dst) 
+      : "=rw"(dst)
       : "rw"(src)
     );
 #else
   CUTE_INVALID_CONTROL_PATH("Not Xe");
 #endif
+  }
+
+  CUTE_HOST_DEVICE static void
+  reorder_stage(float const& src0, float const& src1, float const& src2, float const& src3,
+                CoalescedStage& dst)
+  {
+#if defined(CUTE_ARCH_REORDER_XE_ENABLED)
+    asm (
+      "{\n"
+      ".decl TMP_HF v_type=G type=HF num_elts=64 alias=<%0,0>\n"
+      ".decl IN_F0 v_type=G type=F  num_elts=16 alias=<%1,0>\n"
+      ".decl IN_F1 v_type=G type=F  num_elts=16 alias=<%2,0>\n"
+      ".decl IN_F2 v_type=G type=F  num_elts=16 alias=<%3,0>\n"
+      ".decl IN_F3 v_type=G type=F  num_elts=16 alias=<%4,0>\n"
+      "mov  (M1, 16) TMP_HF(0,0)<1>  IN_F0(0,0)<1;1,0>\n"
+      "mov  (M1, 16) TMP_HF(0,16)<1> IN_F1(0,0)<1;1,0>\n"
+      "mov  (M1, 16) TMP_HF(1,0)<1>  IN_F2(0,0)<1;1,0>\n"
+      "mov  (M1, 16) TMP_HF(1,16)<1> IN_F3(0,0)<1;1,0>\n"
+      "}\n"
+      : "=rw"(dst)
+      : "rw"(src0), "rw"(src1), "rw"(src2), "rw"(src3)
+    );
+#else
+  CUTE_INVALID_CONTROL_PATH("Not Xe");
+#endif
+  }
+
+  CUTE_HOST_DEVICE static void
+  reorder_pack(CoalescedStage const& src, intel::uchar4& dst)
+  {
+#if defined(CUTE_ARCH_REORDER_XE_ENABLED)
+    asm (
+      "{\n"
+      ".decl OUT_UB v_type=G type=UB num_elts=64 alias=<%0,0>\n"
+      ".decl TMP_HF v_type=G type=HF num_elts=64 alias=<%1,0>\n"
+      "fcvt (M1_NM, 32) OUT_UB(0,0)<1>  TMP_HF(0,0)<1;1,0>\n"
+      "fcvt (M1_NM, 32) OUT_UB(0,32)<1> TMP_HF(1,0)<1;1,0>\n"
+      "}\n"
+      : "=rw"(dst)
+      : "rw"(src)
+    );
+#else
+  CUTE_INVALID_CONTROL_PATH("Not Xe");
+#endif
+  }
+
+  CUTE_HOST_DEVICE static void
+  reorder_pack(float const& src0, float const& src1, float const& src2, float const& src3,
+               intel::uchar4& dst)
+  {
+    CoalescedStage staged;
+    reorder_stage(src0, src1, src2, src3, staged);
+    reorder_pack(staged, dst);
   }
 };
 
@@ -117,6 +171,7 @@ struct Xe_Reorder<ReorderKind::UU_Universal, float, cutlass::float_e4m3_t>
 {
   using SRegisters = intel::vector_t<float, 1>[1];
   using DRegisters = intel::vector_t<uint8_t, 1>[1];
+  using CoalescedStage = intel::half4;
 
   CUTE_HOST_DEVICE static void
   reorder(intel::vector_t<float, 1> const& src, intel::vector_t<uint8_t, 1>& dst)
@@ -124,18 +179,124 @@ struct Xe_Reorder<ReorderKind::UU_Universal, float, cutlass::float_e4m3_t>
 #if defined(CUTE_ARCH_REORDER_XE_ENABLED)
     asm (
       "{\n"
-      ".decl IN_F  v_type=G type=F  num_elts=16 alias=<%1,0>\n" 
       ".decl OUT_B v_type=G type=B  num_elts=16 alias=<%0,0>\n"
+      ".decl IN_F  v_type=G type=F  num_elts=16 alias=<%1,0>\n"
       ".decl TMP_HF v_type=G type=HF num_elts=16 align=32\n"
       "mov (M1, 16) TMP_HF(0,0)<1> IN_F(0,0)<1;1,0>\n"
       "fcvt (M1_NM, 16) OUT_B(0,0)<1> TMP_HF(0,0)<1;1,0>\n"
       "}\n"
-      : "=rw"(dst) 
+      : "=rw"(dst)
       : "rw"(src)
     );
 #else
   CUTE_INVALID_CONTROL_PATH("Not Xe");
 #endif
+  }
+
+  CUTE_HOST_DEVICE static void
+  reorder_stage(float const& src0, float const& src1, float const& src2, float const& src3,
+                CoalescedStage& dst)
+  {
+#if defined(CUTE_ARCH_REORDER_XE_ENABLED)
+    asm (
+      "{\n"
+      ".decl TMP_HF v_type=G type=HF num_elts=64 alias=<%0,0>\n"
+      ".decl IN_F0 v_type=G type=F num_elts=16 alias=<%1,0>\n"
+      ".decl IN_F1 v_type=G type=F num_elts=16 alias=<%2,0>\n"
+      ".decl IN_F2 v_type=G type=F num_elts=16 alias=<%3,0>\n"
+      ".decl IN_F3 v_type=G type=F num_elts=16 alias=<%4,0>\n"
+      "mov  (M1, 16) TMP_HF(0,0)<1>  IN_F0(0,0)<1;1,0>\n"
+      "mov  (M1, 16) TMP_HF(0,16)<1> IN_F1(0,0)<1;1,0>\n"
+      "mov  (M1, 16) TMP_HF(1,0)<1>  IN_F2(0,0)<1;1,0>\n"
+      "mov  (M1, 16) TMP_HF(1,16)<1> IN_F3(0,0)<1;1,0>\n"
+      "}\n"
+      : "=rw"(dst)
+      : "rw"(src0), "rw"(src1), "rw"(src2), "rw"(src3)
+    );
+#else
+  CUTE_INVALID_CONTROL_PATH("Not Xe");
+#endif
+  }
+
+  CUTE_HOST_DEVICE static void
+  reorder_pack(CoalescedStage const& src, intel::uchar4& dst)
+  {
+#if defined(CUTE_ARCH_REORDER_XE_ENABLED)
+    asm (
+      "{\n"
+      ".decl OUT_B v_type=G type=B num_elts=64 alias=<%0,0>\n"
+      ".decl TMP_HF v_type=G type=HF num_elts=64 alias=<%1,0>\n"
+      "fcvt (M1_NM, 32) OUT_B(0,0)<1>  TMP_HF(0,0)<1;1,0>\n"
+      "fcvt (M1_NM, 32) OUT_B(0,32)<1> TMP_HF(1,0)<1;1,0>\n"
+      "}\n"
+      : "=rw"(dst)
+      : "rw"(src)
+    );
+#else
+  CUTE_INVALID_CONTROL_PATH("Not Xe");
+#endif
+  }
+
+  CUTE_HOST_DEVICE static void
+  reorder_pack(float const& src0, float const& src1, float const& src2, float const& src3,
+               intel::uchar4& dst)
+  {
+    CoalescedStage staged;
+    reorder_stage(src0, src1, src2, src3, staged);
+    reorder_pack(staged, dst);
+  }
+};
+
+template <>
+struct Xe_Reorder<ReorderKind::UU, float, bfloat16_t> : Universal_Reorder_UU<float, bfloat16_t>
+{
+  using CoalescedStage = intel::uint2;
+
+  CUTE_HOST_DEVICE static void
+  reorder_stage(float const& src0, float const& src1, CoalescedStage& dst)
+  {
+#if defined(CUTE_ARCH_REORDER_XE_ENABLED)
+    asm (
+      "{\n"
+      ".decl TMP_UD v_type=G type=UD num_elts=32 alias=<%0,0>\n"
+      ".decl IN_UD0 v_type=G type=UD num_elts=16 alias=<%1,0>\n"
+      ".decl IN_UD1 v_type=G type=UD num_elts=16 alias=<%2,0>\n"
+      "add (M1_NM, 16) TMP_UD(0,0)<1> IN_UD0(0,0)<1;1,0> 0x8000:uw\n"
+      "add (M1_NM, 16) TMP_UD(1,0)<1> IN_UD1(0,0)<1;1,0> 0x8000:uw\n"
+      "}\n"
+      : "=rw"(dst)
+      : "rw"(src0), "rw"(src1)
+    );
+#else
+  CUTE_INVALID_CONTROL_PATH("Not Xe");
+#endif
+  }
+
+  CUTE_HOST_DEVICE static void
+  reorder_pack(CoalescedStage const& src, intel::ushort2& dst)
+  {
+#if defined(CUTE_ARCH_REORDER_XE_ENABLED)
+    asm (
+      "{\n"
+      ".decl OUT_UW v_type=G type=UW num_elts=32 alias=<%0,0>\n"
+      ".decl TMP_UD v_type=G type=UD num_elts=32 alias=<%1,0>\n"
+      ".decl TMP_UW v_type=G type=UW num_elts=64 alias=<TMP_UD,0>\n"
+      "mov (M1_NM, 32) OUT_UW(0,0)<1> TMP_UW(0,1)<2;1,0>\n"
+      "}\n"
+      : "=rw"(dst)
+      : "rw"(src)
+    );
+#else
+  CUTE_INVALID_CONTROL_PATH("Not Xe");
+#endif
+  }
+
+  CUTE_HOST_DEVICE static void
+  reorder_pack(float const& src0, float const& src1, intel::ushort2& dst)
+  {
+    CoalescedStage staged;
+    reorder_stage(src0, src1, staged);
+    reorder_pack(staged, dst);
   }
 };
 

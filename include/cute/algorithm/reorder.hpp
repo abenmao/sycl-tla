@@ -74,6 +74,144 @@ subbyte_sg_tv_swizzle(const InLayout &layout)
 #endif
 }
 
+#ifdef SYCL_INTEL_TARGET
+template <class ReorderAtom, class SrcType, class DstType>
+struct CoalescedReorderAtom {
+  static constexpr bool value = false;
+};
+
+template <class ReorderAtom, class = void>
+struct CoalescedReorderStagedAtom {
+  static constexpr bool value = false;
+};
+
+template <class ReorderAtom>
+struct CoalescedReorderStagedAtom<ReorderAtom, void_t<typename ReorderAtom::CoalescedStage>> {
+  static constexpr bool value = true;
+};
+
+template <>
+struct CoalescedReorderAtom<Xe_Reorder<ReorderKind::UU_Universal, float, cutlass::float_e5m2_t>,
+                            float,
+                            cutlass::float_e5m2_t> {
+  static constexpr bool value = true;
+};
+
+template <>
+struct CoalescedReorderAtom<Xe_Reorder<ReorderKind::UU_Universal, float, cutlass::float_e4m3_t>,
+                            float,
+                            cutlass::float_e4m3_t> {
+  static constexpr bool value = true;
+};
+
+template <>
+struct CoalescedReorderAtom<Xe_Reorder<ReorderKind::UU, float, bfloat16_t>,
+                            float,
+                            bfloat16_t> {
+  static constexpr bool value = true;
+};
+
+template <int Dst, int Src, int Values, class ValueLayout>
+struct CoalescedReorderFindSrc {
+  static constexpr int mapped = decltype(ValueLayout{}(Int<Src>{}))::value;
+  static constexpr int value = (mapped == Dst)
+    ? Src
+    : CoalescedReorderFindSrc<Dst, Src + 1, Values, ValueLayout>::value;
+};
+
+template <int Dst, int Values, class ValueLayout>
+struct CoalescedReorderFindSrc<Dst, Values, Values, ValueLayout> {
+  static constexpr int value = -1;
+};
+
+template <int Dst, int Offset, int ChunkValues, int Values, class ValueLayout>
+struct CoalescedReorderChunkSupported {
+  static constexpr bool value =
+    CoalescedReorderFindSrc<Dst + Offset, 0, Values, ValueLayout>::value >= 0 &&
+    CoalescedReorderChunkSupported<Dst, Offset + 1, ChunkValues, Values, ValueLayout>::value;
+};
+
+template <int Dst, int ChunkValues, int Values, class ValueLayout>
+struct CoalescedReorderChunkSupported<Dst, ChunkValues, ChunkValues, Values, ValueLayout> {
+  static constexpr bool value = true;
+};
+
+template <int Dst, int ChunkValues, int Values, class ValueLayout>
+struct CoalescedReorderLayoutSupported {
+  static constexpr bool chunk_in_range = (Dst + ChunkValues) <= Values;
+  static constexpr bool chunk_supported = chunk_in_range &&
+    CoalescedReorderChunkSupported<Dst, 0, ChunkValues, Values, ValueLayout>::value;
+  static constexpr bool value = chunk_supported &&
+    CoalescedReorderLayoutSupported<Dst + ChunkValues, ChunkValues, Values, ValueLayout>::value;
+};
+
+template <int ChunkValues, int Values, class ValueLayout>
+struct CoalescedReorderLayoutSupported<Values, ChunkValues, Values, ValueLayout> {
+  static constexpr bool value = true;
+};
+
+template <class DstType>
+struct CoalescedReorderDstStorage {
+  static constexpr int register_bits = 512 / intel::_SGSize::value;
+  static constexpr int dst_bits = sizeof_bits_v<DstType>;
+  static constexpr int storage_bits = bytes_to_bits(bits_to_bytes(dst_bits));
+  static_assert(512 % intel::_SGSize::value == 0,
+                "Coalesced reorder GRF bits must divide evenly across the subgroup");
+  static_assert(register_bits % dst_bits == 0,
+                "Coalesced reorder output register must contain a whole number of destination values");
+  static_assert(register_bits * intel::_SGSize::value == 512,
+                "Coalesced reorder output register must fill one 64B GRF across the subgroup");
+  using DRegister = intel::vector_t<uint_byte_t<bits_to_bytes(dst_bits)>, register_bits / storage_bits>;
+  static constexpr int value = register_bits / dst_bits;
+};
+
+template <class ReorderAtom, int ChunkValues, int Dst, int Values, class ValueLayout, class TensorSrc, int Chunks, int... Is>
+CUTE_HOST_DEVICE void
+coalesced_reorder_stage_chunk(TensorSrc const& src, typename ReorderAtom::CoalescedStage (&staged)[Chunks], int_sequence<Is...>)
+{
+  static_assert(CoalescedReorderChunkSupported<Dst, 0, ChunkValues, Values, ValueLayout>::value,
+                "Coalesced reorder could not derive a complete dst-to-src mapping");
+  ReorderAtom::reorder_stage(
+      src(CoalescedReorderFindSrc<Dst + Is, 0, Values, ValueLayout>::value)...,
+      staged[Dst / ChunkValues]);
+}
+
+template <class ReorderAtom, int ChunkValues, int Dst, int Values, class ValueLayout, class TensorSrc, int Chunks>
+CUTE_HOST_DEVICE void
+coalesced_reorder_stage(TensorSrc const& src, typename ReorderAtom::CoalescedStage (&staged)[Chunks])
+{
+  if constexpr (Dst < Values) {
+    coalesced_reorder_stage_chunk<ReorderAtom, ChunkValues, Dst, Values, ValueLayout>(
+        src, staged, make_int_sequence<ChunkValues>{});
+    coalesced_reorder_stage<ReorderAtom, ChunkValues, Dst + ChunkValues, Values, ValueLayout>(src, staged);
+  }
+}
+
+template <class ReorderAtom, class DRegister, int ChunkValues, int Dst, int Values, class TensorDst, int Chunks>
+CUTE_HOST_DEVICE void
+coalesced_reorder_store(typename ReorderAtom::CoalescedStage const (&staged)[Chunks], TensorDst& dst)
+{
+  if constexpr (Dst < Values) {
+    ReorderAtom::reorder_pack(
+        staged[Dst / ChunkValues],
+        reinterpret_cast<DRegister&>(dst(Dst)));
+    coalesced_reorder_store<ReorderAtom, DRegister, ChunkValues, Dst + ChunkValues, Values>(staged, dst);
+  }
+}
+
+template <class ReorderAtom, class DRegister, int ChunkValues, int Values, class ValueLayout, class TensorSrc, class TensorDst>
+CUTE_HOST_DEVICE void
+coalesced_reorder_staged(TensorSrc const& src, TensorDst& dst)
+{
+  static_assert(Values % ChunkValues == 0,
+                "Staged coalesced reorder expects whole chunks");
+  constexpr int Chunks = Values / ChunkValues;
+  typename ReorderAtom::CoalescedStage staged[Chunks];
+  coalesced_reorder_stage<ReorderAtom, ChunkValues, 0, Values, ValueLayout>(src, staged);
+  coalesced_reorder_store<ReorderAtom, DRegister, ChunkValues, 0, Values>(staged, dst);
+}
+#endif
+
 } /* namespace detail */
 
 // Subgroup-cooperative reorder.
@@ -174,6 +312,23 @@ reorder_impl(ReorderAtom               const& atom,
     auto vrlayout = composition(composition(Layout<Shape<_SG, Int<values>>, Stride<_0, _1>>{},
                                             rlayout),
                                 Layout<Shape<_1, Int<values>>, Stride<_0, _SG>>{});        // src val -> dst val
+
+#ifdef SYCL_INTEL_TARGET
+    if constexpr (detail::CoalescedReorderAtom<ReorderAtom, SType, typename DEngine::element_type>::value) {
+      using DstStorage = detail::CoalescedReorderDstStorage<typename DEngine::element_type>;
+      using DRegister = typename DstStorage::DRegister;
+      using ValueLayout = decltype(vrlayout);
+      constexpr int packed_values = DstStorage::value;
+      if constexpr (values % packed_values == 0) {
+        if constexpr (detail::CoalescedReorderLayoutSupported<0, packed_values, values, ValueLayout>::value) {
+          static_assert(detail::CoalescedReorderStagedAtom<ReorderAtom>::value,
+                        "Coalesced reorder atoms must define CoalescedStage and staged reorder_pack hooks");
+          detail::coalesced_reorder_staged<ReorderAtom, DRegister, packed_values, values, ValueLayout>(src, dst);
+          return;
+        }
+      }
+    }
+#endif
 
     CUTE_UNROLL
     for (int sv = 0; sv < values; sv += vchunk) {
