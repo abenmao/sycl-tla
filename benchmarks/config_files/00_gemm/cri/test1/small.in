@@ -3,7 +3,6 @@
 ### Source: xpu-perf/micro_perf/workloads/basic/tensor_gemm_ops/gemm.json###
 ###         xpu-perf/micro_perf/workloads/llm/single_test_ops/gemm_ops.json
 #############################################################################
-# time:cbenchmarks_gemm_sycl_config_file_bytedance PASS 32965s
 # ===== Gemm_BF16BF16FP32FP32FP32_RRR_WG512x256x32_SG64x64x32 =====
 # gemm.json: K=4096, N=4096 (varying M)
 Gemm_BF16BF16FP32FP32FP32_RRR_WG512x256x32_SG64x64x32 --m=1 --n=4096 --k=4096

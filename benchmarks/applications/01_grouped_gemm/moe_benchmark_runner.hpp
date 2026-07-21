@@ -31,8 +31,7 @@
 
 /*! \file
     \brief Google-Benchmark harness for the hand-written MoE grouped-GEMM kernel
-           (applications/moe_grouped_gemm/MoEGEMM), i.e. the same kernel that
-           example 12 launches.
+           (applications/moe_grouped_gemm).
 
     The existing benchmarks/grouped_gemm harness is built around the standard
     GemmUniversalAdapter (can_implement / initialize / run). The MoE kernel is a
@@ -98,23 +97,25 @@ struct MoEBenchmarkOptions {
   bool verify;
   std::string m_per_expert; // comma-separated per-expert M list
   std::string bm_name;
-
-  // ByteDance reference-API vocabulary (Yanfei/Wei thread, requirement #3:
-  // "changed to the MoE format, i.e., configured using
-  // experts_token_count/offset"). These are the canonical names; the legacy
-  // --m/--n/--k/--m_per_expert remain as silent aliases so the committed .in
-  // files keep working. BD name wins when both are given.
-  //   num_tokens          <- total routed tokens (== legacy --m)
-  //   hidden_size         <- model hidden dim
-  //   new_hidden_size     <- intermediate / expert dim
-  //   proj = up|down      <- which projection, decides the N/K assignment:
-  //                            up   : K=hidden_size,     N=new_hidden_size
-  //                            down : K=new_hidden_size, N=hidden_size
-  //   experts_token_count <- per-expert token counts (== legacy --m_per_expert)
-  //   experts_token_offset<- per-expert prefix-sum; if given, validated to be
-  //                          exactly the running sum of experts_token_count
-  //   num_experts_per_rank<- experts on this rank (== num_experts/ep_size); if
-  //                          given, overrides num_experts for the per-rank GEMM
+/*
+  Reference-API vocabulary - MoE format
+  "Canonical" here means the official API designated name, in contrast to the legacy.
+  The following are the canonical names:
+    num_tokens          <- total routed tokens (== legacy --m)
+    hidden_size         <- model hidden dim
+    new_hidden_size     <- intermediate / expert dim
+    proj = up|down      <- which projection, decides the N/K assignment:
+                             up   : K=hidden_size,     N=new_hidden_size
+                             down : K=new_hidden_size, N=hidden_size
+    experts_token_count <- per-expert token counts (== legacy --m_per_expert)
+    experts_token_offset<- per-expert prefix-sum; if given, validated to be
+                           exactly the running sum of experts_token_count
+    num_experts_per_rank<- experts on this rank (== num_experts/ep_size); if
+                           given, overrides num_experts for the per-rank GEMM
+   ----------------------------------------------------------------------------
+   The legacy  --m/--n/--k/--m_per_expert remain as silent aliases so the committed .in
+   files keep working. The canonical name wins when both are given.
+*/
   int hidden_size, new_hidden_size, num_experts_per_rank;
   std::string proj; // "up" | "down" | "" (raw n/k)
   std::string experts_token_offset; // comma-separated prefix sum (optional)
@@ -199,8 +200,9 @@ struct MoEBenchmarkOptions {
     cmd.get_cmd_line_argument("ep_size", ep_size, 1);
     random_mode = cmd.check_cmd_line_flag("random");
 
-    // ---- ByteDance reference-API names (requirement #3). Read after the
-    // legacy flags so a BD name, when present, overrides its alias. ----
+    /* ---- Canonical MoE reference-API names. Read after the
+       legacy flags so a canonical MoE name, when present, overrides its alias. ----
+    */
     int num_tokens = 0;
     cmd.get_cmd_line_argument("num_tokens", num_tokens, 0);
     int num_of_tokens = 0;
@@ -231,15 +233,15 @@ struct MoEBenchmarkOptions {
       }
     }
 
-    // experts_token_count is the BD name for the per-expert M list. It aliases
-    // --m_per_expert; BD name wins if both are present.
+    // experts_token_count is the canonical name for the per-expert M list. It aliases
+    // --m_per_expert; the canonical name wins if both are present.
     std::string experts_token_count;
     cmd.get_cmd_line_argument("experts_token_count", experts_token_count,
                               std::string(""));
     if (!experts_token_count.empty())
       m_per_expert = experts_token_count;
 
-    // num_experts_per_rank (BD) == experts on this rank. When given without the
+    // num_experts_per_rank (canonical) == experts on this rank. When given without the
     // routing math, it sets num_experts directly for the per-rank GEMM.
     cmd.get_cmd_line_argument("num_experts_per_rank", num_experts_per_rank, 0);
     if (num_experts_per_rank > 0 && !moe_mode)
@@ -260,7 +262,7 @@ struct MoEBenchmarkOptions {
 
     build_rows();
 
-    // If the BD experts_token_offset was supplied, validate it is exactly the
+    // If the canonical experts_token_offset was supplied, validate it is exactly the
     // running prefix-sum of the per-expert counts (the reference computes
     // cur_token_start = experts_token_offset[i]; we derive the same internally,
     // so this just guards a mismatched hand-written .in line).

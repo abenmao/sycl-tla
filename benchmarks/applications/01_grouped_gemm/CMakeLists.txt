@@ -50,8 +50,7 @@
 if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
   set(CONFIG_FILE_CRI_GROUPED --config_file=${CUTLASS_DIR}/benchmarks/config_files/01_grouped_gemm/cri/small.in)
   set(CONFIG_FILE_CRI_MOE --config_file=${CUTLASS_DIR}/benchmarks/config_files/01_grouped_gemm/cri/moe_small.in)
-  # ByteDance real-scenario LLM shapes from xpu-perf/micro_perf workloads
-  set(CONFIG_FILE_BYTEDANCE --config_file=${CUTLASS_DIR}/benchmarks/config_files/01_grouped_gemm/cri/test1/small.in)
+  set(CONFIG_FILE_MOE_TEST1_SMALL --config_file=${CUTLASS_DIR}/benchmarks/config_files/01_grouped_gemm/cri/test1/small.in)
 else()
   set(CONFIG_FILE_BMG_GROUPED --config_file=${CUTLASS_DIR}/benchmarks/config_files/01_grouped_gemm/bmg/small.in)
 endif()
@@ -129,7 +128,7 @@ cutlass_benchmark_add_executable(
     TEST_COMMAND_OPTIONS
     CONFIG_FILE_CRI_GROUPED
     CONFIG_FILE_CRI_MOE
-    CONFIG_FILE_BYTEDANCE
+    CONFIG_FILE_MOE_TEST1_SMALL
 )
 target_compile_definitions(cutlass_benchmarks_grouped_gemm_sycl
     PRIVATE MOE_BENCH_ALL CUTE_ENABLE_XE_BLOCK_2D_ASSERT)
