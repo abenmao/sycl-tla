@@ -1,4 +1,37 @@
 # SYCL*TLA (previously referred to as cutlass-sycl) Changelog
+## [SYCL*TLA 0.9.2-cri](https://github.com/intel-innersource/libraries.ai.cutlass.internal) (2026-07-21)
+### Enhancements (Notes: all tests are based on the CRI simulator)
+- **Flash Attention decode/prefill optimizations and feature updates**
+  - Add GQA-fused decode path and speculative decoding support ([#647](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/647))
+  - Enhance reorder API to support None-GRF aligned data ([#713](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/713))
+  - Improve SplitKV with distributed cross-WG butterfly reduction ([#829](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/829))
+  - Optimize paged KV cache and 4K-shape handling ([#828](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/828))
+  - Tune FP8 decode FA PV tile shape ([#835](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/835))
+  - Add/expand small-Q and causal benchmark configurations ([#659](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/659), [#836](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/836))
+  - Optimize SplitKV decode with two-phase reduction, correct tensor scaling, include pagedKV ([#844](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/844))
+  - Unify decode tile configs across head dims and add tunable SplitKV saturation cores ([#848](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/848))
+  - Add optimized SplitKV decode kernel for long KV length (2-kernel implementation: attention computation and separate reduction kernel) ([#882](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/882))
+- **GEMM and block-scaled GEMM improvements**
+  - Add MOE-optimized tile shapes from performance sweep ([#688](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/688))
+  - Add scalar ScaleA loading for small-M block-scaled GEMM ([#855](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/855))
+  - Improve benchmark organization/configuration and split GEMM benchmarks by type for faster builds ([#712](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/712), [#726](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/726), [#689](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/689))
+- **Benchmark and application enablement**
+  - Add MKL-backed host references/verification for GEMM and FMHA benchmark flows ([#779](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/779), [#808](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/808))
+  - Add MoE benchmark application support for EMU and PO runs ([#764](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/764))
+  - Initial port of chunked GDN attention from vLLM-xpu-kernels ([#648](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/648))
+
+### Bug Fixes
+ - **Flash Attention**
+    - Fix GDN persistent-grid nd_range calculation ([#705](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/705))
+    - Fix FMHA benchmark verify polarity ([#826](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/826))
+    - Workaround for speculative decoding with causal mask enabled ([#878](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/878))
+  - **GEMM / Epilogue**
+    - Fix NonNative block-scaled GEMM dispatch/fallback correctness ([#671](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/671))
+    - Fix softmax epilogue batch-store addressing and N validation ([#691](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/691))
+    - Fix identity fast path double-rounding and add EpilogueTile divisibility guard ([#832](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/832))
+    - Fix NonNative BlockScalingTiledMMA behavior ([#857](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/857))
+  - **Build / Compilation**
+    - Fix MKL-not-found issue in benchmark/tooling paths ([#867](https://github.com/intel-innersource/libraries.ai.cutlass.internal/pull/867))
 
 ## [SYCL*TLA 0.9.2](https://github.com/intel/sycl-tla/releases/tag/v0.9.2) (2026-07-17)
 ### Enhancements
