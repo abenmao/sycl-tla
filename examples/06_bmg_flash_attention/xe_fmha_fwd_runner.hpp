@@ -64,9 +64,12 @@ inline int estimate_saturation_cores(int base_units, int kv_blocks) {
 }
 
 // TODO: Need to refine new saturation core estimation strategy for split-K, currently using a simple heuristic based on total.
-inline int estimate_saturation_cores_for_shape(int batch, int num_heads_kv, int seq_len_kv, int kv_tile_size = 256) {
+inline int estimate_saturation_cores_for_shape(
+    int batch, int num_heads_kv, int seq_len_kv, int seq_len_kv_cache,
+    int kv_tile_size = 256) {
   int base_units = batch * num_heads_kv;
-  int kv_blocks  = cute::ceil_div(seq_len_kv, kv_tile_size);
+  int kv_blocks  = cute::ceil_div(seq_len_kv, kv_tile_size)
+                 + cute::ceil_div(seq_len_kv_cache, kv_tile_size);
   return estimate_saturation_cores(base_units, kv_blocks);
 }
 
@@ -119,15 +122,12 @@ struct Options {
     cmd.get_cmd_line_argument("num_heads_kv", num_heads_kv, num_heads_q);
 #endif
 #ifdef DECODE
-    bool const has_seq_len_kv = cmd.check_cmd_line_flag("seq_len_kv");
     cmd.get_cmd_line_argument("seq_len_qo", seq_len_qo, 1);
-    cmd.get_cmd_line_argument("seq_len_kv", seq_len_kv, 0);
-    cmd.get_cmd_line_argument("seq_len_kv_cache", seq_len_kv_cache, has_seq_len_kv ? 0 : 512);
 #else
     cmd.get_cmd_line_argument("seq_len_qo", seq_len_qo, 512);
+#endif
     cmd.get_cmd_line_argument("seq_len_kv", seq_len_kv, seq_len_qo);
     cmd.get_cmd_line_argument("seq_len_kv_cache", seq_len_kv_cache, 0);
-#endif
     cmd.get_cmd_line_argument("head_size_vo", head_size_vo, HEAD_DIM);
     cmd.get_cmd_line_argument("head_size_qk", head_size_qk, head_size_vo);
     cmd.get_cmd_line_argument("iterations", iterations, 100);
@@ -144,12 +144,8 @@ struct Options {
             return;
         }
     }
-    //TODO: Add seq_len_kv_cache to seq_len_kv, remove this when cached/pagedKV
-    // is optimized in splitKV kernel and prefill kernels.
-    seq_len_kv += seq_len_kv_cache;
-    seq_len_kv_cache = 0;
-    if (seq_len_kv <= 0) {
-      std::cerr << "Invalid: seq_len_kv must be > 0" << std::endl;
+    if(seq_len_kv <= 0 && seq_len_kv_cache <= 0) {
+      std::cerr << "Invalid: seq_len_kv or seq_len_kv_cache must be > 0" << std::endl;
       return;
     }
     softmax_scale = 1 / sqrt(static_cast<float>(head_size_qk));
@@ -1056,43 +1052,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
   }
 
   // Note that the GemmUniversalAdapter currently doesn't support flash attention, which is why this
-  // secondary `run` function is required to launch the kernel.
-  static void run(typename FMHAKernel::Params params)
-  {
-    namespace syclex = sycl::ext::oneapi::experimental;
-    namespace intelex = sycl::ext::intel::experimental;
-
-    dim3 const block = FMHAKernel::get_block_shape();
-    dim3 const grid = FMHAKernel::get_grid_shape(params);
-
-    // configure smem size and carveout
-    int smem_size = FMHAKernel::SharedStorageSize;
-
-    const auto sycl_block = compat::dim3(block.x, block.y, block.z);
-    const auto sycl_grid = compat::dim3(grid.x, grid.y, grid.z);
-
-    // Launch parameters depend on whether SYCL compiler supports work-group scratch memory extension
-    compat::experimental::launch_properties launch_props {
-      syclex::work_group_scratch_size(smem_size),
-    };
-    compat::experimental::kernel_properties kernel_props{
-      syclex::sub_group_size<cute::intel::sg_size>,
-#if (SYCL_INTEL_TARGET == 35)
-      intelex::grf_size<512>
-#else
-      intelex::grf_size<256>
-#endif
-    };
-    compat::experimental::launch_policy policy{sycl_grid, sycl_block, launch_props, kernel_props};
-#if defined(CUTLASS_SYCL_PROFILING_ENABLED)
-    auto event = compat::experimental::launch<cutlass::device_kernel<FMHAKernel>, FMHAKernel>(policy, params);
-    EventManager::getInstance().addEvent(event);
-#else
-    compat::experimental::launch<cutlass::device_kernel<FMHAKernel>, FMHAKernel, false>(policy, params);
-#endif
-  }
-
-  // Launch an arbitrary kernel type (used for the split-KV reduction stage).
+  // secondary launch function is required.
   template <class Kernel>
   static void launch_kernel(typename Kernel::Params params)
   {
@@ -1126,6 +1086,21 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
 #endif
   }
 
+  static void run(typename FMHAKernel::Params params)
+  {
+    if constexpr (FMHAKernel::kReducePhaseSeparate) {
+      auto compute_params = params;
+      compute_params.phase = 0;
+      launch_kernel<FMHAKernel>(compute_params);
+      compat::wait();
+      auto reduce_params = params;
+      reduce_params.phase = 1;
+      launch_kernel<FMHAKernel>(reduce_params);
+    } else {
+      launch_kernel<FMHAKernel>(params);
+    }
+  }
+
   // Two-stage split-KV launch: partial attention, then log-sum-exp reduction.
   template <class ReduceParams>
   static void run(typename FMHAKernel::Params fa_params, ReduceParams reduce_params)
@@ -1144,7 +1119,8 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     int saturation_cores_hint = 0;
     if constexpr (IsPersistent) {
       saturation_cores_hint = estimate_saturation_cores_for_shape(
-          shape.batch, shape.num_heads_kv, shape.seq_len_kv);
+          shape.batch, shape.num_heads_kv, shape.seq_len_kv,
+          shape.seq_len_kv_cache);
     }
 
     typename FMHAKernel::Arguments arguments = [&]() {
@@ -1180,6 +1156,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
             block_O.get(), stride_O,
             block_K_cache.get(), stride_K_cache,
             block_V_cache.get(), stride_V_cache,
+            float(scale_k), float(scale_v), float(scale_q),
           },
           {
             options.softmax_scale,

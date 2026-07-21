@@ -248,7 +248,13 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
   }
 
   CUTLASS_HOST_DEVICE static
-  bool can_implement(Arguments const&) {
+  bool can_implement(Arguments const& args) {
+    if constexpr (PagedKV) {
+      constexpr int kv_tile_size = get<1>(TileShapeQK{});
+      return args.ptr_page_table != nullptr
+          && args.page_size >= kv_tile_size
+          && args.page_size % kv_tile_size == 0;
+    }
     return true;
   }
 
@@ -475,7 +481,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     [[maybe_unused]] int const tiles_per_page = params.page_size / kv_stride;
     [[maybe_unused]] int const batch_offset = params.num_pages_per_seq
       ? params.num_pages_per_seq[l_coord]
-      : l_coord * (seq_len_kv_cache / params.page_size);
+      : l_coord * cute::ceil_div(seq_len_kv_cache, params.page_size);
 
     // Conservative optimization for cached non-paged path:
     // keep legacy prefetch, but switch K/V copy to payload pipeline.
@@ -540,16 +546,18 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       update_payloads(prepared_pv, k_start_delta);
     }
     if constexpr (!GqaFusion) {
-      CUTLASS_PRAGMA_UNROLL
-      for (int K = 0; K < Stages; K++) {
-        prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
-        update_payloads(prepared_pk, kv_stride);
-      }
-      if constexpr (!disable_V_prefetch) {
+      if (blk_k1 > kblocks_cache) {
         CUTLASS_PRAGMA_UNROLL
         for (int K = 0; K < Stages; K++) {
-          prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
-          update_payloads(prepared_pv, kv_stride);
+          prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
+          update_payloads(prepared_pk, kv_stride);
+        }
+        if constexpr (!disable_V_prefetch) {
+          CUTLASS_PRAGMA_UNROLL
+          for (int K = 0; K < Stages; K++) {
+            prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
+            update_payloads(prepared_pv, kv_stride);
+          }
         }
       }
     }
@@ -938,7 +946,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
     /* Main loop, blocked in k. */
     if constexpr (CachedKV) {
-      for (int K = blk_k0; K < kblocks_cache; K++) {
+      for (int K = blk_k0; K < cute::min(blk_k1, kblocks_cache); K++) {
         mainloop_body(std::bool_constant<true>{}, K,
                       copy_k_cache, copy_v_cache,
                       prefetch_v_cache, tKgK_cache,

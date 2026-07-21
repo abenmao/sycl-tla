@@ -202,22 +202,29 @@ int main(int argc, const char **argv) {
   const int total_rows = gqa_group * q_len;
 
   const int kv_tile    = int(KV_TILE_SIZE::value);
-  const int kv_blocks  = (options.seq_len_kv + kv_tile - 1) / kv_tile;
+  const int kv_blocks  = (options.seq_len_kv + kv_tile - 1) / kv_tile
+                       + (options.seq_len_kv_cache + kv_tile - 1) / kv_tile;
   const int base_units = options.batch * options.num_heads_kv;
   const int saturation_cores_default = estimate_saturation_cores(base_units, kv_blocks);
-  const bool use_split = total_rows <= 64 && base_units < cutlass::fmha::kernel::fmha_split_saturation_cores(saturation_cores_default);
+  const int saturation_cores = cutlass::fmha::kernel::fmha_split_saturation_cores(saturation_cores_default);
+  const bool use_split = !options.varlen
+                      && total_rows <= 64
+                      && base_units < saturation_cores
+                      && base_units * kv_blocks > saturation_cores;
+
+  #define FMHA_RUN_SPLIT(CAUSAL, PAGED, QK, PV, OUT, SGL)                                      \
+    FMHAConfig<CAUSAL, false, QK, PV, OUT, SGL, void, PipelineStages,                           \
+               ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::                    \
+               template run<false, true, PAGED,                                                \
+               cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options)
 
   #define FMHA_RUN_Q(QK, PV, OUT, SGL)                                                                  \
     (use_split                                                                                        \
        ? (options.is_causal                                                                           \
-           ? FMHAConfig</*CausalMask=*/true,  false, QK, PV, OUT, SGL, void, PipelineStages,          \
-                        ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::                  \
-                        template run<false, true, false,                                             \
-                        cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options)              \
-           : FMHAConfig</*CausalMask=*/false, false, QK, PV, OUT, SGL, void, PipelineStages,          \
-                        ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::                  \
-                        template run<false, true, false,                                             \
-                        cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options))             \
+           ? (options.use_paged_kv ? FMHA_RUN_SPLIT(true, true, QK, PV, OUT, SGL)                    \
+                                   : FMHA_RUN_SPLIT(true, false, QK, PV, OUT, SGL))                  \
+           : (options.use_paged_kv ? FMHA_RUN_SPLIT(false, true, QK, PV, OUT, SGL)                   \
+                                   : FMHA_RUN_SPLIT(false, false, QK, PV, OUT, SGL)))                \
        : (options.is_causal                                                                           \
            ? FMHAConfig</*CausalMask=*/true,  false, QK, PV, OUT, SGL, void, PipelineStages,          \
                         ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/true>::template run<      \
@@ -236,6 +243,7 @@ int main(int argc, const char **argv) {
     return FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64);
 
 #undef FMHA_RUN_Q
+  #undef FMHA_RUN_SPLIT
 #else
   // Directly instantiate only CachedKV=true kernels.
   // Causal and VarLen are dispatched at runtime.
