@@ -316,6 +316,8 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
   cutlass::DeviceAllocation<ElementQKMMAVerify> block_Q_dq; // Dequantized copy of Q for validation
   cutlass::DeviceAllocation<ElementQKMMAVerify> block_K_dq; // Dequantized copy of K for validation
   cutlass::DeviceAllocation<ElementPVMMAVerify> block_V_dq; // Dequantized copy of V for validation
+  cutlass::DeviceAllocation<ElementQKMMAVerify> block_K_cache_dq;
+  cutlass::DeviceAllocation<ElementPVMMAVerify> block_V_cache_dq;
 
   //
   // Methods
@@ -433,8 +435,8 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     auto block_Q_ = (BlockScale || PerTensorScale) ? block_Q_dq : in_memory(block_Q);
     auto block_K_ = (BlockScale || F8kvF16mma || PerTensorScale) ? block_K_dq : in_memory(block_K);
     auto block_V_ = ((BlockScale && !FP4Input) || F8kvF16mma || PerTensorScale) ? block_V_dq : in_memory(block_V);
-    auto block_K_cache_ = in_memory(block_K_cache);
-    auto block_V_cache_ = in_memory(block_V_cache);
+    auto block_K_cache_ = (BlockScale || F8kvF16mma || PerTensorScale) ? block_K_cache_dq : in_memory(block_K_cache);
+    auto block_V_cache_ = ((BlockScale && !FP4Input) || F8kvF16mma || PerTensorScale) ? block_V_cache_dq : in_memory(block_V_cache);
     using ElementV_ = std::conditional_t<BlockScale && !FP4Input, 
                                     ElementPVMMAVerify,
                                     std::remove_pointer_t<decltype(block_V_.get())>>;
@@ -833,17 +835,8 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     compat::wait();
   }
 
-  template <typename LowpT, typename DeqT>
-  void apply_dequantization(const cutlass::DeviceAllocation<LowpT>& lowp, cutlass::DeviceAllocation<DeqT>& deq, float& scale) {
-    const float lowp_max = float(cutlass::platform::numeric_limits<LowpT>::max());
-    const float highp_max = float(cutlass::platform::numeric_limits<DeqT>::max());
-    auto s = highp_max / lowp_max;
-
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dis(1.0f, s/2.0f);
-    scale = dis(gen);
-
+  template <typename DeqT>
+  void scale_dequantized(cutlass::DeviceAllocation<DeqT>& deq, float scale) {
     auto deq_buff = std::vector<DeqT>(deq.size());
     compat::memcpy<DeqT>(deq_buff.data(), deq.get(), deq.size());
     compat::wait();
@@ -854,6 +847,19 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
 
     compat::memcpy<DeqT>(deq.get(), deq_buff.data(), deq.size());
     compat::wait();
+  }
+
+  template <typename LowpT, typename DeqT>
+  void apply_dequantization(const cutlass::DeviceAllocation<LowpT>& lowp, cutlass::DeviceAllocation<DeqT>& deq, float& scale) {
+    const float lowp_max = float(cutlass::platform::numeric_limits<LowpT>::max());
+    const float highp_max = float(cutlass::platform::numeric_limits<DeqT>::max());
+    auto s = highp_max / lowp_max;
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dis(1.0f, s/2.0f);
+    scale = dis(gen);
+    scale_dequantized(deq, scale);
   }
 
   /// Initialize operands to be used in the GEMM and reference GEMM
@@ -996,19 +1002,27 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     block_Q_dq.reset(block_Q.size());
     block_K_dq.reset(block_K.size());
     block_V_dq.reset(block_V.size());
+    block_K_cache_dq.reset(block_K_cache.size());
+    block_V_cache_dq.reset(block_V_cache.size());
 
     convert_dtype<ElementQ, ElementQKMMAVerify, ExampleRunner>(block_Q, block_Q_dq);
     convert_dtype<ElementK, ElementQKMMAVerify, ExampleRunner>(block_K, block_K_dq);
     convert_dtype<ElementV, ElementPVMMAVerify, ExampleRunner>(block_V, block_V_dq);
+    convert_dtype<ElementK, ElementQKMMAVerify, ExampleRunner>(block_K_cache, block_K_cache_dq);
+    convert_dtype<ElementV, ElementPVMMAVerify, ExampleRunner>(block_V_cache, block_V_cache_dq);
 
 #if !PERSISTENT
     if constexpr (F8kvF16mma) {
       apply_dequantization(block_K, block_K_dq, scale_k);
       apply_dequantization(block_V, block_V_dq, scale_v);
+      scale_dequantized(block_K_cache_dq, scale_k);
+      scale_dequantized(block_V_cache_dq, scale_v);
     } else if constexpr (PerTensorScale) {
       apply_dequantization(block_Q, block_Q_dq, scale_q);
       apply_dequantization(block_K, block_K_dq, scale_k);
       apply_dequantization(block_V, block_V_dq, scale_v);
+      scale_dequantized(block_K_cache_dq, scale_k);
+      scale_dequantized(block_V_cache_dq, scale_v);
     } else if constexpr (BlockScale) {
       auto scale_q = cute::ceil_div(head_size_qk, GROUP_SIZE);
       auto scale_k = cute::ceil_div(head_size_qk, GROUP_SIZE);
