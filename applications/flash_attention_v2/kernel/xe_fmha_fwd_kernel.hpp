@@ -363,10 +363,13 @@ public:
         int gqa_fusion_q_per_head   = 0;
         if constexpr (CollectiveMainloop::CausalMask) {
           gqa_fusion_q_per_head   = q_len;
-          fusion_seq_len          = seq_len_kv;
+          fusion_seq_len          = seq_len_kv_cache + seq_len_kv;
           fusion_full_tile_offset = seq_len_kv - cute::min(q_len, seq_len_kv);
           fusion_discard          = 0;
-          fusion_k_blocks         = cute::ceil_div(seq_len_kv, get<1>(TileShapeQK{}));
+          const int fusion_cache_k_blocks = CollectiveMainloop::CachedKV
+              ? cute::ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{})) : 0;
+          fusion_k_blocks = fusion_cache_k_blocks
+                          + cute::ceil_div(seq_len_kv, get<1>(TileShapeQK{}));
         }
 
         const int idx_b_l = idx_b;
