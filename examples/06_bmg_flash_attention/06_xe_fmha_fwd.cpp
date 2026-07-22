@@ -274,7 +274,13 @@ int main(int argc, const char **argv) {
     return -1;
   }
 
-  using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
+  // Causal scheduler with DisablePrefetchV=true, used only for small tiles.
+  using CausalSmallScheduler =
+    cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false, false, true, false, true>;
+  // Causal scheduler without DisablePrefetchV, used for large tiles.
+  using CausalScheduler =
+    cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false, false, true, false, false>;
+  using DefaultScheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
 
   using FMHACausal    = FMHAConfig<true, false, ShapeQK_Causal, ShapePV_Causal, ShapeOut_Causal, SubgroupLayoutQK_Causal, void, PipelineStages, ElementQ, ElementK, ElementV>;
   using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
@@ -295,15 +301,15 @@ int main(int argc, const char **argv) {
   if (options.is_causal) {
     if (use_small) {
       if (options.varlen) {
-        return FMHACausal4::template run<true, false, false, Scheduler>(options);
+        return FMHACausal4::template run<true, false, false, CausalSmallScheduler>(options);
       } else {
-        return FMHACausal8::template run<false, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false,false,false,false,true>>(options);
+        return FMHACausal8::template run<false, false, false, CausalSmallScheduler>(options);
       }
     }
     if (options.varlen) {
-      return FMHACausal::template run<true, false, false, Scheduler>(options);
+      return FMHACausal::template run<true, false, false, CausalScheduler>(options);
     } else {
-      return FMHACausal::template run<false, false, false, Scheduler>(options);
+      return FMHACausal::template run<false, false, false, DefaultScheduler>(options);
     }
   } else {
     if (options.seq_len_qo < 512) {
@@ -314,9 +320,9 @@ int main(int argc, const char **argv) {
       }
     }
     if (options.varlen) {
-      return FMHANonCausal::template run<true, false, false, Scheduler>(options);
+      return FMHANonCausal::template run<true, false, false, DefaultScheduler>(options);
     } else {
-      return FMHANonCausal::template run<false, false, false, Scheduler>(options);
+      return FMHANonCausal::template run<false, false, false, DefaultScheduler>(options);
     }
   }
 #else

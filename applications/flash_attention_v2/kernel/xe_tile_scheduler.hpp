@@ -140,9 +140,23 @@ struct XeFHMAIndividualTileScheduler {
         idx_b = BlockIdxY();
         params.divmod_num_heads(idx_b, head, idx_b);
       }
-      // Reverse Q dispatch: last Q tile first (causal mask: later Q tiles have more K-blocks)
-      int q_tile = params.grid.z - 1 - BlockIdxZ();
-      return make_coord(q_tile, BlockIdxX(), head, idx_b);
+
+      if constexpr (DisablePrefetchV) {
+        // Interleave heavy and light Q tiles only on the no-prefetch-V path.
+        int const q_idx = int(BlockIdxZ());
+        int const num_q_tiles = params.grid.z;
+        int q_tile = 0;
+        if ((q_idx & 1) == 0) {
+          q_tile = num_q_tiles - 1 - (q_idx >> 1);
+        } else {
+          q_tile = (q_idx >> 1);
+        }
+        return make_coord(q_tile, int(BlockIdxX()), head, idx_b);
+      } else {
+        // Restore the previous causal dispatch for normal prefetch-V paths.
+        int q_tile = params.grid.z - 1 - BlockIdxZ();
+        return make_coord(q_tile, BlockIdxX(), head, idx_b);
+      }
     } else {
       // Non-causal grid layout: (V, Q, batch*heads).
       if constexpr (OneBatch) {
