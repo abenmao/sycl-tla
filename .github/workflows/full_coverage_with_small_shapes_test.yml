@@ -27,15 +27,16 @@ env:
   # Per-build memory budget on the build server. Remote compile parallelism
   # (global -j = budget/5, heavy flash-attention pool = budget/10) and the
   # admission gate's free-memory threshold are all derived from this one value.
-  BUILD_MEM_BUDGET_GB: "96"
+  BUILD_MEM_BUDGET_GB: "256"
   SSH_OPTS: "-o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
   REMOTE_CPU_THRESHOLD: "32"
   REMOTE_RAM_THRESHOLD: "128"
   # Remote build step timeout (min) + orphan-reap grace margin. Both the
   # build-step timeout and the orphan-reap age derive from these, staying in
-  # sync. A clean compile takes ~30 min; 60 is ~2x headroom for contention.
-  BUILD_STEP_TIMEOUT_MIN: "60"
-  ORPHAN_REAP_GRACE_MIN: "10"
+  # sync. A clean compile takes ~30 min; 90 is ~3x headroom for contention.
+  # Reap age = timeout + grace = 105 min.
+  BUILD_STEP_TIMEOUT_MIN: "90"
+  ORPHAN_REAP_GRACE_MIN: "15"
 
 jobs:
   run-tests:
@@ -141,7 +142,7 @@ jobs:
           # cancelled run can leave the container alive). Only this layer reaps
           # *other* runs' orphans; the trap and always() cleanup touch only this
           # run. Best-effort. Reap age = BUILD_STEP_TIMEOUT_MIN +
-          # ORPHAN_REAP_GRACE_MIN (70 min) -- just above the step timeout, so any
+          # ORPHAN_REAP_GRACE_MIN (105 min) -- just above the step timeout, so any
           # container that old is guaranteed orphaned.
           REAP_AGE_S=$(( (BUILD_STEP_TIMEOUT_MIN + ORPHAN_REAP_GRACE_MIN) * 60 ))
           ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} '
