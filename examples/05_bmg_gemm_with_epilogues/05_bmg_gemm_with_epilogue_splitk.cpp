@@ -100,12 +100,12 @@ struct Options {
       << "Options:\n\n"
       << "  --help                      If specified, displays this usage statement\n\n"
       << "  --m=<int>                   Sets the M extent of the GEMM\n"
-      << "  --n=<int>                   Sets the N extent of the GEMM\n"
+      << "  --n=<int>                   Sets the N extent of the GEMM; must equal num_head * (nope_dim + rope_dim)\n"
       << "  --k=<int>                   Sets the K extent of the GEMM\n"
       << "  --l=<int>                   Sets the L extent (batch count) of the GEMM\n"
       << "  --num-head=<int>            Sets the num_head for splitk fusion\n"
-      << "  --nope-dim=<int>            Sets the nope_dim for splitk fusion\n"
-      << "  --rope-dim=<int>            Sets the rope_dim for splitk fusion\n"
+      << "  --nope-dim=<int>            Sets the nope_dim for splitk fusion; must be a positive multiple of 32\n"
+      << "  --rope-dim=<int>            Sets the rope_dim for splitk fusion; must be a positive multiple of 32\n"
       << "  --alpha=<s32>               Epilogue scalar alpha\n"
       << "  --beta=<s32>                Epilogue scalar beta\n"
       << "  --iterations=<int>          Iterations\n"
@@ -416,8 +416,23 @@ int main(int argc, const char** argv)
     return -1;
   }
 
-  if (options.n < options.num_head * (options.nope_dim + options.rope_dim)) {
-    std::cerr << "n should be greater than num_head * (nope_dim + rope_dim)" << std::endl;
+  if (options.num_head <= 0) {
+    std::cerr << "num_head should be positive" << std::endl;
+    return -1;
+  }
+
+  if (options.nope_dim <= 0 || (options.nope_dim % 32) != 0) {
+    std::cerr << "nope_dim should be a positive multiple of 32" << std::endl;
+    return -1;
+  }
+
+  if (options.rope_dim <= 0 || (options.rope_dim % 32) != 0) {
+    std::cerr << "rope_dim should be a positive multiple of 32" << std::endl;
+    return -1;
+  }
+
+  if (options.n != options.num_head * (options.nope_dim + options.rope_dim)) {
+    std::cerr << "n should be equal to num_head * (nope_dim + rope_dim)" << std::endl;
     return -1;
   }
 
