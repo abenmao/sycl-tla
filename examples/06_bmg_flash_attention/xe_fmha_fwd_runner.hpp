@@ -485,62 +485,59 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
       for (int h = 0; h < num_heads_q; h++) {
         ElementK_* k_ptr;
         ElementV_* v_ptr;
+        // Declared at this scope (not inside the device branch below) so they stay alive through
+        // the q_chunk loop that consumes k_ptr/v_ptr via GEMM1/GEMM2 on the device path.
         cutlass::DeviceAllocation<ElementK_> block_K_concat;
         cutlass::DeviceAllocation<ElementV_> block_V_concat;
 
-        if (seq_len_kv_cache > 0) {
-          block_K_concat.reset(head_size_qk * seq_len_kv_total);
-          block_V_concat.reset(seq_len_kv_total * head_size_vo);
+        // Assembles this head's K/V. Used for both the device path (k_dst/v_dst point into 
+        // a device DeviceAllocation) and the host path (k_dst/v_dst point into a host std::vector)
+        auto assemble_kv = [&](ElementK_* k_dst, ElementV_* v_dst) {
+          if (seq_len_kv_cache > 0) {
+            if (paged_kv_cache.page_size > 0) {
+              int page_size = paged_kv_cache.page_size;
+              int start_page_idx = isVarLen ? num_pages_per_seq_host[b] : b * (seq_len_kv_cache / page_size);
+              int num_pages = ceil_div(seq_len_kv_cache, page_size);
 
-          if (paged_kv_cache.page_size > 0) {
-            int page_size = paged_kv_cache.page_size;
-            int start_page_idx = isVarLen ? num_pages_per_seq_host[b] : b * (seq_len_kv_cache / page_size);
-            int num_pages = ceil_div(seq_len_kv_cache, page_size);
+              for (int i = 0; i < num_pages; ++i) {
+                int physical_page_id = page_table_host[start_page_idx + i];
+                int current_copy_len = std::min(page_size, seq_len_kv_cache - i * page_size);
 
-            for (int i = 0; i < num_pages; ++i) {
-              int physical_page_id = page_table_host[start_page_idx + i];
-              int current_copy_len = std::min(page_size, seq_len_kv_cache - i * page_size);
+                compat::memcpy<ElementK_>(
+                      k_dst + head_size_qk * i * page_size,
+                      block_K_cache_.get() + offset_k_cache + head_size_qk * physical_page_id * page_size,
+                      head_size_qk * current_copy_len);
 
+                compat::memcpy<ElementV_>(
+                      v_dst + i * page_size * head_size_vo,
+                      block_V_cache_.get() + offset_v_cache + physical_page_id * page_size * head_size_vo,
+                      current_copy_len * head_size_vo);
+              }
+            } else {
               compat::memcpy<ElementK_>(
-                    block_K_concat.get() + head_size_qk * i * page_size,
-                    block_K_cache_.get() + offset_k_cache + head_size_qk * physical_page_id * page_size,
-                    head_size_qk * current_copy_len);
+                    k_dst,
+                    block_K_cache_.get() + offset_k_cache,
+                    head_size_qk * seq_len_kv_cache);
 
               compat::memcpy<ElementV_>(
-                    block_V_concat.get() + i * page_size * head_size_vo,
-                    block_V_cache_.get() + offset_v_cache + physical_page_id * page_size * head_size_vo,
-                    current_copy_len * head_size_vo);
+                    v_dst,
+                    block_V_cache_.get() + offset_v_cache,
+                    seq_len_kv_cache * head_size_vo);
             }
-          } else {
-            compat::memcpy<ElementK_>(
-                  block_K_concat.get(),
-                  block_K_cache_.get() + offset_k_cache,
-                  head_size_qk * seq_len_kv_cache);
-
-            compat::memcpy<ElementV_>(
-                  block_V_concat.get(),
-                  block_V_cache_.get() + offset_v_cache,
-                  seq_len_kv_cache * head_size_vo);
           }
 
           compat::memcpy<ElementK_>(
-                block_K_concat.get() + head_size_qk * seq_len_kv_cache,
+                k_dst + head_size_qk * seq_len_kv_cache,
                 block_K_.get() + offset_k,
                 head_size_qk * seq_len_kv);
           compat::memcpy<ElementV_>(
-                block_V_concat.get() + seq_len_kv_cache * head_size_vo,
+                v_dst + seq_len_kv_cache * head_size_vo,
                 block_V_.get() + offset_v,
                 seq_len_kv * head_size_vo);
+        };
 
-          k_ptr = block_K_concat.get();
-          v_ptr = block_V_concat.get();
-        } else {
-          k_ptr = block_K_.get() + offset_k;
-          v_ptr = block_V_.get() + offset_v;
-        }
-
-        // Host path only: mirror this head's Q/K/V (already offset/concatenated) to host once,
-        // right before the GEMMs below reuse them for every q_chunk of this head.
+        // Host path only: The host path assembles K/V directly into host_K_head/host_V_head via assemble_kv() (D2H) 
+        // Never goes through a device-side block_K_concat/block_V_concat allocation, unlike the device path below. 
         std::vector<ElementQ_> host_Q_head;
         std::vector<ElementK_> host_K_head;
         std::vector<ElementV_> host_V_head;
@@ -549,11 +546,21 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
           compat::memcpy<ElementQ_>(host_Q_head.data(), block_Q_.get() + offset_q, host_Q_head.size());
 
           host_K_head.resize(head_size_qk * seq_len_kv_total);
-          compat::memcpy<ElementK_>(host_K_head.data(), k_ptr, host_K_head.size());
-
           host_V_head.resize(seq_len_kv_total * head_size_vo);
-          compat::memcpy<ElementV_>(host_V_head.data(), v_ptr, host_V_head.size());
+          assemble_kv(host_K_head.data(), host_V_head.data());
           compat::wait();
+        } else {
+          if (seq_len_kv_cache > 0) {
+            block_K_concat.reset(head_size_qk * seq_len_kv_total);
+            block_V_concat.reset(seq_len_kv_total * head_size_vo);
+            assemble_kv(block_K_concat.get(), block_V_concat.get());
+
+            k_ptr = block_K_concat.get();
+            v_ptr = block_V_concat.get();
+          } else {
+            k_ptr = block_K_.get() + offset_k;
+            v_ptr = block_V_.get() + offset_v;
+          }
         }
 
         int q_chunk_size = 128; // Process 128 rows at a time
