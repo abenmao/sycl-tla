@@ -196,10 +196,10 @@ int main(int argc, const char **argv) {
   using ShapeOut32 = Shape<_32, HeadDimSize>;
   using SubgroupLayoutQK32 = Layout<Shape<_4, _8, _1>>;
 
-  using ShapeQK64  = Shape<_64, KV_TILE_SIZE, QKTileK>;
-  using ShapePV64  = Shape<_64, PVTileN, KV_TILE_SIZE>;
+  using ShapeQK64  = Shape<_64, _64, QKTileK>;
+  using ShapePV64  = Shape<_64, PVTileN, _64>;
   using ShapeOut64 = Shape<_64, HeadDimSize>;
-  using SubgroupLayoutQK64 = Layout<Shape<_4, _8, _1>>;
+  using SubgroupLayoutQK64 = Layout<Shape<_8, _1, _1>>;
 
 #else
 #error Either DECODE or PREFILL should be defined.
