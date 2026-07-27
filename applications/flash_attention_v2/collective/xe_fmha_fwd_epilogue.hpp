@@ -38,6 +38,7 @@
 #include "cutlass/epilogue/collective/detail.hpp"
 #include "cutlass/detail/layout.hpp"
 
+#include "cute/algorithm/reorder.hpp"
 #include "cute/algorithm/subgroup_algorithms.hpp"
 #include "cute/algorithm/tensor_algorithms.hpp"
 
@@ -151,6 +152,23 @@ public:
   CUTLASS_HOST_DEVICE
   FMHAFwdEpilogue(Params const&, SharedStorage& shared_) : shared(shared_) {}
 
+  // The two fragments do not necessarily enumerate their values in the same order.
+  template <typename RFragA, typename RFragARow, typename FragO>
+  CUTLASS_DEVICE
+  static void
+  rescale_and_store(RFragA& rA, RFragARow const& rA_sum, FragO& tOrO) {
+    if constexpr (ReduceK{} == _1{} || get<0>(SGTileShapeO{}) == _1{}) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < rA.size(); i++)
+        tOrO(i) = static_cast<ElementO>(rA(i) * broadcast<0>(rA_sum, rA, i));
+    } else {
+      CUTLASS_PRAGMA_UNROLL
+      for (int i = 0; i < rA.size(); i++)
+        rA(i) *= broadcast<0>(rA_sum, rA, i);
+      cute::reorder(rA, tOrO);
+    }
+  }
+
   template <bool SumIsReduced = false, typename QVCoord, typename FragSPRow>
   CUTLASS_DEVICE
   void
@@ -197,10 +215,8 @@ public:
     auto tOrO = thr_copy_o.partition_sg_fragment_S(gO);
     auto tOgO = thr_copy_o.partition_D(gO);
 
-    /* Fused rescale + reorder*/
-    CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < rA.size(); i++)
-      tOrO(i) = static_cast<ElementO>(rA(i) * broadcast<0>(rA_sum, rA, i));
+    /* Rescale + reorder */
+    rescale_and_store(rA, rA_sum, tOrO);
     copy(copy_o, tOrO, tOgO);
   }
 
@@ -269,10 +285,8 @@ public:
     auto tOrO = thr_copy_o.partition_sg_fragment_S(gO);
     auto tOgO = thr_copy_o.partition_D(gO);
 
-    /* Fused rescale + reorder */
-    CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < rA.size(); i++)
-      tOrO(i) = static_cast<ElementO>(rA(i) * broadcast<0>(rA_sum, rA, i));
+    /* Rescale + reorder */
+    rescale_and_store(rA, rA_sum, tOrO);
     copy(copy_o, tOrO, tOgO);
   }
 
