@@ -28,11 +28,16 @@
 
 if (CUTLASS_TEST_FOR_CRI)
   set(TEST_BASE "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
-  set(TEST_SPLITK ${TEST_BASE} --num-head=2 --nope-dim=64 --rope-dim=64) # Splitk specific parameters
+  set(TEST_SPLITK_BASE "--m=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
+  set(TEST_SPLITK ${TEST_SPLITK_BASE} --n=256 --num-head=2 --nope-dim=64 --rope-dim=64) # Splitk specific parameters
 else()
   set(TEST_BASE "")
-  set(TEST_SPLITK ${TEST_BASE}) # No extra parameters when not in CRI mode
+  set(TEST_SPLITK_BASE ${TEST_BASE}) # No extra parameters when not in CRI mode
+  set(TEST_SPLITK ${TEST_SPLITK_BASE}) # No extra parameters when not in CRI mode
 endif()
+
+set(TEST_SPLITK_1 ${TEST_SPLITK_BASE} --n=48 --num-head=1 --nope-dim=16 --rope-dim=32)
+set(TEST_SPLITK_2 ${TEST_SPLITK_BASE} --n=160 --num-head=2 --nope-dim=16 --rope-dim=64)
 
 set(TEST_MULTIPLE_BATCHES ${TEST_BASE} --l=2)
 set(TEST_SINGLE_BATCH ${TEST_BASE} "") # The default batch size is 1
@@ -107,6 +112,8 @@ cutlass_example_add_executable(
   05_bmg_gemm_with_epilogue_splitk.cpp
   TEST_COMMAND_OPTIONS
   TEST_SPLITK
+  TEST_SPLITK_1
+  TEST_SPLITK_2
 )
 
 cutlass_example_add_executable(

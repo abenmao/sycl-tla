@@ -26,7 +26,7 @@
  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  **************************************************************************************************/
 
@@ -104,8 +104,8 @@ struct Options {
       << "  --k=<int>                   Sets the K extent of the GEMM\n"
       << "  --l=<int>                   Sets the L extent (batch count) of the GEMM\n"
       << "  --num-head=<int>            Sets the num_head for splitk fusion\n"
-      << "  --nope-dim=<int>            Sets the nope_dim for splitk fusion; must be a positive multiple of 32\n"
-      << "  --rope-dim=<int>            Sets the rope_dim for splitk fusion; must be a positive multiple of 32\n"
+      << "  --nope-dim=<int>            Sets the nope_dim for splitk fusion; must be a positive multiple of 16\n"
+      << "  --rope-dim=<int>            Sets the rope_dim for splitk fusion; must be a positive multiple of 16\n"
       << "  --alpha=<s32>               Epilogue scalar alpha\n"
       << "  --beta=<s32>                Epilogue scalar beta\n"
       << "  --iterations=<int>          Iterations\n"
@@ -140,7 +140,7 @@ struct ExampleRunner {
   using ElementC = typename Gemm::ElementC;
   using ElementOutput = typename CollectiveEpilogue::ElementOutput;
   using ElementCompute = typename CollectiveEpilogue::ElementCompute;
-  using ElementAccumulator = typename CollectiveEpilogue::ElementAccumulator;
+  using ElementAccumulator = typename Gemm::ElementAccumulator;
 
   using ProblemShapeType = typename Gemm::GemmKernel::ProblemShape;
 
@@ -215,9 +215,7 @@ struct ExampleRunner {
     auto D2_shape = make_shape(M, NUM_HEAD, ROPE_DIM, L);
 
     auto D = std::vector<ElementOutput>(size(D_shape));
-    // 256x128x64
     auto D1 = std::vector<ElementOutput>(size(D1_shape));
-    // 256x128x128
     auto D2 = std::vector<ElementOutput>(size(D2_shape));
     compat::memcpy<ElementOutput>(D.data(), block_ref_D.get(), size(D_shape));
     compat::wait();
@@ -238,12 +236,7 @@ struct ExampleRunner {
       }
     }
 
-    auto test_D = std::vector<ElementOutput>(size(D_shape));
-    compat::memcpy<ElementOutput>(test_D.data(), block_D.get(), size(D_shape));
-
-    // 256x128x64
     auto test_D1 = std::vector<ElementOutput>(size(D1_shape));
-    // 256x128x128
     auto test_D2 = std::vector<ElementOutput>(size(D2_shape));
     compat::memcpy<ElementOutput>(test_D1.data(), block_D1.get(), size(D1_shape));
     compat::memcpy<ElementOutput>(test_D2.data(), block_D2.get(), size(D2_shape));
@@ -307,8 +300,6 @@ struct ExampleRunner {
     auto problem_shape_MNKL = cute::append<4>(problem_size, 1);
     auto [M, N, K, L] = problem_shape_MNKL;
     auto [NUM_HEAD, NOPE_DIM, ROPE_DIM, _] = splitk_size;
-    assert((NOPE_DIM % 32 == 0) && (NOPE_DIM / 32>0) && "NOPE_DIM should be divisible by 32");
-    assert((ROPE_DIM % 32 == 0) && (ROPE_DIM / 32>0) && "ROPE_DIM should be divisible by 32");
     stride_A = cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(M, K, L));
     stride_B = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(N, K, L));
     stride_C = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(M, N, L));
@@ -317,6 +308,7 @@ struct ExampleRunner {
     block_A.reset(M * K * L);
     block_B.reset(K * N * L);
     block_C.reset(M * N * L);
+    // Allocate block_D with padded stride to ensure 2D block store alignment
     block_D.reset(M * N * L);
     block_D1.reset(M * NUM_HEAD * NOPE_DIM * L);
     block_D2.reset(M * NUM_HEAD * ROPE_DIM * L);
@@ -421,13 +413,13 @@ int main(int argc, const char** argv)
     return -1;
   }
 
-  if (options.nope_dim <= 0 || (options.nope_dim % 32) != 0) {
-    std::cerr << "nope_dim should be a positive multiple of 32" << std::endl;
+  if (options.nope_dim <= 0 || (options.nope_dim % 16) != 0) {
+    std::cerr << "nope_dim should be a positive multiple of 16" << std::endl;
     return -1;
   }
 
-  if (options.rope_dim <= 0 || (options.rope_dim % 32) != 0) {
-    std::cerr << "rope_dim should be a positive multiple of 32" << std::endl;
+  if (options.rope_dim <= 0 || (options.rope_dim % 16) != 0) {
+    std::cerr << "rope_dim should be a positive multiple of 16" << std::endl;
     return -1;
   }
 
@@ -463,38 +455,37 @@ int main(int argc, const char** argv)
   using LayoutC = cutlass::layout::RowMajor;
   using LayoutD = cutlass::layout::RowMajor;
 
-  using GmemTiledCopyA = XE_2D_U16x8x16_LD_N;
-  using GmemTiledCopyB = XE_2D_U16x16x16_LD_V;
+  using GmemTiledCopyA = void;
+  using GmemTiledCopyB = void;
 
   // Workgroup-level tile
   using TileShape = Shape<_32, _512, _32>;
 
   using TiledMma =
-      typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
+      typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cute::bfloat16_t>>, Layout<TileShape>,
                                     Layout<Shape<_2, _16, _1>, Stride<_16, _1, _0>>>::TiledMMA;
 
-  using EpilogueTile = Shape<_16, _32>;
+  using EpilogueTile = void;
   constexpr int PipelineStages = 3;
-  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16<PipelineStages>;
-  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeXMX16;
+  using GEMMDispatchPolicy = cutlass::gemm::MainloopXeL1Staged<PipelineStages>;
+  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
 
   using EpilogueOp = cutlass::epilogue::fusion::LinCombSplitK<ElementOutput,
-          ElementComputeEpilogue, XE_2D_U32x8x16_ST_N, ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
+          ElementComputeEpilogue, void, ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
 
   using FusionCallBacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueOp, TileShape,
-          EpilogueTile>;
+          decltype(tile_shape(TiledMma()))>;
   using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
           EpilogueDispatchPolicy,
           TileShape,
+          EpilogueTile,
           ElementAccumulator,
           cutlass::gemm::TagToStrideC_t<LayoutC>,
           ElementOutput,
           cutlass::gemm::TagToStrideC_t<LayoutD>,
           FusionCallBacks,
-          XE_2D_U32x8x16_LD_N,
-          void, void,
           void,
-          void, void>;
+          void>;
 
 // Mainloop
   using CollectiveMainloop = cutlass::gemm::collective::CollectiveMma<

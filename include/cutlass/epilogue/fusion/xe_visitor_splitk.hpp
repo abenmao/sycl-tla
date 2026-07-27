@@ -280,6 +280,227 @@ public:
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
+// New-API visitor for IntelXeGeneric epilogue
+// Stores GEMM output to two separate tensors (D1/D2) based on head structure.
+// Each epi tile maps entirely to one target → single 2D block store per tile.
+// Requires NOPE_DIM % EPI_N == 0 && ROPE_DIM % EPI_N == 0 (checked in can_implement).
+template <
+  class CtaTileShapeMNK,
+  class EpilogueTile_,
+  class ElementOutput,
+  class ElementCompute,
+  FloatRoundStyle RoundStyle
+>
+struct XeSplitKGeneric
+{
+public:
+  static constexpr int EPI_N = get<1>(EpilogueTile_{});
+
+  struct SharedStorage { };
+
+  struct Arguments {
+    ElementOutput* ptr_output;
+    ElementOutput* ptr_output1;
+    ElementOutput* ptr_output2;
+    size_t NUM_HEAD;
+    size_t NOPE_DIM;
+    size_t ROPE_DIM;
+  };
+
+  struct Params {
+    ElementOutput* ptr_output1;
+    ElementOutput* ptr_output2;
+    int D1_N;     // NUM_HEAD * NOPE_DIM
+    int D2_N;     // NUM_HEAD * ROPE_DIM
+    int NOPE_DIM;
+    int ROPE_DIM;
+  };
+
+  template <class ProblemShape>
+  static constexpr Params
+  to_underlying_arguments(ProblemShape const& problem_shape, Arguments const& args, void* workspace) {
+    return {args.ptr_output1, args.ptr_output2,
+            int(args.NUM_HEAD * args.NOPE_DIM), int(args.NUM_HEAD * args.ROPE_DIM),
+            int(args.NOPE_DIM), int(args.ROPE_DIM)};
+  }
+
+  template <class ProblemShape>
+  static bool
+  can_implement(ProblemShape const& problem_shape, Arguments const& args) {
+    return (args.NOPE_DIM % EPI_N == 0) && (args.ROPE_DIM % EPI_N == 0);
+  }
+
+  template <class ProblemShape>
+  static size_t
+  get_workspace_size(ProblemShape const& problem_shape, Arguments const& args) {
+    return 0;
+  }
+
+  template <class ProblemShape>
+  static cutlass::Status
+  initialize_workspace(ProblemShape const& problem_shape, Arguments const& args, void* workspace, cudaStream_t stream,
+    CudaHostAdapter* cuda_adapter = nullptr) {
+    return Status::kSuccess;
+  }
+
+  CUTLASS_DEVICE bool is_producer_load_needed() const { return false; }
+  CUTLASS_DEVICE bool is_C_load_needed() const { return false; }
+
+  CUTLASS_HOST_DEVICE XeSplitKGeneric() { }
+  CUTLASS_HOST_DEVICE XeSplitKGeneric(Params const& params, SharedStorage const&) : params(params) { }
+
+  Params params;
+
+  template <class... Args>
+  CUTLASS_DEVICE auto
+  get_producer_load_callbacks(ProducerLoadArgs<Args...> const& args) {
+    return EmptyProducerLoadCallbacks{};
+  }
+
+  // ConsumerStoreCallbacks: 2D block store, each epi tile → one target (D1 or D2)
+  template<class CopyD1, class CopyD2, class StoreFrag, class ComputeFrag, class ComputeTV, class EpiTileType>
+  struct ConsumerStoreCallbacks : EmptyConsumerStoreCallbacks {
+    ComputeFrag compute_wi;
+    ComputeTV compute_tv;
+    int NOPE_DIM, ROPE_DIM;
+    int M_val, N_val;
+    bool skip;
+
+    CopyD1  copy_d1;
+    CopyD2  copy_d2;
+    StoreFrag store_frag;
+    int D1_N, D2_N;
+    int sg_m, sg_n;
+    int wi_idx_val;
+
+    CUTLASS_DEVICE
+    ConsumerStoreCallbacks(
+        ComputeFrag&& compute_wi_, ComputeTV compute_tv_,
+        int NOPE_DIM_, int ROPE_DIM_, int M_, int N_, bool skip_,
+        CopyD1 copy_d1_, CopyD2 copy_d2_, StoreFrag&& store_frag_,
+        int D1_N_, int D2_N_, int sg_m_, int sg_n_, int wi_idx_)
+      : compute_wi(cute::move(compute_wi_)), compute_tv(compute_tv_),
+        NOPE_DIM(NOPE_DIM_), ROPE_DIM(ROPE_DIM_), M_val(M_), N_val(N_),
+        skip(skip_),
+        copy_d1(copy_d1_), copy_d2(copy_d2_), store_frag(cute::move(store_frag_)),
+        D1_N(D1_N_), D2_N(D2_N_), sg_m(sg_m_), sg_n(sg_n_), wi_idx_val(wi_idx_) {}
+
+    template <typename ElementAccumulator, typename ElementInput, int FragmentSize>
+    CUTLASS_DEVICE auto
+    visit(Array<ElementAccumulator, FragmentSize> const& frg_acc, int epi_v, int epi_m, int epi_n,
+          Array<ElementInput, FragmentSize> const& frg_input) {
+      return frg_input;
+    }
+
+    template<class STensor, class SyncFn, class VTensor>
+    CUTLASS_DEVICE void
+    reduce(STensor&&, SyncFn const&, int epi_m, int epi_n, bool is_last_iteration, VTensor visit_results) {
+      if (skip) return;
+
+      // Fill compute fragment with visit results (compute order)
+      int elem_idx = 0;
+      for (int v = 0; v < visit_results.size(); v++) {
+        CUTLASS_PRAGMA_UNROLL
+        for (int epi_v = 0; epi_v < visit_results(v).size(); epi_v++) {
+          compute_wi(elem_idx++) = static_cast<ElementOutput>(visit_results(v)[epi_v]);
+        }
+      }
+      // Reorder from compute layout to store layout
+      auto compute_sg = make_subgroup_tensor(compute_wi, compute_tv);
+      reorder(compute_sg, store_frag);
+
+      // Determine which target this epi tile belongs to
+      static constexpr int EPI_N_val = get<1>(EpiTileType{});
+      int abs_n = sg_n + epi_n * EPI_N_val;
+      int ROW_DIM = NOPE_DIM + ROPE_DIM;
+      int head_idx = abs_n / ROW_DIM;
+      int head_local = abs_n % ROW_DIM;
+      bool is_nope = head_local < NOPE_DIM;
+
+      int target_n_base = is_nope ? (head_idx * NOPE_DIM + head_local)
+                                  : (head_idx * ROPE_DIM + (head_local - NOPE_DIM));
+      int target_N = is_nope ? D1_N : D2_N;
+      int sg_m_epi = sg_m / get<0>(EpiTileType{});
+      int target_n_epi = target_n_base / EPI_N_val;
+
+      // Create coordinate tensor in target space
+      auto mCoord = cute::get_xe_tensor(make_shape(M_val, target_N));
+      auto gCoord = local_tile(mCoord, EpiTileType{}, make_coord(sg_m_epi + epi_m, target_n_epi));
+      if (is_nope) {
+        auto tCoord = copy_d1.get_slice(wi_idx_val).partition_D(gCoord);
+        copy(copy_d1, store_frag, tCoord);
+      } else {
+        auto tCoord = copy_d2.get_slice(wi_idx_val).partition_D(gCoord);
+        copy(copy_d2, store_frag, tCoord);
+      }
+    }
+  };
+
+  template <
+    bool ReferenceSrc,
+    class... Args
+  >
+  CUTLASS_DEVICE auto
+  get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
+    auto [M, N, K, L] = args.problem_shape_mnkl;
+    auto [m_coord, n_coord, k_coord, l_coord] = args.tile_coord_mnkl;
+
+    // Get subgroup's global base coordinate
+    auto thr_mma = args.tiled_mma.get_slice(args.thread_idx);
+    auto tCDgCD = thr_mma.partition_C(args.cD);
+    int sg_m = int(get<0>(tCDgCD(_0{})));
+    int sg_n = int(get<1>(tCDgCD(_0{})));
+
+    using MMATile = decltype(take<0,2>(typename cute::remove_cvref_t<decltype(args.tiled_mma)>::AtomShape_MNK{}));
+    using EpiTileType = cute::remove_cvref_t<decltype(args.epi_tile)>;
+
+    bool skip = (sg_n >= int(N)) || (sg_m >= int(M));
+
+    // Build 2D block store objects for D1 and D2
+    int l_batch_d1 = int(l_coord) * int(M) * params.D1_N;
+    int l_batch_d2 = int(l_coord) * int(M) * params.D2_N;
+    auto mD1 = make_tensor(make_gmem_ptr(params.ptr_output1 + l_batch_d1),
+                           make_layout(make_shape(int(M), params.D1_N),
+                                       make_stride(params.D1_N, Int<1>{})));
+    auto mD2 = make_tensor(make_gmem_ptr(params.ptr_output2 + l_batch_d2),
+                           make_layout(make_shape(int(M), params.D2_N),
+                                       make_stride(params.D2_N, Int<1>{})));
+    static constexpr int CopyBitsD = sizeof(ElementOutput) * 8;
+    using StoreOp = XE_STORE_2D<CopyBitsD,
+                                cute::gcd(8, get<0>(MMATile{})),
+                                cute::gcd(512 / CopyBitsD, get<1>(MMATile{}))>;
+    auto copy_d1 = make_block_2d_copy(StoreOp{}, mD1);
+    auto copy_d2 = make_block_2d_copy(StoreOp{}, mD2);
+
+    // Store fragment via get_xe_tensor + local_tile + partition_sg_fragment_S
+    int wi_idx = args.thread_idx % intel::sg_size;
+    auto mCoord_frag = cute::get_xe_tensor(make_shape(int(M), params.D1_N));
+    int sg_m_epi = sg_m / get<0>(EpiTileType{});
+    auto gCoord_frag = local_tile(mCoord_frag, EpiTileType{}, make_coord(sg_m_epi, 0));
+    auto trTarget = copy_d1.get_slice(wi_idx).partition_sg_fragment_S(gCoord_frag);
+
+    // Compute → store reorder layout
+    auto mma_per_epi = shape_div(args.epi_tile, MMATile{});
+    auto sg_v_coord = prepend(flat_divide(remove<0>(tCDgCD.layout()), mma_per_epi),
+                              get<0>(tCDgCD.layout()));
+    static constexpr int EpiWISize = decltype(size(EpiTileType{}))::value / intel::sg_size;
+    auto compute_wi = make_tensor<ElementOutput>(Int<EpiWISize>{});
+    using AccTVLayout = decltype(thr_mma.partition_sg_fragment_C(args.cD).tv_layout());
+    auto cd_compute_tv = make_layout(get<0>(AccTVLayout{}),
+                                     sg_v_coord(_,_,_,_0{},_0{}));
+
+    return ConsumerStoreCallbacks<
+        decltype(copy_d1), decltype(copy_d2), decltype(trTarget),
+        decltype(compute_wi), decltype(cd_compute_tv), EpiTileType>(
+      cute::move(compute_wi), cd_compute_tv,
+      params.NOPE_DIM, params.ROPE_DIM, int(M), int(N), skip,
+      copy_d1, copy_d2, cute::move(trTarget),
+      params.D1_N, params.D2_N, sg_m, sg_n, wi_idx);
+  }
+};
+
+/////////////////////////////////////////////////////////////////////////////////////////////////
+
 } // namespace cutlass::epilogue::fusion
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
