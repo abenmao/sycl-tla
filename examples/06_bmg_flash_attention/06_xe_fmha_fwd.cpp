@@ -268,7 +268,7 @@ int main(int argc, const char **argv) {
 #undef FMHA_RUN_Q
 #endif // SPLITKV
 #else
-#if HEAD_DIM == 128 && defined(PREFILL) && !(defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)) && (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+#if HEAD_DIM == 128 && defined(PREFILL) && (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
   if (options.seq_len_kv_cache > 0 || options.use_paged_kv) {
     std::cerr << "Error: CachedKV/PagedKV requested. Use the cached_kv binary." << std::endl;
     return -1;
