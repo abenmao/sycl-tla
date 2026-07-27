@@ -61,6 +61,13 @@ struct FMHAProblemShape {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+// A sequence of length seq_len_kv_cache occupies ceil_div(seq_len_kv_cache, page_size) pages
+CUTLASS_HOST_DEVICE
+int paged_kv_cache_rows(int seq_len_kv_cache, int page_size) {
+  return page_size > 0 ? cute::ceil_div(seq_len_kv_cache, page_size) * page_size
+                       : seq_len_kv_cache;
+}
+
 template <class ProblemShape_, class CollectiveMainloop_, class CollectiveEpilogue_, class TileScheduler_>
 class XeFMHAFwdKernel {
 
@@ -279,6 +286,11 @@ public:
         k_blocks_prefetch = k_blocks;
       }
 
+      int kv_cache_rows = seq_len_kv_cache;
+      if constexpr (CollectiveMainloop::PagedKV) {
+        kv_cache_rows = paged_kv_cache_rows(seq_len_kv_cache, params.mainloop.page_size);
+      }
+
       int offset_q = 0, offset_k = 0, offset_v = 0, offset_o = 0;
       int offset_k_cache = 0, offset_v_cache = 0;
       int batch_dim = s.batch;
@@ -294,8 +306,14 @@ public:
         offset_o = s.num_heads_q * s.head_size_vo * qo_cumulative[idx_b];
         if (s.seq_len_kv_cache.cumulative_length) {
           auto kv_cumulative_cache = s.seq_len_kv_cache.cumulative_length;
-          offset_k_cache = s.num_heads_kv * s.head_size_qk * kv_cumulative_cache[idx_b];
-          offset_v_cache = s.num_heads_kv * s.head_size_vo * kv_cumulative_cache[idx_b];
+          int rows_before_batch = kv_cumulative_cache[idx_b];
+          if constexpr (CollectiveMainloop::PagedKV) {
+            if (params.mainloop.num_pages_per_seq) {
+              rows_before_batch = params.mainloop.num_pages_per_seq[idx_b] * params.mainloop.page_size;
+            }
+          }
+          offset_k_cache = s.num_heads_kv * s.head_size_qk * rows_before_batch;
+          offset_v_cache = s.num_heads_kv * s.head_size_vo * rows_before_batch;
         }
       }
 
@@ -304,8 +322,8 @@ public:
       auto shape_V = make_shape(s.head_size_vo, seq_len_kv, s.num_heads_kv, batch_dim);
       auto shape_O = make_shape(seq_len_qo, s.head_size_vo, s.num_heads_q, batch_dim);
 
-      auto shape_K_cache = make_shape(seq_len_kv_cache, s.head_size_qk, s.num_heads_kv, batch_dim);
-      auto shape_V_cache = make_shape(s.head_size_vo, seq_len_kv_cache, s.num_heads_kv, batch_dim);
+      auto shape_K_cache = make_shape(kv_cache_rows, s.head_size_qk, s.num_heads_kv, batch_dim);
+      auto shape_V_cache = make_shape(s.head_size_vo, kv_cache_rows, s.num_heads_kv, batch_dim);
 
       auto dcQ = const_cast<ElementQ*>(p.Q + offset_q);
       auto dcK = const_cast<ElementK*>(p.K + offset_k);
@@ -863,8 +881,12 @@ public:
       Tensor K = make_tensor(make_gmem_ptr(dcK), make_layout(shape_K, p.dK));    // (k,d,h,b)
       Tensor V = make_tensor(make_gmem_ptr(dcV), make_layout(shape_V, p.dV));    // (v,k,h,b)
 
-      auto shape_K_cache = make_shape(s.seq_len_kv_cache, s.head_size_qk, s.num_heads_kv, s.batch);
-      auto shape_V_cache = make_shape(s.head_size_vo, s.seq_len_kv_cache, s.num_heads_kv, s.batch);
+      int kv_cache_rows = s.seq_len_kv_cache;
+      if constexpr (CollectiveMainloop::PagedKV) {
+        kv_cache_rows = paged_kv_cache_rows(s.seq_len_kv_cache, params.mainloop.page_size);
+      }
+      auto shape_K_cache = make_shape(kv_cache_rows, s.head_size_qk, s.num_heads_kv, s.batch);
+      auto shape_V_cache = make_shape(s.head_size_vo, kv_cache_rows, s.num_heads_kv, s.batch);
       auto dcK_cache = const_cast<ElementK*>(p.K_cache);
       auto dcV_cache = const_cast<ElementV*>(p.V_cache);
       Tensor K_cache = make_tensor(make_gmem_ptr(dcK_cache), make_layout(shape_K_cache, p.dK_cache));
@@ -1197,6 +1219,11 @@ public:
 
       const int k_blocks = cute::ceil_div(seq_len, get<1>(TileShapeQK{}));
 
+      int kv_cache_rows = seq_len_kv_cache;
+      if constexpr (CollectiveMainloop::PagedKV) {
+        kv_cache_rows = paged_kv_cache_rows(seq_len_kv_cache, params.mainloop.page_size);
+      }
+
       int offset_q = 0, offset_k = 0, offset_v = 0, offset_o = 0;
       int offset_k_cache = 0, offset_v_cache = 0;
       int offset_exp_sums = 0, offset_max_logits = 0;
@@ -1213,8 +1240,14 @@ public:
 
         if (s.seq_len_kv_cache.cumulative_length) {
           auto kv_cumulative_cache = s.seq_len_kv_cache.cumulative_length;
-          offset_k_cache = s.num_heads_kv * s.head_size_qk * kv_cumulative_cache[idx_b];
-          offset_v_cache = s.num_heads_kv * s.head_size_vo * kv_cumulative_cache[idx_b];
+          int rows_before_batch = kv_cumulative_cache[idx_b];
+          if constexpr (CollectiveMainloop::PagedKV) {
+            if (params.mainloop.num_pages_per_seq) {
+              rows_before_batch = params.mainloop.num_pages_per_seq[idx_b] * params.mainloop.page_size;
+            }
+          }
+          offset_k_cache = s.num_heads_kv * s.head_size_qk * rows_before_batch;
+          offset_v_cache = s.num_heads_kv * s.head_size_vo * rows_before_batch;
         }
 
         // for gqa packing, seq_len_qo must be 1
@@ -1229,8 +1262,8 @@ public:
       auto shape_exp_sums = make_shape(seq_len_qo_packed, num_kv_splits, s.num_heads_kv, batch_dim);
       auto shape_max_logits = make_shape(seq_len_qo_packed, num_kv_splits, s.num_heads_kv, batch_dim);
 
-      auto shape_K_cache = make_shape(seq_len_kv_cache, s.head_size_qk, s.num_heads_kv, batch_dim);
-      auto shape_V_cache = make_shape(s.head_size_vo, seq_len_kv_cache, s.num_heads_kv, batch_dim);
+      auto shape_K_cache = make_shape(kv_cache_rows, s.head_size_qk, s.num_heads_kv, batch_dim);
+      auto shape_V_cache = make_shape(s.head_size_vo, kv_cache_rows, s.num_heads_kv, batch_dim);
 
       int num_blocks_per_split = cute::ceil_div(k_blocks, num_kv_splits);
       int kv_split_offset = idx_kv_split * num_blocks_per_split;

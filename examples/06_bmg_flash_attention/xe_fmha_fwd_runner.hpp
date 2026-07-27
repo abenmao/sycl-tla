@@ -480,6 +480,9 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
         seq_len_kv_cache = shape.seq_len_kv_cache;
       }
       int seq_len_kv_total = seq_len_kv + seq_len_kv_cache;
+      int kv_cache_rows = (paged_kv_cache.page_size > 0)
+          ? ceil_div(seq_len_kv_cache, paged_kv_cache.page_size) * paged_kv_cache.page_size
+          : seq_len_kv_cache;
 
       int kv_group_update=1;
       for (int h = 0; h < num_heads_q; h++) {
@@ -496,7 +499,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
           if (seq_len_kv_cache > 0) {
             if (paged_kv_cache.page_size > 0) {
               int page_size = paged_kv_cache.page_size;
-              int start_page_idx = isVarLen ? num_pages_per_seq_host[b] : b * (seq_len_kv_cache / page_size);
+              int start_page_idx = isVarLen ? num_pages_per_seq_host[b] : b * ceil_div(seq_len_kv_cache, page_size);
               int num_pages = ceil_div(seq_len_kv_cache, page_size);
 
               for (int i = 0; i < num_pages; ++i) {
@@ -727,8 +730,8 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
         if(kv_group_update % q_group_size==0) {
           offset_k += seq_len_kv * head_size_qk;
           offset_v += seq_len_kv * head_size_vo;
-          offset_k_cache += seq_len_kv_cache * head_size_qk;
-          offset_v_cache += seq_len_kv_cache * head_size_vo;
+          offset_k_cache += kv_cache_rows * head_size_qk;
+          offset_v_cache += kv_cache_rows * head_size_vo;
         }
         kv_group_update++;
         offset_o += seq_len_qo * head_size_vo;
@@ -894,11 +897,27 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     }
 
     auto [batch, num_heads_q, num_heads_kv, seq_len_qo, seq_len_kv, seq_len_kv_cache, head_size_qk, head_size_vo] = problem_size;
+
+    int kv_cache_rows = seq_len_kv_cache;
+    std::vector<int> num_pages_per_seq{0};
+    if (options.use_paged_kv) {
+      paged_kv_cache.page_size = options.page_size;
+      int num_pages = 0;
+      for (int b = 0; b < shape.batch; b++) {
+        int seq_len_cache = isVarLen ? cumulative_seqlen_kv_cache[b + 1] - cumulative_seqlen_kv_cache[b] : seq_len_kv_cache;
+        int pages_per_seq = ceil_div(seq_len_cache, paged_kv_cache.page_size);
+        num_pages_per_seq.push_back(num_pages_per_seq.back() + pages_per_seq);
+        num_pages += pages_per_seq;
+      }
+      kv_cache_rows = isVarLen ? num_pages * paged_kv_cache.page_size
+                               : ceil_div(seq_len_kv_cache, paged_kv_cache.page_size) * paged_kv_cache.page_size;
+    }
+
     auto shape_Q = cute::make_shape(seq_len_qo, head_size_qk, num_heads_q,  batch);
     auto shape_K = cute::make_shape(seq_len_kv, head_size_qk, num_heads_kv, batch);
     auto shape_V = cute::make_shape(head_size_vo, seq_len_kv, num_heads_kv, batch);
-    auto shape_K_cache = cute::make_shape(seq_len_kv_cache, head_size_qk, num_heads_kv, batch);
-    auto shape_V_cache = cute::make_shape(head_size_vo, seq_len_kv_cache, num_heads_kv, batch);
+    auto shape_K_cache = cute::make_shape(kv_cache_rows, head_size_qk, num_heads_kv, batch);
+    auto shape_V_cache = cute::make_shape(head_size_vo, kv_cache_rows, num_heads_kv, batch);
     auto shape_O = cute::make_shape(seq_len_qo, head_size_vo, num_heads_q,  batch);
 
     stride_Q = cutlass::make_cute_packed_stride(StrideQ{}, shape_Q);
@@ -911,8 +930,8 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     block_Q.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * head_size_qk);
     block_K.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv * head_size_qk);
     block_V.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv * head_size_vo);
-    block_K_cache.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv_cache * head_size_qk);
-    block_V_cache.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv_cache * head_size_vo);
+    block_K_cache.reset(static_cast<std::size_t>(batch) * num_heads_kv * kv_cache_rows * head_size_qk);
+    block_V_cache.reset(static_cast<std::size_t>(batch) * num_heads_kv * kv_cache_rows * head_size_vo);
     block_O.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * head_size_vo);
     block_ref_O.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * head_size_vo);
     // Zero-initialize output buffer for the kernel result
@@ -938,16 +957,8 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
       compat::memset(block_Oaccum.get(), 0, block_Oaccum.size() * sizeof_bits_v<ElementO> / 8);
     }
 
-    if (options.use_paged_kv) {
-      paged_kv_cache.page_size = options.page_size;
-      std::vector<int> num_pages_per_seq{0};
-      int num_pages = 0;
-      for(int b = 0; b < shape.batch; b++) {
-        int seq_len_cache = isVarLen ? cumulative_seqlen_kv_cache[b + 1] - cumulative_seqlen_kv_cache[b] : seq_len_kv_cache;
-        int pages_per_seq = ceil_div(seq_len_cache, paged_kv_cache.page_size);
-        num_pages_per_seq.push_back(num_pages_per_seq.back() + pages_per_seq);
-        num_pages += pages_per_seq;
-      }
+    if (paged_kv_cache.page_size > 0) {
+      int num_pages = num_pages_per_seq.back();
       paged_kv_cache.page_table.reset(num_pages);
 
       // initialize block table with random mapping for non-contiguous layout
