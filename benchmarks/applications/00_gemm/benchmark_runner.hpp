@@ -924,11 +924,20 @@ struct BenchmarkRunnerGemm {
     constexpr double sizeof_a = sizeof_bits_v<ElementA> / bits_per_byte;
     constexpr double sizeof_b = sizeof_bits_v<ElementB> / bits_per_byte;
     constexpr double sizeof_o = sizeof_bits_v<ElementOutput> / bits_per_byte;
+    double scale_bytes_transferred = 0.0;
+    if constexpr (is_blocked_scaled<CollectiveMainloop>) {
+      constexpr double sizeof_scale_a = sizeof_bits_v<ElementScaleA> / bits_per_byte;
+      constexpr double sizeof_scale_b = sizeof_bits_v<ElementScaleB> / bits_per_byte;
+      auto const scale_k = cute::ceil_div(options.k, GROUP_SIZE);
+      scale_bytes_transferred = static_cast<double>(
+          options.m * scale_k * sizeof_scale_a +
+          options.n * scale_k * sizeof_scale_b) * options.l;
+    }
     auto mega_bytes_transferred = static_cast<double>(
         options.m * options.k * sizeof_a +
         options.k * options.n * sizeof_b +
         (options.beta != 0 ? 2 : 1) * options.m * options.n * sizeof_o
-      ) * 1e-6 * options.l;
+      ) * 1e-6 * options.l + scale_bytes_transferred * 1e-6;
 
     initialize_counters(state);
     for(auto _ : state) {
