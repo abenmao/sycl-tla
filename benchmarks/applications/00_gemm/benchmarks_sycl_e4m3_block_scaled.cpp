@@ -231,5 +231,14 @@ void register_gemm_benchmarks_e4m3_block_scaled() {
       E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 8, 256, 64, 8, 16, false, cute::_32, false>);
   CUTLASS_BENCHMARK_T("BLockScalingGemmScalarScaleA_E4M3E4M3FP32BF16FP32_RRR_WG4x128x256_SG4x16x256_GS32",
       E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 4, 128, 256, 4, 16, false, cute::_32, false>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E4M3E4M3FP32BF16FP32_RRR_WG128x192x64_SG16x96x64_GS32", E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 128, 192, 64, 16, 96>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E4M3E4M3FP32BF16FP32_RRR_WG128x384x64_SG32x96x64_GS32", E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 128, 384, 64, 32, 96>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E4M3E4M3FP32BF16FP32_RRR_WG448x320x64_SG56x80x64_GS32", E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 448, 320, 64, 56, 80>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E4M3E4M3FP32BF16FP32_RRR_WG160x512x64_SG40x64x64_GS32", E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 160, 512, 64, 40, 64>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E4M3E4M3FP32BF16FP32_RRR_WG8x128x128_SG8x16x128_GS32", E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 8, 128, 128, 8, 16>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E4M3E4M3FP32BF16FP32_RRR_WG32x128x128_SG16x32x128_GS32", E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 32, 128, 128, 16, 32>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E4M3E4M3FP32BF16FP32_RRR_WG96x128x64_SG24x32x64_GS32", E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 96, 128, 64, 24, 32>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemmScalarScaleA_E4M3E4M3FP32BF16FP32_RRR_WG8x256x64_SG4x16x64_GS32", E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 8, 256, 64, 4, 16, false, cute::_32, false>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemmScalarScaleA_E4M3E4M3FP32BF16FP32_RRR_WG4x64x256_SG4x16x256_GS32", E4M3_RRR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 4, 64, 256, 4, 16, false, cute::_32, false>);
 #endif
 }

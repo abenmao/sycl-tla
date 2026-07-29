@@ -209,5 +209,15 @@ void register_gemm_benchmarks_e2m1_block_scaled() {
       E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 8, 256, 128, 8, 16, false, cute::_32, false>);
   CUTLASS_BENCHMARK_T("BLockScalingGemmScalarScaleA_E2M1E2M1FP32BF16FP32_RCR_WG4x128x512_SG4x16x512_GS32",
       E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 4, 128, 512, 4, 16, false, cute::_32, false>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E2M1E2M1FP32BF16FP32_RCR_WG256x192x128_SG32x48x128_GS32", E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 256, 192, 128, 32, 48>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E2M1E2M1FP32BF16FP32_RCR_WG256x384x128_SG64x48x128_GS32", E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 256, 384, 128, 64, 48>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E2M1E2M1FP32BF16FP32_RCR_WG256x448x128_SG32x112x128_GS32", E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 256, 448, 128, 32, 112>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E2M1E2M1FP32BF16FP32_RCR_WG448x320x128_SG56x80x128_GS32", E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 448, 320, 128, 56, 80>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E2M1E2M1FP32BF16FP32_RCR_WG320x256x128_SG80x32x128_GS32", E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 320, 256, 128, 80, 32>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E2M1E2M1FP32BF16FP32_RCR_WG16x128x256_SG8x16x256_GS32", E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 16, 128, 256, 8, 16>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E2M1E2M1FP32BF16FP32_RCR_WG32x128x256_SG8x32x256_GS32", E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 32, 128, 256, 8, 32>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E2M1E2M1FP32BF16FP32_RCR_WG96x128x128_SG24x32x128_GS32", E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 96, 128, 128, 24, 32>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemm_E2M1E2M1FP32BF16FP32_RCR_WG4x64x128_SG4x32x128_GS32", E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 4, 64, 128, 4, 32>);
+  CUTLASS_BENCHMARK_T("BLockScalingGemmScalarScaleA_E2M1E2M1FP32BF16FP32_RCR_WG8x64x512_SG8x32x512_GS32", E2M1_RCR_GEMM_BlockScaled<float, cutlass::bfloat16_t, float, 8, 64, 512, 8, 32, false, cute::_32, false>);
 #endif
 }
