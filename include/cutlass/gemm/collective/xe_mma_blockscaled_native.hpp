@@ -411,6 +411,19 @@ public:
     [[maybe_unused]] const int M_extent = cute::size<0>(mainloop.mAscale.shape());
     [[maybe_unused]] const int lane_id = thread_idx % SubgroupSize;
     [[maybe_unused]] constexpr int k_groups_per_sg = SG_K / GroupK;
+    // Scalar ScaleA path packs two M rows per lane: m0 and m1 (= m0 + SubgroupSize).
+    [[maybe_unused]] const int m0 = m_coord + lane_id;
+    [[maybe_unused]] const int m1 = m0 + SubgroupSize;
+    [[maybe_unused]] const bool m0_valid = m0 < M_extent;
+    [[maybe_unused]] const bool m1_valid = m1 < M_extent;
+
+    // Pre-fill fragment_scaleA with identity once before the k_tile loop.
+    // Out-of-range rows (m0 or m1 >= M_extent) never need updating; valid rows
+    // overwrite only their entries inside the loop, eliminating per-tile stores
+    // for the majority of lanes that map to out-of-bounds M rows.
+    if constexpr (!Use2DBlockLoadScaleA) {
+      cute::fill(fragment_scaleA, NonVoidElementScaleA(1));
+    }
 
     int prefetch_k = k_start_idx;
     CUTLASS_PRAGMA_UNROLL
@@ -431,16 +444,18 @@ public:
         copy(tiled_copy_scaleA, copy_iter_scaleA(_, _, _, k_tile / k_reload_factor), fragment_scaleA);
       } else {
         const int k_group_base = (k_tile / k_reload_factor) * k_groups_per_sg;
-        CUTLASS_PRAGMA_UNROLL
-        for (int j = 0; j < k_groups_per_sg; j++) {
-          const int m0 = m_coord + lane_id;
-          const int m1 = m_coord + lane_id + SubgroupSize;
-          fragment_scaleA(2 * j, 0, 0) = (m0 < M_extent)
-              ? mainloop.mAscale(m0, k_group_base + j, l_coord)
-              : NonVoidElementScaleA(1);
-          fragment_scaleA(2 * j + 1, 0, 0) = (m1 < M_extent)
-              ? mainloop.mAscale(m1, k_group_base + j, l_coord)
-              : NonVoidElementScaleA(1);
+        // Only update entries for valid rows; identity slots stay from pre-fill.
+        if (m0_valid) {
+          CUTLASS_PRAGMA_UNROLL
+          for (int j = 0; j < k_groups_per_sg; j++) {
+            fragment_scaleA(2 * j, 0, 0) = mainloop.mAscale(m0, k_group_base + j, l_coord);
+          }
+          if (m1_valid) {
+            CUTLASS_PRAGMA_UNROLL
+            for (int j = 0; j < k_groups_per_sg; j++) {
+              fragment_scaleA(2 * j + 1, 0, 0) = mainloop.mAscale(m1, k_group_base + j, l_coord);
+            }
+          }
         }
       }
       copy(tiled_copy_scaleB, copy_iter_scaleB(_, _, _, k_tile / k_reload_factor), fragment_scaleB);
