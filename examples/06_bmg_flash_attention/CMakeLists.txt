@@ -41,7 +41,7 @@ endif()
 set(TEST_NO_PAGED "")
 set(TEST_PAGED "--use_paged_kv")
 
-foreach(HEAD_DIM 64 72 96 128 192)
+foreach(HEAD_DIM 64 72 96 128 192 256)
   foreach(INPUT_TYPE bfloat16_t float_e5m2_t float_e4m3_t)
     cutlass_example_add_executable(
       06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM}
