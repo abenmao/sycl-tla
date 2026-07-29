@@ -26,10 +26,11 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# The GDN kernels and launcher are header-only under
+# The GDN kernels, launcher, and shared GdnRunner are header-only under
 # applications/gdn_attention/ (the launcher is an inline template instantiated
 # in test_gdn_chunkwise.cpp). The CUTLASS_APPLICATIONS_DIR include path is
-# added automatically by cutlass_test_unit_add_executable.
+# added automatically by cutlass_test_unit_add_executable, so the runner is
+# reached as "gdn_attention/gdn_runner.hpp" with no extra include dir.
 set(CUTLASS_APPLICATIONS_DIR ${CUTLASS_DIR}/applications)
 
 cutlass_test_unit_add_executable(

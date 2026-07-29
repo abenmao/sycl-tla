@@ -50,8 +50,8 @@
  *
  * Mirrors the pattern used by examples/12_xe20_moe_gemm_cute_interface: a
  * thin wrapper that materialises one Options struct from a shape tuple and
- * the shared CLI-driven knobs (iterations / warmup / verify / seed), then
- * dispatches a single GdnRunner.run() invocation.
+ * the shared CLI-driven knobs (iterations / verify / seed), then
+ * dispatches a single GdnExampleRunner.run() invocation.
  * --------------------------------------------------------------------------- */
 template <typename T, typename StateT>
 int launcher(int batch, int num_v_heads, int num_k_heads, int seq_len,
@@ -73,12 +73,12 @@ int launcher(int batch, int num_v_heads, int num_k_heads, int seq_len,
             << " seq_len=" << seq_len
             << "\n========================================================\n";
 
-  GdnRunner<T, StateT> runner(opt);
+  GdnExampleRunner<T, StateT> runner(opt);
   return runner.run();
 }
 
 int main(int argc, const char** argv) {
-  /* CLI parses the shared knobs (iterations/warmup/verify/seed/help/error)
+  /* CLI parses the shared knobs (iterations/verify/seed/help/error)
    * AND the per-case shape fields (batch/num_v_heads/num_k_heads/seq_len).
    * If any shape flag is supplied, we run a single CLI-driven case below;
    * otherwise we iterate the hard-coded sweep table. */
@@ -115,7 +115,7 @@ int main(int argc, const char** argv) {
               << " num_k_heads=" << base_options.num_k_heads
               << " seq_len=" << base_options.seq_len
               << "\n========================================================\n";
-    GdnRunner<T, StateT> runner(base_options);
+    GdnExampleRunner<T, StateT> runner(base_options);
     return runner.run();
   }
 

@@ -777,11 +777,24 @@ CUTE_DEVICE void chunk_compute_wu_kernel(
 
       for (int v_head_id = 0; v_head_id < num_v_heads; ++v_head_id) {
         /* Precompute per-token scaling factors into SLM:
-         *   beta[t]   = b[t]              (sigmoid-gated write scale)
+         *   beta[t]   = b[t]              (delta-rule write scale)
          *   g[t] = exp(a[t]) * b[t]       (decay * beta, used for W)
          * a[t] here is the CUMSUM gate from stage 1; exp(a[m]-a[n]) gives
          * the product of per-token decays from n to m, but using the
-         * cumsum directly is cheaper (one exp per token vs. one per pair). */
+         * cumsum directly is cheaper (one exp per token vs. one per pair).
+         *
+         * SIGMOID CONTRACT: `b` is read here verbatim as the delta-rule
+         * strength beta, which the chunkwise math assumes lies in (0,1). The
+         * kernel does NOT apply the sigmoid itself -- matching upstream
+         * vllm-xpu-kernels, where the chunk kernel
+         * (chunk_gated_delta_rule_kernels_xe2.hpp) likewise reads b raw and the
+         * sigmoid is applied one stage earlier by the causal conv1d front-end
+         * (chunk_causal_conv1d_xe2.hpp: `b_value = act_sigmoid(b_value)`).
+         * Callers that bypass that front-end (the runner) must therefore sigmoid
+         * b on the host before the launch (see GdnRunner::initialize ->
+         * apply_sigmoid_b). Feeding raw, un-sigmoided b makes beta O(1)+, so the
+         * chunk transition matrix L overflows in the stage-3 inverse and
+         * propagates NaN; the in-range contract is what keeps L well-conditioned. */
         CUTE_UNROLL
         for (int e = local_id; e < chunk_size; e += local_range) {
           float beta_value =
@@ -1234,6 +1247,184 @@ class ChunkComputeWUKernel;
 template <typename T, typename StateT>
 class ChunkFwdOKernel;
 
+/* ---------------------------------------------------------------------------
+ * Per-stage launch entries (one SYCL submit each).
+ *
+ * Each function submits EXACTLY ONE of the five GDN kernels and returns its
+ * sycl::event. They are the single source of truth for each stage's grid / SLM
+ * / MMA-policy setup: kernel_launcher() below calls all five in sequence (the
+ * normal fused path), and the per-kernel harness (examples/14) calls exactly
+ * one to time+verify a single stage in isolation. Splitting them here -- rather
+ * than duplicating the launch math in the harness -- guarantees the harness
+ * dispatches the same kernel the production launcher does (one launch per UT).
+ *
+ * `props` is the shared sub_group_size + grf_size property set; `xe_core_count`
+ * is the device multiprocessor count. Both are computed once by the caller.
+ * ------------------------------------------------------------------------- */
+
+template <typename T, typename StateT, typename Props>
+sycl::event launch_stage_prepare(
+    sycl::queue& queue, Props const& props, int xe_core_count,
+    T* q, T* k, float* a, const float* A_log, const T* dt_bias,
+    const int* query_start_loc, const int total_virtual_seqlen,
+    const int batch_size, const int num_k_heads, const int head_k_dim,
+    const int num_v_heads, const int head_v_dim) {
+  sycl::range<3> local_prepare(1, 1, MaxThreadsPerXeCore);
+  sycl::range<3> global_prepare(1, xe_core_count, 1);
+  auto ev = queue.submit([&](sycl::handler& cgh) {
+    cgh.parallel_for<ChunkPrepareKernel<T, StateT>>(
+        sycl::nd_range<3>{global_prepare * local_prepare, local_prepare},
+        props,
+        [=](auto) {
+          chunk_prepare_kernel<T>(
+              q, k, a, A_log, dt_bias, query_start_loc, total_virtual_seqlen,
+              batch_size, num_k_heads, head_k_dim, num_v_heads, head_v_dim);
+        });
+  });
+  EventManager::getInstance().addEvent(ev);
+  return ev;
+}
+
+template <typename T, typename StateT, typename Props>
+sycl::event launch_stage_compute_A(
+    sycl::queue& queue, Props const& props, int xe_core_count,
+    T* A, T* k, const float* b, float* a,
+    const int* query_start_loc, const int total_virtual_seqlen,
+    const int batch_size, const int num_k_heads, const int head_k_dim,
+    const int num_v_heads) {
+  using Element_non_CV = cutlass::platform::remove_cv_t<T>;
+  auto op = XE_DPAS_TT<8, float, Element_non_CV>{};
+  using WGTileComputeA = chunk_gemm_policy_compute_A::WGTile;
+  using SGLayoutComputeA = chunk_gemm_policy_compute_A::SGLayout;
+  using MMAComputeA = typename TiledMMAHelper<
+      MMA_Atom<decltype(op)>, Layout<WGTileComputeA>, SGLayoutComputeA>::TiledMMA;
+  auto mmaComputeA = MMAComputeA{};
+  int MaxThreadsPerWorkgroupComputeA = size(mmaComputeA);
+  sycl::range<3> local_compute_A(1, 1, MaxThreadsPerWorkgroupComputeA);
+  sycl::range<3> global_compute_A(
+      1, xe_core_count * MaxThreadsPerXeCore / MaxThreadsPerWorkgroupComputeA, 1);
+  int slm_size_compute_A = chunk_size;
+  auto ev = queue.submit([&](sycl::handler& cgh) {
+    sycl::local_accessor<float, 1> local_mem(
+        sycl::range<1>(slm_size_compute_A), cgh);
+    cgh.parallel_for<ChunkComputeAKernel<T, StateT>>(
+        sycl::nd_range<3>{global_compute_A * local_compute_A, local_compute_A},
+        props,
+        [=](auto) {
+          chunk_compute_A_kernel<T, MMAComputeA>(
+              local_mem, A, k, b, a, query_start_loc, total_virtual_seqlen,
+              batch_size, num_k_heads, head_k_dim, num_v_heads);
+        });
+  });
+  EventManager::getInstance().addEvent(ev);
+  return ev;
+}
+
+template <typename T, typename StateT, typename Props>
+sycl::event launch_stage_inverse(
+    sycl::queue& queue, Props const& props, int xe_core_count,
+    T* A, const int* query_start_loc, const int total_virtual_seqlen,
+    const int batch_size, const int num_v_heads) {
+  using Element_non_CV = cutlass::platform::remove_cv_t<T>;
+  auto op = XE_DPAS_TT<8, float, Element_non_CV>{};
+  using WGTileInverse   = chunk_gemm_policy_inverse::WGTile;
+  using SGLayoutInverse = chunk_gemm_policy_inverse::SGLayout;
+  using MMAInverse      = typename TiledMMAHelper<
+      MMA_Atom<decltype(op)>, Layout<WGTileInverse>, SGLayoutInverse>::TiledMMA;
+  int MaxThreadsPerWorkgroupInverse = size(MMAInverse{});
+  sycl::range<3> local_inverse(1, 1, MaxThreadsPerWorkgroupInverse);
+  int inverse_groups =
+      xe_core_count * MaxThreadsPerXeCore / MaxThreadsPerWorkgroupInverse;
+  inverse_groups = (inverse_groups + num_v_heads - 1) / num_v_heads * num_v_heads;
+  sycl::range<3> global_inverse(1, inverse_groups, 1);
+  auto ev = queue.submit([&](sycl::handler& cgh) {
+    cgh.parallel_for<ChunkInverseOptKernel<T, StateT>>(
+        sycl::nd_range<3>{global_inverse * local_inverse, local_inverse},
+        props,
+        [=](auto) {
+          chunk_inverse_opt_kernel<T, MMAInverse>(
+              A, query_start_loc, total_virtual_seqlen, batch_size, num_v_heads);
+        });
+  });
+  EventManager::getInstance().addEvent(ev);
+  return ev;
+}
+
+template <typename T, typename StateT, typename Props>
+sycl::event launch_stage_compute_wu(
+    sycl::queue& queue, Props const& props, int xe_core_count,
+    T* A, T* w, T* u, T* q, T* k, const T* v, const float* b, float* a,
+    const float* A_log, const T* dt_bias, const int* query_start_loc,
+    const bool* has_initial_state, const int total_virtual_seqlen,
+    const int batch_size, const int num_k_heads, const int head_k_dim,
+    const int num_v_heads, const int head_v_dim) {
+  using Element_non_CV = cutlass::platform::remove_cv_t<T>;
+  auto op = XE_DPAS_TT<8, float, Element_non_CV>{};
+  using WGTileComputeWU = chunk_gemm_policy_compute_wu::WGTile;
+  using SGLayoutComputeWU = chunk_gemm_policy_compute_wu::SGLayout;
+  using MMAComputeWU = typename TiledMMAHelper<
+      MMA_Atom<decltype(op)>, Layout<WGTileComputeWU>, SGLayoutComputeWU>::TiledMMA;
+  auto mmaComputeWU = MMAComputeWU{};
+  int MaxThreadsPerWorkgroupComputeWU = size(mmaComputeWU);
+  sycl::range<3> local_compute_wu(1, 1, MaxThreadsPerWorkgroupComputeWU);
+  sycl::range<3> global_compute_wu(
+      1, xe_core_count * MaxThreadsPerXeCore / MaxThreadsPerWorkgroupComputeWU, 1);
+  int slm_size_compute_wu = num_v_heads * 2 + chunk_size * 2;
+  auto ev = queue.submit([&](sycl::handler& cgh) {
+    sycl::local_accessor<float, 1> local_mem(
+        sycl::range<1>(slm_size_compute_wu), cgh);
+    cgh.parallel_for<ChunkComputeWUKernel<T, StateT>>(
+        sycl::nd_range<3>{global_compute_wu * local_compute_wu, local_compute_wu},
+        props,
+        [=](auto) {
+          chunk_compute_wu_kernel<T, MMAComputeWU>(
+              local_mem, A, w, u, q, k, v, b, a, A_log, dt_bias,
+              query_start_loc, has_initial_state, total_virtual_seqlen,
+              batch_size, num_k_heads, head_k_dim, num_v_heads, head_v_dim);
+        });
+  });
+  EventManager::getInstance().addEvent(ev);
+  return ev;
+}
+
+template <typename T, typename StateT, typename Props>
+sycl::event launch_stage_fwd_o(
+    sycl::queue& queue, Props const& props,
+    T* core_attn_out, T* A, T* w, T* u, T* q, T* k, float* a,
+    StateT* ssm_state, const int ssm_state_stride_0,
+    const int* query_start_loc, const int* cache_indices,
+    const bool* has_initial_state, const int batch_size,
+    const int total_virtual_seqlen, const int num_k_heads, const int head_k_dim,
+    const int num_v_heads, const int head_v_dim) {
+  using Element_non_CV = cutlass::platform::remove_cv_t<T>;
+  auto op = XE_DPAS_TT<8, float, Element_non_CV>{};
+  using WGTileFwdO = chunk_gemm_policy_fwd_o::WGTile;
+  using SGLayoutFwdO = chunk_gemm_policy_fwd_o::SGLayout;
+  using MMAFwdO = typename TiledMMAHelper<
+      MMA_Atom<decltype(op)>, Layout<WGTileFwdO>, SGLayoutFwdO>::TiledMMA;
+  auto mmaFwdO = MMAFwdO{};
+  int MaxThreadsPerWorkgroupFwdO = size(mmaFwdO);
+  sycl::range<3> local_fwd_o(1, 1, MaxThreadsPerWorkgroupFwdO);
+  sycl::range<3> global_fwd_o(batch_size, num_v_heads, 1);
+  int slm_size_fwd_o = chunk_size + chunk_size + chunk_size;
+  auto ev = queue.submit([&](sycl::handler& cgh) {
+    sycl::local_accessor<float, 1> local_mem(
+        sycl::range<1>(slm_size_fwd_o), cgh);
+    cgh.parallel_for<ChunkFwdOKernel<T, StateT>>(
+        sycl::nd_range<3>{global_fwd_o * local_fwd_o, local_fwd_o},
+        props,
+        [=](auto) {
+          chunk_fwd_o_kernel<T, StateT, MMAFwdO>(
+              local_mem, core_attn_out, A, w, u, q, k, a, ssm_state,
+              ssm_state_stride_0, query_start_loc, cache_indices,
+              has_initial_state, batch_size, total_virtual_seqlen,
+              num_k_heads, head_k_dim, num_v_heads, head_v_dim);
+        });
+  });
+  EventManager::getInstance().addEvent(ev);
+  return ev;
+}
+
 template <typename T, typename StateT>
 void kernel_launcher(
     sycl::queue& queue,
@@ -1259,9 +1450,6 @@ void kernel_launcher(
     const int head_k_dim,
     const int num_v_heads,
     const int head_v_dim) {
-  using Element_non_CV = cutlass::platform::remove_cv_t<T>;
-  auto op = XE_DPAS_TT<8, float, Element_non_CV>{};
-
   /* Machine-only grid: persistent kernels (prepare, compute_A, inverse,
    * compute_wu) size their grid to the Xe-core array and let their internal
    * grid-stride loops (`chunk_id += global_chunk_range`) sweep all chunks over
@@ -1281,193 +1469,32 @@ void kernel_launcher(
 #endif
   };
 
-  // prepare data for A, W, U compute
-  sycl::range<3> local_prepare(1, 1, MaxThreadsPerXeCore);
-  sycl::range<3> global_prepare(1, xe_core_count, 1);
+  // The five stages, submitted in order to the in-order queue. Each stage's
+  // grid/SLM/MMA setup now lives in its launch_stage_* entry above (the single
+  // source of truth shared with the per-kernel harness).
+  launch_stage_prepare<T, StateT>(
+      queue, kernel_props, xe_core_count, q, k, a, A_log, dt_bias,
+      query_start_loc, total_virtual_seqlen, batch_size, num_k_heads,
+      head_k_dim, num_v_heads, head_v_dim);
 
-  EventManager::getInstance().addEvent(queue.submit([&](sycl::handler& cgh) {
-    cgh.parallel_for<ChunkPrepareKernel<T, StateT>>(
-        sycl::nd_range<3>{global_prepare * local_prepare, local_prepare},
-        kernel_props,
-        [=](auto) {
-          chunk_prepare_kernel<T>(
-              q,
-              k,
-              a,
-              A_log,
-              dt_bias,
-              query_start_loc,
-              total_virtual_seqlen,
-              batch_size,
-              num_k_heads,
-              head_k_dim,
-              num_v_heads,
-              head_v_dim);
-        });
-  }));
+  launch_stage_compute_A<T, StateT>(
+      queue, kernel_props, xe_core_count, A, k, b, a, query_start_loc,
+      total_virtual_seqlen, batch_size, num_k_heads, head_k_dim, num_v_heads);
 
-  // compute A
-  using WGTileComputeA = chunk_gemm_policy_compute_A::WGTile;
-  using SGLayoutComputeA = chunk_gemm_policy_compute_A::SGLayout;
-  using MMAComputeA = typename TiledMMAHelper<
-      MMA_Atom<decltype(op)>,
-      Layout<WGTileComputeA>,
-      SGLayoutComputeA>::TiledMMA;
-  auto mmaComputeA = MMAComputeA{};
-  int MaxThreadsPerWorkgroupComputeA = size(mmaComputeA);
-  sycl::range<3> local_compute_A(1, 1, MaxThreadsPerWorkgroupComputeA);
-  sycl::range<3> global_compute_A(
-      1, xe_core_count * MaxThreadsPerXeCore / MaxThreadsPerWorkgroupComputeA, 1);
-  int slm_size_compute_A = chunk_size;
+  launch_stage_inverse<T, StateT>(
+      queue, kernel_props, xe_core_count, A, query_start_loc,
+      total_virtual_seqlen, batch_size, num_v_heads);
 
-  EventManager::getInstance().addEvent(queue.submit([&](sycl::handler& cgh) {
-    sycl::local_accessor<float, 1> local_mem(
-        sycl::range<1>(slm_size_compute_A), cgh);
-    cgh.parallel_for<ChunkComputeAKernel<T, StateT>>(
-        sycl::nd_range<3>{global_compute_A * local_compute_A, local_compute_A},
-        kernel_props,
-        [=](auto) {
-          chunk_compute_A_kernel<T, MMAComputeA>(
-              local_mem,
-              A,
-              k,
-              b,
-              a,
-              query_start_loc,
-              total_virtual_seqlen,
-              batch_size,
-              num_k_heads,
-              head_k_dim,
-              num_v_heads);
-        });
-  }));
+  launch_stage_compute_wu<T, StateT>(
+      queue, kernel_props, xe_core_count, A, w, u, q, k, v, b, a, A_log,
+      dt_bias, query_start_loc, has_initial_state, total_virtual_seqlen,
+      batch_size, num_k_heads, head_k_dim, num_v_heads, head_v_dim);
 
-  /* Inverse stage: DPAS-accelerated `chunk_inverse_opt_kernel` is the only
-   * path enabled. It partitions the 64x64 chunk inverse into a 4x4 grid of
-   * 16x16 sub-blocks: each sub-group inverts a diagonal block in registers
-   * via `sycl::group_broadcast` (no SLM, no barriers), and the six
-   * off-diagonal blocks are filled with 16x16x16 DPAS via cute MMA. One
-   * work-group per (chunk, v_head) pair. */
-  {
-    using WGTileInverse   = chunk_gemm_policy_inverse::WGTile;
-    using SGLayoutInverse = chunk_gemm_policy_inverse::SGLayout;
-    using MMAInverse      = typename TiledMMAHelper<
-        MMA_Atom<decltype(op)>,
-        Layout<WGTileInverse>,
-        SGLayoutInverse>::TiledMMA;
-    int MaxThreadsPerWorkgroupInverse = size(MMAInverse{});  // 1 sub-group => 16
-    sycl::range<3> local_inverse(1, 1, MaxThreadsPerWorkgroupInverse);
-    /* Machine-sized grid, rounded up to a multiple of num_v_heads so the
-     * kernel's group(1) % / / num_v_heads head id and persistent stride of
-     * (group_range(1) / num_v_heads) divide exactly. */
-    int inverse_groups =
-        xe_core_count * MaxThreadsPerXeCore / MaxThreadsPerWorkgroupInverse;
-    inverse_groups =
-        (inverse_groups + num_v_heads - 1) / num_v_heads * num_v_heads;
-    sycl::range<3> global_inverse(1, inverse_groups, 1);
-
-    EventManager::getInstance().addEvent(queue.submit([&](sycl::handler& cgh) {
-      cgh.parallel_for<ChunkInverseOptKernel<T, StateT>>(
-          sycl::nd_range<3>{global_inverse * local_inverse, local_inverse},
-          kernel_props,
-          [=](auto) {
-            chunk_inverse_opt_kernel<T, MMAInverse>(
-                A,
-                query_start_loc,
-                total_virtual_seqlen,
-                batch_size,
-                num_v_heads);
-          });
-    }));
-  }
-
-  // compute W U
-  using WGTileComputeWU = chunk_gemm_policy_compute_wu::WGTile;
-  using SGLayoutComputeWU = chunk_gemm_policy_compute_wu::SGLayout;
-  using MMAComputeWU = typename TiledMMAHelper<
-      MMA_Atom<decltype(op)>,
-      Layout<WGTileComputeWU>,
-      SGLayoutComputeWU>::TiledMMA;
-  auto mmaComputeWU = MMAComputeWU{};
-  int MaxThreadsPerWorkgroupComputeWU = size(mmaComputeWU);
-  sycl::range<3> local_compute_wu(1, 1, MaxThreadsPerWorkgroupComputeWU);
-  sycl::range<3> global_compute_wu(
-      1, xe_core_count * MaxThreadsPerXeCore / MaxThreadsPerWorkgroupComputeWU, 1);
-  int slm_size_compute_wu = num_v_heads * 2 + chunk_size * 2;
-
-  EventManager::getInstance().addEvent(queue.submit([&](sycl::handler& cgh) {
-    sycl::local_accessor<float, 1> local_mem(
-        sycl::range<1>(slm_size_compute_wu), cgh);
-    cgh.parallel_for<ChunkComputeWUKernel<T, StateT>>(
-        sycl::nd_range<3>{
-            global_compute_wu * local_compute_wu, local_compute_wu},
-        kernel_props,
-        [=](auto) {
-          chunk_compute_wu_kernel<T, MMAComputeWU>(
-              local_mem,
-              A,
-              w,
-              u,
-              q,
-              k,
-              v,
-              b,
-              a,
-              A_log,
-              dt_bias,
-              query_start_loc,
-              has_initial_state,
-              total_virtual_seqlen,
-              batch_size,
-              num_k_heads,
-              head_k_dim,
-              num_v_heads,
-              head_v_dim);
-        });
-  }));
-
-  // compute O
-  using WGTileFwdO = chunk_gemm_policy_fwd_o::WGTile;
-  using SGLayoutFwdO = chunk_gemm_policy_fwd_o::SGLayout;
-  using MMAFwdO = typename TiledMMAHelper<
-      MMA_Atom<decltype(op)>,
-      Layout<WGTileFwdO>,
-      SGLayoutFwdO>::TiledMMA;
-  auto mmaFwdO = MMAFwdO{};
-  int MaxThreadsPerWorkgroupFwdO = size(mmaFwdO);
-  sycl::range<3> local_fwd_o(1, 1, MaxThreadsPerWorkgroupFwdO);
-  sycl::range<3> global_fwd_o(batch_size, num_v_heads, 1);
-  int slm_size_fwd_o = chunk_size + chunk_size + chunk_size;
-
-  EventManager::getInstance().addEvent(queue.submit([&](sycl::handler& cgh) {
-    sycl::local_accessor<float, 1> local_mem(
-        sycl::range<1>(slm_size_fwd_o), cgh);
-    cgh.parallel_for<ChunkFwdOKernel<T, StateT>>(
-        sycl::nd_range<3>{global_fwd_o * local_fwd_o, local_fwd_o},
-        kernel_props,
-        [=](auto) {
-          chunk_fwd_o_kernel<T, StateT, MMAFwdO>(
-              local_mem,
-              core_attn_out,
-              A,
-              w,
-              u,
-              q,
-              k,
-              a,
-              ssm_state,
-              ssm_state_stride_0,
-              query_start_loc,
-              cache_indices,
-              has_initial_state,
-              batch_size,
-              total_virtual_seqlen,
-              num_k_heads,
-              head_k_dim,
-              num_v_heads,
-              head_v_dim);
-        });
-  }));
+  launch_stage_fwd_o<T, StateT>(
+      queue, kernel_props, core_attn_out, A, w, u, q, k, a, ssm_state,
+      ssm_state_stride_0, query_start_loc, cache_indices, has_initial_state,
+      batch_size, total_virtual_seqlen, num_k_heads, head_k_dim, num_v_heads,
+      head_v_dim);
 }
 
 

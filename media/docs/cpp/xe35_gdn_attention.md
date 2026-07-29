@@ -36,6 +36,7 @@ is **no** CUTLASS collective/kernel scaffolding.
   - [Return status](#return-status)
   - [Mutability contract](#mutability-contract)
   - [`has_initial_state` contract](#has_initial_state-contract)
+  - [The sigmoid of `b`](#the-sigmoid-of-b)
 - [Sizing the workspaces](#sizing-the-workspaces)
 - [Integrating the launcher](#integrating-the-launcher)
 - [Constraints](#constraints)
@@ -44,16 +45,25 @@ is **no** CUTLASS collective/kernel scaffolding.
 ## Where the code lives
 
 The kernel itself is **header-only** and lives under
-[`applications/gdn_attention/`](../../../applications/gdn_attention). Three
-consumers drive and validate it:
+[`applications/gdn_attention/`](../../../applications/gdn_attention), alongside
+a single shared host harness,
+[`gdn_runner.hpp`](../../../applications/gdn_attention/gdn_runner.hpp). The
+runner is the one source of truth for device allocation, input initialization
+(including the [sigmoid of `b`](#the-sigmoid-of-b)), `GDNArguments`
+construction, kernel launch, and the host verification oracles. All three
+consumers build on it rather than re-implementing setup:
 
-| Consumer | Path | Role |
+| Consumer | Path | Adds on top of `gdn_runner.hpp` |
 |---|---|---|
-| Example | [`examples/14_xe35_gdn_attention/`](../../../examples/14_xe35_gdn_attention) | Driver + runner; verifies against the shared host reference |
-| Benchmark | [`benchmarks/applications/03_gdn/`](../../../benchmarks/applications/03_gdn) | Google Benchmark harness + configuration sweep |
-| Unit test | [`test/unit/gdn_attention/`](../../../test/unit/gdn_attention) | GoogleTest coverage (`cutlass_test_unit_gdn_attention_chunkwise`) |
+| Example | [`examples/14_xe35_gdn_attention/`](../../../examples/14_xe35_gdn_attention) | CLI `Options` + perf timing; verifies via the recurrent oracle |
+| Benchmark | [`benchmarks/applications/03_gdn`](../../../benchmarks/applications/03_gdn) | FLOP/byte model + Google Benchmark harness + configuration sweep |
+| Unit test | [`test/unit/gdn_attention/`](../../../test/unit/gdn_attention) | GoogleTest pass gate (`cutlass_test_unit_gdn_attention_chunkwise`) |
 
-See the full [file map](#file-map) below for every header and its purpose.
+`gdn_runner.hpp` also hosts the shared CLI shape helpers (`parse_gdn_shape` /
+`validate_gdn_shape`) and the `ExampleOptions` / `BenchmarkOptions` structs, so
+all command-line parsing has one home; the unit test sets shape fields on the
+runner directly and never touches them. See the full [file map](#file-map)
+below for every header and its purpose.
 
 
 ## The five-stage pipeline
@@ -298,9 +308,9 @@ entry point. `has_initial_state` is the one documented nullable pointer.
 
 Stages 1+ mutate `q`, `k`, `a`, and `ssm_state` **in place** on the device.
 The caller MUST NOT rely on their pre-launch contents after the call. The
-example runner snapshots the originals into host vectors before the launch
-precisely because the chunkwise host reference needs them to replay the
-pipeline.
+shared [`GdnRunner`](../../../applications/gdn_attention/gdn_runner.hpp)
+snapshots the originals into host vectors before the launch precisely because
+the host reference oracles need them to replay the pipeline.
 
 ### `has_initial_state` contract
 
@@ -318,6 +328,36 @@ pipeline.
 
 Both kernel-side load sites null-check the pointer with
 `(has_initial_state == nullptr) || has_initial_state[batch_id]`.
+
+### The sigmoid of `b`
+
+The kernel reads `b` **verbatim** as the delta-rule write strength `beta` and
+assumes it already lies in `(0, 1)`. It does **not** apply a sigmoid itself: in
+a full GDN model the causal conv1d front-end emits an in-range `b`, and the
+chunk kernel is the stage *after* that front-end. This mirrors upstream
+[`vllm-xpu-kernels`](https://github.com/vllm-project/vllm-xpu-kernels/tree/main/csrc/xpu/gdn_attn),
+where the chunk kernel (`chunk_gated_delta_rule_kernels_xe2.hpp`) likewise reads
+`b` raw and the sigmoid is applied one stage earlier by the conv1d front-end
+(`chunk_causal_conv1d_xe2.hpp`, `b_value = act_sigmoid(b_value)`). The contract
+is documented at the kernel's `b` load site in `chunk_compute_wu` (see the
+`SIGMOID CONTRACT` comment in
+[`xe35_chunk_gated_delta_rule_kernels.hpp`](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_kernels.hpp)).
+
+**Callers that bypass the conv1d front-end must sigmoid `b` on the host before
+the launch.** The shared
+[`GdnRunner`](../../../applications/gdn_attention/gdn_runner.hpp) does this in
+`initialize()`: it fills `b` with raw values in `[-2, 2]`, snapshots that raw
+copy (`h_b_raw`) for the oracles, then applies
+[`apply_sigmoid_b`](../../../tools/util/include/cutlass/util/reference/host/xe35_gdn_attention_stage_references.hpp)
+in place before handing `b` to the kernel. The raw snapshot matters because the
+host oracles expect an already-sigmoided `b`, which `verify_*()` re-derives
+from the raw copy — snapshotting after the in-place sigmoid would double-apply it.
+
+> **Why it matters numerically:** raw, un-sigmoided `b` is `O(1)` or larger, so
+> the chunk transition matrix `L[m,n] = (K_m·K_n)·exp(a[m]−a[n])·b[m]` grows
+> unbounded and the stage-3 inverse overflows to ±inf, propagating NaN through
+> `compute_wu` and `fwd_o`. Keeping `b ∈ (0,1)` is what keeps `L`
+> well-conditioned for the 64-step forward substitution.
 
 ## Sizing the workspaces
 
@@ -347,9 +387,9 @@ shape.u_workspace = /* device alloc of ws.u_elems × sizeof(T) */;
 
 The counts use `total_virtual_seqlen` (the chunk-padded extent), because that is
 exactly the stride the kernels apply when indexing the workspaces (e.g.
-`v_head_id · total_virtual_seqlen · kChunkSize`). The example runner follows this
-pattern: it builds a `make_arguments_shape_only()` struct, sizes the workspaces
-from it, then fills in pointers in `make_arguments()`.
+`v_head_id · total_virtual_seqlen · kChunkSize`). The shared `GdnRunner` follows
+this pattern: it builds a `make_arguments_shape_only()` struct, sizes the
+workspaces from it, then fills in pointers in `make_arguments()`.
 
 ## Integrating the launcher
 
@@ -461,8 +501,13 @@ the public header.
   ─────────                              ─────────────────────────────────────────
 
   examples/14_xe35_gdn_attention ─┐
-  benchmarks/applications/03_gdn ──┼─include─▶ xe35_chunk_gated_delta_rule_launch.hpp
-  test/unit/gdn_attention ────────┘            (inline launcher: validate + dispatch)
+  benchmarks/applications/03_gdn ─┼─include─▶ gdn_runner.hpp
+  test/unit/gdn_attention ────────┘            (shared host harness: GdnRunner,
+                                                CLI Options, host oracles)
+                                                  │ includes
+                                                  ▼
+                                             xe35_chunk_gated_delta_rule_launch.hpp
+                                                  (inline launcher: validate + dispatch)
                                                   │ includes
                                                   ▼
                                              xe35_chunk_gated_delta_rule_kernels.hpp
@@ -483,8 +528,10 @@ the public header.
 | [xe35_chunk_gated_delta_rule_launch.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_launch.hpp) | Header-only launcher: argument validation + `chunk_gated_delta_rule_launch<T, StateT>` definition (inline template, instantiated at each call site) |
 | [xe35_chunk_gated_delta_rule_kernels.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_kernels.hpp) | Five device kernels + `detail::kernel_launcher` (upstream-aligned signature) |
 | [xe35_chunk_gated_delta_rule_gemm.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_gemm.hpp) | CuTe GEMM helpers (`gemm_TTS`, `gemm_STS`, `gemm_TSS`, `gemm_TTS_k_multi`) |
-| [xe35_gdn_attention_stage_references.hpp](../../../tools/util/include/cutlass/util/reference/host/xe35_gdn_attention_stage_references.hpp) | Per-stage host reference implementations (in `cutlass/util/reference/host/`) shared by the example and unit test |
-| [xe35_gdn_attention_compare.hpp](../../../tools/util/include/cutlass/util/reference/host/xe35_gdn_attention_compare.hpp) | Host verification comparator (`compare_with_stats`/`print_compare_stats`, in `cutlass/util/reference/host/`) used by the example runner |
-| [examples/14_xe35_gdn_attention/](../../../examples/14_xe35_gdn_attention) | Example driver, runner, and perf helpers (verifies via the shared host reference above) |
-| [benchmarks/applications/03_gdn/](../../../benchmarks/applications/03_gdn) | Google Benchmark harness, configuration sweep |
-| [test/unit/gdn_attention/](../../../test/unit/gdn_attention) | GoogleTest unit coverage (`cutlass_test_unit_gdn_attention_chunkwise`) |
+| [gdn_runner.hpp](../../../applications/gdn_attention/gdn_runner.hpp) | Shared host harness: `GdnRunner` (alloc + init + sigmoid(b) + args + launch + oracles), the `parse_gdn_shape`/`validate_gdn_shape` CLI helpers, and the `ExampleOptions`/`BenchmarkOptions` structs. Used by all three consumers |
+| [xe35_gdn_attention_stage_references.hpp](../../../tools/util/include/cutlass/util/reference/host/xe35_gdn_attention_stage_references.hpp) | Per-stage host reference + `apply_sigmoid_b` (in `cutlass/util/reference/host/`), driving the chunkwise oracle |
+| [xe35_gdn_attention_recurrent_reference.hpp](../../../tools/util/include/cutlass/util/reference/host/xe35_gdn_attention_recurrent_reference.hpp) | Token-by-token fp32 recurrent reference oracle + `kTolE2E` tolerance |
+| [xe35_gdn_attention_compare.hpp](../../../tools/util/include/cutlass/util/reference/host/xe35_gdn_attention_compare.hpp) | Host verification comparator (`compare_with_stats`/`print_compare_stats`, in `cutlass/util/reference/host/`) used by `GdnRunner` |
+| [examples/14_xe35_gdn_attention/](../../../examples/14_xe35_gdn_attention) | Example driver + thin `GdnExampleRunner` (CLI + perf timing) over the shared `GdnRunner` |
+| [benchmarks/applications/03_gdn/](../../../benchmarks/applications/03_gdn) | Google Benchmark harness + FLOP/byte model over the shared `GdnRunner`, configuration sweep |
+| [test/unit/gdn_attention/](../../../test/unit/gdn_attention) | GoogleTest unit coverage (`cutlass_test_unit_gdn_attention_chunkwise`); thin pass gate over the shared `GdnRunner` |

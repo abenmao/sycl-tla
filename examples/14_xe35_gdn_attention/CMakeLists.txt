@@ -31,11 +31,11 @@
 # CRI and BMG builds.
 
 if (CUTLASS_TEST_FOR_CRI)
-  # CRI simulator: tiny single-sub-chunk shape, no warmup. Verification is
-  # forced on (--verify=1) for GDN regardless of the global CRI_DEFAULT_VERIFY,
-  # because the GDN inverse/state path is correctness-sensitive and the shape is
-  # kept small enough to verify within the simulator timeout budget.
-  set(GDN_ARGS "--batch=1 --num_v_heads=2 --num_k_heads=1 --seq_len=64 --iterations=${CRI_DEFAULT_ITERATIONS} --warmup=0 --verify=1")
+  # CRI simulator: tiny single-sub-chunk shape. Verification is forced on
+  # (--verify=1) for GDN regardless of the global CRI_DEFAULT_VERIFY, because
+  # the GDN inverse/state path is correctness-sensitive and the shape is kept
+  # small enough to verify within the simulator timeout budget.
+  set(GDN_ARGS "--batch=1 --num_v_heads=2 --num_k_heads=1 --seq_len=64 --iterations=${CRI_DEFAULT_ITERATIONS} --verify=1")
 else()
   # BMG (and other real hardware): empty args -> the runner iterates its
   # built-in case table with verify=1, giving full functional coverage.

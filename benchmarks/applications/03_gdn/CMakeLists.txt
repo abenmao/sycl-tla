@@ -31,7 +31,7 @@
 # Produces one executable:
 #   cutlass_benchmarks_gdn_xe
 #
-# The GDN kernels and launcher are header-only under
+# The GDN kernels, launcher, and shared GdnRunner are header-only under
 # applications/gdn_attention/, shared with the example driver and the unit
 # tests. The BF16 activation variant is compiled into the binary and selected
 # at runtime via the benchmark config .in file.
