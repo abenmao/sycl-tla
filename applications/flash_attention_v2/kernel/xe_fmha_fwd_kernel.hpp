@@ -34,6 +34,7 @@
 #include <array>
 
 #include "cutlass/cutlass.h"
+#include "cutlass/fast_math.h"
 #include "cutlass/gemm/dispatch_policy.hpp"
 #include "cutlass/gemm/gemm.h"
 #include "cutlass/kernel_hardware_info.hpp"
@@ -58,6 +59,72 @@ struct FMHAProblemShape {
   SeqLenType seq_len_qo, seq_len_kv, seq_len_kv_cache;
   int head_size_qk, head_size_vo;
 };
+
+static constexpr int kBlockScaleRowAlign = 64;
+
+CUTLASS_HOST_DEVICE
+int fmha_scaleq_rows(bool packs_gqa_q, int seq_len_qo, int head_group_q) {
+  return packs_gqa_q ? cutlass::round_up(head_group_q * seq_len_qo, kBlockScaleRowAlign)
+                     : seq_len_qo;
+}
+
+template <class TensorScaleQ, class TensorScaleK, class TensorScaleV>
+struct FMHABlockScaleTensors {
+  TensorScaleQ Q;
+  TensorScaleK K;
+  TensorScaleV V;
+  TensorScaleV P;
+
+  CUTLASS_DEVICE static FMHABlockScaleTensors make_null() {
+    auto null_ptr = make_gmem_ptr(static_cast<typename TensorScaleQ::element_type*>(nullptr));
+    auto null_shape = make_shape(0, 0, 0, 0);
+    return {make_tensor(null_ptr, make_layout(null_shape, decltype(stride(TensorScaleQ{})){})),
+            make_tensor(null_ptr, make_layout(null_shape, decltype(stride(TensorScaleK{})){})),
+            make_tensor(null_ptr, make_layout(null_shape, decltype(stride(TensorScaleV{})){})),
+            make_tensor(null_ptr, make_layout(null_shape, decltype(stride(TensorScaleV{})){}))};
+  }
+};
+
+template <bool PackedStrides = false, class KernelParams>
+CUTLASS_DEVICE auto
+make_blockscale_tensors(KernelParams const& p, int rows_q, int heads_q,
+                        int seq_len_kv, int batch_dim,
+                        int offset_q = 0, int offset_k = 0, int offset_v = 0)
+{
+  using ElementScale = cute::remove_const_t<cute::remove_pointer_t<decltype(p.scaleQ)>>;
+  using StrideScaleQ = cute::remove_cvref_t<decltype(p.dScaleQ)>;
+  using StrideScaleK = cute::remove_cvref_t<decltype(p.dScaleK)>;
+  using StrideScaleV = cute::remove_cvref_t<decltype(p.dScaleV)>;
+
+  auto const& s = p.shape;
+  int groups_qk = cute::ceil_div(s.head_size_qk, p.group_size);
+  int groups_v  = cute::ceil_div(seq_len_kv, p.group_size);
+
+  auto shape_Q = make_shape(rows_q, groups_qk, heads_q, batch_dim);
+  auto shape_K = make_shape(seq_len_kv, groups_qk, s.num_heads_kv, batch_dim);
+  auto shape_V = make_shape(s.head_size_vo, groups_v, s.num_heads_kv, batch_dim);
+
+  StrideScaleQ stride_Q = p.dScaleQ;
+  StrideScaleK stride_K = p.dScaleK;
+  StrideScaleV stride_V = p.dScaleV;
+  if constexpr (PackedStrides) {
+    stride_Q = cutlass::make_cute_packed_stride(StrideScaleQ{}, shape_Q);
+    stride_K = cutlass::make_cute_packed_stride(StrideScaleK{}, shape_K);
+    stride_V = cutlass::make_cute_packed_stride(StrideScaleV{}, shape_V);
+  }
+
+  Tensor ScaleQ = make_tensor(make_gmem_ptr(const_cast<ElementScale*>(p.scaleQ + offset_q)),
+                              make_layout(shape_Q, stride_Q));
+  Tensor ScaleK = make_tensor(make_gmem_ptr(const_cast<ElementScale*>(p.scaleK + offset_k)),
+                              make_layout(shape_K, stride_K));
+  Tensor ScaleV = make_tensor(make_gmem_ptr(const_cast<ElementScale*>(p.scaleV + offset_v)),
+                              make_layout(shape_V, stride_V));
+  Tensor ScaleP = make_tensor(make_gmem_ptr(const_cast<ElementScale*>(p.scaleP + offset_v)),
+                              make_layout(shape_V, stride_V));
+
+  return FMHABlockScaleTensors<decltype(ScaleQ), decltype(ScaleK), decltype(ScaleV)>{
+      ScaleQ, ScaleK, ScaleV, ScaleP};
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -99,6 +166,9 @@ public:
   using StrideK = decltype(stride(typename CollectiveMainloop::TensorK{}));
   using StrideV = decltype(stride(typename CollectiveMainloop::TensorV{}));
   static constexpr bool BlockScale = CollectiveMainloop::BlockScale;
+  using ScaleTensors = FMHABlockScaleTensors<typename CollectiveMainloop::TensorScaleQ,
+                                             typename CollectiveMainloop::TensorScaleK,
+                                             typename CollectiveMainloop::TensorScaleV>;
 
   using SGPerWG = typename CollectiveMainloop::SGPerWG;
 
@@ -109,6 +179,11 @@ public:
   // Tile scheduler derived types
   using TileScheduler = TileScheduler_;
   using TileSchedulerParams = typename TileScheduler::Params;
+
+  static constexpr bool kPacksGqaQ = TileScheduler::kGqaFusion;
+
+  static_assert(!(BlockScale && kPacksGqaQ && is_var_len),
+                "BlockScale with GQA-fused Q rows does not support variable-length sequences");
 
   // Epilogue derived types
   using CollectiveEpilogue = CollectiveEpilogue_;
@@ -366,7 +441,24 @@ public:
       constexpr bool kGqaFusion = TileScheduler::kGqaFusion;
       constexpr bool kDisablePrefetchV = TileScheduler::kDisablePrefetchV;
 
+      [[maybe_unused]] ScaleTensors scales = ScaleTensors::make_null();
+      if constexpr (BlockScale) {
+        int offset_scaleQ = 0, offset_scaleK = 0, offset_scaleV = 0;
+        if constexpr (is_var_len) {
+          int scale_d = cute::ceil_div(s.head_size_qk, p.group_size);
+          offset_scaleQ = s.num_heads_q  * scale_d * s.seq_len_qo.cumulative_length[idx_b];
+          offset_scaleK = s.num_heads_kv * scale_d * s.seq_len_kv.cumulative_length[idx_b];
+          offset_scaleV = s.num_heads_kv * s.seq_len_kv.cumulative_scale_length[idx_b];
+        }
+        scales = make_blockscale_tensors<is_var_len>(
+            p,
+            fmha_scaleq_rows(kGqaFusion, int(seq_len_qo), head_group_q),
+            kGqaFusion ? s.num_heads_kv : s.num_heads_q,
+            int(seq_len_kv), batch_dim, offset_scaleQ, offset_scaleK, offset_scaleV);
+      }
+
       if constexpr (kGqaFusion) {
+        assert(get<0>(blk_qv) == 0 && "GQA fusion assumes seq_len_qo <= QK_BLK_M");
         const int head_kv = head;
         const int g = tile_scheduler.get_gqa_group_size();
 
@@ -436,7 +528,11 @@ public:
                   row_start, gqa_fusion_q_per_head,
                   K_cache(_,_,head,l_coord),
                   V_cache(_,_,head,l_coord),
-                  p.scale_k, p.scale_v, p.scale_q);
+                  p.scale_k, p.scale_v, p.scale_q,
+                  scales.Q(_,_,head_kv,idx_b_l),
+                  scales.K(_,_,head_kv,idx_b_l),
+                  scales.V(_,_,head_kv,idx_b_l),
+                  scales.P(_,_,head_kv,idx_b_l));
 
           if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
             sycl::group_barrier(get_work_group<3>());
@@ -448,73 +544,25 @@ public:
         }
         return;
       }
-      if constexpr (BlockScale) {
-        auto scale_q = cute::ceil_div(s.head_size_qk, p.group_size);
-        auto scale_k = cute::ceil_div(s.head_size_qk, p.group_size);
-        int scale_v = cute::ceil_div(seq_len_kv, p.group_size);
 
-        auto shape_scale_Q = make_shape(seq_len_qo, scale_q, s.num_heads_q, batch_dim);
-        auto shape_scale_K = make_shape(seq_len_kv, scale_k, s.num_heads_kv, batch_dim);
-        auto shape_scale_V = make_shape(s.head_size_vo, scale_v, s.num_heads_kv, batch_dim);
-        int offset_scaleQ = 0; int offset_scaleK = 0; int offset_scaleV = 0;
-        StrideScaleQ stride_scaleQ = p.dScaleQ;
-        StrideScaleK stride_scaleK = p.dScaleK;
-        StrideScaleV stride_scaleV = p.dScaleV;
-        if constexpr (is_var_len) {
-          auto qo_cumulative = s.seq_len_qo.cumulative_length;
-          auto kv_cumulative = s.seq_len_kv.cumulative_length;
-          auto kv_scale_cumulative = s.seq_len_kv.cumulative_scale_length;
-          offset_scaleQ = s.num_heads_q * scale_q * qo_cumulative[idx_b];
-          offset_scaleK = s.num_heads_kv * scale_k * kv_cumulative[idx_b];
-          offset_scaleV = s.num_heads_kv * kv_scale_cumulative[idx_b];
-          stride_scaleQ = cutlass::make_cute_packed_stride(StrideScaleQ{}, shape_scale_Q);
-          stride_scaleK = cutlass::make_cute_packed_stride(StrideScaleK{}, shape_scale_K);
-          stride_scaleV = cutlass::make_cute_packed_stride(StrideScaleV{}, shape_scale_V);
-        }
+      const int mainloop_kv_cache = BlockScale ? 0 : seq_len_kv_cache;
 
-        auto dcScaleQ = const_cast<ElementScale*>(p.scaleQ + offset_scaleQ);
-        auto dcScaleK = const_cast<ElementScale*>(p.scaleK + offset_scaleK);
-        auto dcScaleV = const_cast<ElementScale*>(p.scaleV + offset_scaleV);
-        auto dcScaleP = const_cast<ElementScale*>(p.scaleP + offset_scaleV);
+      mainloop.template operator()<false, kDisablePrefetchV>(Q(_,_,head_q,l_coord),
+               K(_,_,head,l_coord),
+               V(_,_,head,l_coord),
+               tArA, tA_max, tA_sum,
+               blk_qv, 0, k_blocks, k_blocks, k_blocks_prefetch,
+               thr_id, seq_len, mainloop_kv_cache, idx_b,
+               full_tile_offset, discard_seq_coord,
+               0,0,
+               K_cache(_,_,head,l_coord),
+               V_cache(_,_,head,l_coord),
+               p.scale_k, p.scale_v, p.scale_q,
+               scales.Q(_,_,head_q,l_coord),
+               scales.K(_,_,head,l_coord),
+               scales.V(_,_,head,l_coord),
+               scales.P(_,_,head,l_coord));
 
-        Tensor ScaleQ = make_tensor(make_gmem_ptr(dcScaleQ), make_layout(shape_scale_Q, stride_scaleQ));
-        Tensor ScaleK = make_tensor(make_gmem_ptr(dcScaleK), make_layout(shape_scale_K, stride_scaleK));
-        Tensor ScaleV = make_tensor(make_gmem_ptr(dcScaleV), make_layout(shape_scale_V, stride_scaleV));
-        Tensor ScaleP = make_tensor(make_gmem_ptr(dcScaleP), make_layout(shape_scale_V, stride_scaleV));
-
-        auto ScaleQ_head = ScaleQ(_, _, head_q, l_coord);
-        auto ScaleK_head = ScaleK(_, _, head, l_coord);
-        auto ScaleV_head = ScaleV(_, _, head, l_coord);
-        auto ScaleP_head = ScaleP(_, _, head, l_coord);
-
-        mainloop.template operator()<false, kDisablePrefetchV>(Q(_,_,head_q,l_coord),
-                 K(_,_,head,l_coord),
-                 V(_,_,head,l_coord),
-                 tArA, tA_max, tA_sum,
-                 blk_qv, 0, k_blocks, k_blocks, k_blocks,
-                 thr_id, seq_len, 0, l_coord,
-                 full_tile_offset, discard_seq_coord,
-                 0,0,
-                 K_cache(_,_,head,l_coord),
-                 V_cache(_,_,head,l_coord),
-                 p.scale_k, p.scale_v, p.scale_q,
-                 ScaleQ_head,
-                 ScaleK_head,
-                 ScaleV_head,
-                 ScaleP_head);
-      } else {
-        mainloop.template operator()<false, kDisablePrefetchV>(Q(_,_,head_q,l_coord),
-                 K(_,_,head,l_coord),
-                 V(_,_,head,l_coord),
-                 tArA, tA_max, tA_sum,
-                 blk_qv, 0, k_blocks, k_blocks, k_blocks_prefetch,
-                 thr_id, seq_len, seq_len_kv_cache, idx_b,
-                 full_tile_offset, discard_seq_coord,
-                 0,0,
-                 K_cache(_,_,head,l_coord),
-                 V_cache(_,_,head,l_coord),
-                 p.scale_k, p.scale_v, p.scale_q);
-      }
       if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
         sycl::group_barrier(get_work_group<3>());
       }
@@ -557,10 +605,14 @@ public:
   using ElementQ = typename CollectiveMainloop::TensorQ::element_type;
   using ElementK = typename CollectiveMainloop::TensorK::element_type;
   using ElementV = typename CollectiveMainloop::TensorV::element_type;
+  using ElementScale = typename CollectiveMainloop::TensorScaleQ::element_type;
 
   using StrideQ = decltype(stride(typename CollectiveMainloop::TensorQ{}));
   using StrideK = decltype(stride(typename CollectiveMainloop::TensorK{}));
   using StrideV = decltype(stride(typename CollectiveMainloop::TensorV{}));
+  using StrideScaleQ = decltype(stride(typename CollectiveMainloop::TensorScaleQ{}));
+  using StrideScaleK = decltype(stride(typename CollectiveMainloop::TensorScaleK{}));
+  using StrideScaleV = decltype(stride(typename CollectiveMainloop::TensorScaleV{}));
 
   using SGPerWG = typename CollectiveMainloop::SGPerWG;
 
@@ -593,7 +645,12 @@ public:
     EpilogueSharedStorage epilogue;
   };
 
-  static constexpr bool BlockScale = false;
+  static constexpr bool BlockScale = CollectiveMainloop::BlockScale;
+  using ScaleTensors = FMHABlockScaleTensors<typename CollectiveMainloop::TensorScaleQ,
+                                             typename CollectiveMainloop::TensorScaleK,
+                                             typename CollectiveMainloop::TensorScaleV>;
+
+  static constexpr bool kPacksGqaQ = true;
 
   static constexpr int SharedStorageSize = is_empty_v<SharedStorage> ? size_t(0)
                                                                      : sizeof(SharedStorage);
@@ -620,6 +677,15 @@ public:
     float scale_k = 1.f;
     float scale_v = 1.f;
     float scale_q = 1.f;
+    const ElementScale *scaleQ = nullptr;
+    StrideScaleQ dScaleQ{};
+    const ElementScale *scaleK = nullptr;
+    StrideScaleK dScaleK{};
+    const ElementScale *scaleV = nullptr;
+    StrideScaleV dScaleV{};
+    const ElementScale *scaleP = nullptr;
+    StrideScaleV dScaleP{};
+    int group_size = 32;
   };
   using KernelParams = KernelArguments;
 
@@ -862,6 +928,14 @@ public:
       copy(merged_res, tPartial);
     };
 
+    [[maybe_unused]] ScaleTensors scales = ScaleTensors::make_null();
+    if constexpr (BlockScale) {
+      scales = make_blockscale_tensors(
+          p,
+          fmha_scaleq_rows(kPacksGqaQ, int(s.seq_len_qo), head_group_q),
+          s.num_heads_kv, int(s.seq_len_kv), s.batch);
+    }
+
     TileScheduler tile_scheduler{params.scheduler, get<1>(TileShapeQK{}), local_k_blocks, num_batch_heads};
 
     CUTLASS_PRAGMA_NO_UNROLL
@@ -962,7 +1036,11 @@ public:
               split_full_tile_offset, 0, 0, split_q_per_head,
               K_cache(_,_,head_kv,idx_b),
               V_cache(_,_,head_kv,idx_b),
-              p.scale_k, p.scale_v, p.scale_q);
+              p.scale_k, p.scale_v, p.scale_q,
+              scales.Q(_,_,head_kv,idx_b),
+              scales.K(_,_,head_kv,idx_b),
+              scales.V(_,_,head_kv,idx_b),
+              scales.P(_,_,head_kv,idx_b));
 
         tA_sum = reduce<0, cute::ReduceMode::Horizontal>(tA_sum_partial, sycl::plus<void>{});
 
@@ -1050,6 +1128,9 @@ public:
   using ElementLSE = typename CollectiveEpilogue::ElementLSE;
 
   static constexpr bool BlockScale = CollectiveMainloop::BlockScale;
+  static_assert(!BlockScale, "XeFMHAFwdSplitKVKernel does not support BlockScale");
+
+  static constexpr bool kPacksGqaQ = true;
 
   // Kernel level shared memory storage
   using MainloopSharedStorage = typename CollectiveMainloop::SharedStorage;

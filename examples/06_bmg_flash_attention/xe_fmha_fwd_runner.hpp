@@ -254,6 +254,8 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
 
   static constexpr bool BlockScale = FMHAKernel::BlockScale;
 
+  static constexpr bool PacksGqaQ = FMHAKernel::kPacksGqaQ;
+
 
   using ElementScale = typename CollectiveMainloop::TensorScaleQ::element_type;
   using StrideScaleQ = decltype(cute::stride(typename CollectiveMainloop::TensorScaleQ{}));
@@ -796,7 +798,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     std::vector<uint8_t> src(size(operand_layout) * sizeof_bits_v<SrcElement> / 8, 0);
     cutlass::device_memory::copy_to_host(src.data(), (uint8_t*)q_buffer, src.size());
 
-    std::vector<uint8_t> scale(size(scale_layout) * sizeof_bits_v<ElementScale> / 8, 0);
+    std::vector<uint8_t> scale(cute::cosize(scale_layout) * sizeof_bits_v<ElementScale> / 8, 0);
     cutlass::device_memory::copy_to_host(scale.data(), (uint8_t*)scale_buffer, scale.size());
 
     compat::wait();
@@ -1048,19 +1050,15 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
       int scale_v = cute::ceil_div(seq_len_kv, GROUP_SIZE);
       if constexpr (isVarLen && BlockScale) { scale_v = cumulative_scale_kv.back(); }
 
-      auto shape_scale_Q = cute::make_shape(seq_len_qo, scale_q, num_heads_q, batch);
       auto shape_scale_K = cute::make_shape(seq_len_kv, scale_k, num_heads_kv, batch);
       auto shape_scale_V = cute::make_shape(head_size_vo, scale_v, num_heads_kv, batch);
 
-      stride_SQ = cutlass::make_cute_packed_stride(StrideScaleQ{}, shape_scale_Q); 
       stride_SK = cutlass::make_cute_packed_stride(StrideScaleK{}, shape_scale_K);
       stride_SV = cutlass::make_cute_packed_stride(StrideScaleV{}, shape_scale_V);
 
-      block_scaleQ.reset(cute::size(shape_scale_Q));
       block_scaleK.reset(cute::size(shape_scale_K));
       block_scaleV.reset(cute::size(shape_scale_V));
 
-      initialize_scale(block_scaleQ, options);
       initialize_scale(block_scaleK, options);
       initialize_scale(block_scaleV, options);
 
@@ -1072,13 +1070,30 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
       auto layout_K = cute::make_layout(shape_K, stride_K);
       auto layout_V = cute::make_layout(shape_V, stride_V);
 
-      auto layout_scale_Q = cute::make_layout(shape_scale_Q, stride_SQ);
       auto layout_scale_K = cute::make_layout(shape_scale_K, stride_SK);
       auto layout_scale_V = cute::make_layout(shape_scale_V, stride_SV);
 
-      apply_scale<ElementQKMMAVerify, ElementQ>(block_Q_dq.get(), block_Q.get(), layout_Q, block_scaleQ.get(), layout_scale_Q);
       apply_scale<ElementQKMMAVerify, ElementK>(block_K_dq.get(), block_K.get(), layout_K, block_scaleK.get(), layout_scale_K);
       apply_scale<ElementPVMMAVerify, ElementV>(block_V_dq.get(), block_V.get(), layout_V, block_scaleV.get(), layout_scale_V);
+
+      const int gqa_group = num_heads_q / num_heads_kv;
+      const int q_len     = seq_len_qo;
+      const int rows_q    = cutlass::fmha::kernel::fmha_scaleq_rows(PacksGqaQ, q_len, gqa_group);
+      const int heads_q   = PacksGqaQ ? num_heads_kv : num_heads_q;
+      const int row_heads = PacksGqaQ ? gqa_group : 1;
+
+      auto shape_scale_Q = cute::make_shape(rows_q, scale_q, heads_q, batch);
+      stride_SQ = cutlass::make_cute_packed_stride(StrideScaleQ{}, shape_scale_Q);
+
+      block_scaleQ.reset(cute::size(shape_scale_Q));
+      initialize_scale(block_scaleQ, options);
+
+      auto layout_scale_Q = cute::make_layout(
+          cute::make_shape(q_len, scale_q, cute::make_shape(row_heads, heads_q), batch),
+          cute::make_stride(cute::_1{}, cute::get<1>(stride_SQ),
+                            cute::make_stride(q_len, cute::get<2>(stride_SQ)),
+                            cute::get<3>(stride_SQ)));
+      apply_scale<ElementQKMMAVerify, ElementQ>(block_Q_dq.get(), block_Q.get(), layout_Q, block_scaleQ.get(), layout_scale_Q);
     }
 #endif
     return shape;
@@ -1190,6 +1205,11 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
             block_K_cache.get(), stride_K_cache,
             block_V_cache.get(), stride_V_cache,
             float(scale_k), float(scale_v), float(scale_q),
+            block_scaleQ.get(), stride_SQ,
+            block_scaleK.get(), stride_SK,
+            block_scaleV.get(), stride_SV,
+            block_scaleP.get(), stride_SV,
+            GROUP_SIZE,
           },
           {
             options.softmax_scale,

@@ -579,7 +579,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       }
     }
     if constexpr (BlockScale) {
-      const int q_coord = get<0>(blk_qv) * BLK_Q + (subgroup_id / ATOM_K)  * SG_Q;
+      const int q_coord = q_pos_base + get<0>(blk_qv) * BLK_Q + (subgroup_id / ATOM_K)  * SG_Q;
       auto& tiled_prefetch_scaleQ = get<0>(get<2>(scale_context_qk));
       auto  prefetch_iter_scaleQ = get<1>(get<2>(scale_context_qk));
       auto& tiled_prefetch_scaleK = get<0>(get<3>(scale_context_qk));
@@ -606,7 +606,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         std::array<FragScaleQ_t, DTiles> arr{};
         auto& tiled_copy_scaleQ = get<0>(get<0>(scale_context_qk));
         auto  copy_iter_scaleQ = get<1>(get<0>(scale_context_qk));
-        const int q_coord_sc = get<0>(blk_qv) * BLK_Q + (subgroup_id / ATOM_K) * SG_Q;
+        const int q_coord_sc = q_pos_base + get<0>(blk_qv) * BLK_Q + (subgroup_id / ATOM_K) * SG_Q;
         copy_iter_scaleQ.data().coord_ = {q_coord_sc, 0, l_coord};
         CUTLASS_PRAGMA_UNROLL
         for (int D = 0; D < DTiles; D++) {
@@ -755,11 +755,14 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       if constexpr (BlockScale) {
         auto& tiled_prefetch_scaleV = get<0>(get<2>(scale_context_pv));
         auto  prefetch_iter_scaleV = get<1>(get<2>(scale_context_pv));
+        const int kv_coord = (K - kblocks_cache) * BLK_PV_D
+                           + (subgroup_id % ATOM_K) * SG_PV_D;
+        const int kv_group = kv_coord / GROUP_K;
         CUTLASS_PRAGMA_UNROLL
         for (int VV = 0; VV < VTiles; VV++) {
           const int v_coord = get<1>(blk_qv) * VTiles * BLK_V + VV * BLK_V + (subgroup_id % ATOM_V) * SG_V;
-          prefetch_iter_scaleV.data().coord_ = {v_coord, 0, l_coord};
-          prefetch(tiled_prefetch_scaleV, prefetch_iter_scaleV(_, _, _, K - kblocks_cache));
+          prefetch_iter_scaleV.data().coord_ = {v_coord, kv_group, l_coord};
+          prefetch(tiled_prefetch_scaleV, prefetch_iter_scaleV(_, _, _, 0));
         }
       }
       /* Causal masking - only in non-cache mode */
@@ -880,9 +883,11 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
           auto zipped_p = make_zip_tensor(tArP, scaleP_view, gemm_p_offsets, gemm_pk_offsets);
           auto zipped_v = make_zip_tensor(tArV, scaleV_view, gemm_v_offsets, gemm_vk_offsets);
-
-          copy_iter_scaleV.data().coord_ = {v_coord, 0, l_coord};
-          copy(tiled_copy_scaleV, copy_iter_scaleV(_, _, _, K), fragment_scaleV);
+          const int kv_coord = (K - kblocks_cache) * BLK_PV_D
+                            + (subgroup_id % ATOM_K) * SG_PV_D;
+          const int kv_group = kv_coord / GROUP_K;
+          copy_iter_scaleV.data().coord_ = {v_coord, kv_group, l_coord};
+          copy(tiled_copy_scaleV, copy_iter_scaleV(_, _, _, 0), fragment_scaleV);
 
           cute::gemm(mma_pv, zipped_p, zipped_v, tArA(_,_,_,VV));
         } else {

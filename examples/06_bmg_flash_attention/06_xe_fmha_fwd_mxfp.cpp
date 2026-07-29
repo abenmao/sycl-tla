@@ -142,48 +142,107 @@ int main(int argc, const char **argv) {
 
 #endif
 #elif defined(DECODE)
+
+#define KV_TILE_SIZE _256
+
 #if HEAD_DIM == 16
   /* Tiny config for testing */
-  using ShapeQK = Shape<_1, _16, _16>;       // (q,k,d)
-  using ShapePV = Shape<_1, _16, _16>;       // (q,v,k)
-  using ShapeOut = Shape<_1, _16>;           // (q,v)
-  using SubgroupLayoutQK = Layout<Shape<_1, _2, _1>>;
-
+  using PVTileN  = _16;
+  using QKTileK    = _16;
+  using HeadDimSize = _16;
 #elif HEAD_DIM == 64
-    using ShapeQK = Shape<_1, _512, _64>;
-    using ShapePV = Shape<_1, _32, _512>;
-    using ShapeOut = Shape<_1, _64>;
-    using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
-
+  using PVTileN  = _32;
+  using QKTileK    = _64;
+  using HeadDimSize = _64;
 #elif HEAD_DIM == 96
-    using ShapeQK = Shape<_1, _512, _32>;
-    using ShapePV = Shape<_1, _32, _512>;
-    using ShapeOut = Shape<_1, _96>;
-    using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
-
+  using PVTileN  = _32;
+  using QKTileK    = _32;
+  using HeadDimSize = _96;
 #elif HEAD_DIM == 128
-    using ShapeQK = Shape<_1, _512, _64>;
-    using ShapePV = Shape<_1, _32, _512>;
-    using ShapeOut = Shape<_1, _128>;
-    using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
-
-#elif HEAD_DIM == 192
-    using ShapeQK = Shape<_1, _512, _64>;
-    using ShapePV = Shape<_1, _32, _512>;
-    using ShapeOut = Shape<_1, _192>;
-    using SubgroupLayoutQK = Layout<Shape<_1, _8, _1>>;
+#if (defined(IS_MX_FLOAT_E5M2) || defined(IS_MX_FLOAT_E4M3)) && defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+  using PVTileN  = _64;
+#else
+  using PVTileN  = _32;
 #endif
+  using QKTileK    = _64;
+  using HeadDimSize = _128;
+#elif HEAD_DIM == 192
+  using PVTileN  = _32;
+  using QKTileK    = _64;
+  using HeadDimSize = _192;
+#endif
+
+  using ShapeQK8  = Shape<_8,  KV_TILE_SIZE, QKTileK>;   // (q,k,d)
+  using ShapePV8  = Shape<_8,  PVTileN, KV_TILE_SIZE>; // (q,v,k)
+  using ShapeOut8 = Shape<_8,  HeadDimSize>;        // (q,v)
+  using SubgroupLayoutQK8  = Layout<Shape<_1, _8, _1>>;
+
+  using ShapeQK16  = Shape<_16, KV_TILE_SIZE, QKTileK>;
+  using ShapePV16  = Shape<_16, PVTileN, KV_TILE_SIZE>;
+  using ShapeOut16 = Shape<_16, HeadDimSize>;
+  using SubgroupLayoutQK16 = Layout<Shape<_2, _8, _1>>;
+
+  using ShapeQK32  = Shape<_32, KV_TILE_SIZE, QKTileK>;
+  using ShapePV32  = Shape<_32, PVTileN, KV_TILE_SIZE>;
+  using ShapeOut32 = Shape<_32, HeadDimSize>;
+  using SubgroupLayoutQK32 = Layout<Shape<_4, _8, _1>>;
+
+  using ShapeQK64  = Shape<_64, _64, QKTileK>;
+  using ShapePV64  = Shape<_64, PVTileN, _64>;
+  using ShapeOut64 = Shape<_64, HeadDimSize>;
+  using SubgroupLayoutQK64 = Layout<Shape<_8, _1, _1>>;
 #else
 #error Either DECODE or PREFILL should be defined.
 #endif
 
+constexpr bool BlockScale = true;
 #ifdef DECODE
   constexpr int PipelineStages = 1;
-  constexpr bool BlockScale = false;
 #else
   constexpr int PipelineStages = 2;
-  constexpr bool BlockScale = true;
 #endif
+
+#if defined(DECODE)
+  const int gqa_group  = options.num_heads_q / options.num_heads_kv;
+  const int q_len      = options.seq_len_qo;
+  const int total_rows = gqa_group * q_len;
+
+  const int kv_tile    = int(KV_TILE_SIZE::value);
+  const int kv_blocks  = (options.seq_len_kv + kv_tile - 1) / kv_tile;
+  const int base_units = options.batch * options.num_heads_kv;
+  const int saturation_cores_default = estimate_saturation_cores(base_units, kv_blocks);
+  const bool use_split =  total_rows <= 64 && base_units < cutlass::fmha::kernel::fmha_split_saturation_cores(saturation_cores_default);
+
+#define FMHA_RUN_Q(QK, PV, OUT, SGL)                                                                  \
+    (use_split                                                                                        \
+       ? (options.is_causal                                                                           \
+           ? FMHAConfig</*CausalMask=*/true,  BlockScale, QK, PV, OUT, SGL, void, PipelineStages,     \
+                        ElementQ, ElementK, ElementV, ElementScale, /*kGqaFusion=*/false>::            \
+                        template run<false, false, false,                                             \
+                        cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options)       \
+           : FMHAConfig</*CausalMask=*/false, BlockScale, QK, PV, OUT, SGL, void, PipelineStages,     \
+                        ElementQ, ElementK, ElementV, ElementScale, /*kGqaFusion=*/false>::            \
+                        template run<false, false, false,                                             \
+                        cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options))      \
+       : (options.is_causal                                                                           \
+           ? FMHAConfig</*CausalMask=*/true,  BlockScale, QK, PV, OUT, SGL, void, PipelineStages,     \
+                        ElementQ, ElementK, ElementV, ElementScale, /*kGqaFusion=*/true>::template run<\
+                        false, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options) \
+           : FMHAConfig</*CausalMask=*/false, BlockScale, QK, PV, OUT, SGL, void, PipelineStages,     \
+                        ElementQ, ElementK, ElementV, ElementScale, /*kGqaFusion=*/true>::template run<\
+                        false, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options)))
+
+  if (total_rows <= 8)
+    return FMHA_RUN_Q(ShapeQK8,  ShapePV8,  ShapeOut8,  SubgroupLayoutQK8);
+  else if (total_rows <= 16)
+    return FMHA_RUN_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16);
+  else if (total_rows <= 32)
+    return FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32);
+  else
+    return FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64);
+
+#undef FMHA_RUN_Q
+#else
 #if defined(IS_MX_FLOAT_E5M2) || defined(IS_MX_FLOAT_E4M3) || defined(IS_MX_FLOAT_E2M1)
   // BlockScale does not support CachedKV/PagedKV
   using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
@@ -203,5 +262,6 @@ int main(int argc, const char **argv) {
       return FMHANonCausal::template run<false, false, false, Scheduler>(options);
     }
   }
+#endif
 #endif
 }
