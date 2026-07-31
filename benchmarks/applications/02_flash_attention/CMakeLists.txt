@@ -94,6 +94,12 @@ set(DECODE_SOURCES
     benchmarks_decode_bf16.cpp
 )
 
+if(SYCL_TARGET_INTEL_GPU_CRI)
+  list(APPEND DECODE_SOURCES
+       benchmarks_decode_mxfp8.cpp
+  )
+endif()
+
 add_library(decode_lib SHARED ${DECODE_SOURCES})
 
 # Create the prefill subsuite under flash_attention

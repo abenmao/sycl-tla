@@ -206,6 +206,11 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
   static constexpr bool Persistent = FMHAConfiguration::Persistent;
   // Scale-related types are only defined when !Persistent & !CachedKV & !PagedKV
   static constexpr bool BlockScale = (Persistent || CachedKV || PagedKV) ? false : FMHAKernel::BlockScale;
+  // Whether the kernel packs GQA query heads into the Q rows (GQA fusion). This
+  // changes the block-scale ScaleQ layout: rows are padded/packed per KV head
+  // instead of one row per query head. Must match the example runner so the
+  // stride/shape handed to the kernel is the GQA-fusion layout it expects.
+  static constexpr bool PacksGqaQ = FMHAKernel::kPacksGqaQ;
 
   // Helper to safely extract scale-related types from FMHA kernel
   template<typename FMHAKernel, bool Enable>
@@ -266,6 +271,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
   cutlass::DeviceAllocation<ElementScale> block_scaleQ;
   cutlass::DeviceAllocation<ElementScale> block_scaleK;
   cutlass::DeviceAllocation<ElementScale> block_scaleV;
+  cutlass::DeviceAllocation<ElementScale> block_scaleP;
   std::vector<int> cumulative_scale_q;
   std::vector<int> cumulative_scale_kv;
   cutlass::DeviceAllocation<int> device_cumulative_scale_q;
@@ -970,33 +976,61 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
       int scale_v = cute::ceil_div(seq_len_kv, GROUP_SIZE);
       if constexpr (isVarLen && BlockScale) { scale_v = cumulative_scale_kv.back(); }
 
-      auto shape_scale_Q = cute::make_shape(seq_len_qo, scale_q, num_heads_q, batch);
       auto shape_scale_K = cute::make_shape(seq_len_kv, scale_k, num_heads_kv, batch);
       auto shape_scale_V = cute::make_shape(head_size_vo, scale_v, num_heads_kv, batch);
 
-      stride_SQ = cutlass::make_cute_packed_stride(StrideScaleQ{}, shape_scale_Q); 
       stride_SK = cutlass::make_cute_packed_stride(StrideScaleK{}, shape_scale_K);
       stride_SV = cutlass::make_cute_packed_stride(StrideScaleV{}, shape_scale_V);
 
-      block_scaleQ.reset(cute::size(shape_scale_Q));
       block_scaleK.reset(cute::size(shape_scale_K));
       block_scaleV.reset(cute::size(shape_scale_V));
 
-      initialize_scale(block_scaleQ, options);
       initialize_scale(block_scaleK, options);
       initialize_scale(block_scaleV, options);
+
+      // scaleP scales the softmax probabilities before the P*V matmul in the
+      // block-scaled path. The kernel unconditionally reads KernelArguments::scaleP
+      // (mainloop dereferences p.scaleP + offset_v on device); leaving it null
+      // dereferences a null pointer on the device and aborts the run. Match the
+      // example runner: allocate a scaleV-shaped buffer filled with ones.
+      block_scaleP.reset(cute::size(shape_scale_V));
+      std::vector<ElementScale> host_scaleP(cute::size(shape_scale_V), ElementScale(1));
+      block_scaleP.copy_from_host(host_scaleP.data(), host_scaleP.size());
 
       auto layout_Q = cute::make_layout(shape_Q, stride_Q);
       auto layout_K = cute::make_layout(shape_K, stride_K);
       auto layout_V = cute::make_layout(shape_V, stride_V);
 
-      auto layout_scale_Q = cute::make_layout(shape_scale_Q, stride_SQ);
       auto layout_scale_K = cute::make_layout(shape_scale_K, stride_SK);
       auto layout_scale_V = cute::make_layout(shape_scale_V, stride_SV);
 
-      apply_scale<ElementQKMMAVerify, ElementQ>(block_Q_dq.get(), block_Q.get(), layout_Q, block_scaleQ.get(), layout_scale_Q);
       apply_scale<ElementQKMMAVerify, ElementK>(block_K_dq.get(), block_K.get(), layout_K, block_scaleK.get(), layout_scale_K);
       apply_scale<ElementPVMMAVerify, ElementV>(block_V_dq.get(), block_V.get(), layout_V, block_scaleV.get(), layout_scale_V);
+
+      // ScaleQ must use the GQA-fusion layout when the kernel packs query heads
+      // into the Q rows (PacksGqaQ). fmha_scaleq_rows() rounds head_group_q*seq_len_qo
+      // up to the block alignment and the head extent collapses to num_heads_kv.
+      // The stride handed to the kernel must be this packed layout; the old
+      // (seq_len_qo, scale_q, num_heads_q, batch) shape produces a wrong stride_SQ
+      // and the device reads ScaleQ out of bounds (sim reset).
+      const int gqa_group = num_heads_q / num_heads_kv;
+      const int q_len     = seq_len_qo;
+      const int rows_q    = cutlass::fmha::kernel::fmha_scaleq_rows(PacksGqaQ, q_len, gqa_group);
+      const int heads_q   = PacksGqaQ ? num_heads_kv : num_heads_q;
+      const int row_heads = PacksGqaQ ? gqa_group : 1;
+
+      auto shape_scale_Q = cute::make_shape(rows_q, scale_q, heads_q, batch);
+      stride_SQ = cutlass::make_cute_packed_stride(StrideScaleQ{}, shape_scale_Q);
+
+      block_scaleQ.reset(cute::size(shape_scale_Q));
+      initialize_scale(block_scaleQ, options);
+
+      auto layout_scale_Q = cute::make_layout(
+          cute::make_shape(q_len, scale_q, cute::make_shape(row_heads, heads_q), batch),
+          cute::make_stride(cute::_1{}, cute::get<1>(stride_SQ),
+                            cute::make_stride(q_len, cute::get<2>(stride_SQ)),
+                            cute::get<3>(stride_SQ)));
+      apply_scale<ElementQKMMAVerify, ElementQ>(block_Q_dq.get(), block_Q.get(), layout_Q, block_scaleQ.get(), layout_scale_Q);
     }
 
     return shape;
@@ -1086,6 +1120,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
             GROUP_SIZE,
             block_K_cache.get(), stride_K_cache,
             block_V_cache.get(), stride_V_cache,
+            block_scaleP.get(), stride_SV,
           },
           {
             options.softmax_scale,
@@ -1230,6 +1265,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
               GROUP_SIZE,
               block_K_cache.get(), stride_K_cache,
               block_V_cache.get(), stride_V_cache,
+              block_scaleP.get(), stride_SV,
             },
             {
               options.softmax_scale,

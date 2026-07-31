@@ -47,6 +47,7 @@ template <typename ElementQ, typename ElementK, typename ElementV, typename Elem
           typename SubgroupLayoutQK, typename SubgroupLayoutPV_,
           bool Causal_, bool VarLen_, bool CachedKV_, bool PagedKV_, bool Persistent_,
           bool BlockScale, int PipelineStages,
+          bool GqaFusion = false,
           typename GmemTiledCopyQ = void, 
           typename GmemTiledCopyK = void, 
           typename GmemTiledCopyV = void, 
@@ -156,9 +157,14 @@ struct FMHAConfig {
     GmemTiledCopyO
   >;
 
+  // GqaFusion transparently forwards to the tile scheduler.  When false the type
+  // XeFHMAIndividualTileScheduler<false, false, Causal, false> is identical to the
+  // previous XeFHMAIndividualTileScheduler<false, false, Causal>, so all existing
+  // benchmark kernels are byte-identical.  When true it enables GQA fusion (NoGQA=true,
+  // GqaFusion=true), matching the example's decode path (batch>1 case: BO=false,HGO=true).
   using Scheduler = cute::conditional_t<Persistent,
       cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler,
-      cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false, false, Causal>
+      cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false, GqaFusion, Causal, GqaFusion>
   >;
   using FMHAKernel = cute::conditional_t<Persistent,
       cutlass::fmha::kernel::XeFMHAFwdDynamicSplitKernel<
@@ -294,7 +300,7 @@ template<FMHAMode Mode,
          class ElementScale, bool Causal, bool VarLen, bool CachedKV, bool PagedKV, bool Persistent, bool BlockScale,
          int WgTileQ, int WgTileK, int WgTileV,
          int SgTileQ, int SgTileK,
-         int HeadDimQK, int HeadDimV>
+         int HeadDimQK, int HeadDimV, bool GqaFusion = false>
 struct FMHAConfigGenWithTileShape{
   using ShapeQK = Shape<Int<WgTileQ>, Int<WgTileK>, Int<HeadDimQK>>;
   using ShapePV = Shape<Int<WgTileQ>, Int<WgTileV>, Int<WgTileK>>;  // Third dimension = WgTileK (K sequence tile, shared with ShapeQK[1])
@@ -327,7 +333,7 @@ struct FMHAConfigGenWithTileShape{
     ElementQ, ElementK, ElementV, ElementO, LayoutQ, LayoutK, LayoutV, LayoutO, ElementScale,
     ShapeQK, ShapePV, ShapeOutput,
     SubgroupLayoutQK, void,
-    Causal, VarLen, CachedKV, PagedKV, Persistent, BlockScale, PipelineStagesConfig<Mode>::value>;
+    Causal, VarLen, CachedKV, PagedKV, Persistent, BlockScale, PipelineStagesConfig<Mode>::value, GqaFusion>;
 };
 
 } // namespace flash_attention
