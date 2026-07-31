@@ -1325,10 +1325,10 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
       cute_time = timer.seconds() / options.iterations;
     }
 
-    // For CRI TESTs, verify() must be called after the timed iterations loop, also verify on host
+    // For CRI TESTs, verify() must be called after the timed iterations loop, also verify on device
 #ifdef CUTLASS_TEST_FOR_CRI
     if (options.verify != 0) {
-      bool passed = verify(shape, options.is_causal, /*verify_on_device=*/false);
+      bool passed = verify(shape, options.is_causal, /*verify_on_device=*/true);
       std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
       if (!passed) {
         return cutlass::Status::kErrorInternal;
