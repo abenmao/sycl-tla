@@ -68,20 +68,27 @@ int fmha_scaleq_rows(bool packs_gqa_q, int seq_len_qo, int head_group_q) {
                      : seq_len_qo;
 }
 
+CUTLASS_HOST_DEVICE
+int fmha_scale_cache_rows(int kv_cache_rows) {
+  return cutlass::round_up(kv_cache_rows, kBlockScaleRowAlign);
+}
+
 template <class TensorScaleQ, class TensorScaleK, class TensorScaleV>
 struct FMHABlockScaleTensors {
   TensorScaleQ Q;
   TensorScaleK K;
   TensorScaleV V;
   TensorScaleV P;
+  TensorScaleK K_cache;
+  TensorScaleV V_cache;
 
   CUTLASS_DEVICE static FMHABlockScaleTensors make_null() {
     auto null_ptr = make_gmem_ptr(static_cast<typename TensorScaleQ::element_type*>(nullptr));
     auto null_shape = make_shape(0, 0, 0, 0);
+    auto null_k = make_tensor(null_ptr, make_layout(null_shape, decltype(stride(TensorScaleK{})){}));
+    auto null_v = make_tensor(null_ptr, make_layout(null_shape, decltype(stride(TensorScaleV{})){}));
     return {make_tensor(null_ptr, make_layout(null_shape, decltype(stride(TensorScaleQ{})){})),
-            make_tensor(null_ptr, make_layout(null_shape, decltype(stride(TensorScaleK{})){})),
-            make_tensor(null_ptr, make_layout(null_shape, decltype(stride(TensorScaleV{})){})),
-            make_tensor(null_ptr, make_layout(null_shape, decltype(stride(TensorScaleV{})){}))};
+            null_k, null_v, null_v, null_k, null_v};
   }
 };
 
@@ -89,7 +96,8 @@ template <bool PackedStrides = false, class KernelParams>
 CUTLASS_DEVICE auto
 make_blockscale_tensors(KernelParams const& p, int rows_q, int heads_q,
                         int seq_len_kv, int batch_dim,
-                        int offset_q = 0, int offset_k = 0, int offset_v = 0)
+                        int offset_q = 0, int offset_k = 0, int offset_v = 0,
+                        int rows_kv_cache = 0, int offset_k_cache = 0, int offset_v_cache = 0)
 {
   using ElementScale = cute::remove_const_t<cute::remove_pointer_t<decltype(p.scaleQ)>>;
   using StrideScaleQ = cute::remove_cvref_t<decltype(p.dScaleQ)>;
@@ -99,18 +107,25 @@ make_blockscale_tensors(KernelParams const& p, int rows_q, int heads_q,
   auto const& s = p.shape;
   int groups_qk = cute::ceil_div(s.head_size_qk, p.group_size);
   int groups_v  = cute::ceil_div(seq_len_kv, p.group_size);
+  int groups_v_cache = cute::ceil_div(rows_kv_cache, p.group_size);
 
   auto shape_Q = make_shape(rows_q, groups_qk, heads_q, batch_dim);
   auto shape_K = make_shape(seq_len_kv, groups_qk, s.num_heads_kv, batch_dim);
   auto shape_V = make_shape(s.head_size_vo, groups_v, s.num_heads_kv, batch_dim);
+  auto shape_K_cache = make_shape(rows_kv_cache, groups_qk, s.num_heads_kv, batch_dim);
+  auto shape_V_cache = make_shape(s.head_size_vo, groups_v_cache, s.num_heads_kv, batch_dim);
 
   StrideScaleQ stride_Q = p.dScaleQ;
   StrideScaleK stride_K = p.dScaleK;
   StrideScaleV stride_V = p.dScaleV;
+  StrideScaleK stride_K_cache = p.dScaleK_cache;
+  StrideScaleV stride_V_cache = p.dScaleV_cache;
   if constexpr (PackedStrides) {
     stride_Q = cutlass::make_cute_packed_stride(StrideScaleQ{}, shape_Q);
     stride_K = cutlass::make_cute_packed_stride(StrideScaleK{}, shape_K);
     stride_V = cutlass::make_cute_packed_stride(StrideScaleV{}, shape_V);
+    stride_K_cache = cutlass::make_cute_packed_stride(StrideScaleK{}, shape_K_cache);
+    stride_V_cache = cutlass::make_cute_packed_stride(StrideScaleV{}, shape_V_cache);
   }
 
   Tensor ScaleQ = make_tensor(make_gmem_ptr(const_cast<ElementScale*>(p.scaleQ + offset_q)),
@@ -121,9 +136,13 @@ make_blockscale_tensors(KernelParams const& p, int rows_q, int heads_q,
                               make_layout(shape_V, stride_V));
   Tensor ScaleP = make_tensor(make_gmem_ptr(const_cast<ElementScale*>(p.scaleP + offset_v)),
                               make_layout(shape_V, stride_V));
+  Tensor ScaleK_cache = make_tensor(make_gmem_ptr(const_cast<ElementScale*>(p.scaleK_cache + offset_k_cache)),
+                                    make_layout(shape_K_cache, stride_K_cache));
+  Tensor ScaleV_cache = make_tensor(make_gmem_ptr(const_cast<ElementScale*>(p.scaleV_cache + offset_v_cache)),
+                                    make_layout(shape_V_cache, stride_V_cache));
 
   return FMHABlockScaleTensors<decltype(ScaleQ), decltype(ScaleK), decltype(ScaleV)>{
-      ScaleQ, ScaleK, ScaleV, ScaleP};
+      ScaleQ, ScaleK, ScaleV, ScaleP, ScaleK_cache, ScaleV_cache};
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -235,6 +254,10 @@ public:
     StrideV dV_cache{};
     const ElementScale *scaleP = nullptr;
     StrideScaleV dScaleP{};
+    const ElementScale *scaleK_cache = nullptr;
+    StrideScaleK dScaleK_cache{};
+    const ElementScale *scaleV_cache = nullptr;
+    StrideScaleV dScaleV_cache{};
   };
   using KernelParams = KernelArguments;
 
@@ -444,17 +467,23 @@ public:
       [[maybe_unused]] ScaleTensors scales = ScaleTensors::make_null();
       if constexpr (BlockScale) {
         int offset_scaleQ = 0, offset_scaleK = 0, offset_scaleV = 0;
+        int offset_scaleK_cache = 0, offset_scaleV_cache = 0;
         if constexpr (is_var_len) {
           int scale_d = cute::ceil_div(s.head_size_qk, p.group_size);
           offset_scaleQ = s.num_heads_q  * scale_d * s.seq_len_qo.cumulative_length[idx_b];
           offset_scaleK = s.num_heads_kv * scale_d * s.seq_len_kv.cumulative_length[idx_b];
           offset_scaleV = s.num_heads_kv * s.seq_len_kv.cumulative_scale_length[idx_b];
+          if (s.seq_len_kv_cache.cumulative_scale_length) {
+            offset_scaleK_cache = s.num_heads_kv * scale_d * s.seq_len_kv_cache.cumulative_length[idx_b];
+            offset_scaleV_cache = s.num_heads_kv * s.seq_len_kv_cache.cumulative_scale_length[idx_b];
+          }
         }
         scales = make_blockscale_tensors<is_var_len>(
             p,
             fmha_scaleq_rows(kGqaFusion, int(seq_len_qo), head_group_q),
             kGqaFusion ? s.num_heads_kv : s.num_heads_q,
-            int(seq_len_kv), batch_dim, offset_scaleQ, offset_scaleK, offset_scaleV);
+            int(seq_len_kv), batch_dim, offset_scaleQ, offset_scaleK, offset_scaleV,
+            fmha_scale_cache_rows(kv_cache_rows), offset_scaleK_cache, offset_scaleV_cache);
       }
 
       if constexpr (kGqaFusion) {
@@ -532,7 +561,9 @@ public:
                   scales.Q(_,_,head_kv,idx_b_l),
                   scales.K(_,_,head_kv,idx_b_l),
                   scales.V(_,_,head_kv,idx_b_l),
-                  scales.P(_,_,head_kv,idx_b_l));
+                  scales.P(_,_,head_kv,idx_b_l),
+                  scales.K_cache(_,_,head_kv,idx_b_l),
+                  scales.V_cache(_,_,head_kv,idx_b_l));
 
           if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
             sycl::group_barrier(get_work_group<3>());
@@ -545,14 +576,12 @@ public:
         return;
       }
 
-      const int mainloop_kv_cache = BlockScale ? 0 : seq_len_kv_cache;
-
       mainloop.template operator()<false, kDisablePrefetchV>(Q(_,_,head_q,l_coord),
                K(_,_,head,l_coord),
                V(_,_,head,l_coord),
                tArA, tA_max, tA_sum,
                blk_qv, 0, k_blocks, k_blocks, k_blocks_prefetch,
-               thr_id, seq_len, mainloop_kv_cache, idx_b,
+               thr_id, seq_len, seq_len_kv_cache, idx_b,
                full_tile_offset, discard_seq_coord,
                0,0,
                K_cache(_,_,head,l_coord),
@@ -561,7 +590,9 @@ public:
                scales.Q(_,_,head_q,l_coord),
                scales.K(_,_,head,l_coord),
                scales.V(_,_,head,l_coord),
-               scales.P(_,_,head,l_coord));
+               scales.P(_,_,head,l_coord),
+               scales.K_cache(_,_,head,l_coord),
+               scales.V_cache(_,_,head,l_coord));
 
       if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
         sycl::group_barrier(get_work_group<3>());
@@ -686,6 +717,10 @@ public:
     const ElementScale *scaleP = nullptr;
     StrideScaleV dScaleP{};
     int group_size = 32;
+    const ElementScale *scaleK_cache = nullptr;
+    StrideScaleK dScaleK_cache{};
+    const ElementScale *scaleV_cache = nullptr;
+    StrideScaleV dScaleV_cache{};
   };
   using KernelParams = KernelArguments;
 
@@ -930,10 +965,15 @@ public:
 
     [[maybe_unused]] ScaleTensors scales = ScaleTensors::make_null();
     if constexpr (BlockScale) {
+      int scale_cache_rows = s.seq_len_kv_cache;
+      if constexpr (CollectiveMainloop::PagedKV) {
+        scale_cache_rows = paged_kv_cache_rows(s.seq_len_kv_cache, params.mainloop.page_size);
+      }
       scales = make_blockscale_tensors(
           p,
           fmha_scaleq_rows(kPacksGqaQ, int(s.seq_len_qo), head_group_q),
-          s.num_heads_kv, int(s.seq_len_kv), s.batch);
+          s.num_heads_kv, int(s.seq_len_kv), s.batch,
+          0, 0, 0, fmha_scale_cache_rows(scale_cache_rows));
     }
 
     TileScheduler tile_scheduler{params.scheduler, get<1>(TileShapeQK{}), local_k_blocks, num_batch_heads};
@@ -1040,7 +1080,9 @@ public:
               scales.Q(_,_,head_kv,idx_b),
               scales.K(_,_,head_kv,idx_b),
               scales.V(_,_,head_kv,idx_b),
-              scales.P(_,_,head_kv,idx_b));
+              scales.P(_,_,head_kv,idx_b),
+              scales.K_cache(_,_,head_kv,idx_b),
+              scales.V_cache(_,_,head_kv,idx_b));
 
         tA_sum = reduce<0, cute::ReduceMode::Horizontal>(tA_sum_partial, sycl::plus<void>{});
 

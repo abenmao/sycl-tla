@@ -56,6 +56,11 @@ foreach(HEAD_DIM 64 96 128 192)
       set(TEST_NO_PAGED_DECODE ${TEST_BASE} "--seq_len_qo=1")
       set(TEST_CACHED_KV_PREFILL ${TEST_BASE} "--seq_len_kv_cache=64" "--seq_len_qo=256")
       set(TEST_CACHED_KV_DECODE ${TEST_BASE} "--seq_len_kv_cache=64" "--seq_len_qo=1")
+      set(MXFP_DECODE_BASE "--batch=1 --num_heads_q=4 --num_heads_kv=4 --seq_len_kv=1 --seq_len_qo=1 --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
+      set(TEST_MXFP_CACHED_KV_PREFILL ${TEST_BASE} "--seq_len_kv_cache=128" "--seq_len_qo=256")
+      set(TEST_MXFP_PAGED_PREFILL ${TEST_BASE} "--seq_len_kv_cache=128" "--page_size=64" "--use_paged_kv" "--seq_len_qo=256")
+      set(TEST_MXFP_CACHED_KV_DECODE ${MXFP_DECODE_BASE} "--seq_len_kv_cache=512")
+      set(TEST_MXFP_PAGED_DECODE ${MXFP_DECODE_BASE} "--seq_len_kv_cache=512" "--page_size=256" "--use_paged_kv")
     else()
       set(TEST_PAGED_PREFILL "--use_paged_kv")
       set(TEST_PAGED_DECODE "--use_paged_kv")
@@ -136,8 +141,26 @@ foreach(HEAD_DIM 64 96 128 192)
     target_compile_definitions(06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
     target_compile_definitions(06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
 
-    # --- Cached KV targets (CachedKV=true, PagedKV=false, split into separate binary) ---
-    if (NOT INPUT_TYPE STREQUAL "mx_float_e5m2_t" AND NOT INPUT_TYPE STREQUAL "mx_float_e4m3_t" AND NOT INPUT_TYPE STREQUAL "mx_float_e2m1_t")
+    # --- Cached KV targets (CachedKV=true, split into separate binary) ---
+    if (INPUT_TYPE STREQUAL "mx_float_e5m2_t" OR INPUT_TYPE STREQUAL "mx_float_e4m3_t" OR INPUT_TYPE STREQUAL "mx_float_e2m1_t")
+      cutlass_example_add_executable(
+        06_xe_fmha_fwd_prefill_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM}
+        06_xe_fmha_fwd_mxfp.cpp
+        TEST_COMMAND_OPTIONS
+        TEST_MXFP_CACHED_KV_PREFILL
+        TEST_MXFP_PAGED_PREFILL
+      )
+      target_compile_definitions(06_xe_fmha_fwd_prefill_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL CACHED_KV SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
+
+      cutlass_example_add_executable(
+        06_xe_fmha_fwd_decode_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM}
+        06_xe_fmha_fwd_mxfp.cpp
+        TEST_COMMAND_OPTIONS
+        TEST_MXFP_CACHED_KV_DECODE
+        TEST_MXFP_PAGED_DECODE
+      )
+      target_compile_definitions(06_xe_fmha_fwd_decode_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE CACHED_KV SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
+    else()
       cutlass_example_add_executable(
         06_xe_fmha_fwd_prefill_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM}
         06_xe_fmha_fwd_cached_kv.cpp

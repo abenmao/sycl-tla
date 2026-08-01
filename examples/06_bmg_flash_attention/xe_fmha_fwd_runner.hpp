@@ -265,11 +265,15 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
   StrideScaleQ stride_SQ;
   StrideScaleK stride_SK;
   StrideScaleV stride_SV;
+  StrideScaleK stride_SK_cache{};
+  StrideScaleV stride_SV_cache{};
 
   cutlass::DeviceAllocation<ElementScale> block_scaleQ;
   cutlass::DeviceAllocation<ElementScale> block_scaleK;
   cutlass::DeviceAllocation<ElementScale> block_scaleV;
   cutlass::DeviceAllocation<ElementScale> block_scaleP;
+  cutlass::DeviceAllocation<ElementScale> block_scaleK_cache;
+  cutlass::DeviceAllocation<ElementScale> block_scaleV_cache;
 
   ElementScale scale_k = ElementScale(1);
   ElementScale scale_v = ElementScale(1);
@@ -277,9 +281,11 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
 
   std::vector<int> cumulative_scale_q;
   std::vector<int> cumulative_scale_kv;
+  std::vector<int> cumulative_scale_kv_cache;
 
   cutlass::DeviceAllocation<int> device_cumulative_scale_q;
   cutlass::DeviceAllocation<int> device_cumulative_scale_kv;
+  cutlass::DeviceAllocation<int> device_cumulative_scale_kv_cache;
 
   uint64_t seed = 0;
 
@@ -364,6 +370,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     if constexpr (BlockScale) {
       cumulative_scale_q = {0};
       cumulative_scale_kv = {0};
+      cumulative_scale_kv_cache = {0};
     }
 
 
@@ -387,6 +394,8 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
         int scale_len_kv = cute::ceil_div(seqlen_kv, GROUP_SIZE);
         cumulative_scale_q.push_back(cumulative_scale_q.back() + scale_len_q);
         cumulative_scale_kv.push_back(cumulative_scale_kv.back() + scale_len_kv);
+        cumulative_scale_kv_cache.push_back(cumulative_scale_kv_cache.back()
+                                            + cute::ceil_div(seqlen_kv_cache, GROUP_SIZE));
       }
       cumulative_seqlen_kv_cache.push_back(cumulative_seqlen_kv_cache.back() + seqlen_kv_cache);
     }
@@ -425,6 +434,9 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
         shape.seq_len_kv.cumulative_scale_length = cumulative_scale_kv.data();
       }
       shape.seq_len_kv_cache = cutlass::fmha::collective::VariableLength{max_seq_len_kv_cache, cumulative_seqlen_kv_cache.data()};
+      if constexpr (BlockScale) {
+        shape.seq_len_kv_cache.cumulative_scale_length = cumulative_scale_kv_cache.data();
+      }
     }
 
     auto batch = shape.batch;
@@ -1014,8 +1026,13 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
           device_cumulative_scale_kv.reset(cumulative_scale_kv.size());
           device_cumulative_scale_kv.copy_from_host(cumulative_scale_kv.data(), cumulative_scale_kv.size());
         }
+        if (!cumulative_scale_kv_cache.empty()) {
+          device_cumulative_scale_kv_cache.reset(cumulative_scale_kv_cache.size());
+          device_cumulative_scale_kv_cache.copy_from_host(cumulative_scale_kv_cache.data(), cumulative_scale_kv_cache.size());
+        }
         shape.seq_len_qo.cumulative_scale_length = device_cumulative_scale_q.get();
         shape.seq_len_kv.cumulative_scale_length = device_cumulative_scale_kv.get();
+        shape.seq_len_kv_cache.cumulative_scale_length = device_cumulative_scale_kv_cache.get();
       }
       shape.seq_len_kv_cache.cumulative_length = device_cumulative_seqlen_kv_cache.get();
     }
@@ -1075,6 +1092,34 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
 
       apply_scale<ElementQKMMAVerify, ElementK>(block_K_dq.get(), block_K.get(), layout_K, block_scaleK.get(), layout_scale_K);
       apply_scale<ElementPVMMAVerify, ElementV>(block_V_dq.get(), block_V.get(), layout_V, block_scaleV.get(), layout_scale_V);
+
+      const int scale_rows_cache =
+          cutlass::round_up(kv_cache_rows, cutlass::fmha::kernel::kBlockScaleRowAlign);
+      int scale_v_cache = cute::ceil_div(scale_rows_cache, GROUP_SIZE);
+      if constexpr (isVarLen) { scale_v_cache = cumulative_scale_kv_cache.back(); }
+
+      auto shape_scale_K_cache = cute::make_shape(scale_rows_cache, scale_k, num_heads_kv, batch);
+      auto shape_scale_V_cache = cute::make_shape(head_size_vo, scale_v_cache, num_heads_kv, batch);
+
+      stride_SK_cache = cutlass::make_cute_packed_stride(StrideScaleK{}, shape_scale_K_cache);
+      stride_SV_cache = cutlass::make_cute_packed_stride(StrideScaleV{}, shape_scale_V_cache);
+
+      if (seq_len_kv_cache > 0) {
+        block_scaleK_cache.reset(cute::size(shape_scale_K_cache));
+        block_scaleV_cache.reset(cute::size(shape_scale_V_cache));
+
+        initialize_scale(block_scaleK_cache, options);
+        initialize_scale(block_scaleV_cache, options);
+
+        apply_scale<ElementQKMMAVerify, ElementK>(
+            block_K_cache_dq.get(), block_K_cache.get(),
+            cute::make_layout(shape_K_cache, stride_K_cache),
+            block_scaleK_cache.get(), cute::make_layout(shape_scale_K_cache, stride_SK_cache));
+        apply_scale<ElementPVMMAVerify, ElementV>(
+            block_V_cache_dq.get(), block_V_cache.get(),
+            cute::make_layout(shape_V_cache, stride_V_cache),
+            block_scaleV_cache.get(), cute::make_layout(shape_scale_V_cache, stride_SV_cache));
+      }
 
       const int gqa_group = num_heads_q / num_heads_kv;
       const int q_len     = seq_len_qo;
@@ -1210,6 +1255,8 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
             block_scaleV.get(), stride_SV,
             block_scaleP.get(), stride_SV,
             GROUP_SIZE,
+            block_scaleK_cache.get(), stride_SK_cache,
+            block_scaleV_cache.get(), stride_SV_cache,
           },
           {
             options.softmax_scale,
@@ -1236,7 +1283,9 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
             GROUP_SIZE,
             block_K_cache.get(), stride_K_cache,
             block_V_cache.get(), stride_V_cache,
-            block_scaleP.get(), stride_SV
+            block_scaleP.get(), stride_SV,
+            block_scaleK_cache.get(), stride_SK_cache,
+            block_scaleV_cache.get(), stride_SV_cache
           },
           {
             options.softmax_scale,

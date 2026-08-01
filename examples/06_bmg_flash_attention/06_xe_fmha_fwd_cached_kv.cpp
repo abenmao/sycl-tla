@@ -247,7 +247,6 @@ int main(int argc, const char **argv) {
 #else
   // Directly instantiate only CachedKV=true kernels.
   // Causal and VarLen are dispatched at runtime.
-  // BlockScale (mxfp) is not supported with CachedKV.
   using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
 
 #if HEAD_DIM == 128 && defined(PREFILL) && !(defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)) && (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
