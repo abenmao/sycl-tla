@@ -1545,7 +1545,11 @@ template <bool Causal,
           typename GmemTiledCopyK = void,
           typename GmemTiledCopyV = void,
           typename GmemTiledCopyO = void,
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
           XeStoreCachePolicy StoreCachePolicyO = XeStoreCachePolicy::kWT_WB_WB>
+#else
+          XeStoreCachePolicy StoreCachePolicyO = XeStoreCachePolicy::kDefault>
+#endif
 struct FMHAConfig {
 
   static constexpr int SGTileQ = get<0>(shape_div(TileShapeQK{}, shape(SubgroupLayoutQK{})))();

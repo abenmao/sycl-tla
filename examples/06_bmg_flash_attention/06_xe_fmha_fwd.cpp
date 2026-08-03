@@ -131,10 +131,10 @@ int main(int argc, const char **argv) {
 
 #elif HEAD_DIM == 128
 #if !(defined(SYCL_TARGET_INTEL_GPU_CRI))
-  using ShapeQK = Shape<_256, _32, _32>;
-  using ShapePV = Shape<_256, _32, _32>;
-  using ShapeOut = Shape<_256, _128>;
-  using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
+  using ShapeQK = Shape<_512, _32, _32>;
+  using ShapePV = Shape<_512, _32, _32>;
+  using ShapeOut = Shape<_512, _128>;
+  using SubgroupLayoutQK = Layout<Shape<_32, _1, _1>>;
 #else
   using ShapeQK = Shape<_512, _64, QKTileK>;
   using ShapePV = Shape<_512, _64, _64>;
@@ -156,7 +156,17 @@ int main(int argc, const char **argv) {
   using ShapeQK = Shape<_256, _64, _32>;
   using ShapePV = Shape<_256, _32, _64>;
   using ShapeOut = Shape<_256, _192>;
+#if !(defined(SYCL_TARGET_INTEL_GPU_CRI))
+  using SubgroupLayoutQK = Layout<Shape<_32, _1, _1>>;
+#else
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
+#endif
+
+#elif HEAD_DIM == 256
+  using ShapeQK = Shape<_256, _64, _32>;
+  using ShapePV = Shape<_256, _32, _64>;
+  using ShapeOut = Shape<_256, _256>;
+  using SubgroupLayoutQK = Layout<Shape<_32, _1, _1>>;
 
 #endif
 #undef QKTileK
@@ -221,6 +231,11 @@ int main(int argc, const char **argv) {
 
 #ifdef DECODE
   constexpr int PipelineStages = 1;
+#elif !(defined(SYCL_TARGET_INTEL_GPU_CRI))
+  // BMG (Xe20) prefill: the mainloop is L1/memory-pipe sensitive. Together with the
+  // after-GEMM2 K-prefetch (see xe_fmha_fwd_mainloop.hpp), a shallower prefetch depth
+  // keeps the K/V L1 footprint small. Stages=1 is the measured optimum on BMG.
+  constexpr int PipelineStages = 1;
 #else
   constexpr int PipelineStages = 2;
 #endif
@@ -263,10 +278,21 @@ int main(int argc, const char **argv) {
     return FMHA_RUN_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8);
   else if (total_rows <= 16)
     return FMHA_RUN_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16);
+#if HEAD_DIM >= 128 && !(defined(SYCL_TARGET_INTEL_GPU_CRI))
+  // BMG (Xe20) hdim>=128: the M=32 rung needs 32 sub-groups (SubgroupLayoutQK32 = <4,8,1>)
+  // over a KV_TILE_SIZE-wide tile and overruns the 256-GRF budget, so the launch fails with
+  // UR_RESULT_ERROR_OUT_OF_RESOURCES. Skip that rung and fall through to M=64, which uses
+  // 8 sub-groups and a 64-wide KV tile. CRI/Xe3p has the registers for the full ladder.
+  // Capping M costs scheduling granularity, not coverage: the kernel loops
+  // ceil_div(total_rows, QK_BLK_M) times over the packed rows.
+  else
+    return FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64);
+#else
   else if (total_rows <= 32)
     return FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32);
   else
     return FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64);
+#endif
 
   #undef FMHA_RUN_Q
 #else

@@ -72,7 +72,7 @@ set(TEST_VARLEN_CACHED_KV_PREFILL ${TEST_CACHED_KV_PREFILL} "--varlen")
 set(TEST_VARLEN_KVCACHE_PREFILL ${TEST_KVCACHE_PREFILL} "--varlen")
 set(TEST_VARLEN_KVCACHE_PAGED_PREFILL ${TEST_KVCACHE_PAGED_PREFILL} "--varlen")
 
-foreach(HEAD_DIM 64 96 128 192)
+foreach(HEAD_DIM 64 96 128 192 256)
   foreach(INPUT_TYPE ${INPUT_TYPES})
     # FP4 (e2m1) DPAS atom has K=64, so head dim must be a multiple of 64.
     # hdim96 is not divisible by 64 and is therefore unsupported for FP4 inputs.

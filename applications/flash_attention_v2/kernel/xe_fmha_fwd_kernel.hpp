@@ -261,6 +261,26 @@ public:
     StrideScaleK dScaleK_cache{};
     const ElementScale *scaleV_cache = nullptr;
     StrideScaleV dScaleV_cache{};
+    // GQA-fused per-token causal masking, driven at RUNTIME instead of via the
+    // CausalMask template parameter. >0 means "apply the packed per-token mask,
+    // using this many query tokens per head".
+    //
+    // Why runtime: instantiating this mainloop with CausalMask=true hangs the
+    // GPU on BMG (Xe engine reset, no page fault) for packed decode. Keeping
+    // the mainloop non-causal and driving the identical mask from here avoids
+    // that template path while computing the same result. 0 = unchanged
+    // behaviour for every existing caller.
+    //
+    // NOTE: no in-tree caller sets this -- the writer is xpu-perf
+    // (micro_perf/vendor_ops/INTEL/ops/sycl_ext/flash_attention.cpp), which
+    // assigns it directly so that removing the field breaks its build rather
+    // than silently dropping the mask. Do not delete it as dead code.
+    int packed_causal_q_len = 0;
+    // ENABLE FLAG ONLY -- the divisor comes from shape.seq_len_qo. Derived on
+    // the host by to_underlying_arguments; callers never set this directly.
+    // The packed causal mask must NOT use `%` on device -- a device-side
+    // integer divide on this path hangs the GPU.
+    cutlass::FastDivmod packed_causal_divmod{};
   };
   using KernelParams = KernelArguments;
 
@@ -284,7 +304,23 @@ public:
   //
 
   static Params to_underlying_arguments(Arguments const &args, void *workspace) {
-    return {args.kernel,
+    KernelParams kernel_params = args.kernel;
+    // Divisor for the packed causal mask is ALWAYS seq_len_qo -- derive it from
+    // the shape, not from any caller-supplied value.
+    // Built here (HOST) on purpose: FastDivmod's constructor itself divides,
+    // and a device-side integer divide on this path hangs the GPU.
+    if constexpr (!is_var_len) {
+      int q_len = int(args.kernel.shape.seq_len_qo);
+      if (q_len > 0) {
+        kernel_params.packed_causal_divmod = cutlass::FastDivmod(q_len);
+      }
+    }
+    // LIMITATION (var_len): seq_len_qo is per-batch, so a single host-built
+    // divmod cannot represent it and the divisor stays 1. That is CORRECT
+    // wherever gqa packing forces seq_len_qo == 1 (mod 1 == 0 either way), but
+    // a var_len + GqaFusion + causal case with q_len > 1 would mask wrongly.
+    // Not reachable from xpu-perf (VarLen=false); revisit if that changes.
+    return {kernel_params,
             CollectiveMainloop::to_underlying_arguments(args.mainloop, workspace),
             CollectiveEpilogue::to_underlying_arguments(args.epilogue, workspace),
             TileScheduler::to_underlying_arguments(args.kernel.shape, args.hw_info, TileShapeO{})};
@@ -345,6 +381,14 @@ public:
 
       auto sequence_length_shape = get_sequence_length_shape(s, idx_b);
       auto [seq_len_qo, seq_len_kv, seq_len_kv_cache] = sequence_length_shape;
+#if defined(Q_PACKED_DECODE)
+      if constexpr (TileScheduler::kGqaFusion) {
+        // Q_PACKED_DECODE: blk_q ranges over the packed M-tiles spanning
+        // head_group_q * seq_len_qo rows (one WG per tile), so bound the tile
+        // index by the packed row count, not seq_len_qo.
+        if (blk_q * get<0>(TileShapeQK{}) >= head_group_q * seq_len_qo) continue;
+      } else
+#endif
       if (blk_q * get<0>(TileShapeQK{}) >= seq_len_qo) continue;
 
       int discard_seq_coord = 0;
@@ -522,14 +566,33 @@ public:
 
         const int q_len = seq_len_qo;
         const int total_rows = g * q_len;
+#if defined(Q_PACKED_DECODE)
+        // Q_PACKED_DECODE: the scheduler already split the head_group_q * q_len
+        // packed rows across parallel WGs, so this WG owns exactly one M-tile
+        // (blk_q) and runs a single KV pass -- no serial per-tile re-read.
+        const int num_q_blocks = 1;
+#else
         const int num_q_blocks = (total_rows + int(QK_BLK_M) - 1) / int(QK_BLK_M);
+#endif
 
         int fusion_seq_len          = seq_len;
+        // Must match the outer k_blocks, which sums cache tiles + new tiles
+        // separately (cache and new KV are distinct tensors, so a partial last
+        // cache tile cannot be merged with the first new tile). Using
+        // ceil_div(seq_len_kv_cache + seq_len_kv) here under-counts whenever
+        // seq_len_kv_cache is not a multiple of the tile N, silently dropping
+        // the new-KV tail.
         int fusion_k_blocks         = k_blocks;
         int fusion_full_tile_offset = full_tile_offset;
         int fusion_discard          = discard_seq_coord;
         int gqa_fusion_q_per_head   = 0;
-        if constexpr (CollectiveMainloop::CausalMask) {
+        // Causal here comes from EITHER the template (legacy callers) or the
+        // runtime flag (packed decode, which instantiates the mainloop
+        // non-causal to avoid the hanging CausalMask=true path). Both produce
+        // the same fusion_* values below.
+        const bool fusion_causal =
+            CollectiveMainloop::CausalMask || p.packed_causal_q_len > 0;
+        if (fusion_causal) {
           gqa_fusion_q_per_head   = q_len;
           fusion_seq_len          = seq_len_kv_cache + seq_len_kv;
           fusion_full_tile_offset = seq_len_kv - cute::min(q_len, seq_len_kv);
@@ -544,8 +607,18 @@ public:
         const auto q_group_off = head_kv * g * stride<2>(Q.layout());
         const auto o_group_off = head_kv * g * stride<2>(O.layout());
         for (int qb = 0; qb < num_q_blocks; ++qb) {
+#if defined(Q_PACKED_DECODE)
+          const int row_start  = blk_q * int(QK_BLK_M);   // this WG's packed M-tile
+#else
           const int row_start  = qb * int(QK_BLK_M);
+#endif
           const int valid_rows = cute::min(int(QK_BLK_M), total_rows - row_start);
+          // Q/O tile views are pre-offset by row_start, so the mainloop/epilogue
+          // must address tile 0 in the Q (M) dimension. In the native serial path
+          // blk_q is always 0 (scheduler Q-grid = 1 since seq_len_qo <= QK_BLK_M),
+          // so this equals the old blk_qv; with Q_PACKED_DECODE blk_q is the tile
+          // index and must be zeroed here (the offset lives in the view).
+          const auto blk_qv_pk = make_coord(0, blk_v);
 
           auto make_gqa_view_q = [&, idx_b_l, row_start, valid_rows]() {
             auto offset = idx_b_l * stride<3>(Q.layout())
@@ -579,7 +652,7 @@ public:
                   K(_,_,head_kv,idx_b),
                   V(_,_,head_kv,idx_b),
                   tArA, tA_max, tA_sum,
-                  blk_qv, 0, fusion_k_blocks, fusion_k_blocks, fusion_k_blocks,
+                  blk_qv_pk, 0, fusion_k_blocks, fusion_k_blocks, fusion_k_blocks,
                   thr_id,
                   fusion_seq_len, seq_len_kv_cache, idx_b,
                   fusion_full_tile_offset, fusion_discard,
@@ -592,7 +665,9 @@ public:
                   scales.V(_,_,head_kv,idx_b_l),
                   scales.P(_,_,head_kv,idx_b_l),
                   scales.K_cache(_,_,head_kv,idx_b_l),
-                  scales.V_cache(_,_,head_kv,idx_b_l));
+                  scales.V_cache(_,_,head_kv,idx_b_l),
+                  compute_sg_active,
+                  p.packed_causal_divmod);
 
           if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
             sycl::group_barrier(get_work_group<3>());
@@ -600,7 +675,7 @@ public:
 
           epilogue(make_gqa_view_o(),
                   tArA, tA_max, tA_sum,
-                  blk_qv, thr_id, p.scale_v);
+                  blk_qv_pk, thr_id, p.scale_v);
         }
         return;
       }
