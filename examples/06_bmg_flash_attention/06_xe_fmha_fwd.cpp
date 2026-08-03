@@ -147,7 +147,17 @@ int main(int argc, const char **argv) {
   using ShapeQK = Shape<_256, _64, _32>;
   using ShapePV = Shape<_256, _32, _64>;
   using ShapeOut = Shape<_256, _192>;
+#if !(defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+  using SubgroupLayoutQK = Layout<Shape<_32, _1, _1>>;
+#else
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
+#endif
+
+#elif HEAD_DIM == 256
+  using ShapeQK = Shape<_256, _64, _32>;
+  using ShapePV = Shape<_256, _32, _64>;
+  using ShapeOut = Shape<_256, _256>;
+  using SubgroupLayoutQK = Layout<Shape<_32, _1, _1>>;
 
 #endif
 #elif defined(DECODE)
@@ -206,6 +216,11 @@ int main(int argc, const char **argv) {
 #endif
 
 #ifdef DECODE
+  constexpr int PipelineStages = 1;
+#elif !(defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+  // BMG (Xe20) prefill: the mainloop is L1/memory-pipe sensitive. Together with the
+  // after-GEMM2 K-prefetch (see xe_fmha_fwd_mainloop.hpp), a shallower prefetch depth
+  // keeps the K/V L1 footprint small. Stages=1 is the measured optimum on BMG.
   constexpr int PipelineStages = 1;
 #else
   constexpr int PipelineStages = 2;
@@ -297,7 +312,13 @@ int main(int argc, const char **argv) {
                       false, false, false,                                                           \
                       cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options)))
 
+  // BMG (Xe20): an M=32/64 tile paired with the 256-wide KV tile needs 32 sub-groups and
+  // overruns the 256-GRF budget at hdim128, so the launch fails with
+  // UR_RESULT_ERROR_OUT_OF_RESOURCES. CRI/Xe3p has the registers for the full ladder.
+  // Capping M only costs scheduling granularity, not coverage: the GqaFusion kernel loops
+  // ceil_div(total_rows, QK_BLK_M) times over the packed rows.
   if (!use_two_kernel_split) {
+#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
     if (total_rows <= 8)
       return FMHA_RUN_DYNAMIC_OR_NON_SPLIT_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8);
     else if (total_rows <= 16)
@@ -306,9 +327,42 @@ int main(int argc, const char **argv) {
       return FMHA_RUN_DYNAMIC_OR_NON_SPLIT_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32);
     else
       return FMHA_RUN_DYNAMIC_OR_NON_SPLIT_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64);
+#else
+    if (total_rows <= 8)
+      return FMHA_RUN_DYNAMIC_OR_NON_SPLIT_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8);
+    else if (total_rows <= 16)
+      return FMHA_RUN_DYNAMIC_OR_NON_SPLIT_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16);
+#if HEAD_DIM >= 128
+    else if (total_rows <= 32)
+      return FMHA_RUN_DYNAMIC_OR_NON_SPLIT_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64);
+#else
+    else if (total_rows <= 32)
+      return FMHA_RUN_DYNAMIC_OR_NON_SPLIT_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32);
+#endif
+    else
+      return FMHA_RUN_DYNAMIC_OR_NON_SPLIT_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64);
+#endif
   }
 
-#if defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
+  // Same BMG M-cap as above; the split-KV scheduler packs GQA and query positions into the
+  // Q grid dimension, so a smaller tile just yields more work-groups.
+#if !(defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+  if (total_rows <= 8)
+    return FMHA_RUN_TWO_KERNEL_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, 8);
+  else if (total_rows <= 16)
+    return FMHA_RUN_TWO_KERNEL_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16, 16);
+#if HEAD_DIM >= 128
+  // BMG hdim128: M=32 tile (SubgroupLayoutQK32 = <4,8,1> = 32 SGs, N=256) overruns
+  // the 256-GRF budget at launch; skip that rung and fall through to M=64.
+  else
+    return FMHA_RUN_TWO_KERNEL_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64, 64);
+#else
+  else if (total_rows <= 32)
+    return FMHA_RUN_TWO_KERNEL_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32, 32);
+  else
+    return FMHA_RUN_TWO_KERNEL_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64, 64);
+#endif
+#elif defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
   if (total_rows <= 8)
     return FMHA_RUN_TWO_KERNEL_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, 8);
   else if (total_rows <= 31)

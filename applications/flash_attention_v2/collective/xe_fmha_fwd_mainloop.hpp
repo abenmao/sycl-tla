@@ -34,6 +34,7 @@
 #include <type_traits>
 
 #include "cutlass/cutlass.h"
+#include "cutlass/fast_math.h"
 #include "cutlass/gemm/dispatch_policy.hpp"
 #include "cutlass/gemm/collective/xe_mma_blockscaled_scale_traits.hpp"
 #include "cute/algorithm/functional.hpp"
@@ -112,6 +113,18 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
                 "check the ShapeQK/ShapePV tile configuration for this head dimension.");
   static constexpr int DTiles = VTiles * decltype(get<1>(TileShapePV{}))::value
                             / decltype(get<2>(TileShapeQK{}))::value;
+  // Q-preload / multi-payload-copy selection.
+  // CRI (Xe3p, 512 GRF): always preload Q and use the multi-payload copy API.
+  // BMG (Xe20, 256 GRF): when DTiles>1 (e.g. hdim128, DTiles=4) the tSrQ_arr[DTiles]
+  //   preload + per-D payload descriptors blow the register budget, so copy Q and
+  //   K/V directly in-loop. When DTiles==1 (e.g. hdim64) preload is cheap — keep it.
+#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+  static constexpr bool kPreloadQ    = true;
+  static constexpr bool kUsePayloads = true;
+#else
+  static constexpr bool kPreloadQ    = (DTiles == 1);
+  static constexpr bool kUsePayloads = (DTiles == 1);
+#endif
   using SubgroupLayoutQK = decltype(TiledMMAQK{}.get_atom_layout_mnk());
   using SGPerWG = decltype(product(take<1,4>(shape(typename TiledMMAQK::ThrLayoutVMNK{}))));
 
@@ -310,7 +323,14 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
              TensorScaleV2D    const& scaleV = TensorScaleV2D{},
              TensorScaleP2D    const& scaleP = TensorScaleP2D{},
              TensorScaleK2D    const& scaleK_cache = TensorScaleK2D{},
-             TensorScaleV2D    const& scaleV_cache = TensorScaleV2D{}) {
+             TensorScaleV2D    const& scaleV_cache = TensorScaleV2D{},
+             // Host-built divmod for gqa_fusion_q_per_head. Used INSTEAD of the
+             // `%` operator in the packed causal mask below: lowering that
+             // runtime-divisor modulo hangs the GPU on the packed-decode path
+             // (engine reset, no page fault), while FastDivmod is pure
+             // multiply-high + shift. Appended last so the other call sites,
+             // which never reach this parameter, stay untouched.
+             cutlass::FastDivmod const& gqa_fusion_q_divmod = cutlass::FastDivmod{}) {
     using namespace sycl::ext::oneapi::this_work_item;
 
     // Short dimension names:
@@ -374,7 +394,10 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     /* Create register fragments for MMA and copies */
     auto tQrQ = thr_copy_q.partition_sg_fragment_D(gQ(_,_,0));
     [[maybe_unused]] auto tSrQ = thr_mma_qk.partition_sg_fragment_A(gQ(_,_,0));
-    std::array<decltype(tSrQ), DTiles> tSrQ_arr;
+    // kPreloadQ: preload all DTiles Q slices (tSrQ_arr[DTiles]).
+    // !kPreloadQ (BMG, DTiles>1): only one live Q slice at a time (tSrQ_arr[1]).
+    static constexpr int kQArrSize = kPreloadQ ? DTiles : 1;
+    std::array<decltype(tSrQ), kQArrSize> tSrQ_arr;
 
     auto tKrK = thr_copy_k.partition_sg_fragment_D(gK(_,_,0,0));
     auto tSrK = thr_mma_qk.partition_sg_fragment_B(gK(_,_,0,0));
@@ -493,11 +516,14 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
     int kblocks_cache = ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{}));
 
-    /* Preload + reorder Q once; reused across all K iterations. */
-    CUTLASS_PRAGMA_UNROLL
-    for (int d = 0; d < DTiles; d++) {
-      copy(copy_q, tQgQ(_,_,_,d), tQrQ);
-      reorder(tQrQ, tSrQ_arr[d]);
+    /* Preload + reorder Q once; reused across all K iterations (kPreloadQ only).
+     * When !kPreloadQ (BMG, DTiles>1) Q is copied per D-tile inside the KV loop. */
+    if constexpr (kPreloadQ) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int d = 0; d < DTiles; d++) {
+        copy(copy_q, tQgQ(_,_,_,d), tQrQ);
+        reorder(tQrQ, tSrQ_arr[d]);
+      }
     }
 
     CUTLASS_PRAGMA_UNROLL
@@ -745,8 +771,13 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
             copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
           }
         } else {
-          copy_with_multi_payloads(copy_k, prepared_k[D], tKrK);
-          update_payloads(prepared_k[D], kv_stride);
+          if constexpr (kUsePayloads) {
+            copy_with_multi_payloads(copy_k, prepared_k[D], tKrK);
+            update_payloads(prepared_k[D], kv_stride);
+          } else {
+            // BMG (DTiles>1): direct indexed copy avoids payload-descriptor registers.
+            copy(copy_k, tKgK(_,_,_,k_idx,D), tKrK);
+          }
         }
 
         reorder(tKrK, tSrK);
@@ -804,7 +835,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
               dequantize(tSrK, scale_k);
             }
           }
-          auto const& tSrQ_d = tSrQ_arr[D];
+          // !kPreloadQ (BMG, DTiles>1): copy+reorder this D-slice of Q now into slot 0.
+          if constexpr (!kPreloadQ) {
+            copy(copy_q, tQgQ(_,_,_,D), tQrQ);
+            reorder(tQrQ, tSrQ_arr[0]);
+          }
+          auto const& tSrQ_d = tSrQ_arr[kPreloadQ ? D : 0];
           if (D == 0) {
             cute::gemm<true>(mma_qk, tSrQ_d(_, _, 0), tSrK(_, _, 0), tSrS);
             CUTLASS_PRAGMA_UNROLL
@@ -885,9 +921,15 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           prefetch(tiled_prefetch_scaleV, prefetch_iter_scaleV(_, _, _, 0));
         }
       }
-      /* Causal masking - only in non-cache mode */
-      if constexpr (!is_cache && CausalMask) {
-        if (K == total_blk - 1) {
+      /* Causal masking - only in non-cache mode.
+         GqaFusion (Q_PACKED_DECODE) instantiates this mainloop NON-causal and
+         drives the identical packed per-token mask from the runtime
+         gqa_fusion_q_per_head, because CausalMask=true hangs the GPU on that
+         path. So the block must also be compiled for GqaFusion. Prefill is
+         unaffected: there CausalMask folds the condition to a constant and
+         gqa_fusion_q_per_head is 0. */
+      if constexpr (!is_cache && (CausalMask || GqaFusion)) {
+        if ((CausalMask || gqa_fusion_q_per_head > 0) && K == total_blk - 1) {
           // Need to get global col and row indices to mask the elements.
           // Use the logical new-KV tile index (K - kblocks_cache) so that
           // col_idx correctly reflects the position within the new-KV segment
@@ -900,13 +942,23 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           // Block-style causal mask: build a per-element additive mask
           // (NaN = keep, -INF = discard) and apply it to the whole score
           // fragment with a single uniform fmin.
+          // seq_coord = token index within the query head. The packed rows are
+          // head-major (packed row = head_local * q_len + token), so this is
+          // (q_pos_base + row_idx) % q_len -- but computed with FastDivmod.
+          // A plain `%` here hangs the GPU: measured 6/8 runs dead with `%`,
+          // 0/5 with the identical value from a bit-mask, on hd64 q_len=4.
           CUTLASS_PRAGMA_UNROLL
           for (int i = 0; i < tSrS.size(); ++i) {
             int row_idx = get<0>(cS_thread(i));
             int col_idx = get<1>(cS_thread(i));
-            int seq_coord = (gqa_fusion_q_per_head > 0)
-                          ? ((q_pos_base + row_idx) % gqa_fusion_q_per_head)
-                          : row_idx;
+            int seq_coord;
+            if (gqa_fusion_q_per_head > 0) {
+              int quo, rem;
+              gqa_fusion_q_divmod(quo, rem, q_pos_base + row_idx);
+              seq_coord = rem;
+            } else {
+              seq_coord = row_idx;
+            }
             bool masked = (col_idx - full_tile_offset) > (seq_coord - discard_seq_coord);
             tSrS(i) = sycl::fmin(tSrS(i), masked ? ElementS(-INFINITY) : ElementS(sycl::nan(0u)));
           }
@@ -964,8 +1016,12 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
             copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
           }
         } else {
-          copy_with_multi_payloads(copy_v, prepared_v[VV], tVrV);
-          update_payloads(prepared_v[VV], kv_stride);
+          if constexpr (kUsePayloads) {
+            copy_with_multi_payloads(copy_v, prepared_v[VV], tVrV);
+            update_payloads(prepared_v[VV], kv_stride);
+          } else {
+            copy(copy_v, tVgV(_,_,_,VV,k_idx), tVrV);
+          }
         }
         reorder(tVrV, tArV);
 

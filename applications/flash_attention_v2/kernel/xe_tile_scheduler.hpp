@@ -65,6 +65,19 @@ template <bool OneBatch = false, bool NoGQA = false, bool CausalMask = false, bo
 struct XeFHMAIndividualTileScheduler {
   static constexpr bool kGqaFusion = GqaFusion;
   static constexpr bool kDisablePrefetchV = DisablePrefetchV;
+  // Grid-layout selector. The causal grid (V, batch*heads, Q) places the Q tile
+  // in the slow (z) dimension with reverse dispatch -- good for prefill causal
+  // load balancing, but for Q_PACKED_DECODE fusion it scatters the packed M-tiles
+  // that SHARE a KV head into different dispatch waves, so the second m-tile
+  // re-reads the (long) KV from HBM instead of reusing L2. For the fusion+gather
+  // case we therefore use the non-causal layout (M-tile in the fast y dimension)
+  // so a KV head's m-tiles co-schedule and share its K/V in L2. The causal MASK
+  // is still applied in the mainloop (driven by CausalMask), independent of this.
+#if defined(Q_PACKED_DECODE)
+  static constexpr bool kUseCausalGrid = CausalMask && !GqaFusion;
+#else
+  static constexpr bool kUseCausalGrid = CausalMask;
+#endif
   using NumHeadsDivmod   = cute::conditional_t<OneBatch, detail::EmptyDivmod, FastDivmod>;
   using HeadGroupDivmod  = cute::conditional_t<NoGQA || GqaFusion, detail::EmptyDivmod, FastDivmod>;
 
@@ -90,17 +103,34 @@ struct XeFHMAIndividualTileScheduler {
 
     int heads_in_grid = GqaFusion ? shape.num_heads_kv : shape.num_heads_q;
 
+    // Number of rows packed into the Q (M) dimension of the grid. For the native
+    // kGqaFusion path this is just seq_len_qo (the head_group_q * seq_len_qo rows
+    // are looped serially inside a single WG). With Q_PACKED_DECODE the packed
+    // M dimension (head_group_q * seq_len_qo) is instead SPLIT across parallel
+    // WGs, so each WG runs one M-tile with a single KV pass -- this removes the
+    // serial per-m-tile KV re-read that regresses seq_len_qo > 1 decode.
+    // NOTE: unlike the .cur Q_PACKED_DECODE this is the *parallelization* half
+    // only -- it keeps the native GqaFusion strided Q/O view and does NOT do a
+    // physical gather/scatter into a global scratch buffer.
+    int q_rows_in_grid = int(shape.seq_len_qo);
+#if defined(Q_PACKED_DECODE)
+    if constexpr (GqaFusion) {
+      q_rows_in_grid = (shape.num_heads_q / shape.num_heads_kv) * int(shape.seq_len_qo);
+    }
+#endif
+
     dim3 grid;
-    if constexpr (CausalMask) {
+    if constexpr (kUseCausalGrid) {
       // Causal: grid layout (V, batch*heads, Q) groups all heads for the same
       // Q tile adjacent, enabling wave-level load balancing under causal mask.
       grid = dim3(size(ceil_div(shape.head_size_vo, get<1>(tile_shape))),   // V
             size(shape.batch * heads_in_grid),                         // (h,b)
-                  size(ceil_div(shape.seq_len_qo,   get<0>(tile_shape))));  // Q
+                  size(ceil_div(q_rows_in_grid,     get<0>(tile_shape))));  // Q
     } else {
-      // Non-causal: original grid layout (V, Q, batch*heads).
+      // Non-causal (and Q_PACKED_DECODE fusion): grid layout (V, Q, batch*heads)
+      // keeps a KV head's packed M-tiles adjacent for L2 reuse.
       grid = dim3(size(ceil_div(shape.head_size_vo, get<1>(tile_shape))),   // V
-                  size(ceil_div(shape.seq_len_qo,   get<0>(tile_shape))),   // Q
+                  size(ceil_div(q_rows_in_grid,     get<0>(tile_shape))),   // Q
             size(shape.batch * heads_in_grid));                        // (h,b)
     }
     Params p{};
@@ -130,7 +160,7 @@ struct XeFHMAIndividualTileScheduler {
     using namespace cute;
     int head;
     int idx_b;
-    if constexpr (CausalMask) {
+    if constexpr (kUseCausalGrid) {
       // Causal grid layout: (V, batch*heads, Q).
       if constexpr (OneBatch) {
         // Single batch: grid.y == num_heads_q. No divmod needed.
