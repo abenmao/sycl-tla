@@ -446,7 +446,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     auto head_size_vo = shape.head_size_vo;
     int seq_len_qo, seq_len_kv, seq_len_kv_cache;
 
-    auto block_Q_ = (BlockScale || PerTensorScale) ? block_Q_dq : in_memory(block_Q);
+    auto block_Q_ = ((BlockScale && !F8kvF16mma) || PerTensorScale) ? block_Q_dq : in_memory(block_Q);
     auto block_K_ = (BlockScale || F8kvF16mma || PerTensorScale) ? block_K_dq : in_memory(block_K);
     auto block_V_ = ((BlockScale && !FP4Input) || F8kvF16mma || PerTensorScale) ? block_V_dq : in_memory(block_V);
     auto block_K_cache_ = (BlockScale || F8kvF16mma || PerTensorScale) ? block_K_cache_dq : in_memory(block_K_cache);
@@ -1050,7 +1050,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     convert_dtype<ElementV, ElementPVMMAVerify, ExampleRunner>(block_V_cache, block_V_cache_dq);
 
 #if !PERSISTENT
-    if constexpr (F8kvF16mma) {
+    if constexpr (F8kvF16mma && !BlockScale) {
       apply_dequantization(block_K, block_K_dq, scale_k);
       apply_dequantization(block_V, block_V_dq, scale_v);
       scale_dequantized(block_K_cache_dq, scale_k);
@@ -1131,14 +1131,20 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
       stride_SQ = cutlass::make_cute_packed_stride(StrideScaleQ{}, shape_scale_Q);
 
       block_scaleQ.reset(cute::size(shape_scale_Q));
-      initialize_scale(block_scaleQ, options);
+      if constexpr (F8kvF16mma) {
+        //block_scaleQ is not used in the kernel, but we need to initialize it to avoid uninitialized memory access
+        std::vector<ElementScale> host_scaleQ(cute::size(shape_scale_Q), ElementScale(1));
+        block_scaleQ.copy_from_host(host_scaleQ.data(), host_scaleQ.size());
+      } else {
+        initialize_scale(block_scaleQ, options);
 
-      auto layout_scale_Q = cute::make_layout(
-          cute::make_shape(q_len, scale_q, cute::make_shape(row_heads, heads_q), batch),
-          cute::make_stride(cute::_1{}, cute::get<1>(stride_SQ),
-                            cute::make_stride(q_len, cute::get<2>(stride_SQ)),
-                            cute::get<3>(stride_SQ)));
-      apply_scale<ElementQKMMAVerify, ElementQ>(block_Q_dq.get(), block_Q.get(), layout_Q, block_scaleQ.get(), layout_scale_Q);
+        auto layout_scale_Q = cute::make_layout(
+            cute::make_shape(q_len, scale_q, cute::make_shape(row_heads, heads_q), batch),
+            cute::make_stride(cute::_1{}, cute::get<1>(stride_SQ),
+                              cute::make_stride(q_len, cute::get<2>(stride_SQ)),
+                              cute::get<3>(stride_SQ)));
+        apply_scale<ElementQKMMAVerify, ElementQ>(block_Q_dq.get(), block_Q.get(), layout_Q, block_scaleQ.get(), layout_scale_Q);
+      }
     }
 #endif
     return shape;
@@ -1486,7 +1492,7 @@ struct FMHAConfig {
   static constexpr bool is_f8_v = cute::is_any_of_v<T, cute::float_e5m2_t, cute::float_e4m3_t>;
   template <typename T>
   static constexpr bool is_f16_v = cute::is_any_of_v<T, cute::half_t, cute::bfloat16_t>;
-  static constexpr bool F8kvF16mma = is_f16_v<ElementQ> && is_f8_v<ElementK> && cute::is_same_v<ElementScale, float> && !BlockScale;
+  static constexpr bool F8kvF16mma = is_f16_v<ElementQ> && is_f8_v<ElementK> && is_f8_v<ElementV>;
 
 #if !(defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
   using DefaultMMA = typename cute::conditional_t<
@@ -1499,7 +1505,7 @@ struct FMHAConfig {
 #else
   using DefaultDpasOp = XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, ElementQ>;
   using DefaultBdpasOp = XE_BDPAS_TT<cute::gcd(SGTileQ, 8), float, ElementQ>;
-  using DefaultMMA = cute::conditional_t<BlockScale, DefaultBdpasOp, DefaultDpasOp>;
+  using DefaultMMA = cute::conditional_t<BlockScale && !F8kvF16mma, DefaultBdpasOp, DefaultDpasOp>;
   using MMAOperationPV = typename cute::conditional_t<
       cute::is_same_v<ElementV, cutlass::float_e5m2_t> || cute::is_same_v<ElementV, cutlass::float_e4m3_t>,
       DefaultMMA,

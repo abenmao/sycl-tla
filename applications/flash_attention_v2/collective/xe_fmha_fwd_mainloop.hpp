@@ -128,6 +128,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
   using TiledCopyV = conditional_t<is_void_v<TiledCopyV_>, decltype(make_block_2d_copy_B(TiledMMAPV{}, TensorV2D{})), TiledCopyV_>;
   static constexpr bool BlockScale = BlockScale_;
   static constexpr bool F8kvF16mma = F8kvF16mma_;
+  static constexpr bool HardwareBlockScale = BlockScale && !F8kvF16mma;
   static constexpr bool PerTensorScale = PerTensorScale_;
 
   using TensorScaleQ = TensorScaleQ_;
@@ -377,12 +378,16 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
     auto tKrK = thr_copy_k.partition_sg_fragment_D(gK(_,_,0,0));
     auto tSrK = thr_mma_qk.partition_sg_fragment_B(gK(_,_,0,0));
+    Tensor cK_mma = make_identity_tensor(select<1,2>(TileShapeQK{}));
+    auto tScK = thr_mma_qk.partition_B(cK_mma);
 
     auto tSrS = thr_mma_qk.partition_sg_fragment_C(cP);
     auto tArP = thr_mma_pv.partition_sg_fragment_A(cP);
 
     auto tVrV = thr_copy_v.partition_sg_fragment_D(gV_split(_,_,0,0));
     auto tArV = thr_mma_pv.partition_sg_fragment_B(gV_split(_,_,0,0));
+    Tensor cV_mma = make_identity_tensor(select<1,2>(TileShapePV{}));
+    auto tAcV = thr_mma_pv.partition_B(cV_mma);
 
     /* Create TiledCopy objects for prefetches */
     auto prefetch_k = make_block_2d_prefetch<SGPerWG{}>(tile_shape_k, K_2D);
@@ -400,7 +405,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     using ScaleCopyQK = void;
     using ScaleCopyPV = void;
     auto scale_context_qk = [&]() {
-      if constexpr (BlockScale) {
+      if constexpr (HardwareBlockScale) {
         auto scale_copy_Q = gemm::collective::make_scaled_copy<ScaleCopyQK, ElementScaleQ, SG_Q, SG_QK_D, GROUP_K>(
                                                       scaleQ, 0, 0, size<4>(tKgK));
         auto scale_copy_K = gemm::collective::make_scaled_copy<ScaleCopyQK, ElementScaleK, SG_K, SG_QK_D, GROUP_K>(
@@ -423,7 +428,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     }();
 
     auto scale_context_pv = [&]() {
-      if constexpr (BlockScale) {
+      if constexpr (HardwareBlockScale) {
         // P-scale is loaded from a dedicated global buffer via the
         // same copy path as V (built with the K extent blk_k1 so the iterator can be
         // sliced by K below). This mirrors scaleV -- the only mechanism breaks compiler's
@@ -449,7 +454,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     }();
 
     auto scale_context_qk_cache = [&]() {
-      if constexpr (BlockScale && CachedKV) {
+      if constexpr (HardwareBlockScale && CachedKV) {
         auto scale_copy_K = gemm::collective::make_scaled_copy<ScaleCopyQK, ElementScaleK, SG_K, SG_QK_D, GROUP_K>(
                                                       scaleK_cache, 0, 0, size<4>(tKgK));
         auto scale_prefetch_K = gemm::collective::make_scaled_prefetch<decltype(get<0>(scale_copy_K)), SG_K, SG_QK_D, GROUP_K>(
@@ -461,7 +466,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     }();
 
     auto scale_context_pv_cache = [&]() {
-      if constexpr (BlockScale && CachedKV) {
+      if constexpr (HardwareBlockScale && CachedKV) {
         auto scale_copy_V = gemm::collective::make_scaled_copy<ScaleCopyPV, ElementScaleV, SG_V, SG_PV_D, GROUP_K>(
                                                       scaleV_cache, 0, 0, blk_k1);
         auto scale_prefetch_V = gemm::collective::make_scaled_prefetch<decltype(get<0>(scale_copy_V)), SG_V, SG_PV_D, GROUP_K>(
@@ -604,7 +609,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
       }
     }
-    if constexpr (BlockScale) {
+    if constexpr (HardwareBlockScale) {
       const int q_coord = q_pos_base + get<0>(blk_qv) * BLK_Q + (subgroup_id / ATOM_K)  * SG_Q;
       auto& tiled_prefetch_scaleQ = get<0>(get<2>(scale_context_qk));
       auto  prefetch_iter_scaleQ = get<1>(get<2>(scale_context_qk));
@@ -644,7 +649,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     /* Preload scaleQ once; reused across all K iterations (BlockScale only).
      * scaleQ depends on (q_coord, l_coord, D) only -- all KV-loop invariants. */
     auto scaleQ_arr_ctx = [&]() {
-      if constexpr (BlockScale) {
+      if constexpr (HardwareBlockScale) {
         using FragScaleQ_t = cute::remove_cvref_t<decltype(get<2>(get<0>(scale_context_qk)))>;
         std::array<FragScaleQ_t, DTiles> arr{};
         auto& tiled_copy_scaleQ = get<0>(get<0>(scale_context_qk));
@@ -663,7 +668,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
     /* Preload scaleP once. */
     auto scaleP_ctx = [&]() {
-      if constexpr (BlockScale && !FP4Input) {
+      if constexpr (HardwareBlockScale && !FP4Input) {
         using FragScaleP_t = cute::remove_cvref_t<decltype(get<2>(get<0>(scale_context_pv)))>;
         FragScaleP_t frag{};
         auto& tiled_copy_scaleP = get<0>(get<0>(scale_context_pv));
@@ -692,7 +697,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
                              auto& copy_k_cur, auto& copy_v_cur,
                              auto& prefetch_v_cur, auto& tKgK_cur,
                              auto& tVgV_cur, auto& pVgV_cur,
-                             auto& scale_ctx_qk_cur, auto& scale_ctx_pv_cur) {
+                             auto& scale_ctx_qk_cur, auto& scale_ctx_pv_cur,
+                             auto const& scale_k_cur, auto const& scale_v_cur) {
 #if not defined(CUTLASS_TEST_FOR_CRI)
       /* Split barrier to keep threads together */
       barrier_arrive(ScopeWorkgroup);
@@ -734,7 +740,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
         reorder(tKrK, tSrK);
 
-        if constexpr (BlockScale) {
+        if constexpr (HardwareBlockScale) {
           if constexpr (sizeof_bits_v<ElementQ> <= 8) {
             static_assert(SG_QK_D >= 32, "Intel Xe blockscaled MMA requires SG_QK_D to be at least 32.");
             static_assert(SG_PV_D >= 32, "Intel Xe blockscaled MMA requires SG_PV_D to be at least 32.");
@@ -773,7 +779,19 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           }
         } else {
           if constexpr (F8kvF16mma) {
-            dequantize(tSrK, scale_k);
+            if constexpr (BlockScale) {
+              CUTLASS_PRAGMA_UNROLL
+              for (int i = 0; i < tSrK.size(); ++i) {
+                auto const coord = tScK(i);
+                int const k_row = k_idx * BLK_K + get<0>(coord);
+                int const d_group = (D * BLK_QK_D + get<1>(coord)) / GROUP_K;
+                tSrK(i) = static_cast<typename TiledMMAQK::ValTypeB>(
+                    static_cast<float>(scale_k_cur(k_row, d_group)) *
+                    static_cast<float>(tSrK(i)));
+              }
+            } else {
+              dequantize(tSrK, scale_k);
+            }
           }
           auto const& tSrQ_d = tSrQ_arr[D];
           if (D == 0) {
@@ -799,7 +817,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         update_payloads(prepared_pk, kv_stride);
       }
       // Prefetch V scale
-      if constexpr (BlockScale) {
+      if constexpr (HardwareBlockScale) {
         auto& scale_prefetch_V_ctx = get<2>(scale_ctx_pv_cur);
         auto& tiled_prefetch_scaleV = get<0>(scale_prefetch_V_ctx);
         auto  prefetch_iter_scaleV = get<1>(scale_prefetch_V_ctx);
@@ -910,7 +928,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
             tA_sum(i) = tA_sum(i) * group_broadcast(sg, rescale(0), i) + tS_partial_sum(i);
           }
         }
-        if constexpr (BlockScale && !FP4Input) {
+        if constexpr (HardwareBlockScale && !FP4Input) {
           const int v_coord = get<1>(blk_qv) * VTiles * BLK_V + VV * BLK_V + (subgroup_id % ATOM_V) * SG_V;
           // P-scale is a KV-loop invariant; it was preloaded once
           // into scaleP_ctx before the mainloop, so reuse it here instead of
@@ -941,7 +959,20 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           cute::gemm(mma_pv, zipped_p, zipped_v, tArA(_,_,_,VV));
         } else {
           if constexpr (F8kvF16mma) {
-            dequantize(tArV, scale_v);
+            if constexpr (BlockScale) {
+              CUTLASS_PRAGMA_UNROLL
+              for (int i = 0; i < tArV.size(); ++i) {
+                auto const coord = tAcV(i);
+                int const v_coord = get<1>(blk_qv) * VTiles * BLK_V
+                                  + VV * BLK_V + get<0>(coord);
+                int const kv_group = (k_idx * BLK_PV_D + get<1>(coord)) / GROUP_K;
+                tArV(i) = static_cast<typename TiledMMAPV::ValTypeB>(
+                    static_cast<float>(scale_v_cur(v_coord, kv_group)) *
+                    static_cast<float>(tArV(i)));
+              }
+            } else {
+              dequantize(tArV, scale_v);
+            }
           }
           cute::gemm(mma_pv, tArP, tArV, tArA(_,_,_,VV));
         }
@@ -988,7 +1019,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
       }
       // Prefetch K scale
-      if constexpr (BlockScale) {
+      if constexpr (HardwareBlockScale) {
         auto& scale_prefetch_K_ctx = get<3>(scale_ctx_qk_cur);
         bool const has_next = !is_cache || (K_next < kblocks_cache);
         if (has_next) {
@@ -1014,7 +1045,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
                       copy_k_cache, copy_v_cache,
                       prefetch_v_cache, tKgK_cache,
                       tVgV_cache, pVgV_cache,
-                      scale_context_qk_cache, scale_context_pv_cache);
+                      scale_context_qk_cache, scale_context_pv_cache,
+                      scaleK_cache, scaleV_cache);
       }
     }
 
@@ -1023,7 +1055,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
                     copy_k, copy_v,
                     prefetch_v, tKgK,
                     tVgV, pVgV,
-                    scale_context_qk, scale_context_pv);
+                    scale_context_qk, scale_context_pv,
+                    scaleK, scaleV);
     }
 
     if constexpr (!GqaFusion) {
