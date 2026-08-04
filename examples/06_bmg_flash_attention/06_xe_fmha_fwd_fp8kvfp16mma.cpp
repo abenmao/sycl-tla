@@ -108,30 +108,30 @@ int main(int argc, const char **argv) {
   using ShapeQK = Shape<_128, _64, _32>;
   using ShapePV = Shape<_128, _32, _64>;
   using ShapeOut = Shape<_128, _64>;
-  using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
+  using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 
 #elif HEAD_DIM == 96
-  using ShapeQK = Shape<_128, _64, _32>;
-  using ShapePV = Shape<_128, _32, _64>;
+  using ShapeQK = Shape<_128, _32, _32>;
+  using ShapePV = Shape<_128, _32, _32>;
   using ShapeOut = Shape<_128, _96>;
-  using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
+  using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 
 #elif HEAD_DIM == 128
-  using ShapeQK = Shape<_128, _64, _32>;
-  using ShapePV = Shape<_128, _32, _64>;
+  using ShapeQK = Shape<_128, _32, _32>;
+  using ShapePV = Shape<_128, _32, _32>;
   using ShapeOut = Shape<_128, _128>;
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 
 #elif HEAD_DIM == 192
-  using ShapeQK = Shape<_256, _64, _32>;
-  using ShapePV = Shape<_256, _32, _64>;
-  using ShapeOut = Shape<_256, _192>;
+  using ShapeQK = Shape<_128, _32, _32>;
+  using ShapePV = Shape<_128, _32, _32>;
+  using ShapeOut = Shape<_128, _192>;
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 
 #endif
 #elif defined(DECODE)
 
-#define KV_TILE_SIZE _256
+#define KV_TILE_SIZE _128
 
 #if HEAD_DIM == 16
   /* Tiny config for testing */
@@ -139,20 +139,20 @@ int main(int argc, const char **argv) {
   using QKTileK     = _16;
   using HeadDimSize = _16;
 #elif HEAD_DIM == 64
-  using PVTileN     = _32;
-  using QKTileK     = _64;
+  using PVTileN     = _16;
+  using QKTileK     = _32;
   using HeadDimSize = _64;
 #elif HEAD_DIM == 96
-  using PVTileN     = _32;
+  using PVTileN     = _16;
   using QKTileK     = _32;
   using HeadDimSize = _96;
 #elif HEAD_DIM == 128
-  using PVTileN     = _32;
-  using QKTileK     = _64;
+  using PVTileN     = _16;
+  using QKTileK     = _32;
   using HeadDimSize = _128;
 #elif HEAD_DIM == 192
-  using PVTileN     = _32;
-  using QKTileK     = _64;
+  using PVTileN     = _16;
+  using QKTileK     = _32;
   using HeadDimSize = _192;
 #endif
 
@@ -171,8 +171,8 @@ int main(int argc, const char **argv) {
   using ShapeOut32 = Shape<_32, HeadDimSize>;
   using SubgroupLayoutQK32 = Layout<Shape<_4, _8, _1>>;
 
-  using ShapeQK64  = Shape<_64, _64, QKTileK>;
-  using ShapePV64  = Shape<_64, PVTileN, _64>;
+  using ShapeQK64  = Shape<_64, _32, QKTileK>;
+  using ShapePV64  = Shape<_64, PVTileN, _32>;
   using ShapeOut64 = Shape<_64, HeadDimSize>;
   using SubgroupLayoutQK64 = Layout<Shape<_8, _1, _1>>;
 #else
