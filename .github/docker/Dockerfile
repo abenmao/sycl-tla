@@ -1,14 +1,12 @@
 FROM ubuntu:24.04
 
-ARG HTTP_PROXY
-ARG HTTPS_PROXY
 ENV DEBIAN_FRONTEND=noninteractive
+ENV http_proxy="http://proxy-dmz.intel.com:912"
+ENV https_proxy="http://proxy-dmz.intel.com:912"
 
 # Install build tools and C++ standard library (needed by icpx)
 # Proxy is passed inline so it is NOT persisted in image metadata/history
-RUN http_proxy=${HTTP_PROXY} https_proxy=${HTTPS_PROXY} \
-    apt-get update && \
-    http_proxy=${HTTP_PROXY} https_proxy=${HTTPS_PROXY} \
+RUN apt-get update && \
     apt-get install -y \
     cmake \
     ninja-build \
