@@ -1,12 +1,12 @@
 name: "Full Coverage with Common Shapes Test"
 
 on:
-  push:
-    branches: [ "cri","master_next","cri_pathfinding","v0.1.0_next" ]
+#  push:
+#    branches: [ "master_next","v0.1.0_next" ]
   pull_request:
-    branches: [ "cri","master_next","cri_pathfinding","v0.1.0_next" ]
-  merge_group:
-    branches: [ "cri","master_next","cri_pathfinding","v0.1.0_next" ]
+    branches: [ "master_next","v0.1.0_next" ]
+#  merge_group:
+#    branches: [ "master_next","v0.1.0_next" ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
