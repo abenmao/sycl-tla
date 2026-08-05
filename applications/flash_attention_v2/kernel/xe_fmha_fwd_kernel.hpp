@@ -1114,11 +1114,16 @@ public:
 // Splits the KV sequence into `num_kv_splits` partitions, each processed by an
 // independent work-group, to obtain high parallelism for long-KV decode. GQA
 // query heads sharing a KV head are packed into the Q tile dimension. Each WG
-// stores its locally-normalized partial output (Oaccum) plus per-split softmax
-// statistics (exp sum + max logit); a subsequent ReduceSplitK kernel merges the
-// partitions with a numerically-stable log-sum-exp rescale.
+// With multiple splits, each WG stores a locally-normalized partial output
+// (Oaccum) plus per-split softmax statistics (exp sum + max logit), and a
+// subsequent ReduceSplitK kernel merges the partitions with a numerically
+// stable log-sum-exp rescale. With one split, phase 0 writes the fully
+// normalized output directly and the reduction launch is skipped.
 //
-// Assumes decode (seq_len_qo == 1) and GQA group size <= 8 (DPAS max repeat).
+// Supports packed GQA/query rows across one or more Q tiles for both direct
+// single-split output and multi-split reduction. Variable-length query
+// sequences longer than one are rejected because the var-len path forces its
+// packed query length to one internally.
 ///////////////////////////////////////////////////////////////////////////////
 template <class ProblemShape_, class CollectiveMainloop_, class CollectiveEpilogue_, class TileScheduler_>
 class XeFMHAFwdSplitKVKernel {
@@ -1188,7 +1193,6 @@ public:
   // Maximum number of KV splits is bounded by the work-group size (one thread
   // reduces one split in the reduction kernel).
   static constexpr int max_num_kv_splits = SGPerWG::value * intel::sg_size;
-  static constexpr int dpas_max_repeat_count = 8;
   static constexpr bool kReducePhaseSeparate = false;
 
   // Device side arguments
@@ -1200,7 +1204,7 @@ public:
     StrideK dK;
     const ElementV *V;
     StrideV dV;
-    ElementO *O;                 // partial output (Oaccum)
+    ElementO *O;                 // partial Oaccum, or final output when num_kv_splits == 1
     StrideO dO;
     const ElementK *K_cache = nullptr;
     StrideK dK_cache{};
@@ -1221,7 +1225,7 @@ public:
     MainloopArguments mainloop{};
     EpilogueArguments epilogue{};
     KernelHardwareInfo hw_info{};
-    int num_kv_splits = -1; // no split by default
+    int num_kv_splits = -1; // auto/default sentinel; clamped to a positive count downstream
   };
 
   // Kernel entry point API
@@ -1245,18 +1249,11 @@ public:
 
   static bool can_implement(Arguments const &args) {
     // Query positions are packed alongside GQA heads into the Q tile dimension,
-    // so seq_len_qo > 1 is supported for the non-var-len, non-causal path.
-    //  - Causal + seq_len_qo > 1 is NOT supported: the mainloop is invoked
-    //    without GQA fusion, so a packed row index no longer maps to a real
-    //    query position and the causal mask would use the wrong coordinate.
-    //  - Var-len forces seq_len_qo = 1 internally, so reject longer var-len
-    //    sequences rather than silently produce wrong results.
+    // so seq_len_qo > 1 is supported for fixed-length causal and non-causal
+    // paths. Var-len forces seq_len_qo = 1 internally, so reject longer
+    // var-len sequences rather than silently produce wrong results.
     if constexpr (is_var_len) {
       if (args.kernel.shape.seq_len_qo.max_length != 1) {
-        return false;
-      }
-    } else {
-      if (CollectiveMainloop::CausalMask && args.kernel.shape.seq_len_qo != 1) {
         return false;
       }
     }
@@ -1265,10 +1262,6 @@ public:
     }
     if (args.num_kv_splits == 0) {
       // 0 is invalid; -1 means "auto" (clamped to 1 downstream).
-      return false;
-    }
-    // GQA group size limited to DPAS max repeat count
-    if (args.kernel.shape.num_heads_q / args.kernel.shape.num_heads_kv > dpas_max_repeat_count) {
       return false;
     }
     return CollectiveMainloop::can_implement(args.mainloop)
@@ -1309,7 +1302,6 @@ public:
     int head_group_q = s.num_heads_q / s.num_heads_kv;
 
     int thr_id = int(ThreadIdxX());
-    int q_sg_tile = get<0>(shape_div(TileShapeQK{}, shape(SubgroupLayoutQK{})));
 
     auto cS = make_identity_tensor(take<0,2>(TiledMMAQK{}.tile_mnk()));
     auto tScS = TiledMMAQK{}.get_slice(thr_id).partition_C(cS);
@@ -1337,10 +1329,9 @@ public:
       int seq_coord = cute::min(seq_len_qo, (blk_q * get<0>(TileShapeQK{}) + q_offset_sg));
 
       if (CollectiveMainloop::CausalMask && seq_coord < discard_seq_coord) continue;
-      const int seq_len_new = CollectiveMainloop::CausalMask ? full_tile_offset + cute::min(seq_len_kv, seq_coord - discard_seq_coord) + q_sg_tile : seq_len_kv;
-      const int seq_len = seq_len_new + seq_len_kv_cache;
-
-      const int k_blocks = cute::ceil_div(seq_len, get<1>(TileShapeQK{}));
+      const int seq_len = seq_len_kv + seq_len_kv_cache;
+      const int k_blocks = cute::ceil_div(seq_len_kv, get<1>(TileShapeQK{}))
+                         + cute::ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{}));
 
       int kv_cache_rows = seq_len_kv_cache;
       if constexpr (CollectiveMainloop::PagedKV) {
@@ -1436,7 +1427,7 @@ public:
 
       CollectiveMainloop mainloop(params.mainloop, shared_storage.mainloop);
 
-      mainloop.template operator()<>(
+      mainloop.template operator()<CollectiveMainloop::CausalMask>(
               Q(_,_,head,l_coord),
               K(_,_,head,l_coord),
               V(_,_,head,l_coord),
@@ -1444,7 +1435,7 @@ public:
               blk_qv, start_blk, end_blk, k_blocks, end_blk,
               thr_id, seq_len, seq_len_kv_cache, idx_b,
               full_tile_offset, discard_seq_coord,
-              0, 0,
+              0, CollectiveMainloop::CausalMask ? seq_len_qo : 0,
               K_cache(_,_,head,l_coord),
               V_cache(_,_,head,l_coord),
               p.scale_k, p.scale_v, p.scale_q);
@@ -1453,7 +1444,8 @@ public:
         sycl::group_barrier(get_work_group<3>());
       }
 
-      // Epilogue: store locally-normalized partial output + per-split LSE stats.
+      // Epilogue: store locally-normalized output and per-split LSE statistics.
+      // The output is partial only when more than one KV split is active.
       CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
       epilogue(O(_,_,idx_kv_split * s.num_heads_kv + head,l_coord),
                 tArA, tA_max, tA_sum,

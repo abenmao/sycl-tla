@@ -953,12 +953,13 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     compat::memset(block_O.get(), 0, block_O.size() * sizeof_bits_v<ElementO> / 8);
 
     if constexpr (isSplitKV) {
-      // Determine the number of KV splits. Auto (-1) => cap by max supported.
+      // Positive requests are capped at the kernel maximum; -1 selects that
+      // maximum when the caller did not supply a tuned positive count.
       num_kv_splits = options.num_kv_splits > 0
                         ? cute::min(options.num_kv_splits, int(FMHAKernel::max_num_kv_splits))
                         : int(FMHAKernel::max_num_kv_splits);
 
-      // Partial outputs and per-split softmax statistics (decode: seq_len_qo == 1).
+      // Partial outputs and per-split statistics for all query/head rows.
       auto shape_Oaccum = cute::make_shape(seq_len_qo, head_size_vo, num_heads_q * num_kv_splits, batch);
       auto shape_stats  = cute::make_shape(seq_len_qo, num_kv_splits, num_heads_q, batch);
       stride_Oaccum     = cutlass::make_cute_packed_stride(StrideO{}, shape_Oaccum);
@@ -1230,7 +1231,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
             block_Q.get(), stride_Q,
             block_K.get(), stride_K,
             block_V.get(), stride_V,
-            block_Oaccum.get(), stride_Oaccum,
+            num_kv_splits == 1 ? block_O.get() : block_Oaccum.get(), stride_Oaccum,
             block_K_cache.get(), stride_K_cache,
             block_V_cache.get(), stride_V_cache,
             block_exp_sums.get(), stride_exp_sums,
@@ -1239,7 +1240,9 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
           },
           {
             options.softmax_scale,
-            nullptr, 0, nullptr
+            options.use_paged_kv ? paged_kv_cache.page_table.get() : nullptr,
+            options.use_paged_kv ? paged_kv_cache.page_size : 0,
+            options.use_paged_kv ? paged_kv_cache.num_pages_per_seq.get() : nullptr
           },
           {},
           hw_info,
@@ -1322,10 +1325,16 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     // Convert host-side arguments to device-side arguments to be passed to the kernel
     auto params = FMHAKernel::to_underlying_arguments(arguments, workspace.get());
 
-    // Launch helper: single kernel for the standard path, or a two-stage
-    // (partial attention + reduction) launch for the split-KV path.
+    // Launch helper: one kernel for the standard and one-split paths; multi-split
+    // split-KV launches partial attention followed by reduction.
     auto launch = [&]() {
       if constexpr (isSplitKV) {
+        if (num_kv_splits == 1) {
+          // With one partition, phase 0 already produces the globally
+          // normalized output and writes it directly to block_O.
+          run(params);
+          return;
+        }
         typename ReductionSplitKernel::Arguments reduce_arguments{
           {
             shape,

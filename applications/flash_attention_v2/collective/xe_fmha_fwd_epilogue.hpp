@@ -220,12 +220,11 @@ public:
     copy(copy_o, tOrO, tOgO);
   }
 
-  // Split-KV version: computes the locally-normalized partial output for one KV
-  // split and stores the per-split softmax statistics (exp sum + max logit) so a
-  // subsequent reduction kernel can merge partitions with a numerically stable
-  // log-sum-exp rescale. Assumes decode with GQA query heads (and, when
-  // seq_len_qo > 1, the query positions) packed into the Q tile. Each packed row
-  // maps to work-item `thr_id` within its Q tile, so row `blk_q * TileQ + thr_id`.
+  // Split-KV version: computes the locally-normalized output for one KV split
+  // and stores its softmax statistics (exp sum + max logit). With multiple
+  // splits, a subsequent reduction kernel merges these partial outputs with a
+  // numerically stable log-sum-exp rescale. Assumes decode with GQA query heads
+  // (and, when seq_len_qo > 1, query positions) packed into the Q tile.
   template <bool SumIsReduced = false, typename QVCoord, typename FragSPRow, typename TensorLSE2DIn>
   CUTLASS_DEVICE
   void
@@ -253,18 +252,34 @@ public:
     // Reduce k-blocks of A, A_max and A_sum across WG, if needed.
     auto [rA, rA_max, rA_sum, active] = reduce_A(tArA, tA_max, tA_sum_full, thr_id);
 
-    // Store per-split softmax statistics. Work-item `thr_id` holds the reduced
-    // stats for row `thr_id` within this Q tile; offset by blk_q for the global
-    // packed row, and guard against the partial last tile.
-    constexpr int TileQ = get<0>(TileShapeO{});
-    int stats_row = get<0>(blk_qv) * TileQ + thr_id;
-    if (thr_id < TileQ && stats_row < num_packed_rows) {
-      exp_sums(stats_row, idx_kv_split) = static_cast<ElementLSE>(rA_sum(0));
-      max_logits(stats_row, idx_kv_split) = static_cast<ElementLSE>(rA_max(0));
-    }
-
     /* Some subgroups may not have any work to do; if so, quit early. */
     if (!active) return;
+
+    /* Tile output and recover each thread's actual output coordinates. */
+    Tensor cO = make_identity_tensor(O.shape());          // (q,v)
+    Tensor gO = local_tile(cO, TileShapeO{}, blk_qv);     // (q,v)
+
+    TiledCopyO copy_o{O};
+    auto thr_copy_o = copy_o.get_slice(thr_id);
+
+    auto tOrO = thr_copy_o.partition_sg_fragment_S(gO);
+    auto tOgO = thr_copy_o.partition_D(gO);
+
+    // Store one copy of the softmax statistics per packed Q row. For Q tiles
+    // larger than 8, rows are distributed across multiple subgroups and do not
+    // map directly to `thr_id`. Use the same fragment-to-coordinate mapping as
+    // the output store, selecting the unique fragment at V coordinate zero.
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < rA.size(); i++) {
+      auto coord = tOgO(i);
+      int stats_row = int(get<0>(coord));
+      if (int(get<1>(coord)) == 0 && stats_row < num_packed_rows) {
+        exp_sums(stats_row, idx_kv_split) =
+            static_cast<ElementLSE>(broadcast<0>(rA_sum, rA, i));
+        max_logits(stats_row, idx_kv_split) =
+            static_cast<ElementLSE>(broadcast<0>(rA_max, rA, i));
+      }
+    }
 
     /* Complete local softmax normalization; the reduce kernel multiplies the sum back. */
     CUTLASS_PRAGMA_UNROLL
@@ -273,17 +288,6 @@ public:
         rA_sum(i) = ElementA(v_scale) / rA_sum(i);
       else
         rA_sum(i) = ElementA(1) / rA_sum(i);
-
-    /* Tile output */
-    Tensor cO = make_identity_tensor(O.shape());          // (q,v)
-    Tensor gO = local_tile(cO, TileShapeO{}, blk_qv);     // (q,v)
-
-    /* Prepare slices */
-    TiledCopyO copy_o{O};
-    auto thr_copy_o = copy_o.get_slice(thr_id);
-
-    auto tOrO = thr_copy_o.partition_sg_fragment_S(gO);
-    auto tOgO = thr_copy_o.partition_D(gO);
 
     /* Rescale + reorder */
     rescale_and_store(rA, rA_sum, tOrO);

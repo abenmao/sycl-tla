@@ -181,8 +181,8 @@ int main(int argc, const char **argv) {
   using ShapeOut32 = Shape<_32, HeadDimSize>;
   using SubgroupLayoutQK32 = Layout<Shape<_4, _8, _1>>;
 
-  using ShapeQK64  = Shape<_64,  _64, QKTileK>;
-  using ShapePV64  = Shape<_64, PVTileN,  _64>;
+  using ShapeQK64  = Shape<_64, _64, QKTileK>;
+  using ShapePV64  = Shape<_64, PVTileN, _64>;
   using ShapeOut64 = Shape<_64, HeadDimSize>;
   using SubgroupLayoutQK64 = Layout<Shape<_8, _1, _1>>;
 
@@ -207,43 +207,118 @@ int main(int argc, const char **argv) {
   const int base_units = options.batch * options.num_heads_kv;
   const int saturation_cores_default = estimate_saturation_cores(base_units, kv_blocks);
   const int saturation_cores = cutlass::fmha::kernel::fmha_split_saturation_cores(saturation_cores_default);
-  const bool use_split = !options.varlen
-                      && total_rows <= 64
-                      && base_units < saturation_cores
-                      && base_units * kv_blocks > saturation_cores;
+  bool auto_two_kernel = false;
+  // TODO: The current selection strategy is rule-based and needs to be refined in the future.
+  const bool causal_cached_kv =
+      !options.varlen && options.is_causal && options.use_paged_kv &&
+      options.seq_len_qo == 4 && options.seq_len_kv == options.seq_len_qo &&
+      options.seq_len_kv_cache > 0;
+  if (causal_cached_kv) {
+    const int cache_len = options.seq_len_kv_cache;
+    if (cache_len <= 1024) {
+      auto_two_kernel = total_rows > 16 || base_units >= 4;
+    }
+  }
+  const bool use_two_kernel = options.num_kv_splits > 0 || auto_two_kernel;
+  const bool use_dynamic_split = !use_two_kernel
+                              && !options.varlen
+                              && total_rows <= 64
+                              && base_units < saturation_cores
+                              && base_units * kv_blocks > saturation_cores;
 
-  #define FMHA_RUN_SPLIT(CAUSAL, PAGED, QK, PV, OUT, SGL)                                      \
+  auto select_num_kv_splits = [&](int q_tile) {
+    if (options.num_kv_splits > 0) {
+      return options.num_kv_splits;
+    }
+
+    const int q_tiles = cute::ceil_div(total_rows, q_tile);
+    const int base_work_groups = options.batch * options.num_heads_kv * q_tiles;
+    const int xe_cores = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
+#if defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
+    const int target_parallel_rows = cute::max(8, xe_cores * 5);
+#else
+    const int target_parallel_rows = cute::max(8, xe_cores * 8);
+#endif
+    const int parallel_splits = cute::max(
+        1, cute::ceil_div(target_parallel_rows, base_work_groups * q_tile));
+    const int latency_splits = cute::max(1, cute::ceil_div(kv_blocks, 128));
+    const int max_useful_splits = cute::max(1, kv_blocks / 16);
+    return cute::min(cute::max(parallel_splits, latency_splits), max_useful_splits);
+  };
+
+  #define FMHA_RUN_TWO_KERNEL(CAUSAL, PAGED, QK, PV, OUT, SGL, Q_TILE)                       \
+    [&]() {                                                                                  \
+      Options tuned_options = options;                                                       \
+      tuned_options.num_kv_splits = select_num_kv_splits(Q_TILE);                            \
+      return FMHAConfig<CAUSAL, false, QK, PV, OUT, SGL, void, PipelineStages,              \
+                        ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::         \
+          template run<false, true, PAGED,                                                   \
+                       cutlass::fmha::kernel::XeFHMASplitKVTileScheduler, true>(tuned_options); \
+    }()
+
+  #define FMHA_RUN_DYNAMIC(CAUSAL, PAGED, QK, PV, OUT, SGL)                                    \
     FMHAConfig<CAUSAL, false, QK, PV, OUT, SGL, void, PipelineStages,                           \
                ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::                    \
                template run<false, true, PAGED,                                                \
                cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options)
 
-  #define FMHA_RUN_Q(QK, PV, OUT, SGL)                                                                  \
-    (use_split                                                                                        \
+  #define FMHA_RUN_TWO_KERNEL_Q(QK, PV, OUT, SGL, Q_TILE)                                      \
+    (options.is_causal                                                                               \
+       ? (options.use_paged_kv ? FMHA_RUN_TWO_KERNEL(true, true, QK, PV, OUT, SGL, Q_TILE)    \
+                               : FMHA_RUN_TWO_KERNEL(true, false, QK, PV, OUT, SGL, Q_TILE))  \
+       : (options.use_paged_kv ? FMHA_RUN_TWO_KERNEL(false, true, QK, PV, OUT, SGL, Q_TILE)   \
+                               : FMHA_RUN_TWO_KERNEL(false, false, QK, PV, OUT, SGL, Q_TILE)))
+
+  #define FMHA_RUN_Q(QK, PV, OUT, SGL, PAGED)                                                 \
+    (use_dynamic_split                                                                        \
        ? (options.is_causal                                                                           \
-           ? (options.use_paged_kv ? FMHA_RUN_SPLIT(true, true, QK, PV, OUT, SGL)                    \
-                                   : FMHA_RUN_SPLIT(true, false, QK, PV, OUT, SGL))                  \
-           : (options.use_paged_kv ? FMHA_RUN_SPLIT(false, true, QK, PV, OUT, SGL)                   \
-                                   : FMHA_RUN_SPLIT(false, false, QK, PV, OUT, SGL)))                \
+           ? (options.use_paged_kv ? FMHA_RUN_DYNAMIC(true, true, QK, PV, OUT, SGL)             \
+                                   : FMHA_RUN_DYNAMIC(true, false, QK, PV, OUT, SGL))           \
+           : (options.use_paged_kv ? FMHA_RUN_DYNAMIC(false, true, QK, PV, OUT, SGL)            \
+                                   : FMHA_RUN_DYNAMIC(false, false, QK, PV, OUT, SGL)))         \
        : (options.is_causal                                                                           \
            ? FMHAConfig</*CausalMask=*/true,  false, QK, PV, OUT, SGL, void, PipelineStages,          \
                         ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/true>::template run<      \
-                        false, true, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options) \
+                        false, true, PAGED, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options) \
            : FMHAConfig</*CausalMask=*/false, false, QK, PV, OUT, SGL, void, PipelineStages,          \
                         ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/true>::template run<      \
-                        false, true, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options)))
+                        false, true, PAGED, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options)))
+
+  if (use_two_kernel) {
+#if defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
+    if (total_rows <= 8)
+      return FMHA_RUN_TWO_KERNEL_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, 8);
+    else if (total_rows <= 31)
+      return FMHA_RUN_TWO_KERNEL_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16, 16);
+    else
+      return FMHA_RUN_TWO_KERNEL_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32, 32);
+#else
+    if (total_rows <= 8)
+      return FMHA_RUN_TWO_KERNEL_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, 8);
+    else if (total_rows <= 16)
+      return FMHA_RUN_TWO_KERNEL_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16, 16);
+    else
+      return FMHA_RUN_TWO_KERNEL_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32, 32);
+#endif
+  }
 
   if (total_rows <= 8)
-    return FMHA_RUN_Q(ShapeQK8,  ShapePV8,  ShapeOut8,  SubgroupLayoutQK8);
+    return options.use_paged_kv ? FMHA_RUN_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, true)
+                                : FMHA_RUN_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, false);
   else if (total_rows <= 16)
-    return FMHA_RUN_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16);
+    return options.use_paged_kv ? FMHA_RUN_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16, true)
+                                : FMHA_RUN_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16, false);
   else if (total_rows <= 32)
-    return FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32);
+    return options.use_paged_kv ? FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32, true)
+                                : FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32, false);
   else
-    return FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64);
+    return options.use_paged_kv ? FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64, true)
+                                : FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64, false);
 
 #undef FMHA_RUN_Q
-  #undef FMHA_RUN_SPLIT
+  #undef FMHA_RUN_TWO_KERNEL_Q
+  #undef FMHA_RUN_DYNAMIC
+  #undef FMHA_RUN_TWO_KERNEL
 #else
   // Directly instantiate only CachedKV=true kernels.
   // Causal and VarLen are dispatched at runtime.

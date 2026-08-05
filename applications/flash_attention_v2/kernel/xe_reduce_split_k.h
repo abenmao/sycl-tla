@@ -99,7 +99,7 @@ public:
   struct Arguments {
     KernelArguments kernel{};
     KernelHardwareInfo hw_info{};
-    int num_kv_splits = -1; // no split by default
+    int num_kv_splits = -1; // auto/default sentinel; clamped to a positive count downstream
   };
 
   /// Params structure
@@ -124,11 +124,6 @@ public:
   }
 
   static bool can_implement(Arguments const &args) {
-    // only support decode
-    if (!is_var_len && args.kernel.shape.seq_len_qo > 1) {
-      return false;
-    }
-
     if (args.num_kv_splits > FMHAKernel_::max_num_kv_splits) {
       return false;
     }
@@ -153,11 +148,14 @@ public:
   static dim3 get_block_shape() { return dim3(SGPerWG::value * intel::sg_size, 1, 1); }
 
   CUTLASS_DEVICE
-  Shape<int, int> get_sequence_length_shape(ProblemShape const& problem_shape, int const& batch) {
+  Shape<int, int, int> get_sequence_length_shape(ProblemShape const& problem_shape, int const& batch) {
     if constexpr (is_var_len) {
-      return cutlass::fmha::collective::apply_variable_length(Shape<VariableLength, VariableLength>{problem_shape.seq_len_qo, problem_shape.seq_len_kv}, batch);
+      auto shape = cutlass::fmha::collective::apply_variable_length(
+          Shape<VariableLength, VariableLength>{problem_shape.seq_len_qo, problem_shape.seq_len_kv}, batch);
+      return Shape<int, int, int>{get<0>(shape), get<1>(shape), problem_shape.seq_len_kv_cache};
     } else {
-      return Shape<int, int>{problem_shape.seq_len_qo, problem_shape.seq_len_kv};
+      return Shape<int, int, int>{problem_shape.seq_len_qo, problem_shape.seq_len_kv,
+                                  problem_shape.seq_len_kv_cache};
     }
   }
 
@@ -185,12 +183,13 @@ public:
       auto [seq_idx, head_q, idx_b] = tile_scheduler.get_block_coord();
 
       auto sequence_length_shape = get_sequence_length_shape(s, idx_b);
-      auto [seq_len_qo, seq_len_kv] = sequence_length_shape;
+      auto [seq_len_qo, seq_len_kv, seq_len_kv_cache] = sequence_length_shape;
 
       // when varlen enabled, use largest seq_len_qo to decide work group num
       if (seq_idx >= seq_len_qo) continue;
 
-      const int k_blocks = cute::ceil_div(seq_len_kv, get<1>(TileShapeQK{}));
+      const int k_blocks = cute::ceil_div(seq_len_kv, get<1>(TileShapeQK{}))
+             + cute::ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{}));
       int num_blocks_per_split = cute::ceil_div(k_blocks, num_kv_splits);
 
       int offset_o = 0, offset_o_accum = 0;

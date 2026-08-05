@@ -298,8 +298,8 @@ struct XeFHMASplitKVTileScheduler {
     int num_head = shape.num_heads_kv;
     int splits = cute::max(1, num_kv_splits);
     grid.z *= splits;
-    // Store the clamped split count so the device side never divides by / shapes
-    // with a non-positive value when num_kv_splits is left at the -1 "auto" default.
+    // Store the clamped split count so the device side never divides by or
+    // constructs shapes with a non-positive value when num_kv_splits is -1.
     return Params{grid, {num_head}, {shape.batch * num_head}, splits};
   }
 
