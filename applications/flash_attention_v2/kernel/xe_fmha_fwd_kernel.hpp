@@ -238,20 +238,22 @@ public:
     StrideV dV;
     ElementO *O;
     StrideO dO;
+    // Arguments order affects kernel-entry payload layout and instruction
+    // pipeline, keep hot arguments at the front to improve performance.
+    float scale_k = 1.f;
+    float scale_v = 1.f;
+    float scale_q = 1.f;
+    const ElementK *K_cache;
+    StrideK dK_cache{};
+    const ElementV *V_cache;
+    StrideV dV_cache{};
     const ElementScale *scaleQ = nullptr;
     StrideScaleQ dScaleQ{};
     const ElementScale *scaleK = nullptr;
     StrideScaleK dScaleK{};
     const ElementScale *scaleV = nullptr;
     StrideScaleV dScaleV{};
-    float scale_k = 1.f;
-    float scale_v = 1.f;
-    float scale_q = 1.f;
     int group_size = 32;
-    const ElementK *K_cache;
-    StrideK dK_cache{};
-    const ElementV *V_cache;
-    StrideV dV_cache{};
     const ElementScale *scaleP = nullptr;
     StrideScaleV dScaleP{};
     const ElementScale *scaleK_cache = nullptr;
