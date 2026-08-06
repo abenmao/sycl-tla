@@ -355,7 +355,8 @@ int main(int argc, const char **argv) {
   const int num_xe_cores = cutlass::KernelHardwareInfo::query_device_multiprocessor_count();
   int num_q_tiles_256 = (options.seq_len_qo + 255) / 256;
   int total_wgs_256 = num_q_tiles_256 * options.num_heads_q * options.batch;
-  bool use_small = options.seq_len_qo < 512 || total_wgs_256 < 2 * num_xe_cores;
+  // These magic numbers are from an empirical fit based on observed performance data.
+  bool use_small = (options.seq_len_qo - 576) * options.num_heads_q <= 11840 || total_wgs_256 < 2 * num_xe_cores;
 
   if (options.is_causal) {
     if (use_small) {
