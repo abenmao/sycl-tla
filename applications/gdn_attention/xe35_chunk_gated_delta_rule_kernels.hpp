@@ -80,9 +80,9 @@ struct chunk_gemm_policy_16x16x16 {
   using SGLayout = Layout<Shape<_1, _1, _1>, Stride<_1, _1, _0>>;
 };
 
-using chunk_gemm_policy_compute_A = chunk_gemm_policy_64x64x32_2x2;
+using chunk_gemm_policy_compute_A = chunk_gemm_policy_64x64x32_4x2;
 using chunk_gemm_policy_inverse = chunk_gemm_policy_16x16x16;
-using chunk_gemm_policy_compute_wu = chunk_gemm_policy_64x64x32_2x1;
+using chunk_gemm_policy_compute_wu = chunk_gemm_policy_64x64x32_4x2;
 using chunk_gemm_policy_fwd_o = chunk_gemm_policy_64x64x32_4x2;
 
 CUTE_DEVICE float
