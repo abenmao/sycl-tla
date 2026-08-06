@@ -79,8 +79,9 @@ struct XE_LOAD_2D : XE_Copy_Op_2D_Base<Bits, Height, Width, Width/BlockWidth>
 #ifdef CUTE_ARCH_COPY_XE_ENABLED
     using namespace intel;
     // TODO: to workaround the GRF aligned visa issue, may have better way in the future
-    constexpr auto grf_aligned_size = cute::max(64, Width * Height);
-    auto &dv = *reinterpret_cast<storage_vector_t<T, grf_aligned_size * Bits / sg_size> *>(dst);
+    constexpr auto bits_per_grf = 64 * 8;
+    constexpr auto grf_aligned_bits = cute::ceil_div(Bits * Width * Height, bits_per_grf) * bits_per_grf;
+    auto &dv = *reinterpret_cast<storage_vector_t<T, grf_aligned_bits / sg_size> *>(dst);
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
     asm (
       "lsc_load_block2d.ugm.ca.ca.uc (M1, 1)  %0:d%2.%3x%4x%5nn flat[%1+(0,0)]"
