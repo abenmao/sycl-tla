@@ -303,17 +303,14 @@ public:
       }
     }();
 
-    // Check if C is in column-major layout or not
+    // Deduce C load copy atom: use transpose load for column-major C.
+    // Transpose load requires >= 32-bit element size; sub-32-bit types are packed.
     constexpr bool IsColMajorC = cutlass::gemm::detail::is_major<0, StrideC>();
-    // Actual transpose load supports either 32-bit or 64-bit data element size only
     static constexpr int CopyBitsCTranspose = cute::max(CopyBitsC, 32);
-    // For sub-32-bit data types, calculate the number of elements packed into 32-bits
     static constexpr int Sub32BitFactor = CopyBitsCTranspose / CopyBitsC;
-    // Get copy atom operations for non-transposed and transposed load respectively
+
     using DefaultCopyOpG2RNonTranspose =  XE_LOAD_2D<CopyBitsC, cute::gcd(8, get<0>(epilogue_tile)), cute::gcd(512 / CopyBitsC, get<1>(epilogue_tile))>;
     using DefaultCopyOpG2RTranspose = XE_LOAD_2D_TRANSPOSE<CopyBitsCTranspose, cute::gcd(512 / CopyBitsC, get<1>(epilogue_tile)), cute::gcd(8 / Sub32BitFactor, get<0>(epilogue_tile))>;
-    // Use transpose load if C is in column-major layout
-    // Use non-transpose load for C otherwise
     using DefaultCopyOpG2R = conditional_t<IsColMajorC, DefaultCopyOpG2RTranspose, DefaultCopyOpG2RNonTranspose>;
 
     using DefaultCopyOpR2G = XE_STORE_2D<CopyBitsD, cute::gcd(8, get<0>(epilogue_tile)), cute::gcd(512 / CopyBitsD, get<1>(epilogue_tile))>;
@@ -355,7 +352,9 @@ public:
 
     auto tDrD = thr_copy_d.partition_sg_fragment_S(gCD_epi(_,_,0,0));                   // (atom_v,atom_m,atom_n)
 
-    // Accumulator TV layout for reorder operations.
+    // Build the thread-value (TV) layout that maps accumulator elements to coordinates.
+    // This layout is used by reorder() to transform between MMA accumulator layout
+    // and the 2D block store layout expected by the hardware copy atoms.
     using AccTVLayout = decltype(thr_mma.partition_sg_fragment_C(gCD).tv_layout());
     auto cd_compute_tv = make_layout(get<0>(AccTVLayout{}),
                                      sg_v_coord(_,_,_,_0{},_0{}));
@@ -368,31 +367,37 @@ public:
     // skip all callback overhead and directly reorder + store.
     // reorder() handles both type conversion and layout transformation.
     //
+    // NOTE: We deliberately avoid using recast<Array<ElementD, N>>(accumulator) here.
+    //   recast() calls recast_ptr() which internally uses reinterpret_cast to convert
+    //   between unrelated pointer types (e.g. float* → half_t*).  Dereferencing the
+    //   resulting pointer violates the C++ strict aliasing rule ([basic.lval] p11),
+    //   which states that accessing an object through a glvalue of an incompatible type
+    //   is undefined behavior.  Compilers may exploit this rule for optimizations,
+    //   leading to miscompilation in practice.
+    //   See: https://en.cppreference.com/w/cpp/language/reinterpret_cast#Type_aliasing
+    //
+    //   Instead, we perform element-wise conversion via NumericConverter, which also
+    //   guarantees single-step rounding (avoids double-rounding through reorder's
+    //   hardware path for narrow types like e4m3).
+    //
     if constexpr (has_is_identity<FusionCallbacks>::value) {
       if (fusion_callbacks.is_identity()) {
-        using ElementAccumulator = typename Accumulator::element_type;
-        constexpr int ComputeVectorLen = size<0>(Accumulator{});
-        auto tiled_acc_v = recast<Array<ElementAccumulator, ComputeVectorLen>>(tiled_acc);
-
-        // Use ElementD for the compute fragment so that reorder() only performs layout
-        // transformation without type conversion.  The float→ElementD conversion is done
-        // explicitly via NumericArrayConverter to match the full path's single-step rounding.
-        // Without this, reorder's hardware path (float→half→e4m3) double-rounds and produces
-        // different results for midpoint values.
         auto tDrD_compute_wi = make_fragment_like<ElementD>(tiled_acc(_,_0{},_0{}));
         auto tDrD_compute = make_subgroup_tensor(tDrD_compute_wi, cd_compute_tv);
-        auto tDrD_compute_v = recast<Array<ElementD, ComputeVectorLen>>(tDrD_compute_wi);
 
         static constexpr auto RoundStyle = ThreadEpilogueOp::RoundStyle;
-        NumericArrayConverter<ElementD, ElementAccumulator, ComputeVectorLen, RoundStyle> convert_output{};
+        NumericConverter<ElementD, typename Accumulator::element_type, RoundStyle> convert_output{};
+
+        static_assert(EpiTilesM == size<1>(tiled_acc), "EpiTilesM must match the number of epilogue tiles in the M dimension");
+        static_assert(EpiTilesN == size<2>(tiled_acc), "EpiTilesN must match the number of epilogue tiles in the N dimension");
 
         CUTLASS_PRAGMA_UNROLL
         for (int epi_m = 0; epi_m < EpiTilesM; epi_m++) {
           CUTLASS_PRAGMA_UNROLL
           for (int epi_n = 0; epi_n < EpiTilesN; epi_n++) {
             CUTLASS_PRAGMA_UNROLL
-            for (int epi_v = 0; epi_v < size<0>(tiled_acc_v); ++epi_v) {
-              tDrD_compute_v(epi_v) = convert_output(tiled_acc_v(epi_v, epi_m, epi_n));
+            for (int epi_v = 0; epi_v < size<0>(tiled_acc); ++epi_v) {
+              tDrD_compute(epi_v) = convert_output(tiled_acc(epi_v, epi_m, epi_n));
             }
 
             if constexpr (is_destination_supported) {
