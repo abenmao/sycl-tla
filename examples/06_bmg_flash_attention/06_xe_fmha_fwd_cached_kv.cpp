@@ -153,12 +153,8 @@ int main(int argc, const char **argv) {
   using QKTileK    = _32;
   using HeadDimSize = _96;
 #elif HEAD_DIM == 128
-#if defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
-  using PVTileN  = _64;
-#else
-  using PVTileN  = _32;
-#endif
-  using QKTileK    = _64;
+  using PVTileN  = _128;
+  using QKTileK  = _128;
   using HeadDimSize = _128;
 #elif HEAD_DIM == 192
   using PVTileN  = _32;
@@ -180,6 +176,16 @@ int main(int argc, const char **argv) {
   using ShapePV32  = Shape<_32, PVTileN,  KV_TILE_SIZE>;
   using ShapeOut32 = Shape<_32, HeadDimSize>;
   using SubgroupLayoutQK32 = Layout<Shape<_4, _8, _1>>;
+
+  using ShapeQK40  = Shape<_40, _64, QKTileK>;
+  using ShapePV40  = Shape<_40, PVTileN, _64>;
+  using ShapeOut40 = Shape<_40, HeadDimSize>;
+  using SubgroupLayoutQK40 = Layout<Shape<_5, _1, _1>>;
+
+  using ShapeQK48  = Shape<_48, _64, QKTileK>;
+  using ShapePV48  = Shape<_48, PVTileN, _64>;
+  using ShapeOut48 = Shape<_48, HeadDimSize>;
+  using SubgroupLayoutQK48 = Layout<Shape<_6, _1, _1>>;
 
   using ShapeQK64  = Shape<_64, _64, QKTileK>;
   using ShapePV64  = Shape<_64, PVTileN, _64>;
@@ -311,6 +317,12 @@ int main(int argc, const char **argv) {
   else if (total_rows <= 32)
     return options.use_paged_kv ? FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32, true)
                                 : FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32, false);
+  else if (total_rows <= 40)
+    return options.use_paged_kv ? FMHA_RUN_Q(ShapeQK40, ShapePV40, ShapeOut40, SubgroupLayoutQK40, true)
+                                : FMHA_RUN_Q(ShapeQK40, ShapePV40, ShapeOut40, SubgroupLayoutQK40, false);
+  else if (total_rows <= 48)
+    return options.use_paged_kv ? FMHA_RUN_Q(ShapeQK48, ShapePV48, ShapeOut48, SubgroupLayoutQK48, true)
+                                : FMHA_RUN_Q(ShapeQK48, ShapePV48, ShapeOut48, SubgroupLayoutQK48, false);
   else
     return options.use_paged_kv ? FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64, true)
                                 : FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64, false);
