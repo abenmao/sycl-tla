@@ -47,7 +47,7 @@ cutlass_test_unit_add_executable(
   copy_scatter.cpp
   mma.cpp
   tiled_mma.cpp
-  xe_copy_2d_test.cpp
+  xe_copy_2d.cpp
   reorder.cpp
   xe_copy_prefetch_2d.cpp
   # xe_vnni_2d.cpp # Disabled it due to driver unavailablility
