@@ -41,8 +41,8 @@ if(CUTLASS_ENABLE_SYCL)
     xe_gemm_tf32_tf32_fp32_tensor_op_fp32.cpp
     xe_gemm_f8_f8_fp32_tensor_op_fp32.cpp
     xe_gemm_fp16_s8_fp32_tensor_op_fp32.cpp
-    gemm_universal_bf16n_bf16t_f32n_tensor_op_f32_xe.cpp
-    gemm_universal_fp8_fp8_fp32_tensor_op_f32_xe_models.cpp
+    xe_gemm_universal_bf16n_bf16t_f32n_tensor_op_f32.cpp
+    xe_gemm_universal_fp8_fp8_fp32_tensor_op_f32.cpp
   )
 
   cutlass_test_unit_add_executable(
@@ -62,9 +62,9 @@ if(CUTLASS_ENABLE_SYCL)
 
   cutlass_test_unit_add_executable(
     cutlass_test_unit_gemm_device_mixed_input_tensorop_xe
-    gemm_universal_s8t_bf16n_f32t_mixed_input_tensor_op_f32_xe.cpp
-    gemm_universal_f16t_s4t_f32t_mixed_input_tensor_op_f32_xe.cpp
-    gemm_universal_f16t_s4n_f32t_mixed_input_tensor_op_f32_xe.cpp
+    xe_gemm_universal_s8t_bf16n_f32t_mixed_input_tensor_op_f32.cpp
+    xe_gemm_universal_f16t_s4t_f32t_mixed_input_tensor_op_f32.cpp
+    xe_gemm_universal_f16t_s4n_f32t_mixed_input_tensor_op_f32.cpp
   )
 
   # Group Gemm test
@@ -89,9 +89,9 @@ if(CUTLASS_ENABLE_SYCL)
     cutlass_test_unit_add_executable(
       cutlass_test_unit_gemm_device_unified_tests
       gemm_universal_lincomb_per_rowbias_eltact.cpp
-      gemm_universal_mainloopintelxexmx16group.cpp
-      gemm_universal_mainloopintelxexmx16_group_fp8.cpp
-      gemm_universal_mainloopintelxexmx16group_precision.cpp
+      xe_gemm_universal_mainloop_group.cpp
+      xe_gemm_universal_mainloop_group_fp8.cpp
+      xe_gemm_universal_mainloop_group_precision.cpp
       gemm_universal_fp_scaling.cpp
     )
 
@@ -118,4 +118,6 @@ if(CUTLASS_ENABLE_SYCL)
     test_unit_gemm_device_tensorop_xe_group_gemm
     test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
   )
+
+  add_subdirectory(legacy)
 endif()

@@ -36,9 +36,9 @@
 #endif
 
 #if defined(CUTE_ARCH_MMA_XE_ENABLED) && ((defined(__INTEL_LLVM_COMPILER) && (__INTEL_LLVM_COMPILER < 20250200)) || defined(CUTLASS_SYCL_BUILTIN_ENABLE))
-#include <cute/arch/mma_xe_legacy_builtin.hpp>
+#include <cute/arch/legacy/mma_xe_builtin.hpp>
 #elif defined(CUTE_ARCH_MMA_XE_ENABLED)
-#include <cute/arch/mma_xe_legacy_spirv.hpp>
+#include <cute/arch/legacy/mma_xe_spirv.hpp>
 #endif
 
 #include <cute/config.hpp>

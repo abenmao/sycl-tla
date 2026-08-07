@@ -72,7 +72,7 @@ if (CUTLASS_ENABLE_SYCL)
     message(STATUS "Building CuTE examples for Intel GPU targets")
     cutlass_example_add_executable(
       cute_tutorial_bmg
-      bgemm_bmg_legacy.cpp
+      legacy/bgemm_bmg.cpp
       TEST_COMMAND_OPTIONS
       BMG_ARGS
     )

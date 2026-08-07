@@ -49,7 +49,7 @@
 #include "cutlass/epilogue/thread/linear_combination.h"
 
 #include "default_gemm_configuration.hpp"
-#include "gemm_testbed_3x_ptr_array.hpp"
+#include "../gemm_testbed_3x_ptr_array.hpp"
 using namespace cute;
 namespace cutlass {
 namespace {
@@ -98,7 +98,7 @@ struct DefaultGemmGroupConfiguration<
       float, float,
       float, LayoutC, 1,
       ElementOutput, LayoutC, 1,
-      epilogue::IntelXeGenericGroup,
+      epilogue::IntelXeXMX16Group,
       EpilogueOp
     >::CollectiveOp;
 };

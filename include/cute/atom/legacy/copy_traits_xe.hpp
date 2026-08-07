@@ -35,7 +35,7 @@
 #include <cute/atom/copy_traits.hpp>
 
 #include <cute/algorithm/prefetch.hpp>
-#include <cute/arch/copy_xe_legacy.hpp>
+#include <cute/arch/legacy/copy_xe.hpp>
 
 namespace cute {
 

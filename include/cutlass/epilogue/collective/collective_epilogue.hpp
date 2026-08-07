@@ -74,9 +74,9 @@ class CollectiveEpilogue {
 #include "xe4_epilogue_dma_warpspecialized.hpp"
 #elif defined (SYCL_INTEL_TARGET)
 #include "xe_epilogue.hpp"
-#include "xe_epilogue_legacy.hpp"
+#include "cutlass/epilogue/collective/legacy/xe_epilogue.hpp"
 #include "xe_array_epilogue.hpp"
-#include "xe_array_epilogue_legacy.hpp"
+#include "cutlass/epilogue/collective/legacy/xe_array_epilogue.hpp"
 #endif
 //
 // Conv

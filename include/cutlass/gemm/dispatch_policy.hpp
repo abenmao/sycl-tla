@@ -1374,6 +1374,27 @@ struct MainloopXeL1Staged {
   using Schedule = KernelSchedule;
   using ClusterShape = Shape<_1,_1,_1>;
 };
+
+template<int Stages_, class KernelSchedule = KernelXe>
+struct MainloopXeL1StagedMixedPrecision : MainloopXeL1Staged<Stages_, KernelSchedule> {
+};
+
+template<int Stages_, class KernelScheduler = KernelXePtrArrayCooperative>
+struct MainloopXeL1StagedGroupMixedPrecision : MainloopXeL1Staged<Stages_, KernelScheduler> {
+};
+
+template<int Stages_, class KernelSchedule = KernelXe>
+struct MainloopXeL1StagedFP8Scaling : MainloopXeL1Staged<Stages_, KernelSchedule> {
+};
+
+template<int Stages_, class KernelSchedule = KernelXe>
+struct MainloopXeL1StagedW8A8 : MainloopXeL1Staged<Stages_, KernelSchedule> {
+};
+
+template<int Stages_, class KernelScheduler = KernelXePtrArrayCooperative>
+struct MainloopXeL1StagedGroupFP8 : MainloopXeL1Staged<Stages_, KernelScheduler> {
+};
+
 #endif
 
 // n-buffer in smem, pipelined with Blackwell UMMA and TMA, Warp specialized dynamic schedule

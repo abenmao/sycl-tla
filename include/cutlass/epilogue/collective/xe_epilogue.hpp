@@ -96,6 +96,7 @@ public:
   using ThreadEpilogueOp = typename fusion::FusionCallbacksTraits<FusionCallbacks>::Operation;
   using ElementCompute = typename ThreadEpilogueOp::ElementCompute;
   using ElementOutput = ElementD;
+  using ElementAccumulator = ElementCompute;
 
   static constexpr int CopyBitsC = cute::min(sizeof(NonVoidElementC) * 8, 64);
   static constexpr int CopyBitsD = cute::min(sizeof(ElementD) * 8, 64);

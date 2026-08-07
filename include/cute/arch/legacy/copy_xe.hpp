@@ -36,15 +36,15 @@
 #endif
 
 #if defined(CUTE_ARCH_COPY_XE_ENABLED) && ((defined(__INTEL_LLVM_COMPILER) && (__INTEL_LLVM_COMPILER < 20250200)) || defined(CUTLASS_SYCL_BUILTIN_ENABLE))
-#include <cute/arch/copy_xe_legacy_builtin.hpp>
+#include <cute/arch/legacy/copy_xe_builtin.hpp>
 #elif defined(CUTE_ARCH_COPY_XE_ENABLED)
-#include <cute/arch/copy_xe_legacy_spirv.hpp>
+#include <cute/arch/legacy/copy_xe_spirv.hpp>
 #endif
 
-#include <cute/arch/copy_xe_legacy_U4.hpp>
-#include <cute/arch/copy_xe_legacy_U8.hpp>
-#include <cute/arch/copy_xe_legacy_U16.hpp>
-#include <cute/arch/copy_xe_legacy_U32.hpp>
-#include <cute/arch/copy_xe_legacy_U64.hpp>
+#include <cute/arch/legacy/copy_xe_U4.hpp>
+#include <cute/arch/legacy/copy_xe_U8.hpp>
+#include <cute/arch/legacy/copy_xe_U16.hpp>
+#include <cute/arch/legacy/copy_xe_U32.hpp>
+#include <cute/arch/legacy/copy_xe_U64.hpp>
 
 #include <cute/util/xe_split_barrier.hpp>

@@ -30,82 +30,76 @@
  **************************************************************************************************/
 
 /*! \file
-    \brief Tests for Xe tf32_tf32_fp32
+    \brief Tests for Xe s8_s8_s32
 */
 
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
 #include "cutlass/gemm/kernel/gemm_universal.hpp"
 #include "default_gemm_configuration.hpp"
 
-#include "gemm_testbed_3x.hpp"
-
+#include "../gemm_testbed_3x.hpp"
 namespace cutlass {
 namespace {
 template <typename LayoutA, typename LayoutB>
-struct XE_Device_Gemm_tf32_tf32_f32_tensor_op_f32_cooperative {
-  using ElementA = cute::tfloat32_t;
-  using ElementB = cute::tfloat32_t;
+struct XE_Device_Gemm_s8_s8_s32_tensor_op_s32_cooperative {
+  using ElementA = int8_t;
+  using ElementB = int8_t;
 
   using Config = gemm::device::DefaultGemmConfigurationToCutlass3Types<
     arch::OpClassTensorOp, arch::IntelXe,
     ElementA, LayoutA,
     ElementB, LayoutB,
-    float, layout::RowMajor,
-    float>;
+    int32_t, layout::RowMajor,
+    int32_t>;
 
-  using DispatchPolicy = gemm::MainloopXeL1Staged<3, gemm::KernelXeCooperative>;
+  using DispatchPolicy = gemm::MainloopIntelXeXMX16<3, gemm::KernelPVCCooperative>;
 
   using CollectiveMainloop = gemm::collective::CollectiveMma<
-    DispatchPolicy, typename Config::TileShape,
+    DispatchPolicy, Config::TileShape,
     ElementA, detail::TagToStrideA_t<LayoutA>,
     ElementB, detail::TagToStrideB_t<LayoutB>,
-    typename Config::TiledMma,
-    typename Config::GmemTiledCopyA, void, void, cute::identity,  // A
-    typename Config::GmemTiledCopyB, void, void, cute::identity   // B
+    Config::TiledMma,
+    Config::GmemTiledCopyA, void, void, cute::identity,  // A
+    Config::GmemTiledCopyB, void, void, cute::identity   // B
   >;
 
   using GemmKernel = gemm::kernel::GemmUniversal<
       cute::Shape<int,int,int,int>,
       CollectiveMainloop,
-      typename Config::CollectiveEpilogue,
-      gemm::StreamKScheduler
-  >;
+      Config::CollectiveEpilogue,
+      gemm::StreamKScheduler>;
 
   using Gemm = gemm::device::GemmUniversalAdapter<GemmKernel>;
 };
 
-TEST(XE_Device_Gemm_tf32t_tf32t_f32t_tensor_op_f32_cooperative, 256x256x32) {
+TEST(XE_Device_Gemm_s8t_s8t_s32t_tensor_op_s32_cooperative, 64x128x32) {
   using LayoutA = layout::RowMajor;
   using LayoutB = layout::RowMajor;
-  using Gemm = XE_Device_Gemm_tf32_tf32_f32_tensor_op_f32_cooperative<LayoutA, LayoutB>::Gemm;
-  // TODO(Codeplay): Enable batch tests
+  using Gemm = XE_Device_Gemm_s8_s8_s32_tensor_op_s32_cooperative<LayoutA, LayoutB>::Gemm;
   EXPECT_TRUE(test::gemm::device::TestXe<Gemm>());
 }
 
-/* TODO(Codeplay): missing copy transpose builtin and prefetch builtin
-TEST(XE_Device_Gemm_tf32n_tf32t_f32t_tensor_op_f32_cooperative, 256x256x32) {
+// TODO(Codeplay): Test on XE2 because the copy function is not available in the IGC driver for PVC
+TEST(XE2_Device_Gemm_s8n_s8t_s32t_tensor_op_s32_cooperative, 64x128x32) {
   using LayoutA = layout::ColumnMajor;
   using LayoutB = layout::RowMajor;
-  using Gemm = XE_Device_Gemm_tf32_tf32_f32_tensor_op_f32_cooperative<LayoutA, LayoutB>::Gemm;
-  // TODO(Codeplay): Enable batch tests
-  EXPECT_TRUE(test::gemm::device::TestXe<Gemm>());
+  using Gemm = XE_Device_Gemm_s8_s8_s32_tensor_op_s32_cooperative<LayoutA, LayoutB>::Gemm;
+  EXPECT_TRUE(test::gemm::device::TestXe<Gemm>(1.0, 0.0, true, 16));
 }
 
-TEST(XE_Device_Gemm_tf32t_tf32n_f32t_tensor_op_f32_cooperative, 256x256x32) {
+TEST(XE_Device_Gemm_s8t_s8n_s32t_tensor_op_s32_cooperative, 64x128x32) {
   using LayoutA = layout::RowMajor;
   using LayoutB = layout::ColumnMajor;
-  using Gemm = XE_Device_Gemm_tf32_tf32_f32_tensor_op_f32_cooperative<LayoutA, LayoutB>::Gemm;
-  // TODO(Codeplay): Enable batch tests
-  EXPECT_TRUE(test::gemm::device::TestXe<Gemm>());
+  using Gemm = XE_Device_Gemm_s8_s8_s32_tensor_op_s32_cooperative<LayoutA, LayoutB>::Gemm;
+  EXPECT_TRUE(test::gemm::device::TestXe<Gemm>(1.0, 0.0, true, 16));
 }
 
-TEST(XE_Device_Gemm_tf32n_tf32n_f32t_tensor_op_f32_cooperative, 256x256x32) {
+// TODO(Codeplay): Test on XE2 because the copy function is not available in the IGC driver for PVC
+TEST(XE2_Device_Gemm_s8n_s8n_s32t_tensor_op_s32_cooperative, 64x128x32) {
   using LayoutA = layout::ColumnMajor;
   using LayoutB = layout::ColumnMajor;
-  using Gemm = XE_Device_Gemm_tf32_tf32_f32_tensor_op_f32_cooperative<LayoutA, LayoutB>::Gemm;
-  // TODO(Codeplay): Enable batch tests
-  EXPECT_TRUE(test::gemm::device::TestXe<Gemm>());
+  using Gemm = XE_Device_Gemm_s8_s8_s32_tensor_op_s32_cooperative<LayoutA, LayoutB>::Gemm;
+  EXPECT_TRUE(test::gemm::device::TestXe<Gemm>(1.0, 0.0, true, 16));
 }
-*/
 }
 } // namespace cutlass

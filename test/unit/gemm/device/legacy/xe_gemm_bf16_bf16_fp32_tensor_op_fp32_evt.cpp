@@ -43,7 +43,7 @@
 #include "cutlass/epilogue/collective/collective_builder.hpp"
 #include "cutlass/gemm/collective/collective_builder.hpp"
 
-#include "gemm_testbed_3x.hpp"
+#include "../gemm_testbed_3x.hpp"
 
 namespace cutlass {
 namespace {
@@ -140,26 +140,27 @@ TEST(Xe_Gemm_bf16t_bf16t_f32_tensor_op_gmma_f32_epilogue_drelu, 256x256x32) {
 TEST(XE_Device_Gemm_bf16t_bf16t_f32_tensor_op_gmma_f32_epilogue, 256x256x32_LinCombPerRowBias) {
   using ElementBias = float;
 
-  using EpilogueDispatchPolicy = epilogue::IntelXeGeneric;
+  using EpilogueDispatchPolicy = epilogue::IntelXeXMX16;
   using EpilogueOp = epilogue::fusion::LinCombPerRowBias<
       ElementOutput, ElementComputeEpilogue, ElementBias, ElementAccumulator,
       ElementAccumulator, 128 / sizeof_bits_v<ElementBias>,
       FloatRoundStyle::round_to_nearest>;
-  using FusionCallbacks = epilogue::fusion::FusionCallbacks<
+  using FusionCallBacks = epilogue::fusion::FusionCallbacks<
       EpilogueDispatchPolicy, EpilogueOp, TileShape_MNK,
       decltype(tile_shape(CollectiveMainloop::TiledMma()))>;
 
   using CollectiveEpilogue = epilogue::collective::CollectiveEpilogue<
           EpilogueDispatchPolicy,
           TileShape_MNK,
-          void,
           ElementAccumulator,
           gemm::TagToStrideC_t<LayoutC>,
           ElementOutput,
           gemm::TagToStrideC_t<LayoutD>,
-          FusionCallbacks,
-          void,
-          void>;
+          FusionCallBacks,
+          XE_2D_U32x8x16_LD_N,
+          void, void,
+          XE_2D_U32x8x16_ST_N,
+          void, void>;
 
   using Gemm = XE_Device_Gemm_bf16_bf16_f32_tensor_op_gmma_f32_epilogue<CollectiveEpilogue>::Gemm;
 
@@ -170,26 +171,27 @@ TEST(XE_Device_Gemm_bf16t_bf16t_f32_tensor_op_gmma_f32_epilogue, 256x256x32_LinC
 TEST(XE_Device_Gemm_bf16t_bf16t_f32_tensor_op_gmma_f32_epilogue, 256x256x32_LinCombPerColBias) {
   using ElementBias = float;
 
-  using EpilogueDispatchPolicy = epilogue::IntelXeGeneric;
+  using EpilogueDispatchPolicy = epilogue::IntelXeXMX16;
   using EpilogueOp = epilogue::fusion::LinCombPerColBias<
       ElementOutput, ElementComputeEpilogue, ElementBias, ElementAccumulator,
       ElementAccumulator, 128 / sizeof_bits_v<ElementBias>,
       FloatRoundStyle::round_to_nearest>;
-  using FusionCallbacks = epilogue::fusion::FusionCallbacks<
+  using FusionCallBacks = epilogue::fusion::FusionCallbacks<
       EpilogueDispatchPolicy, EpilogueOp, TileShape_MNK,
       decltype(tile_shape(CollectiveMainloop::TiledMma()))>;
 
   using CollectiveEpilogue = epilogue::collective::CollectiveEpilogue<
           EpilogueDispatchPolicy,
           TileShape_MNK,
-          void,
           ElementAccumulator,
           gemm::TagToStrideC_t<LayoutC>,
           ElementOutput,
           gemm::TagToStrideC_t<LayoutD>,
-          FusionCallbacks,
-          void,
-          void>;
+          FusionCallBacks,
+          XE_2D_U32x8x16_LD_N,
+          void, void,
+          XE_2D_U32x8x16_ST_N,
+          void, void>;
 
   using Gemm = XE_Device_Gemm_bf16_bf16_f32_tensor_op_gmma_f32_epilogue<CollectiveEpilogue>::Gemm;
 

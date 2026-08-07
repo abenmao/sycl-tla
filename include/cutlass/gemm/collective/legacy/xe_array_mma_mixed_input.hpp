@@ -39,8 +39,6 @@
 #include "cute/atom/mma_atom.hpp"
 #include "cute/algorithm/gemm.hpp"
 
-#include "cutlass/gemm/collective/xe_mma_mixed_input.hpp"
-
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass::gemm::collective {
@@ -66,7 +64,7 @@ template <
   class SmemCopyAtomB_,
   class TransformB_>
 struct CollectiveMma<
-    MainloopXeL1StagedGroupMixedPrecision<Stages, Schedule>,
+    MainloopIntelXeXMX16GroupMixedPrecision<Stages, Schedule>,
     TileShape_,
     ElementAOptionalTuple,
     StrideA_,
@@ -80,7 +78,7 @@ struct CollectiveMma<
     GmemTiledCopyB_,
     SmemLayoutAtomB_,
     SmemCopyAtomB_,
-    TransformB_> : public CollectiveMma<MainloopXeL1StagedMixedPrecision<Stages>,
+    TransformB_> : public CollectiveMma<MainloopIntelXeXMX16MixedPrecision<Stages>,
                                 TileShape_,
                                 ElementAOptionalTuple,
                                 StrideA_,
@@ -100,7 +98,7 @@ public:
   //
   // Type Aliases
   //
-  using Base = CollectiveMma<MainloopXeL1StagedMixedPrecision<Stages>,
+  using Base = CollectiveMma<MainloopIntelXeXMX16MixedPrecision<Stages>,
                                 TileShape_,
                                 ElementAOptionalTuple,
                                 StrideA_,
@@ -132,7 +130,7 @@ public:
   using NonVoidElementScale = typename Base::NonVoidElementScale;
   using NonVoidElementZero = typename Base::NonVoidElementZero;
 
-  using DispatchPolicy = MainloopXeL1StagedGroupMixedPrecision<Stages, Schedule>;
+  using DispatchPolicy = MainloopIntelXeXMX16GroupMixedPrecision<Stages, Schedule>;
 
   using InternalNonVoidStrideScale = cute::remove_pointer_t<NonVoidStrideScale>;
   using InternalNonVoidStrideZero = cute::remove_pointer_t<NonVoidStrideZero>;

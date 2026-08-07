@@ -858,6 +858,6 @@ print(ThrMMA<TiledMMA, ThrVMNK> const& thr_mma)
 
 #if defined(CUTLASS_ENABLE_SYCL)
 #include <cute/atom/mma_traits_xe.hpp>
-#include <cute/atom/mma_traits_xe_legacy.hpp>
+#include <cute/atom/legacy/mma_traits_xe.hpp>
 #endif
 ////////////////////////////////////////////////////////////////////////////////////////////////////

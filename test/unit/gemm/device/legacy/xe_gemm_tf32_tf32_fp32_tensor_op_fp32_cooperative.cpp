@@ -37,7 +37,7 @@
 #include "cutlass/gemm/kernel/gemm_universal.hpp"
 #include "default_gemm_configuration.hpp"
 
-#include "gemm_testbed_3x.hpp"
+#include "../gemm_testbed_3x.hpp"
 
 namespace cutlass {
 namespace {
@@ -53,7 +53,7 @@ struct XE_Device_Gemm_tf32_tf32_f32_tensor_op_f32_cooperative {
     float, layout::RowMajor,
     float>;
 
-  using DispatchPolicy = gemm::MainloopXeL1Staged<3, gemm::KernelXeCooperative>;
+  using DispatchPolicy = gemm::MainloopIntelXeXMX16<3, gemm::KernelXeCooperative>;
 
   using CollectiveMainloop = gemm::collective::CollectiveMma<
     DispatchPolicy, typename Config::TileShape,
