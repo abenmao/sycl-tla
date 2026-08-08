@@ -153,7 +153,11 @@ int main(int argc, const char **argv) {
   using QKTileK    = _32;
   using HeadDimSize = _96;
 #elif HEAD_DIM == 128
+#if defined(IS_BFLOAT16)
+  using PVTileN  = _64;
+#else
   using PVTileN  = _128;
+#endif
   using QKTileK  = _128;
   using HeadDimSize = _128;
 #elif HEAD_DIM == 192
@@ -167,7 +171,13 @@ int main(int argc, const char **argv) {
   using ShapeOut8 = Shape<_8,  HeadDimSize>;        // (q,v)
   using SubgroupLayoutQK8  = Layout<Shape<_1, _8, _1>>;
 
-  using ShapeQK16  = Shape<_16,  KV_TILE_SIZE, QKTileK>;
+ #if HEAD_DIM == 128
+   using QKTileK16 = _64;  // use QKTileK=64 instead of 128 for better performance on cached-KV Q=16
+ #else
+   using QKTileK16 = QKTileK;
+ #endif
+
+  using ShapeQK16  = Shape<_16,  KV_TILE_SIZE, QKTileK16>;
   using ShapePV16  = Shape<_16, PVTileN,  KV_TILE_SIZE>;
   using ShapeOut16 = Shape<_16, HeadDimSize>;
   using SubgroupLayoutQK16 = Layout<Shape<_2, _8, _1>>;

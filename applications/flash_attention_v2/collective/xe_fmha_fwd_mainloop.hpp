@@ -817,13 +817,52 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
       }
 
-      /* K prefetch for next iteration */
+      /* Prefetch V current and K next after QK to cover K latency with softmax/PV. */
+      int K_next = K + Stages;
+      [[maybe_unused]] int k_idx_next_cache = K_next;
       if constexpr (is_cache && !GqaFusion) {
         if (subgroup_id < RegularKVPrefetchSGs) {
           CUTLASS_PRAGMA_UNROLL
           for (int VV = 0; VV < VTiles; VV++) {
             prefetch(prefetch_v_cache, pVgV_cache(_,_,_,VV,k_idx));
           }
+        }
+        if (K_next < kblocks_cache) {
+          int physical_K_next = K_next;
+          if constexpr (PagedKV) {
+            constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
+            int slot_next = (stage_mask >= 0) ? ((K_next - blk_k0) & stage_mask) : ((K_next - blk_k0) % Stages);
+            bool const is_continuous_next = (K_next == last_prefetched_logical_k + 1);
+            int physical_next;
+
+            if (is_continuous_next) {
+              if (tiles_per_page > 0 && (tiles_per_page & (tiles_per_page - 1)) == 0) {
+                int const page_mask = tiles_per_page - 1;
+                int const tile_in_page = K_next & page_mask;
+                physical_next = (tile_in_page != 0)
+                  ? (last_prefetched_physical_k + 1)
+                  : get_physical_k_tile(K_next, batch_offset, tiles_per_page);
+              } else {
+                int const tile_in_page = K_next % tiles_per_page;
+                physical_next = (tile_in_page != 0)
+                  ? (last_prefetched_physical_k + 1)
+                  : get_physical_k_tile(K_next, batch_offset, tiles_per_page);
+              }
+            } else {
+              physical_next = get_physical_k_tile(K_next, batch_offset, tiles_per_page);
+            }
+
+            physical_k_tiles_cache[slot_next] = physical_next;
+            physical_K_next = physical_next;
+            last_prefetched_logical_k = K_next;
+            last_prefetched_physical_k = physical_next;
+          }
+          if (subgroup_id < RegularKVPrefetchSGs) {
+            for (int D = 0; D < size<4>(pKgK_cache); D++) {
+              prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_next,D));
+            }
+          }
+          k_idx_next_cache = physical_K_next;
         }
       } else if constexpr (!GqaFusion) {
         if (subgroup_id < RegularKVPrefetchSGs) {
@@ -993,50 +1032,6 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
       }
 
-      /* K prefetch */
-      int K_next = K + Stages;
-      [[maybe_unused]] int k_idx_next_cache = K_next;
-      if constexpr (is_cache) {
-        if (K_next < kblocks_cache) {
-          int physical_K_next = K_next;
-          if constexpr (PagedKV) {
-            constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
-            int slot_next = (stage_mask >= 0) ? ((K_next - blk_k0) & stage_mask) : ((K_next - blk_k0) % Stages);
-            bool const is_continuous_next = (K_next == last_prefetched_logical_k + 1);
-            int physical_next;
-
-            if (is_continuous_next) {
-              if (tiles_per_page > 0 && (tiles_per_page & (tiles_per_page - 1)) == 0) {
-                int const page_mask = tiles_per_page - 1;
-                int const tile_in_page = K_next & page_mask;
-                physical_next = (tile_in_page != 0)
-                  ? (last_prefetched_physical_k + 1)
-                  : get_physical_k_tile(K_next, batch_offset, tiles_per_page);
-              } else {
-                int const tile_in_page = K_next % tiles_per_page;
-                physical_next = (tile_in_page != 0)
-                  ? (last_prefetched_physical_k + 1)
-                  : get_physical_k_tile(K_next, batch_offset, tiles_per_page);
-              }
-            } else {
-              physical_next = get_physical_k_tile(K_next, batch_offset, tiles_per_page);
-            }
-
-            physical_k_tiles_cache[slot_next] = physical_next;
-            physical_K_next = physical_next;
-            last_prefetched_logical_k = K_next;
-            last_prefetched_physical_k = physical_next;
-          }
-          if constexpr (!GqaFusion) {
-            if (subgroup_id < RegularKVPrefetchSGs) {
-              for (int D = 0; D < size<4>(pKgK_cache); D++) {
-                prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_next,D));
-              }
-            }
-          }
-          k_idx_next_cache = physical_K_next;
-        }
-      }
       // Prefetch K scale
       if constexpr (HardwareBlockScale && !GqaFusion) {
         auto& scale_prefetch_K_ctx = get<3>(scale_ctx_qk_cur);
