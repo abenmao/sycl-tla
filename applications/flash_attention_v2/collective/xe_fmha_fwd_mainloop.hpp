@@ -598,7 +598,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       }
     }
     // Cache K prefetch init, still uses legacy API.
-    if constexpr (CachedKV) {
+    if constexpr (CachedKV && !GqaFusion) {
       if (subgroup_id < RegularKVPrefetchSGs) {
         for (int D = 0; D < size<4>(pKgK_cache); D++) {
           CUTLASS_PRAGMA_UNROLL
@@ -627,7 +627,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         prefetch(tiled_prefetch_scaleQ, prefetch_iter_scaleQ(_, _, _, D));
       }
 
-      if constexpr (CachedKV) {
+      if constexpr (CachedKV && !GqaFusion) {
         auto& tiled_prefetch_scaleK_cache = get<0>(get<3>(scale_context_qk_cache));
         auto  prefetch_iter_scaleK_cache = get<1>(get<3>(scale_context_qk_cache));
         for (int K = 0; K < Stages; K++) {
@@ -642,12 +642,14 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
       }
 
-      if (blk_k1 > kblocks_cache) {
-        for (int K = 0; K < Stages; K++) {
-          const int k_coord = K * BLK_K + (subgroup_id % ATOM_K)  * SG_K;
-          prefetch_iter_scaleK.data().coord_ = {k_coord, 0, l_coord};
-          for (int D = 0; D < DTiles; D++) {
-            prefetch(tiled_prefetch_scaleK, prefetch_iter_scaleK(_, _, _, D));
+      if constexpr (!GqaFusion) {
+        if (blk_k1 > kblocks_cache) {
+          for (int K = 0; K < Stages; K++) {
+            const int k_coord = K * BLK_K + (subgroup_id % ATOM_K)  * SG_K;
+            prefetch_iter_scaleK.data().coord_ = {k_coord, 0, l_coord};
+            for (int D = 0; D < DTiles; D++) {
+              prefetch(tiled_prefetch_scaleK, prefetch_iter_scaleK(_, _, _, D));
+            }
           }
         }
       }
@@ -816,7 +818,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       }
 
       /* K prefetch for next iteration */
-      if constexpr (is_cache) {
+      if constexpr (is_cache && !GqaFusion) {
         if (subgroup_id < RegularKVPrefetchSGs) {
           CUTLASS_PRAGMA_UNROLL
           for (int VV = 0; VV < VTiles; VV++) {
@@ -830,7 +832,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
       }
       // Prefetch V scale
-      if constexpr (HardwareBlockScale) {
+      if constexpr (HardwareBlockScale && !GqaFusion) {
         auto& scale_prefetch_V_ctx = get<2>(scale_ctx_pv_cur);
         auto& tiled_prefetch_scaleV = get<0>(scale_prefetch_V_ctx);
         auto  prefetch_iter_scaleV = get<1>(scale_prefetch_V_ctx);
@@ -1025,16 +1027,18 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
             last_prefetched_logical_k = K_next;
             last_prefetched_physical_k = physical_next;
           }
-          if (subgroup_id < RegularKVPrefetchSGs) {
-            for (int D = 0; D < size<4>(pKgK_cache); D++) {
-              prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_next,D));
+          if constexpr (!GqaFusion) {
+            if (subgroup_id < RegularKVPrefetchSGs) {
+              for (int D = 0; D < size<4>(pKgK_cache); D++) {
+                prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_next,D));
+              }
             }
           }
           k_idx_next_cache = physical_K_next;
         }
       }
       // Prefetch K scale
-      if constexpr (HardwareBlockScale) {
+      if constexpr (HardwareBlockScale && !GqaFusion) {
         auto& scale_prefetch_K_ctx = get<3>(scale_ctx_qk_cur);
         bool const has_next = !is_cache || (K_next < kblocks_cache);
         if (has_next) {

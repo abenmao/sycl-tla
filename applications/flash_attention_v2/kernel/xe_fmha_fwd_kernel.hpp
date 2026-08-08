@@ -1067,8 +1067,8 @@ public:
           split_q_per_head       = s.seq_len_qo;
           split_full_tile_offset = s.seq_len_kv - cute::min(int(s.seq_len_qo), int(s.seq_len_kv));
         }
-
-        mainloop.template operator()<true>(
+        // keep the prefetch on when splitKV
+        mainloop.template operator()<false>(
               make_gqa_view_q(),
               K(_,_,head_kv,idx_b),
               V(_,_,head_kv,idx_b),
