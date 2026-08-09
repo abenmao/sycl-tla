@@ -76,13 +76,14 @@ stages.
 | # | Stage | What it computes |
 |---|---|---|
 | 1 | `chunk_prepare` | L2-normalize Q (scaled by `1/sqrt(D)`) and K in place; cumulative-sum the per-token log-scale gate into `a[t] = cumsum(softplus(a + dt_bias) * -exp(A_log))`. |
-| 2 | `chunk_compute_A` | Build the lower-triangular transition matrix `L[m,n] = (K_m·K_n) * exp(a[m] - a[n]) * b[m]` per chunk. |
+| 2 | `chunk_compute_A_o2` | **Fused dual GEMM** sharing the `K` operand: build the lower-triangular transition matrix `L[m,n] = (K_m·K_n) * exp(a[m] - a[n]) * b[m]` into `A_workspace`, **and** the decay-gated intra-chunk score `O2[m,n] = (Q_m·K_n) * exp(a[m] - a[n])` (causal, `m>=n`) into `o2_workspace`. |
 | 3 | `chunk_inverse` | Invert `L` in place  |
 | 4 | `chunk_compute_wu` | `U = L^-1 * V * diag(b)` and `W = L^-1 * K * diag(exp(a) * b)`. |
-| 5 | `chunk_fwd_o` | `O = Q * S^T * exp(g) + O2 * U`; update SSM state `S_out = exp(g_last) * S_prev + U^T * K_scaled`. |
+| 5 | `chunk_fwd_o` | `O = Q * S^T * exp(g) + O2 * U` (reads the precomputed `O2`); update SSM state `S_out = exp(g_last) * S_prev + U^T * K_scaled`. |
 
-**Workspaces.** Three workspace tensors are supplied by the caller
-(`A_workspace`, `w_workspace`, `u_workspace`); element counts come from
+**Workspaces.** Four workspace tensors are supplied by the caller
+(`A_workspace`, `o2_workspace`, `w_workspace`, `u_workspace`); element counts
+come from
 [`cutlass::gdn::get_workspace_sizes()`](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule.hpp).
 They are sized by `total_virtual_seqlen` (the chunk-padded extent), **not**
 `total_seqlen` (real tokens), because that is the stride the kernels use when
@@ -92,7 +93,7 @@ indexing them.
 
 Each stage reads the tensors produced upstream and writes the next. `q`/`k`/`a`
 are mutated **in place** (see [mutability contract](#mutability-contract)); the
-`A`/`w`/`u` workspaces are scratch buffers reused only within a launch.
+`A`/`o2`/`w`/`u` workspaces are scratch buffers reused only within a launch.
 
 ```
   STAGE              READS                          WRITES
@@ -100,8 +101,8 @@ are mutated **in place** (see [mutability contract](#mutability-contract)); the
   1 prepare          q, k, a, A_log, dt_bias        q, k, a            (in place)
         │
         ▼
-  2 compute_A        k, a, b                        A  (L, lower-tri)  [workspace]
-        │
+  2 compute_A_o2     q, k, a, b                     A  (L, lower-tri)  [workspace]
+        │                                           o2 (O2, causal)    [workspace]
         ▼
   3 inverse          A                              A  (L^-1)          [workspace, in place]
         │
@@ -109,10 +110,10 @@ are mutated **in place** (see [mutability contract](#mutability-contract)); the
   4 compute_wu       A, q, k, v, b, a, A_log,       w (W), u (U)       [workspace]
         │            dt_bias, has_initial_state
         ▼
-  5 fwd_o            A, w, u, q, b, a, ssm_state    core_attn_out  [total_seqlen, n_vh, hv]
+  5 fwd_o            o2, w, u, q, k, a, ssm_state   core_attn_out  [total_seqlen, n_vh, hv]
                                                     ssm_state      (recurrent state, in place)
 
-  Legend:  in place = mutates a caller tensor   ·   workspace = A/w/u scratch (per launch)
+  Legend:  in place = mutates a caller tensor   ·   workspace = A/o2/w/u scratch (per launch)
 ```
 
 ## Work hierarchy & GPU mapping
@@ -144,7 +145,8 @@ geometry of each stage and the `xe_core_count` floor.
   ──────────────────  ───────────────────────────────  ───────────  ─────────────────────────
   1 chunk_prepare     xe_core_count                     512 threads  1 sub-group ↦ (v_head,chunk);
                                                                       persistent loop over chunks
-  2 chunk_compute_A   xe_core_count·512 / wg_size       MMA wg_size  1 work-group ↦ one chunk
+  2 chunk_compute_A_o2 xe_core_count·512 / wg_size      MMA wg_size  1 work-group ↦ one chunk
+                                                                      (fused L + O2 dual GEMM)
   3 chunk_inverse     max(xe_core_count·512/16,         16 (1 sub-   1 work-group ↦ (chunk,v_head);
                           ⌈tvs/64⌉·num_v_heads)         group)       4×4 block forward-substitution
   4 chunk_compute_wu  xe_core_count·512 / wg_size       MMA wg_size  1 work-group ↦ (v_head,chunk)
@@ -277,7 +279,8 @@ the arithmetic.
 
 | Field | Type | Layout | Produced by → consumed by |
 |---|---|---|---|
-| `A_workspace` | `void*` → `T` | `[num_v_heads, tvs, kChunkSize]` | stage 2 (`L`) → stage 3 (`L⁻¹`) → stages 4–5 |
+| `A_workspace` | `void*` → `T` | `[num_v_heads, tvs, kChunkSize]` | stage 2 (`L`) → stage 3 (`L⁻¹`) → stage 4 |
+| `o2_workspace` | `void*` → `T` | `[num_v_heads, tvs, kChunkSize]` | stage 2 (`O2`) → stage 5 |
 | `w_workspace` | `void*` → `T` | `[num_v_heads, tvs, head_k_dim]` | stage 4 (`W`) → stage 5 |
 | `u_workspace` | `void*` → `T` | `[num_v_heads, tvs, head_v_dim]` | stage 4 (`U`) → stage 5 |
 
@@ -362,13 +365,14 @@ from the raw copy — snapshotting after the in-place sigmoid would double-apply
 ## Sizing the workspaces
 
 [`get_workspace_sizes(args)`](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule.hpp)
-returns a `GDNWorkspaceSizes` with the **element counts** (of `T`) for the three
+returns a `GDNWorkspaceSizes` with the **element counts** (of `T`) for the four
 scratch buffers. It reads only the shape fields, so you can call it on a
 shape-only `GDNArguments` before any device pointer exists:
 
 ```cpp
 struct GDNWorkspaceSizes {
   size_t A_elems;   // num_v_heads · total_virtual_seqlen · kChunkSize
+  size_t o2_elems;  // num_v_heads · total_virtual_seqlen · kChunkSize
   size_t w_elems;   // num_v_heads · total_virtual_seqlen · head_k_dim
   size_t u_elems;   // num_v_heads · total_virtual_seqlen · head_v_dim
 };
@@ -378,11 +382,12 @@ struct GDNWorkspaceSizes {
 cutlass::gdn::GDNArguments shape = /* shape scalars only */;
 auto ws = cutlass::gdn::get_workspace_sizes(shape);
 
-// allocate `ws.A_elems` / `ws.w_elems` / `ws.u_elems` elements **of T**
-// (e.g. bytes = ws.A_elems * sizeof(T)), then store the pointers back:
-shape.A_workspace = /* device alloc of ws.A_elems × sizeof(T) */;
-shape.w_workspace = /* device alloc of ws.w_elems × sizeof(T) */;
-shape.u_workspace = /* device alloc of ws.u_elems × sizeof(T) */;
+// allocate `ws.A_elems` / `ws.o2_elems` / `ws.w_elems` / `ws.u_elems` elements
+// **of T** (e.g. bytes = ws.A_elems * sizeof(T)), then store the pointers back:
+shape.A_workspace  = /* device alloc of ws.A_elems  × sizeof(T) */;
+shape.o2_workspace = /* device alloc of ws.o2_elems × sizeof(T) */;
+shape.w_workspace  = /* device alloc of ws.w_elems  × sizeof(T) */;
+shape.u_workspace  = /* device alloc of ws.u_elems  × sizeof(T) */;
 ```
 
 The counts use `total_virtual_seqlen` (the chunk-padded extent), because that is
@@ -416,9 +421,9 @@ args.head_k_dim           = 128;                     // multiple of 64
 args.head_v_dim           = 128;                     // multiple of 64
 args.ssm_state_stride_0   = num_v_heads * head_v_dim * head_k_dim;
 
-// 2. Size + allocate the three workspaces (host-only math).
+// 2. Size + allocate the four workspaces (host-only math).
 auto ws = cutlass::gdn::get_workspace_sizes(args);
-//   allocate ws.A_elems / ws.w_elems / ws.u_elems elements of T on the device
+//   allocate ws.A_elems / ws.o2_elems / ws.w_elems / ws.u_elems elements of T on the device
 
 // 3. Fill in every device pointer (inputs, outputs, workspaces).
 args.q = d_q;  args.k = d_k;  args.v = d_v;
@@ -426,7 +431,8 @@ args.b = d_b;  args.a = d_a;  args.A_log = d_A_log;  args.dt_bias = d_dt_bias;
 args.query_start_loc = d_qsl;  args.cache_indices = d_cache;
 args.has_initial_state = d_has_init;   // or nullptr (see contract)
 args.core_attn_out = d_out;  args.ssm_state = d_state;
-args.A_workspace = d_A;  args.w_workspace = d_w;  args.u_workspace = d_u;
+args.A_workspace = d_A;  args.o2_workspace = d_o2;
+args.w_workspace = d_w;  args.u_workspace = d_u;
 
 // 4. Launch on an IN-ORDER queue and synchronize.
 sycl::queue queue{sycl::gpu_selector_v, sycl::property::queue::in_order()};
@@ -448,6 +454,12 @@ queue.wait_and_throw();
 
 ## Constraints
 
+- **`num_v_heads` must be an exact integer multiple of `num_k_heads`
+  (`num_v_heads >= num_k_heads`, GQA-style head grouping).** The kernel maps each
+  v-head back to its owning k/q-head via integer division
+  (`k_head = v_head / (num_v_heads / num_k_heads)`), so a non-multiple would
+  misalign v-heads to the wrong k/q-head. The launcher rejects
+  `num_v_heads % num_k_heads != 0` with `Status::kErrorInvalidProblem`.
 - **`kChunkSize == 64` is baked in.** The value 64 is the baseline Xe2 (BMG)
   choice inherited from the upstream port
   ([`vllm-xpu-kernels` `csrc/xpu/gdn_attn/xe_2`](https://github.com/vllm-project/vllm-xpu-kernels/tree/main/csrc/xpu/gdn_attn/xe_2));
@@ -527,7 +539,7 @@ the public header.
 | [xe35_chunk_gated_delta_rule.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule.hpp) | Lightweight public API: `GDNArguments`, `get_workspace_sizes`, `chunk_gated_delta_rule_launch` declaration |
 | [xe35_chunk_gated_delta_rule_launch.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_launch.hpp) | Header-only launcher: argument validation + `chunk_gated_delta_rule_launch<T, StateT>` definition (inline template, instantiated at each call site) |
 | [xe35_chunk_gated_delta_rule_kernels.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_kernels.hpp) | Five device kernels + `detail::kernel_launcher` (upstream-aligned signature) |
-| [xe35_chunk_gated_delta_rule_gemm.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_gemm.hpp) | CuTe GEMM helpers (`gemm_TTS`, `gemm_STS`, `gemm_TSS`, `gemm_TTS_k_multi`) |
+| [xe35_chunk_gated_delta_rule_gemm.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_gemm.hpp) | CuTe GEMM helpers (`gemm_TTS`, `gemm_STS`, `gemm_TSS`, `gemm_TTS_k_multi`, `gemm_TTS_shareB`) |
 | [gdn_runner.hpp](../../../applications/gdn_attention/gdn_runner.hpp) | Shared host harness: `GdnRunner` (alloc + init + sigmoid(b) + args + launch + oracles), the `parse_gdn_shape`/`validate_gdn_shape` CLI helpers, and the `ExampleOptions`/`BenchmarkOptions` structs. Used by all three consumers |
 | [xe35_gdn_attention_stage_references.hpp](../../../tools/util/include/cutlass/util/reference/host/xe35_gdn_attention_stage_references.hpp) | Per-stage host reference + `apply_sigmoid_b` (in `cutlass/util/reference/host/`), driving the chunkwise oracle |
 | [xe35_gdn_attention_recurrent_reference.hpp](../../../tools/util/include/cutlass/util/reference/host/xe35_gdn_attention_recurrent_reference.hpp) | Token-by-token fp32 recurrent reference oracle + `kTolE2E` tolerance |

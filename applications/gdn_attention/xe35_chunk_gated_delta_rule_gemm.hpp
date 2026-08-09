@@ -48,6 +48,9 @@
     gemm_TTS_k_multi : same as TTS, but each k-slice of A is pre-scaled by
                        a per-lane float from an SLM array (used for diagonal
                        scaling in compute_wu / fwd_o).
+    gemm_TTS_shareB  : two TTS GEMMs sharing the B operand, fused into a
+                       single k-loop so B is loaded/prefetched/reordered
+                       once per k-tile and consumed by both DPAS calls.
 
   All helpers accumulate into the caller's register fragment tCrC, so
   multiple calls can be chained (C += A1*B1 + A2*B2 ...) without intermediate
@@ -398,6 +401,116 @@ CUTE_DEVICE void gemm_TTS_k_multi(
     }
 
     cute::gemm(mma, tCrA, tCrB, tCrC);
+
+    barrier_wait(barrier_scope);
+  }
+}
+
+template <
+    class A1Tensor,
+    class A2Tensor,
+    class BTensor,
+    class C1SGCTensor,
+    class C2SGCTensor,
+    class TiledMMA>
+/* gemm_TTS_shareB: two TTS GEMMs that share the B operand, fused into one
+ * k-loop.
+ *   C1 += A1(gmem, M×K) * B(gmem, N×K)^T
+ *   C2 += A2(gmem, M×K) * B(gmem, N×K)^T
+ * B is loaded, prefetched, and reordered once per k-tile and consumed by
+ * both DPAS calls — replaces two back-to-back gemm_TTS calls that share B. */
+CUTE_DEVICE void gemm_TTS_shareB(
+    A1Tensor const& A1,  // (M,K)
+    A2Tensor const& A2,  // (M,K)
+    BTensor const& B,    // (N,K)
+    C1SGCTensor& tCrC1,  // (M,N)
+    C2SGCTensor& tCrC2,  // (M,N)
+    int wg_m,            // m tile start id
+    int wg_n,            // n tile start id
+    TiledMMA const& mma) {
+  auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
+  int local_id = item.get_local_linear_id();
+
+  Tensor cA1 = make_identity_tensor(A1.shape());
+  Tensor cA2 = make_identity_tensor(A2.shape());
+  Tensor cB = make_identity_tensor(B.shape());
+
+  auto wg_tile = mma.tile_mnk();
+
+  Tensor gA1 = local_tile(
+      cA1, select<0, 2>(wg_tile), make_coord(wg_m, _));  // (BLK_M,BLK_K,k)
+  Tensor gA2 = local_tile(
+      cA2, select<0, 2>(wg_tile), make_coord(wg_m, _));  // (BLK_M,BLK_K,k)
+  Tensor gB = local_tile(
+      cB, select<1, 2>(wg_tile), make_coord(wg_n, _));  // (BLK_N,BLK_K,k)
+
+  auto copy_a1 = get_block_2d_copy_A<void>(mma, A1);
+  auto copy_a2 = get_block_2d_copy_A<void>(mma, A2);
+  auto copy_b = get_block_2d_copy_B<void>(mma, B);
+
+  auto thr_mma = mma.get_slice(local_id);
+  auto thr_copy_a1 = copy_a1.get_slice(local_id);
+  auto thr_copy_a2 = copy_a2.get_slice(local_id);
+  auto thr_copy_b = copy_b.get_slice(local_id);
+
+  auto tCrA1 = thr_mma.partition_sg_fragment_A(gA1(_, _, 0));
+  auto tCrA2 = thr_mma.partition_sg_fragment_A(gA2(_, _, 0));
+  auto tCrB = thr_mma.partition_sg_fragment_B(gB(_, _, 0));
+
+  auto tA1rA1 = thr_copy_a1.partition_sg_fragment_D(gA1(_, _, 0));
+  auto tA2rA2 = thr_copy_a2.partition_sg_fragment_D(gA2(_, _, 0));
+  auto tBrB = thr_copy_b.partition_sg_fragment_D(gB(_, _, 0));
+
+  Tensor tA1gA1 = thr_copy_a1.partition_S(gA1);
+  Tensor tA2gA2 = thr_copy_a2.partition_S(gA2);
+  Tensor tBgB = thr_copy_b.partition_S(gB);
+
+  auto prefetch_a1 = make_block_2d_prefetch(copy_a1);
+  auto prefetch_a2 = make_block_2d_prefetch(copy_a2);
+  auto prefetch_b = make_block_2d_prefetch(copy_b);
+
+  auto thr_prefetch_A1 = prefetch_a1.get_slice(local_id);
+  auto thr_prefetch_A2 = prefetch_a2.get_slice(local_id);
+  auto thr_prefetch_B = prefetch_b.get_slice(local_id);
+
+  auto pA1gA1 = thr_prefetch_A1.partition_S(gA1);
+  auto pA2gA2 = thr_prefetch_A2.partition_S(gA2);
+  auto pBgB = thr_prefetch_B.partition_S(gB);
+
+  const int prefetch_dist = 3;
+
+  constexpr auto barrier_scope = SPIRVScope::ScopeWorkgroup;
+
+  int k_tile_count = ceil_div(shape<1>(B), get<2>(wg_tile));
+  int k_tile_prefetch = 0;
+
+  CUTE_UNROLL
+  for (; k_tile_prefetch < prefetch_dist && k_tile_prefetch < k_tile_count; 
+      ++k_tile_prefetch) {
+    prefetch(prefetch_a1, pA1gA1(_, _, _, k_tile_prefetch));
+    prefetch(prefetch_a2, pA2gA2(_, _, _, k_tile_prefetch));
+    prefetch(prefetch_b, pBgB(_, _, _, k_tile_prefetch));
+  }
+
+  for (int k_tile = 0; k_tile < k_tile_count; k_tile++, k_tile_prefetch++) {
+    barrier_arrive(barrier_scope);
+
+    copy(copy_a1, tA1gA1(_, _, _, k_tile), tA1rA1);
+    copy(copy_a2, tA2gA2(_, _, _, k_tile), tA2rA2);
+    copy(copy_b, tBgB(_, _, _, k_tile), tBrB);
+
+    if (k_tile_prefetch < k_tile_count) {
+      prefetch(prefetch_a1, pA1gA1(_, _, _, k_tile_prefetch));
+      prefetch(prefetch_a2, pA2gA2(_, _, _, k_tile_prefetch));
+      prefetch(prefetch_b, pBgB(_, _, _, k_tile_prefetch));
+    }
+
+    reorder(tA1rA1, tCrA1);
+    reorder(tA2rA2, tCrA2);
+    reorder(tBrB, tCrB);
+
+    cute::gemm(mma, tCrA1, tCrB, tCrC1);
+    cute::gemm(mma, tCrA2, tCrB, tCrC2);
 
     barrier_wait(barrier_scope);
   }

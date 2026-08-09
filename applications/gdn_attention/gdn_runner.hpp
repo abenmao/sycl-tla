@@ -153,7 +153,7 @@ struct GdnRunner {
   cutlass::DeviceAllocation<uint8_t> d_has_initial_state;
   cutlass::DeviceAllocation<T>       d_core_attn_out;
   cutlass::DeviceAllocation<StateT>  d_ssm_state;
-  cutlass::DeviceAllocation<T>       d_A_ws, d_w_ws, d_u_ws;
+  cutlass::DeviceAllocation<T>       d_A_ws, d_o2_ws, d_w_ws, d_u_ws;
 
   /* ---- pre-kernel host snapshots (the kernel mutates q,k,a,ssm_state in
    *      place; the oracles need the raw pre-launch values) ---- */
@@ -211,13 +211,16 @@ struct GdnRunner {
 
     auto ws = cutlass::gdn::get_workspace_sizes(make_arguments_shape_only());
     alloc(d_A_ws, ws.A_elems, "d_A_ws");
+    alloc(d_o2_ws, ws.o2_elems, "d_o2_ws");
     alloc(d_w_ws, ws.w_elems, "d_w_ws");
     alloc(d_u_ws, ws.u_elems, "d_u_ws");
 
     /* Zero-init workspaces (kernel reads tiles after partial writes across
      * stages, so leftover USM contents could leak into the math). */
-    std::vector<T> zeros_T(std::max({ws.A_elems, ws.w_elems, ws.u_elems}), T{0});
+    std::vector<T> zeros_T(
+        std::max({ws.A_elems, ws.o2_elems, ws.w_elems, ws.u_elems}), T{0});
     d_A_ws.copy_from_host(zeros_T.data(), ws.A_elems);
+    d_o2_ws.copy_from_host(zeros_T.data(), ws.o2_elems);
     d_w_ws.copy_from_host(zeros_T.data(), ws.w_elems);
     d_u_ws.copy_from_host(zeros_T.data(), ws.u_elems);
 
@@ -315,6 +318,7 @@ struct GdnRunner {
     a.core_attn_out     = d_core_attn_out.get();
     a.ssm_state         = d_ssm_state.get();
     a.A_workspace       = d_A_ws.get();
+    a.o2_workspace      = d_o2_ws.get();
     a.w_workspace       = d_w_ws.get();
     a.u_workspace       = d_u_ws.get();
     return a;

@@ -71,7 +71,7 @@ inline cutlass::Status chunk_gated_delta_rule_launch(
     return cutlass::Status::kErrorInvalidProblem;
   }
 
-  // NOTE: device pointers (q/k/v, the A/w/u workspaces, core_attn_out,
+  // NOTE: device pointers (q/k/v, the A/o2/w/u workspaces, core_attn_out,
   // ssm_state, the gate/bias arrays) are NOT null-checked here. They are part
   // of the caller's contract (see GDNArguments): all required pointers must be
   // valid device allocations, and the workspaces must be sized per
@@ -85,6 +85,7 @@ inline cutlass::Status chunk_gated_delta_rule_launch(
       static_cast<T*>(args.k),
       static_cast<const T*>(args.v),
       static_cast<T*>(args.A_workspace),
+      static_cast<T*>(args.o2_workspace),
       static_cast<T*>(args.w_workspace),
       static_cast<T*>(args.u_workspace),
       args.b,

@@ -91,6 +91,7 @@ struct GDNArguments {
    * The middle extent is total_virtual_seqlen (the chunk-padded token count),
    * NOT total_seqlen, because that is the stride the kernels index them by. */
   void* A_workspace;         ///< [num_v_heads, total_virtual_seqlen, kChunkSize]   T
+  void* o2_workspace;        ///< [num_v_heads, total_virtual_seqlen, kChunkSize]   T
   void* w_workspace;         ///< [num_v_heads, total_virtual_seqlen, head_k_dim]   T
   void* u_workspace;         ///< [num_v_heads, total_virtual_seqlen, head_v_dim]   T
 };
@@ -106,18 +107,20 @@ struct GDNArguments {
 constexpr int kChunkSize = 64;
 
 /* Compute the per-tensor workspace sizes (in elements of T) required for a
- * given problem. Caller allocates A_workspace, w_workspace, u_workspace. */
+ * given problem. Caller allocates A_workspace, o2_workspace, w_workspace, u_workspace. */
 struct GDNWorkspaceSizes {
   size_t A_elems;
+  size_t o2_elems;
   size_t w_elems;
   size_t u_elems;
 };
 inline GDNWorkspaceSizes get_workspace_sizes(GDNArguments const& args) {
   /* Use total_virtual_seqlen directly -- this is the exact stride the kernel
-   * uses when indexing A/w/u (e.g., v_head_id * total_virtual_seqlen * chunk_size). */
+   * uses when indexing A/o2/w/u (e.g., v_head_id * total_virtual_seqlen * chunk_size). */
   const size_t tvs = static_cast<size_t>(args.total_virtual_seqlen);
   GDNWorkspaceSizes out;
   out.A_elems = static_cast<size_t>(args.num_v_heads) * tvs * kChunkSize;
+  out.o2_elems = static_cast<size_t>(args.num_v_heads) * tvs * kChunkSize;
   out.w_elems = static_cast<size_t>(args.num_v_heads) * tvs * args.head_k_dim;
   out.u_elems = static_cast<size_t>(args.num_v_heads) * tvs * args.head_v_dim;
   return out;

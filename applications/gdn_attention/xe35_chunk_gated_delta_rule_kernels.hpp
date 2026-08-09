@@ -80,7 +80,7 @@ struct chunk_gemm_policy_16x16x16 {
   using SGLayout = Layout<Shape<_1, _1, _1>, Stride<_1, _1, _0>>;
 };
 
-using chunk_gemm_policy_compute_A = chunk_gemm_policy_64x64x32_4x2;
+using chunk_gemm_policy_compute_A_O2 = chunk_gemm_policy_64x64x32_4x2;
 using chunk_gemm_policy_inverse = chunk_gemm_policy_16x16x16;
 using chunk_gemm_policy_compute_wu = chunk_gemm_policy_64x64x32_4x2;
 using chunk_gemm_policy_fwd_o = chunk_gemm_policy_64x64x32_4x2;
@@ -229,10 +229,27 @@ CUTE_DEVICE void chunk_prepare_kernel(
   }
 }
 
+/* For each (chunk, kv_head_id) this kernel issues two 64×64 GEMMs sharing the
+ * same K operand (B):
+ *
+ *   A[v_head, chunk, :]  <- masked  K · K^T          (lower-tri L, fed to inverse)
+ *   o2[v_head, chunk, :] <- masked  Q · K^T          (decay-gated O2, fed to fwd_o)
+ *
+ * The GEMMs run once per kv_head_id and the result is reused across the kv_ratio
+ * v-heads in that group; the inner loop only applies the per-v_head masks and
+ * stores to the two destinations. K-side tile loads from the second GEMM hit
+ * the L1/L2 cache populated by the first.
+ *
+ * Mask differences:
+ *   compute_A : m>n -> *= exp(g[m]-g[n]) * b[m]; m==n -> 1; m<n -> 0
+ *   compute_o2: m>=n -> *= exp(g[m]-g[n]);                  m<n -> 0
+ */
 template <typename T, class TiledMMA>
-CUTE_DEVICE void chunk_compute_A_kernel(
+CUTE_DEVICE void chunk_compute_A_o2_kernel(
     const sycl::local_accessor<float, 1>& slm_mem_const,
     T* A,
+    T* o2,
+    const T* q,
     const T* k,
     const float* b,
     const float* a,
@@ -297,80 +314,143 @@ CUTE_DEVICE void chunk_compute_A_kernel(
 
     while (chunk_id < cumsum_chunks) {
       const int chunk_start_offset = chunk_id * chunk_size;
+      const int local_chunk_idx = chunk_id - pre_chunks;
+      int current_chunk_size = chunk_size;
+      if ((local_chunk_idx + 1) * chunk_size > seq_len) {
+        current_chunk_size = seq_len - local_chunk_idx * chunk_size;
+      }
 
-      for (int v_head_id = 0; v_head_id < num_v_heads; ++v_head_id) {
-        /* Load the cumsum gate a[t] for this chunk into SLM so all threads
-         * can read arbitrary token pairs without serialisation. */
-        CUTE_UNROLL
-        for (int e = local_id; e < chunk_size; e += local_range) {
-          g_slm_ptr[e] =
-              a[(chunk_start_offset + e) + v_head_id * total_virtual_seqlen];
-        }
-
-        item.barrier(sycl::access::fence_space::local_space);
-
+      /* Reuse the K·Kᵀ / Q·Kᵀ GEMM pair out of the v_head loop: the kv_ratio
+       * v_heads sharing a kv_head_id get identical raw accumulators, so compute
+       * them once per k_head; the inner loop copies the base and masks per
+       * v_head.
+       *
+       * CRITICAL ASSUMPTION: num_v_heads is an exact integer multiple of
+       * num_k_heads (num_v_heads >= num_k_heads, GQA-style head grouping). */
+      for (int kv_head_id = 0; kv_head_id < num_k_heads; ++kv_head_id) {
         auto k_ptr = k +
                      static_cast<int64_t>(chunk_start_offset) * num_k_heads *
                          head_k_dim +
-                     (v_head_id / kv_ratio) * head_k_dim;
+                     kv_head_id * head_k_dim;
         auto K_tensor_shape = make_shape(chunk_size, head_k_dim);
         auto K_tensor = make_tensor(
             make_gmem_ptr(k_ptr),
             make_layout(
                 K_tensor_shape, make_stride(head_k_dim * num_k_heads, _1{})));
 
-        auto A_ptr = A +
-                     static_cast<int64_t>(v_head_id) * total_virtual_seqlen *
-                         chunk_size +
-                     chunk_start_offset * chunk_size;
-        auto A_tensor_shape = make_shape(chunk_size, chunk_size);
-        auto A_tensor = make_tensor(
-            make_gmem_ptr(A_ptr),
-            make_layout(A_tensor_shape, make_stride(chunk_size, _1{})));
+        auto q_ptr = q +
+                     static_cast<int64_t>(chunk_start_offset) * num_k_heads *
+                         head_k_dim +
+                     kv_head_id * head_k_dim;
+        auto Q_tensor_shape = make_shape(chunk_size, head_k_dim);
+        auto Q_tensor = make_tensor(
+            make_gmem_ptr(q_ptr),
+            make_layout(
+                Q_tensor_shape, make_stride(head_k_dim * num_k_heads, _1{})));
 
-        Tensor cA = make_identity_tensor(A_tensor.shape());
-        Tensor gA_C =
-            local_tile(cA, wg_tile, make_coord(0, 0, 0), Step<_1, _1, X>{});
+        /* Identity tensor and base accumulators are layout-only — independent
+         * of v_head_id since A and o2 share the same per-chunk shape/stride. */
+        auto C_tensor_shape = make_shape(chunk_size, chunk_size);
+        Tensor cC = make_identity_tensor(C_tensor_shape);
+        Tensor gC =
+            local_tile(cC, wg_tile, make_coord(0, 0, 0), Step<_1, _1, X>{});
 
-        auto copy_A_c = get_block_2d_copy_D<void>(mma, A_tensor);
-        auto thr_copy_A_c = copy_A_c.get_slice(local_id);
-        auto tCrA_c = thr_copy_A_c.partition_sg_fragment_S(gA_C);
-        auto tCgA_c = thr_copy_A_c.partition_D(gA_C);
-        auto tSrA_c = thr_mma.partition_sg_fragment_C(gA_C);
+        auto tSrA_base = thr_mma.partition_sg_fragment_C(gC);
+        auto tSrO2_base = thr_mma.partition_sg_fragment_C(gC);
 
-        /* Compute raw inner products: A[m,n] = K_m · K_n for all (m,n) in tile. */
-        clear(tSrA_c);
-        gemm_TTS(K_tensor, K_tensor, tSrA_c, 0, 0, mma);
+        clear(tSrA_base);
+        clear(tSrO2_base);
+        gemm_TTS_shareB(
+            K_tensor, Q_tensor, K_tensor, tSrA_base, tSrO2_base, 0, 0, mma);
 
-        /* Apply causal lower-tri mask, decay gate, and beta:
-         *   m > n : A[m,n] *= exp(a[m]-a[n]) * b[m]   (off-diagonal -- decay-gated)
-         *   m == n: A[m,n]  = 1.0f                     (diagonal -- identity)
-         *   m < n : A[m,n]  = 0.0f                     (upper tri -- masked out)
-         * This writes the strict lower-triangular transition matrix L. */
-        CUTE_UNROLL
-        for (int sn = 0; sn < SG_N / sub_group_size; ++sn) {
-          int n_idx =
-              n_tile_start + n_sg_start + sn * sub_group_size + sg_local_id;
+        for (int g_idx = 0; g_idx < kv_ratio; ++g_idx) {
+          const int v_head_id = kv_head_id * kv_ratio + g_idx;
+
+          /* Single SLM load of cumsum gate a[t]; both the L mask and the O2
+           * mask read it. Zero-pad past the partial-chunk tail so exp(0)=1
+           * there (those rows/cols are not consumed downstream). */
           CUTE_UNROLL
-          for (int sm = 0; sm < SG_M; ++sm) {
-            int m_idx = m_tile_start + m_sg_start + sm;
-            float beta_value =
-                b[(chunk_start_offset + m_idx) +
-                  v_head_id * total_virtual_seqlen];
+          for (int e = local_id; e < current_chunk_size; e += local_range) {
+            g_slm_ptr[e] =
+                a[(chunk_start_offset + e) + v_head_id * total_virtual_seqlen];
+          }
+          CUTE_UNROLL
+          for (int e = current_chunk_size + local_id; e < chunk_size;
+               e += local_range) {
+            g_slm_ptr[e] = 0.0f;
+          }
+          item.barrier(sycl::access::fence_space::local_space);
 
-            tSrA_c(sn * SG_M + sm) *=
-                sycl::exp(g_slm_ptr[(m_idx)] - g_slm_ptr[n_idx]) * beta_value;
-            if (m_idx == n_idx) {
-              tSrA_c(sn * SG_M + sm) = 1.0f;
-            }
-            if (m_idx < n_idx) {
-              tSrA_c(sn * SG_M + sm) = 0.0f;
+          auto A_ptr = A +
+                       static_cast<int64_t>(v_head_id) * total_virtual_seqlen *
+                           chunk_size +
+                       chunk_start_offset * chunk_size;
+          auto A_tensor = make_tensor(
+              make_gmem_ptr(A_ptr),
+              make_layout(C_tensor_shape, make_stride(chunk_size, _1{})));
+
+          auto copy_A_c = get_block_2d_copy_D<void>(mma, A_tensor);
+          auto thr_copy_A_c = copy_A_c.get_slice(local_id);
+          auto tCrA_c = thr_copy_A_c.partition_sg_fragment_S(gC);
+          auto tCgA_c = thr_copy_A_c.partition_D(gC);
+
+          auto O2_ptr = o2 +
+                        static_cast<int64_t>(v_head_id) * total_virtual_seqlen *
+                            chunk_size +
+                        chunk_start_offset * chunk_size;
+          auto O2_tensor = make_tensor(
+              make_gmem_ptr(O2_ptr),
+              make_layout(C_tensor_shape, make_stride(chunk_size, _1{})));
+
+          auto copy_O2_c = get_block_2d_copy_D<void>(mma, O2_tensor);
+          auto thr_copy_O2_c = copy_O2_c.get_slice(local_id);
+          auto tCrO2_c = thr_copy_O2_c.partition_sg_fragment_S(gC);
+          auto tCgO2_c = thr_copy_O2_c.partition_D(gC);
+
+          /* Per-v_head working copies of the shared base accumulators; the mask
+           * mutates these in place while the base stays clean for the next
+           * iteration. */
+          auto tSrA_c = thr_mma.partition_sg_fragment_C(gC);
+          auto tSrO2_c = thr_mma.partition_sg_fragment_C(gC);
+          cute::copy(tSrA_base, tSrA_c);
+          cute::copy(tSrO2_base, tSrO2_c);
+
+          /* Fused mask:
+           *   L  (A):  m>n  => *=exp(g[m]-g[n])*b[m]; m==n => 1; m<n => 0.
+           *   O2:      m>=n => *=exp(g[m]-g[n]);                m<n => 0. */
+          CUTE_UNROLL
+          for (int sn = 0; sn < SG_N / sub_group_size; ++sn) {
+            int n_idx =
+                n_tile_start + n_sg_start + sn * sub_group_size + sg_local_id;
+            CUTE_UNROLL
+            for (int sm = 0; sm < SG_M; ++sm) {
+              int m_idx = m_tile_start + m_sg_start + sm;
+              int idx = sn * SG_M + sm;
+              float beta_value =
+                  b[(chunk_start_offset + m_idx) +
+                    v_head_id * total_virtual_seqlen];
+              float e = sycl::exp(g_slm_ptr[m_idx] - g_slm_ptr[n_idx]);
+
+              tSrA_c(idx) *= e * beta_value;
+              tSrO2_c(idx) *= e;
+              if (m_idx == n_idx) {
+                tSrA_c(idx) = 1.0f;
+              }
+              if (m_idx < n_idx) {
+                tSrA_c(idx) = 0.0f;
+                tSrO2_c(idx) = 0.0f;
+              }
             }
           }
-        }
 
-        reorder(tSrA_c, tCrA_c);
-        copy(copy_A_c, tCrA_c, tCgA_c);
+          reorder(tSrA_c, tCrA_c);
+          copy(copy_A_c, tCrA_c, tCgA_c);
+          reorder(tSrO2_c, tCrO2_c);
+          copy(copy_O2_c, tCrO2_c, tCgO2_c);
+
+          // Write-after-read fence on the shared g_slm_ptr buffer.
+          item.barrier(sycl::access::fence_space::local_space);
+        }
       }
       chunk_id += global_chunk_range;
     }
@@ -904,7 +984,7 @@ template <typename T, typename StateT, class TiledMMA>
 CUTE_DEVICE void chunk_fwd_o_kernel(
     const sycl::local_accessor<float, 1>& slm_mem_const,  // [3 * chunk_size]
     T* core_attn_out,  // [total_seqlen, num_v_heads, head_v_dim]
-    T* A,  // [num_v_heads, total_virtual_seqlen, chunk_size], temp O2 buffer
+    T* o2,  // [num_v_heads, total_virtual_seqlen, chunk_size], O2 = masked Q·K^T
     T* w,  // [num_v_heads, total_virtual_seqlen, head_k_dim]
     T* u,  // [num_v_heads, total_virtual_seqlen, head_v_dim]
     const T* q,  // [total_virtual_seqlen, num_k_heads, head_k_dim]
@@ -1074,59 +1154,14 @@ CUTE_DEVICE void chunk_fwd_o_kernel(
         item.barrier(sycl::access::fence_space::local_space);
       }
 
-      auto q_ptr =
-          q + chunk_offset * num_k_heads * head_k_dim + kv_head_id * head_k_dim;
-      auto Q_tensor_shape = make_shape(current_chunk_size, head_k_dim);
-      auto Q_tensor = make_tensor(
-          make_gmem_ptr(q_ptr),
-          make_layout(
-              Q_tensor_shape, make_stride(head_k_dim * num_k_heads, _1{})));
-
-      auto k_ptr =
-          k + chunk_offset * num_k_heads * head_k_dim + kv_head_id * head_k_dim;
-      auto K_tensor_shape = make_shape(chunk_size, head_k_dim);
-      auto K_tensor = make_tensor(
-          make_gmem_ptr(k_ptr),
-          make_layout(
-              K_tensor_shape, make_stride(head_k_dim * num_k_heads, _1{})));
-
       auto O2_ptr =
-          A +
+          o2 +
           static_cast<int64_t>(v_head_id) * total_virtual_seqlen * chunk_size +
           chunk_offset * chunk_size;
       auto O2_tensor_shape = make_shape(current_chunk_size, chunk_size);
       auto O2_tensor = make_tensor(
           make_gmem_ptr(O2_ptr),
           make_layout(O2_tensor_shape, make_stride(chunk_size, _1{})));
-      Tensor cO2 = make_identity_tensor(O2_tensor_shape);
-      auto copy_O2_c = get_block_2d_copy_D<void>(mma, O2_tensor);
-      auto thr_copy_O2_c = copy_O2_c.get_slice(local_id);
-
-      Tensor gO2_C =
-          local_tile(cO2, wg_tile, make_coord(0, 0, 0), Step<_1, _1, X>{});
-      auto tCrO2_c = thr_copy_O2_c.partition_sg_fragment_S(gO2_C);
-      auto tCgO2_c = thr_copy_O2_c.partition_D(gO2_C);
-      auto tSrO2_c = thr_mma.partition_sg_fragment_C(gO2_C);
-
-      clear(tSrO2_c);
-      gemm_TTS(Q_tensor, K_tensor, tSrO2_c, 0, 0, mma);
-
-      CUTE_UNROLL
-      for (int sn = 0; sn < SG_N / sub_group_size; ++sn) {
-        int n_idx =
-            n_tile_start + n_sg_start + sn * sub_group_size + sg_local_id;
-        CUTE_UNROLL
-        for (int sm = 0; sm < SG_M; ++sm) {
-          int m_idx = m_tile_start + m_sg_start + sm;
-          tSrO2_c(sn * SG_M + sm) *=
-              sycl::exp(g_slm_ptr[(m_idx)] - g_slm_ptr[n_idx]);
-          if (m_idx < n_idx) {
-            tSrO2_c(sn * SG_M + sm) = 0.0f;
-          }
-        }
-      }
-      reorder(tSrO2_c, tCrO2_c);
-      copy(copy_O2_c, tCrO2_c, tCgO2_c);
 
       auto U_tensor_T_shape = make_shape(head_v_dim, chunk_size);
       auto U_tensor_T = make_tensor(
@@ -1145,6 +1180,13 @@ CUTE_DEVICE void chunk_fwd_o_kernel(
       auto thr_copy_O_c = copy_O_c.get_slice(local_id);
 
       if (has_prev_state) {
+        auto q_ptr =
+            q + chunk_offset * num_k_heads * head_k_dim + kv_head_id * head_k_dim;
+        auto Q_tensor_shape = make_shape(current_chunk_size, head_k_dim);
+        auto Q_tensor = make_tensor(
+            make_gmem_ptr(q_ptr),
+            make_layout(
+                Q_tensor_shape, make_stride(head_k_dim * num_k_heads, _1{})));
         for (int dv = 0; dv < head_v_dim / chunk_size; ++dv) {
           Tensor gO_C =
               local_tile(cO, wg_tile, make_coord(0, dv, 0), Step<_1, _1, X>{});
@@ -1170,6 +1212,8 @@ CUTE_DEVICE void chunk_fwd_o_kernel(
         }
       }
 
+      auto k_ptr =
+          k + chunk_offset * num_k_heads * head_k_dim + kv_head_id * head_k_dim;
       auto K_tensor_T_shape = make_shape(head_k_dim, chunk_size);
       auto K_tensor_T = make_tensor(
           make_gmem_ptr(k_ptr),
@@ -1236,7 +1280,7 @@ template <typename T, typename StateTag>
 class ChunkPrepareKernel;
 
 template <typename T, typename StateTag>
-class ChunkComputeAKernel;
+class ChunkComputeAO2Kernel;
 
 template <typename T, typename StateTag>
 class ChunkInverseOptKernel;
@@ -1286,34 +1330,36 @@ sycl::event launch_stage_prepare(
 }
 
 template <typename T, typename StateT, typename Props>
-sycl::event launch_stage_compute_A(
+sycl::event launch_stage_compute_A_o2(
     sycl::queue& queue, Props const& props, int xe_core_count,
-    T* A, T* k, const float* b, float* a,
+    T* A, T* o2, const T* q, T* k, const float* b, float* a,
     const int* query_start_loc, const int total_virtual_seqlen,
     const int batch_size, const int num_k_heads, const int head_k_dim,
     const int num_v_heads) {
   using Element_non_CV = cutlass::platform::remove_cv_t<T>;
   auto op = XE_DPAS_TT<8, float, Element_non_CV>{};
-  using WGTileComputeA = chunk_gemm_policy_compute_A::WGTile;
-  using SGLayoutComputeA = chunk_gemm_policy_compute_A::SGLayout;
-  using MMAComputeA = typename TiledMMAHelper<
-      MMA_Atom<decltype(op)>, Layout<WGTileComputeA>, SGLayoutComputeA>::TiledMMA;
-  auto mmaComputeA = MMAComputeA{};
-  int MaxThreadsPerWorkgroupComputeA = size(mmaComputeA);
-  sycl::range<3> local_compute_A(1, 1, MaxThreadsPerWorkgroupComputeA);
-  sycl::range<3> global_compute_A(
-      1, xe_core_count * MaxThreadsPerXeCore / MaxThreadsPerWorkgroupComputeA, 1);
-  int slm_size_compute_A = chunk_size;
+  using WGTileComputeA_o2 = chunk_gemm_policy_compute_A_O2::WGTile;
+  using SGLayoutComputeA_o2 = chunk_gemm_policy_compute_A_O2::SGLayout;
+  using MMAComputeA_o2 = typename TiledMMAHelper<
+      MMA_Atom<decltype(op)>, Layout<WGTileComputeA_o2>,
+      SGLayoutComputeA_o2>::TiledMMA;
+  auto mmaComputeA_o2 = MMAComputeA_o2{};
+  int MaxThreadsPerWorkgroupComputeA_o2 = size(mmaComputeA_o2);
+  sycl::range<3> local_compute_A_o2(1, 1, MaxThreadsPerWorkgroupComputeA_o2);
+  sycl::range<3> global_compute_A_o2(
+      1, xe_core_count * MaxThreadsPerXeCore / MaxThreadsPerWorkgroupComputeA_o2, 1);
+  int slm_size_compute_A_o2 = chunk_size;
   auto ev = queue.submit([&](sycl::handler& cgh) {
     sycl::local_accessor<float, 1> local_mem(
-        sycl::range<1>(slm_size_compute_A), cgh);
-    cgh.parallel_for<ChunkComputeAKernel<T, StateT>>(
-        sycl::nd_range<3>{global_compute_A * local_compute_A, local_compute_A},
+        sycl::range<1>(slm_size_compute_A_o2), cgh);
+    cgh.parallel_for<ChunkComputeAO2Kernel<T, StateT>>(
+        sycl::nd_range<3>{global_compute_A_o2 * local_compute_A_o2, local_compute_A_o2},
         props,
         [=](auto) {
-          chunk_compute_A_kernel<T, MMAComputeA>(
-              local_mem, A, k, b, a, query_start_loc, total_virtual_seqlen,
-              batch_size, num_k_heads, head_k_dim, num_v_heads);
+          chunk_compute_A_o2_kernel<T, MMAComputeA_o2>(
+              local_mem, A, o2, q, k, b, a, query_start_loc,
+              total_virtual_seqlen, batch_size, num_k_heads, head_k_dim,
+              num_v_heads);
         });
   });
   EventManager::getInstance().addEvent(ev);
@@ -1390,7 +1436,7 @@ sycl::event launch_stage_compute_wu(
 template <typename T, typename StateT, typename Props>
 sycl::event launch_stage_fwd_o(
     sycl::queue& queue, Props const& props,
-    T* core_attn_out, T* A, T* w, T* u, T* q, T* k, float* a,
+    T* core_attn_out, T* o2, T* w, T* u, T* q, T* k, float* a,
     StateT* ssm_state, const int ssm_state_stride_0,
     const int* query_start_loc, const int* cache_indices,
     const bool* has_initial_state, const int batch_size,
@@ -1415,7 +1461,7 @@ sycl::event launch_stage_fwd_o(
         props,
         [=](auto) {
           chunk_fwd_o_kernel<T, StateT, MMAFwdO>(
-              local_mem, core_attn_out, A, w, u, q, k, a, ssm_state,
+              local_mem, core_attn_out, o2, w, u, q, k, a, ssm_state,
               ssm_state_stride_0, query_start_loc, cache_indices,
               has_initial_state, batch_size, total_virtual_seqlen,
               num_k_heads, head_k_dim, num_v_heads, head_v_dim);
@@ -1433,6 +1479,7 @@ void kernel_launcher(
     T* k,
     const T* v,
     T* A,
+    T* o2,
     T* w,
     T* u,
     const float* b,
@@ -1477,8 +1524,8 @@ void kernel_launcher(
       query_start_loc, total_virtual_seqlen, batch_size, num_k_heads,
       head_k_dim, num_v_heads, head_v_dim);
 
-  launch_stage_compute_A<T, StateT>(
-      queue, kernel_props, xe_core_count, A, k, b, a, query_start_loc,
+  launch_stage_compute_A_o2<T, StateT>(
+      queue, kernel_props, xe_core_count, A, o2, q, k, b, a, query_start_loc,
       total_virtual_seqlen, batch_size, num_k_heads, head_k_dim, num_v_heads);
 
   launch_stage_inverse<T, StateT>(
@@ -1491,7 +1538,7 @@ void kernel_launcher(
       batch_size, num_k_heads, head_k_dim, num_v_heads, head_v_dim);
 
   launch_stage_fwd_o<T, StateT>(
-      queue, kernel_props, core_attn_out, A, w, u, q, k, a, ssm_state,
+      queue, kernel_props, core_attn_out, o2, w, u, q, k, a, ssm_state,
       ssm_state_stride_0, query_start_loc, cache_indices, has_initial_state,
       batch_size, total_virtual_seqlen, num_k_heads, head_k_dim, num_v_heads,
       head_v_dim);
