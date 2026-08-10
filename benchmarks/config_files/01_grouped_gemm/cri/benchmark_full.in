@@ -1,168 +1,63 @@
-
-# avg_m=683, m_tiles=43, n_tiles=14, total_mn_tiles=602 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=10928  --num_experts=16  --verify=true
-# avg_m=1366, m_tiles=76, n_tiles=14, total_mn_tiles=1064 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=21856  --num_experts=16  --verify=true
-# avg_m=2560, m_tiles=80, n_tiles=14, total_mn_tiles=1120 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=20480  --num_experts=8  --verify=true
-# avg_m=2731, m_tiles=107, n_tiles=14, total_mn_tiles=1498 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=27310  --num_experts=10  --verify=true
-# avg_m=5462, m_tiles=114, n_tiles=14, total_mn_tiles=1596 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=32772  --num_experts=6  --verify=true
-# avg_m=683, m_tiles=43, n_tiles=14, total_mn_tiles=602 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=10928  --num_experts=16  --verify=true
-# avg_m=1366, m_tiles=76, n_tiles=14, total_mn_tiles=1064 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=21856  --num_experts=16  --verify=true
-# avg_m=2560, m_tiles=80, n_tiles=14, total_mn_tiles=1120 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=20480  --num_experts=8  --verify=true
-# avg_m=2731, m_tiles=107, n_tiles=14, total_mn_tiles=1498 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=27310  --num_experts=10  --verify=true
-# avg_m=5462, m_tiles=114, n_tiles=14, total_mn_tiles=1596 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=32772  --num_experts=6  --verify=true
-# avg_m=683, m_tiles=43, n_tiles=14, total_mn_tiles=602 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=10928  --num_experts=16  --verify=true
-# avg_m=1366, m_tiles=76, n_tiles=14, total_mn_tiles=1064 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_288_256_128  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=21856  --num_experts=16  --verify=true
-# avg_m=2560, m_tiles=80, n_tiles=14, total_mn_tiles=1120 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=20480  --num_experts=8  --verify=true
-# avg_m=2731, m_tiles=107, n_tiles=14, total_mn_tiles=1498 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=27310  --num_experts=10  --verify=true
-# avg_m=5462, m_tiles=114, n_tiles=14, total_mn_tiles=1596 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_288_256_128  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=32772  --num_experts=6  --verify=true
-# avg_m=683, m_tiles=43, n_tiles=14, total_mn_tiles=602 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=10928  --num_experts=16  --verify=true
-# avg_m=1366, m_tiles=76, n_tiles=14, total_mn_tiles=1064 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=21856  --num_experts=16  --verify=true
-# avg_m=2731, m_tiles=107, n_tiles=14, total_mn_tiles=1498 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=27310  --num_experts=10  --verify=true
-# avg_m=683, m_tiles=43, n_tiles=14, total_mn_tiles=602 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=10928  --num_experts=16  --verify=true
-# avg_m=1366, m_tiles=76, n_tiles=14, total_mn_tiles=1064 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=21856  --num_experts=16  --verify=true
-# avg_m=2731, m_tiles=107, n_tiles=14, total_mn_tiles=1498 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=27310  --num_experts=10  --verify=true
-# avg_m=683, m_tiles=43, n_tiles=14, total_mn_tiles=602 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=10928  --num_experts=16  --verify=true
-# avg_m=1366, m_tiles=76, n_tiles=14, total_mn_tiles=1064 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_288_256_128  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=21856  --num_experts=16  --verify=true
-# avg_m=2731, m_tiles=107, n_tiles=14, total_mn_tiles=1498 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=27310  --num_experts=10  --verify=true
-# avg_m=171, m_tiles=15, n_tiles=14, total_mn_tiles=210 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=2736  --num_experts=16  --verify=true
-# avg_m=171, m_tiles=15, n_tiles=14, total_mn_tiles=210 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=2736  --num_experts=16  --verify=true
-# avg_m=171, m_tiles=15, n_tiles=14, total_mn_tiles=210 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_192_256_128  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=2736  --num_experts=16  --verify=true
-# avg_m=427, m_tiles=16, n_tiles=14, total_mn_tiles=224 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=3416  --num_experts=8  --verify=true
-# avg_m=427, m_tiles=16, n_tiles=14, total_mn_tiles=224 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=3416  --num_experts=8  --verify=true
-# avg_m=427, m_tiles=16, n_tiles=14, total_mn_tiles=224 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_224_256_128  --bm_name=src0_best_double_buffer --n=3584 --k=1280 --m=3416  --num_experts=8  --verify=true
-# avg_m=683
-CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_384_320_64  --bm_name=src_0_regular --n=2560 --k=3584 --m=9562  --num_experts=14  --verify=true
-# avg_m=683
-CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_384_320_64  --bm_name=src_0_regular --n=2560 --k=3584 --m=9562  --num_experts=14  --verify=true
-# avg_m=1366, m_tiles=76, n_tiles=10, total_mn_tiles=760 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=21856  --num_experts=16  --verify=true
-# avg_m=2560, m_tiles=80, n_tiles=10, total_mn_tiles=800 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=20480  --num_experts=8  --verify=true
-# avg_m=2731, m_tiles=129, n_tiles=10, total_mn_tiles=1290 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=32772  --num_experts=12  --verify=true
-# avg_m=5462, m_tiles=152, n_tiles=10, total_mn_tiles=1520 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=43696  --num_experts=8  --verify=true
-# avg_m=683
-CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_384_320_64  --bm_name=src_0_regular --n=2560 --k=3584 --m=9562  --num_experts=14  --verify=true
-# avg_m=683
-CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_384_320_64  --bm_name=src_0_regular --n=2560 --k=3584 --m=9562  --num_experts=14  --verify=true
-# avg_m=1366, m_tiles=76, n_tiles=10, total_mn_tiles=760 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=21856  --num_experts=16  --verify=true
-# avg_m=2560, m_tiles=80, n_tiles=10, total_mn_tiles=800 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=20480  --num_experts=8  --verify=true
-# avg_m=2731, m_tiles=129, n_tiles=10, total_mn_tiles=1290 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=32772  --num_experts=12  --verify=true
-# avg_m=5462, m_tiles=152, n_tiles=10, total_mn_tiles=1520 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=43696  --num_experts=8  --verify=true
-# avg_m=683
-CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_384_320_128  --bm_name=src_0_regular --n=2560 --k=3584 --m=9562  --num_experts=14  --verify=true
-# avg_m=683
-CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_384_320_128  --bm_name=src_0_regular --n=2560 --k=3584 --m=9562  --num_experts=14  --verify=true
-# avg_m=1366, m_tiles=76, n_tiles=10, total_mn_tiles=760 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_288_256_128  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=21856  --num_experts=16  --verify=true
-# avg_m=2560, m_tiles=80, n_tiles=10, total_mn_tiles=800 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=20480  --num_experts=8  --verify=true
-# avg_m=2731, m_tiles=129, n_tiles=10, total_mn_tiles=1290 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=32772  --num_experts=12  --verify=true
-# avg_m=5462, m_tiles=152, n_tiles=10, total_mn_tiles=1520 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_288_256_128  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=43696  --num_experts=8  --verify=true
-# avg_m=683, m_tiles=43, n_tiles=10, total_mn_tiles=430 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=10928  --num_experts=16  --verify=true
-# avg_m=1366, m_tiles=76, n_tiles=10, total_mn_tiles=760 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=21856  --num_experts=16  --verify=true
-# avg_m=2731, m_tiles=129, n_tiles=10, total_mn_tiles=1290 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=32772  --num_experts=12  --verify=true
-# avg_m=683, m_tiles=43, n_tiles=10, total_mn_tiles=430 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=10928  --num_experts=16  --verify=true
-# avg_m=1366, m_tiles=76, n_tiles=10, total_mn_tiles=760 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=21856  --num_experts=16  --verify=true
-# avg_m=2731, m_tiles=129, n_tiles=10, total_mn_tiles=1290 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=32772  --num_experts=12  --verify=true
-# avg_m=683, m_tiles=43, n_tiles=10, total_mn_tiles=430 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=10928  --num_experts=16  --verify=true
-# avg_m=1366, m_tiles=76, n_tiles=10, total_mn_tiles=760 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_288_256_128  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=21856  --num_experts=16  --verify=true
-# avg_m=2731, m_tiles=129, n_tiles=10, total_mn_tiles=1290 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=32772  --num_experts=12  --verify=true
-# avg_m=171
-CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_192_512_64  --bm_name=src_0_regular --n=2560 --k=3584 --m=4788  --num_experts=28  --verify=true
-# avg_m=171
-CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_192_512_64  --bm_name=src_0_regular --n=2560 --k=3584 --m=4788  --num_experts=28  --verify=true
-# avg_m=171
-CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_192_512_128  --bm_name=src_0_regular --n=2560 --k=3584 --m=4788  --num_experts=28  --verify=true
-# avg_m=427, m_tiles=31, n_tiles=10, total_mn_tiles=310 (even)
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=6832  --num_experts=16  --verify=true
-# avg_m=427, m_tiles=31, n_tiles=10, total_mn_tiles=310 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=6832  --num_experts=16  --verify=true
-# avg_m=427, m_tiles=31, n_tiles=10, total_mn_tiles=310 (even)
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_224_256_128  --bm_name=src0_best_double_buffer --n=2560 --k=3584 --m=6832  --num_experts=16  --verify=true
-# Tiles used in src0:
-# +---------+-----------+
-# | Tile    | sg_layout |
-# +---------+-----------+
-# | 192x256 | 4x8       |
-# | 192x320 | 8x4       |
-# | 224x256 | 4x8       |
-# | 256x256 | 8x4       |
-# | 288x256 | 4x8       |
-# +---------+-----------+
-
-# src1 BF16 shapes: n=3072 k=4096
-
-# avg_m=96   (num_tokens=384)   m_tiles=12, n_tiles=24, total_mn_tiles=288 (even)
-CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_224_256_32  --bm_name=src1_best_double_buffer --n=3072 --k=4096 --m=384   --num_experts=4   --verify=true
-# avg_m=224  (num_tokens=896)   m_tiles=24, n_tiles=12, total_mn_tiles=288 (even)
-CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_224_256_32  --bm_name=src1_best_double_buffer --n=3072 --k=4096 --m=5376  --num_experts=24  --verify=true
-# avg_m=256  (num_tokens=1024)  m_tiles=24, n_tiles=12, total_mn_tiles=288 (even)
-CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_256_256_32  --bm_name=src1_best_double_buffer --n=3072 --k=4096 --m=6144  --num_experts=24  --verify=true
-# avg_m=448  (num_tokens=1792)  m_tiles=24, n_tiles=12, total_mn_tiles=288 (even)
-CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_224_256_32  --bm_name=src1_best_double_buffer --n=3072 --k=4096 --m=5376  --num_experts=12  --verify=true
-# avg_m=1024 (num_tokens=4096)  m_tiles=24, n_tiles=12, total_mn_tiles=288 (even)
-CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_256_256_32  --bm_name=src1_best_double_buffer --n=3072 --k=4096 --m=6144  --num_experts=6   --verify=true
-# avg_m=1280 (num_tokens=5120)  m_tiles=40, n_tiles=12, total_mn_tiles=480 (even)
-CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_256_256_32  --bm_name=src1_best_double_buffer --n=3072 --k=4096 --m=10240 --num_experts=8   --verify=true
-# avg_m=2560 (num_tokens=10240) m_tiles=40, n_tiles=12, total_mn_tiles=480 (even)
-CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_256_256_32  --bm_name=src1_best_double_buffer --n=3072 --k=4096 --m=10240 --num_experts=4   --verify=true
-# avg_m=8192 (num_tokens=32768) m_tiles=64, n_tiles=12, total_mn_tiles=768 (even)
-CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_256_256_32  --bm_name=src1_best_double_buffer --n=3072 --k=4096 --m=16384 --num_experts=2   --verify=true
-
-
-# Tiles used in src1:
-# +---------+-----------+
-# | Tile    | sg_layout |
-# +---------+-----------+
-# | 192x256 | 4x8       |
-# | 192x384 | 4x8       |
-# | 224x256 | 4x8       |
-# | 256x256 | 8x4       |
-# | 288x256 | 4x8       |
-# +---------+-----------+
+# MoE grouped-GEMM benchmark shapes — CRI / Xe3p (reference src0 + src1 configs)
+#
+# Per line: <dtype> --bm_name --ep_size --num_experts --topk --hidden_size
+#           --new_hidden_size --num_of_tokens --override_number_experts --verify
+#
+# What the benched GEMM actually is (see MoEBenchmarkOptions::build_rows):
+#   M_per_expert = (num_of_tokens * topk / ep_size) / (num_experts / ep_size)
+#                == num_of_tokens * topk / num_experts   (ep_size cancels)
+#   groups       = override_number_experts        <- replaces the routing count
+#   K, N         = hidden_size, new_hidden_size   (proj=up; down swaps them)
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=16392 --override_number_experts=16 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=61440 --override_number_experts=8 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=65544 --override_number_experts=10 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=131088 --override_number_experts=6 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=16392 --override_number_experts=16 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=61440 --override_number_experts=8 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=65544 --override_number_experts=10 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=131088 --override_number_experts=6 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=16392 --override_number_experts=16 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=61440 --override_number_experts=8 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=65544 --override_number_experts=10 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=131088 --override_number_experts=6 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=96 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=16416 --override_number_experts=16 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=96 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=16416 --override_number_experts=16 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=96 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=16416 --override_number_experts=16 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=192 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=81984 --override_number_experts=8 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=192 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=81984 --override_number_experts=8 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=192 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=81984 --override_number_experts=8 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=16392 --override_number_experts=8 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=61440 --override_number_experts=8 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=65544 --override_number_experts=12 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=131088 --override_number_experts=8 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=16392 --override_number_experts=8 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=61440 --override_number_experts=8 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=65544 --override_number_experts=12 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=131088 --override_number_experts=8 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=16392 --override_number_experts=8 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=61440 --override_number_experts=8 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=65544 --override_number_experts=12 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=131088 --override_number_experts=8 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=48 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=48 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=48 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=96 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=16416 --override_number_experts=28 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=96 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=16416 --override_number_experts=28 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=96 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=16416 --override_number_experts=28 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=192 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=81984 --override_number_experts=16 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=192 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=81984 --override_number_experts=16 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=192 --topk=1 --hidden_size=3584 --new_hidden_size=2560 --num_of_tokens=81984 --override_number_experts=16 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --override_number_experts=4 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --override_number_experts=24 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --override_number_experts=24 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --override_number_experts=12 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --override_number_experts=6 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --override_number_experts=8 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --override_number_experts=4 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --override_number_experts=2 --verify=true

@@ -41,6 +41,7 @@
 #include "cutlass/platform/platform.h"
 #include "moe_grouped_gemm/kernel/xe_moe_tile_scheduler.hpp"
 #include "moe_grouped_gemm/collective/xe_moe_gemm.hpp"
+#include "moe_grouped_gemm/moe_scale_layout.hpp"
 #include <cute/util/compat.hpp>
 
 #pragma clang diagnostic ignored "-Wpass-failed"
@@ -103,8 +104,11 @@ MoEGEMM(const ElementA *Activations, const ElementB *Weights,
         const int32_t GroupN = 0, const int32_t GroupK = 0) {
   // Scale-storage row alignment for the MX 2D block load (FILE 2 layout).
   // Physical scale extents (rows) must be a multiple of this for the
-  // hardware block-2D scale load; only used on the Block (CfgGroupK>0) path.
-  constexpr int kScaleAlign = 64;
+  // hardware block-2D scale load. Shared with the host packer via
+  // moe_scale_layout.hpp so padding cannot drift.
+  constexpr int kScaleAlign = cutlass::moe::kScaleAlign;
+  constexpr int kTensorPaddedScaleN = cutlass::moe::kTensorPaddedScaleN;
+  constexpr int kTensorScaleK = cutlass::moe::kTensorScaleK;
 
   TileScheduler scheduler{scheduler_params, const_cast<int32_t *>(M_per_group),
                           N, K, num_experts};
@@ -174,19 +178,28 @@ MoEGEMM(const ElementA *Activations, const ElementB *Weights,
     // compile time so 16-bit kernels stay byte-identical.
     if constexpr (!cute::is_void_v<ElementS>) {
       if constexpr (CfgGroupK == 0) {
-        // TENSOR scale: padded MN-major layout matching fill_scale_per_row and
-        // verify_scaled. scale_k=2 (fixed: BDPAS offset scheme requires Height=2).
-        // Both K slots hold the same value; pointer uses padded cumulative M.
+        // TENSOR scale: fixed surface geometry from moe_scale_layout.hpp — the
+        // same constants the host packer sizes the surface with
+        // (scale_surface_geom / pack_moe_scales). Height 2 is the BDPAS offset
+        // scheme's requirement; both K slots hold the same value, and the
+        // pointer uses padded cumulative M.
+        static_assert(cute::sizeof_bits_v<ElementA> == 8,
+                      "ScaleKind::Tensor scale surface geometry is fp8-only.");
         const int M_def = int(M) < 0 ? 0 : int(M);
         static_assert((kScaleAlign & (kScaleAlign - 1)) == 0,
                       "kScaleAlign must be a power of two");
         const int round_up_M = (M_def + (kScaleAlign - 1)) & ~(kScaleAlign - 1);
+        // One stripe must cover the whole subgroup N extent: the 2D scale load
+        // walks the surface in kScaleAlign-wide steps, so a larger SG_N would
+        // read past the host allocation.
         constexpr int BLK_N_T = decltype(tile_size<1>(mma))::value;
         constexpr int SG_NUMS_N_T = get<2>(typename TiledMMA::ThrLayoutVMNK{}.shape());
         constexpr int SG_N_T = BLK_N_T / SG_NUMS_N_T;
-        constexpr int padded_scale_n =
-            ((SG_N_T + kScaleAlign - 1) / kScaleAlign) * kScaleAlign;
-        constexpr int scale_k = 2;
+        static_assert(SG_N_T <= kTensorPaddedScaleN,
+                      "Tensor-scale surface is one kScaleAlign-wide N stripe per "
+                      "expert; SG_N (BLK_N/SG_NUMS_N) must not exceed it.");
+        constexpr int padded_scale_n = kTensorPaddedScaleN;
+        constexpr int scale_k = kTensorScaleK;
         auto sA = make_tensor(
             make_gmem_ptr(const_cast<ElementS *>(ScalesA) +
                           int64_t(padded_cumulative_M) * scale_k),

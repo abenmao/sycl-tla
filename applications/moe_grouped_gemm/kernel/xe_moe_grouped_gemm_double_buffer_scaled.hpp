@@ -39,6 +39,7 @@
 #include "cutlass/kernel_hardware_info.hpp"
 #include "cutlass/platform/platform.h"
 #include "moe_grouped_gemm/kernel/xe_moe_grouped_gemm.hpp"
+#include "moe_grouped_gemm/moe_scale_layout.hpp"
 #include "cutlass/gemm/collective/xe_mma_blockscaled_scale_traits.hpp"
 #include <cute/util/compat.hpp>
 
@@ -77,7 +78,10 @@ MoEGEMMDoubleBufferScaled(const ElementA *Activations, const ElementB *Weights,
                      PersistentTileSchedulerSm90GroupParams<ProblemShape> scheduler_params) {
 
   static_assert(!cute::is_void_v<ElementS>, "Use MoEGEMMDoubleBuffer for plain BF16");
-  constexpr int kScaleAlign = 64;
+  // Shared with the host packer via moe_scale_layout.hpp so padding cannot drift.
+  constexpr int kScaleAlign = cutlass::moe::kScaleAlign;
+  constexpr int kTensorPaddedScaleN = cutlass::moe::kTensorPaddedScaleN;
+  constexpr int kTensorScaleK = cutlass::moe::kTensorScaleK;
 
   namespace coll = cutlass::gemm::collective;
 
@@ -121,6 +125,11 @@ MoEGEMMDoubleBufferScaled(const ElementA *Activations, const ElementB *Weights,
   auto thr_mma = mma.get_slice(local_id);
   auto tCrD_even = thr_mma.partition_sg_fragment_C(gD_even_init);
   auto tCrD_odd  = thr_mma.partition_sg_fragment_C(gD_odd_init);
+  // Every K-tile uses gemm<false> (accumulate), so the accumulators must start
+  // at zero. In-loop clears only run after a store; the very first accumulation
+  // reads these fragments, so clear them up front (uninitialised regs otherwise).
+  clear(tCrD_even);
+  clear(tCrD_odd);
 
   bool is_first_wave  = true;
   ElementD *ptr_D_prev    = Outputs;
@@ -318,14 +327,23 @@ MoEGEMMDoubleBufferScaled(const ElementA *Activations, const ElementB *Weights,
 
       if constexpr (CfgGroupK == 0) {
         // ── TENSOR scale path: HW BDPAS ───────────────────────────────────
-        // Physical scale_k=2 (BDPAS offset scheme). padded_scale_n is
-        // ceil(SG_N / kScaleAlign) * kScaleAlign, compile-time constant.
+        // Fixed surface geometry from moe_scale_layout.hpp — the same constants
+        // the host packer sizes the surface with (scale_surface_geom /
+        // pack_moe_scales): height 2 (BDPAS offset scheme) and one
+        // kScaleAlign-wide N stripe per expert. The static_assert holds the
+        // contract that one stripe covers the whole subgroup N extent — the 2D
+        // scale load walks the surface in kScaleAlign-wide steps, so an SG_N
+        // above that would read past the host allocation.
         // Scale is fused into each DPAS call via make_zip_tensor — same
         // structure as the BLOCK path below, just different scale layout.
-        constexpr int scale_k_tensor = 2;
+        static_assert(cute::sizeof_bits_v<ElementA> == 8,
+                      "ScaleKind::Tensor scale surface geometry is fp8-only.");
+        constexpr int scale_k_tensor = kTensorScaleK;
         const int round_up_M_tensor  = (uniform_M + (kScaleAlign - 1)) & ~(kScaleAlign - 1);
-        constexpr int padded_scale_n_tensor =
-            ((SG_N + kScaleAlign - 1) / kScaleAlign) * kScaleAlign;
+        static_assert(SG_N <= kTensorPaddedScaleN,
+                      "Tensor-scale surface is one kScaleAlign-wide N stripe per "
+                      "expert; SG_N (BLK_N/SG_NUMS_N) must not exceed it.");
+        constexpr int padded_scale_n_tensor = kTensorPaddedScaleN;
         // Same fix as BLOCK path: use expert_id * round_up_M, not ceil64(cumulative_M).
         [[maybe_unused]] const int64_t padded_cumM_tensor =
             int64_t(expert_id) * round_up_M_tensor;

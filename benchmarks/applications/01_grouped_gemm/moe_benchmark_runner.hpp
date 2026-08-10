@@ -31,69 +31,136 @@
 
 /*! \file
     \brief Google-Benchmark harness for the hand-written MoE grouped-GEMM kernel
-           (applications/moe_grouped_gemm).
-
-    The existing benchmarks/grouped_gemm harness is built around the standard
-    GemmUniversalAdapter (can_implement / initialize / run). The MoE kernel is a
-    raw parallel_for launch with a custom tile scheduler + packed-A + a device
-    num_rows_per_expert table, with no GemmUniversal interface, so it needs its
-    own runner. It still reuses the shared scaffolding from benchmarks/common.hpp
-    (BenchmarkRegistry, register_benchmarks, benchmark_main) and Google Benchmark.
-
-    All the kernel machinery (choose_tiled_mma, the Config structs, fill_scale,
-    MoE::MoEGEMM, the PersistentTileSchedulerXeMoE setup) is reused directly from
-    example 12's joint header. We only benchmark ONE GEMM of the exact N/K/experts
-    /M described in the config line (no up-gate 2x / down-proj expansion).
+           (applications/moe_grouped_gemm). Benchmarks one GEMM of the exact
+           N/K/experts/M described in the config line.
 */
 
 #pragma once
 
-// LEAN benchmark TU: this header (and main.cpp) compiles Google Benchmark +
-// common.hpp scaffolding but NOT the cute / MoE kernel, which lives only in
-// moe_kernel_launch.cpp behind the thin moe_kernel_launch.hpp interface. See
-// that header for the TU-split rationale.
+// Lean benchmark TU: this header (and main.cpp) does not include the cute / MoE
+// kernel, which lives only in moe_api.cpp. See moe_api.hpp for the TU-split.
 #include "../common.hpp"
 #include <benchmark/benchmark.h>
 
-// THIN interface to the kernel launch. No cute / MoE / SYCL / oneMKL — just an
-// opaque handle + 3 free functions. The chosen Config (Bf16Config / ...) is
-// baked into moe_kernel_launch.cpp at build time via -DMOE_BENCH_CONFIG, so this
-// benchmark TU never names a cute Config type.
-#include "moe_kernel_launch.hpp"
+#include "moe_grouped_gemm/runner/moe_api.hpp"
+// Kernel-free declarations (Config structs, ScaleKind, fill_flat_scales,
+// VendorTensorMapping) — not moe_gemm_runner.hpp, which would pull the device
+// kernel into the benchmark TU.
+#include "moe_grouped_gemm/runner/moe_types.hpp"
+// Provides MOE_DTYPE_TAG_LIST, which drives per-dtype registration below.
+#include "moe_grouped_gemm/runner/moe_tile_list.hpp"
 
 #include <algorithm>
 #include <cfloat>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
 #include <limits>
-#include <random>
+#include <map>
+#include <memory>
 #include <sstream>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace cutlass::benchmark {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
+// Every input the kernel reads for one benchmarked config: device A/B/D plus the
+// host scale grids. Allocated and filled once per config by build_inputs, then
+// shared by every launch. The vendor_tm only holds pointers into these, so they
+// must outlive the timed loop — they are released when the owning shared_ptr goes
+// out of scope at the end of run().
+//
+// The scale grids are empty for the unscaled (Plain) path.
+template <class Config, class ElementInput, class ElementOutput>
+struct MoeDeviceBuffers {
+  using ElementScaleStore = cutlass::moe::ScaleStoreFor<Config>;
 
-// Fixed seed for --random MoE routing so a given config line is reproducible.
-inline constexpr unsigned kRoutingSeed = 0x4D6F45u; // "MoE"
+  cutlass::DeviceAllocation<ElementInput>  A;   // [num_tokens, K]
+  cutlass::DeviceAllocation<ElementInput>  B;   // [num_experts, N, K]
+  cutlass::DeviceAllocation<ElementOutput> D;   // [num_tokens, N]
+  // Per-expert token counts on the device — the variable-M kernel's M_per_group,
+  // which it reads per workgroup to find its expert and row offset.
+  cutlass::DeviceAllocation<int32_t> experts_token_count; // [num_experts]
 
-// Whether a benchmark line runs verification. `false` (default) is perf-only;
-// `true` routes to the example's VerificationHelper.
+  // Host-side, quantized to the type the kernel reads (see fill_flat_scales).
+  // Block  : [num_tokens, scale_k] and [num_experts, N, scale_k].
+  // Tensor : one scale per token and one per expert.
+  // Kept for verify, which compares against these unpadded grids.
+  std::vector<ElementScaleStore> per_token_scale;
+  std::vector<ElementScaleStore> experts_scale;
+
+  // The packed, padded DEVICE scale surfaces the kernel reads, built from the
+  // grids above by pack_moe_scales. Empty for the unscaled (Plain) path.
+  cutlass::DeviceAllocation<ElementScaleStore> packed_scale_a;
+  cutlass::DeviceAllocation<ElementScaleStore> packed_scale_b;
+};
+// Carries a Config type as a value so a generic lambda can recover it via
+// decltype(tag)::type (C++17; templated lambdas are C++20).
+template <class T> struct TypeTag { using type = T; };
+
+// Rejects a mapping missing any device buffer this Config's kernel dereferences —
+// cheaper to fail here, with a name, than to fault in device code. Owned by the
+// client (this benchmark) because the client is what fills the mapping: it runs on
+// the finished vendor_tm, before launch_moe() crosses into the device TU.
+template <class Config, class ElementA, class ElementD, class ElementScaleIn>
+void moe_validate_mapping(
+    const cutlass::moe::VendorTensorMapping<ElementA, ElementScaleIn, ElementD> &tm) {
+  if (!tm.scatter_tokens || !tm.experts_weight || !tm.y || !tm.experts_token_count_device)
+    throw std::runtime_error(
+        "VendorTensorMapping::{scatter_tokens,experts_weight,y} must point at "
+        "the client's device buffers, and experts_token_count_device must point at the device copy of the per-expert counts");
+  if constexpr (Config::scale_kind != cutlass::moe::ScaleKind::Plain) {
+    // The tensor surface geometry (height kTensorScaleK, one kScaleAlign-wide
+    // N stripe) is derived from MMA_K = 256 / sizeof_bits(Element) = 32 against
+    // the tensor tiles' BLK_K = 64 — an 8-bit-only result. A 4-bit tensor
+    // config would need height 4, so fail here rather than mis-stride.
+    static_assert(Config::scale_kind != cutlass::moe::ScaleKind::Tensor ||
+                      cute::sizeof_bits_v<typename Config::Element> == 8,
+                  "ScaleKind::Tensor scale surface geometry is fp8-only.");
+    // Allocated, packed and uploaded above in build_inputs, which derives the
+    // padding from moe_scale_layout.hpp — the same header the kernels build
+    // their strides from. Null only on the Plain path.
+    if (!tm.packed_scale_a || !tm.packed_scale_b)
+      throw std::runtime_error(
+          "VendorTensorMapping::{packed_scale_a,packed_scale_b} must point at "
+          "the client's packed device scale surfaces for a scaled config");
+  }
+}
+
+// The element-type families a .in dtype token can name; each maps to one Config
+// in moe_types.hpp. The tile geometry is picked later by pick_tile().
+enum class DtypeFamily { Bf16, MxFp8E4m3, MxFp4E2m1, Fp8TensorE4m3 };
+
+// Resolve the .in dtype token to its element-type family. Returns false for an
+// unknown/uncompiled token.
+inline bool resolve_dtype_family(std::string const &token, DtypeFamily &out) {
+  static const std::map<std::string, DtypeFamily> registry = {
+      {"bf16", DtypeFamily::Bf16},
+      {"mxfp8_e4m3", DtypeFamily::MxFp8E4m3},
+      {"mxfp4", DtypeFamily::MxFp4E2m1},
+      {"fp8_tensor", DtypeFamily::Fp8TensorE4m3},
+  };
+  auto it = registry.find(token);
+  if (it == registry.end()) return false;
+  out = it->second;
+  return true;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Command line options for one MoE grouped-GEMM benchmark line. Builds a
-// per-expert M vector from one of three shape sources (highest precedence first):
+// per-expert M vector from one of two shape sources (highest precedence first):
 //   1. --m_per_expert=<csv>   explicit per-expert M list
-//   2. --moe_mode (--m/--topk/--num_experts/--ep_size)  MoE routing math,
-//      following PR #687: experts_per_gpu = num_experts/ep_size,
-//      tokens_per_gpu = (m*topk)/ep_size spread uniformly over experts_per_gpu.
-//   3. Default: M_i = (m * topk) / num_experts / ep_size  (uniform)
+//   2. Default: M_i = (m * topk / ep_size) / (num_experts / ep_size)  (uniform)
 struct MoEBenchmarkOptions {
 
   bool error;
 
   int n, k, num_experts;
-  // MoE routing parameters (PR #687 semantics). moe_mode selects source #2.
-  bool moe_mode;
+  // MoE routing parameters (PR #687 semantics).
   int m, topk, ep_size;
-  bool random_mode;
   bool verify;
   std::string m_per_expert; // comma-separated per-expert M list
   std::string bm_name;
@@ -117,6 +184,10 @@ struct MoEBenchmarkOptions {
    files keep working. The canonical name wins when both are given.
 */
   int hidden_size, new_hidden_size, num_experts_per_rank;
+  // When >0, pins the number of expert groups the benched GEMM runs, overriding
+  // the routing-derived count (some source configs carry a large model
+  // --num_experts and pin the benched group count with this flag).
+  int override_number_experts;
   std::string proj; // "up" | "down" | "" (raw n/k)
   std::string experts_token_offset; // comma-separated prefix sum (optional)
 
@@ -125,9 +196,10 @@ struct MoEBenchmarkOptions {
 
   MoEBenchmarkOptions()
       : error(false), n(2880), k(2880), num_experts(8),
-        moe_mode(false), m(4096), topk(1), ep_size(1), random_mode(false),
+        m(4096), topk(1), ep_size(1),
         verify(false), m_per_expert(""), bm_name("MoEGEMM"),
-        hidden_size(0), new_hidden_size(0), num_experts_per_rank(0), proj(""),
+        hidden_size(0), new_hidden_size(0), num_experts_per_rank(0),
+        override_number_experts(0), proj(""),
         experts_token_offset("") {
     build_rows();
   }
@@ -144,39 +216,23 @@ struct MoEBenchmarkOptions {
       }
       // num_experts follows the csv length.
       num_experts = static_cast<int>(rows_per_expert.size());
-    } else if (moe_mode) {
-      // PR #687 MoE routing math: distribute the per-GPU token budget over the
-      // per-GPU experts. ep_size>1 shards experts across GPUs (expert
-      // parallelism); we benchmark one GPU's share.
-      const int experts_per_gpu = std::max(1, num_experts / ep_size);
-      const int tokens_per_gpu = (m * topk) / ep_size;
-      num_experts = experts_per_gpu;
-      if (random_mode) {
-        // Randomized routing: assign each token to a random expert, modelling
-        // the load imbalance of real top-k routing. Deterministically seeded so
-        // a given config line is reproducible across runs.
-        rows_per_expert.assign(experts_per_gpu, 0);
-        std::mt19937 rng(kRoutingSeed);
-        std::uniform_int_distribution<int> pick(0, experts_per_gpu - 1);
-        for (int t = 0; t < tokens_per_gpu; ++t)
-          rows_per_expert[pick(rng)] += 1;
-      } else {
-        // Uniform routing: even split, remainder spread so total M is exact.
-        const int base = tokens_per_gpu / experts_per_gpu;
-        const int rem = tokens_per_gpu % experts_per_gpu;
-        rows_per_expert.assign(experts_per_gpu, base);
-        for (int i = 0; i < rem && i < experts_per_gpu; ++i)
-          rows_per_expert[i] += 1;
-      }
     } else {
-      // Default uniform routing: same formula as moe_mode but always uniform.
-      const int experts_per_gpu = std::max(1, num_experts / std::max(1, ep_size));
-      const int tokens_per_gpu = (m * std::max(1, topk)) / std::max(1, ep_size);
-      const int base = tokens_per_gpu / experts_per_gpu;
-      const int rem = tokens_per_gpu % experts_per_gpu;
-      rows_per_expert.assign(experts_per_gpu, base);
-      for (int i = 0; i < rem && i < experts_per_gpu; ++i)
-        rows_per_expert[i] += 1;
+      // Default uniform routing. ep_size shards experts across ranks, so both
+      // the token budget and the expert count are per-rank -- the divisions
+      // cancel, leaving M_per_expert independent of ep_size. parse() validates
+      // the counts, so both divisors are >= 1 here.
+      // num_experts_per_rank is already a per-rank count (it replaced
+      // num_experts in parse), so it must not be divided by ep_size again.
+      int experts_per_gpu =
+          num_experts_per_rank > 0 ? num_experts : num_experts / ep_size;
+      const int tokens_per_gpu = (m * topk) / ep_size;
+      int m_per_expert_val = tokens_per_gpu / experts_per_gpu;
+      if (override_number_experts > 0)
+        experts_per_gpu = override_number_experts;
+      // A token budget below one row per expert still has to bench something.
+      if (m_per_expert_val < 1)
+        m_per_expert_val = 1;
+      rows_per_expert.assign(experts_per_gpu, m_per_expert_val);
       num_experts = experts_per_gpu;
     }
   }
@@ -194,15 +250,12 @@ struct MoEBenchmarkOptions {
     cmd.get_cmd_line_argument("bm_name", bm_name, std::string("MoEGEMM"));
 
     // PR #687 MoE routing parameters.
-    moe_mode = cmd.check_cmd_line_flag("moe_mode");
     cmd.get_cmd_line_argument("m", m, 4096);
     cmd.get_cmd_line_argument("topk", topk, 1);
     cmd.get_cmd_line_argument("ep_size", ep_size, 1);
-    random_mode = cmd.check_cmd_line_flag("random");
 
-    /* ---- Canonical MoE reference-API names. Read after the
-       legacy flags so a canonical MoE name, when present, overrides its alias. ----
-    */
+    // ---- DEFAULT reference-API names (requirement #3). Read after the
+    // legacy flags so a canonical name, when present, overrides its alias. ----
     int num_tokens = 0;
     cmd.get_cmd_line_argument("num_tokens", num_tokens, 0);
     int num_of_tokens = 0;
@@ -244,8 +297,13 @@ struct MoEBenchmarkOptions {
     // num_experts_per_rank (canonical) == experts on this rank. When given without the
     // routing math, it sets num_experts directly for the per-rank GEMM.
     cmd.get_cmd_line_argument("num_experts_per_rank", num_experts_per_rank, 0);
-    if (num_experts_per_rank > 0 && !moe_mode)
+    if (num_experts_per_rank > 0)
       num_experts = num_experts_per_rank;
+
+    // override_number_experts pins the number of expert groups the benched GEMM
+    // runs, overriding the routing-derived count in build_rows().
+    cmd.get_cmd_line_argument("override_number_experts", override_number_experts,
+                              0);
 
     cmd.get_cmd_line_argument("experts_token_offset", experts_token_offset,
                               std::string(""));
@@ -254,10 +312,25 @@ struct MoEBenchmarkOptions {
     cmd.get_cmd_line_argument("verify", verify_str, std::string("false"));
     verify = (verify_str == "true" || verify_str == "1");
 
-    if (moe_mode && (topk <= 0 || ep_size <= 0 || num_experts <= 0)) {
-      std::cerr << "Error: --moe_mode requires positive --topk/--ep_size/"
-                   "--num_experts.\n";
+    // Routing counts must be >= 1 so the divisions in build_rows() are defined.
+    // Checked after num_experts_per_rank may have replaced num_experts. Note
+    // CommandLine cannot report a bad value: it does `istringstream >> int`, so
+    // a non-integer silently yields 0 ("abc") or truncates ("1.5" -> 1).
+    if (num_experts < 1 || topk < 1 || ep_size < 1) {
+      std::cerr << "Error: --num_experts/--topk/--ep_size must each be >= 1"
+                << " (got " << num_experts << "/" << topk << "/" << ep_size
+                << ").\n";
       error = true;
+      return;
+    }
+    // A rank must own at least one expert, else num_experts / ep_size floors to
+    // zero and build_rows() divides by it. Skipped when num_experts_per_rank
+    // gave a per-rank count, since that path does not divide by ep_size.
+    if (num_experts_per_rank <= 0 && ep_size > num_experts) {
+      std::cerr << "Error: --ep_size=" << ep_size
+                << " exceeds --num_experts=" << num_experts << ".\n";
+      error = true;
+      return;
     }
 
     build_rows();
@@ -326,19 +399,14 @@ struct MoEBenchmarkOptions {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Runner for the one config this binary compiles. All device work — A/B/D +
-// scale allocation, scheduler/grid/mma setup, the MoE::MoEGEMM parallel_for, and
-// the GPU_Clock timing — lives in the LEAN moe_kernel_launch.cpp, reached via
-// moe_setup / moe_launch_once / moe_teardown. This runner only drives the
-// Google-Benchmark loop + counters; it instantiates NO cute / MoE / SYCL device
-// code, and is NOT templated on Config (the config is baked into the .cpp at
-// build time via -DMOE_BENCH_CONFIG), so this TU never names a cute Config type.
-// Perf only — no verification.
+// All device work lives in moe_api.cpp, reached via launch_moe(). This runner
+// only drives the Google-Benchmark loop + counters; it instantiates no cute /
+// MoE / SYCL device code.
 struct MoEBenchmarkRunner {
 
   void run(::benchmark::State &state, MoEBenchmarkOptions const &options,
            cutlass::KernelHardwareInfo const & /*hw_info*/,
-           const char *config_name) {
+           const char *dtype_tag) {
     const int num_experts = options.num_experts;
     const int N = options.n;
     const int K = options.k;
@@ -348,23 +416,120 @@ struct MoEBenchmarkRunner {
       state.SkipWithError("num_experts does not match per-expert M list size.");
       return;
     }
+
+    // Uniform M across experts is a precondition of the double-buffer kernel,
+    // which takes M as a scalar. pick_tile() may choose it for any shape, so the
+    // requirement is checked here, once, before anything is allocated — rather
+    // than inside the launch, after the tile is already picked.
+    const int uniform_m = num_experts > 0 ? M_per_expert[0] : 0;
+    for (int g = 0; g < num_experts; ++g) {
+      if (M_per_expert[g] != uniform_m) {
+        state.SkipWithError(
+            "MoE benchmark requires uniform M across all experts.");
+        return;
+      }
+    }
+
     int num_tokens = options.total_m();
 
-    // Map the verify toggle to the TU-boundary int (kVerifyNone/kVerifyOn).
-    int verify_kind =
-        options.verify ? moe_bench::kVerifyOn : moe_bench::kVerifyNone;
-
-    // Allocate + warm up the kernel ONCE in the lean TU. The returned handle is
-    // opaque; this TU never sees the kernel type. If verify_kind != none, the
-    // lean TU also runs the example's VerificationHelper against this shape.
-    std::string error;
-    moe_bench::MoeRunHandle *handle =
-        moe_bench::moe_setup_by_name(config_name, N, K, num_experts,
-                                     M_per_expert, &error, verify_kind);
-    if (!handle) {
-      state.SkipWithError(error.empty() ? "moe_setup failed" : error.c_str());
+    // Resolve the .in dtype tag to its element-type family so the data dtype
+    // follows the .in line, not a compile-time default.
+    DtypeFamily family;
+    if (!resolve_dtype_family(dtype_tag, family)) {
+      state.SkipWithError(
+          (std::string("unknown/uncompiled dtype token '") + dtype_tag + "'")
+              .c_str());
       return;
     }
+
+    // The MoeDeviceBuffers for this config, type-erased because the struct is
+    // Config-templated while this scope is dtype-agnostic; the shared_ptr deleter
+    // frees the right type (and releases the device memory) on return.
+    std::shared_ptr<void> inputs;
+
+    // Allocates + fills every input the kernel reads and returns a vendor_tm
+    // wired to it. Config is passed as a type tag (generic lambda) to stay valid
+    // C++17.
+    auto build_inputs = [&](auto config_tag) {
+      using Config = typename decltype(config_tag)::type;
+      using ElementInput  = typename Config::Element;
+      using ElementOutput = typename Config::ElementOutput;
+      using Buffers = MoeDeviceBuffers<Config, ElementInput, ElementOutput>;
+      using ElementScaleStore = typename Buffers::ElementScaleStore;
+      constexpr cutlass::moe::ScaleKind kScaleKind = Config::scale_kind;
+      const uint64_t seed = 2023;
+
+      // Kept alive for the whole benchmark loop — vendor_tm only holds pointers into it.
+      auto buf = std::make_shared<Buffers>();
+      inputs = buf;
+
+      cutlass::moe::VendorTensorMapping<ElementInput, ElementScaleStore, ElementOutput> vendor_tm;
+      vendor_tm.experts_token_count = M_per_expert.data();
+      vendor_tm.num_experts         = num_experts;
+      vendor_tm.N                   = N;
+      vendor_tm.K                   = K;
+
+      if constexpr (kScaleKind != cutlass::moe::ScaleKind::Plain) {
+        constexpr bool kIsTensor = (kScaleKind == cutlass::moe::ScaleKind::Tensor);
+        // Tensor scale is fp8-only: the fixed device surface geometry
+        // (moe_scale_layout.hpp — height kTensorScaleK, one kTensorPaddedScaleN-wide
+        // N stripe per expert) is derived from an 8-bit MMA_K. Caught here, at the
+        // dtype that selects the config, as well as in the kernels and packer.
+        static_assert(!kIsTensor || cute::sizeof_bits_v<ElementInput> == 8,
+                      "ScaleKind::Tensor scale surface geometry is fp8-only.");
+        // Logical (unpadded) host grids: one scale per token / per expert.
+        const int scale_k =
+            kIsTensor ? 1 : (K + Config::group_k - 1) / Config::group_k;
+        buf->per_token_scale.resize(std::size_t(int64_t(num_tokens) * scale_k));
+        buf->experts_scale.resize(
+            kIsTensor ? std::size_t(num_experts)
+                      : std::size_t(int64_t(num_experts) * int64_t(N) * scale_k));
+        cutlass::moe::fill_flat_scales(buf->per_token_scale, seed + 2020, false);
+        cutlass::moe::fill_flat_scales(buf->experts_scale, seed + 2019, false);
+        vendor_tm.per_token_scale = buf->per_token_scale.data();
+        vendor_tm.experts_scale   = buf->experts_scale.data();
+
+        // Pack the grids into the padded device surface and upload, here where
+        // the Config (and so the ScaleKind and group sizes) is known. The kernel
+        // reads this surface verbatim — nothing is re-derived downstream.
+        const auto geom = cutlass::moe::scale_surface_geom<Config>(N, K);
+        cutlass::moe::pack_moe_scales<kIsTensor, ElementScaleStore>(
+            buf->per_token_scale.data(), buf->experts_scale.data(),
+            M_per_expert.data(), num_experts, N, K,
+            kIsTensor ? K : Config::group_k, kIsTensor ? N : Config::group_n,
+            geom.scale_k_store, geom.padded_scale_n, buf->packed_scale_a,
+            buf->packed_scale_b);
+        vendor_tm.packed_scale_a = buf->packed_scale_a.get();
+        vendor_tm.packed_scale_b = buf->packed_scale_b.get();
+      }
+
+      // Fill device A/B/D with initialize_block, which owns the per-element value
+      // range for the compile-time type (and the sub-byte pack for e2m1), so no
+      // host staging buffer is needed. D is fully overwritten by the kernel
+      // (beta=0) but is still seeded, so a partial store shows up in verify.
+      buf->A.reset(std::size_t(int64_t(num_tokens) * K));
+      buf->B.reset(std::size_t(int64_t(num_experts) * N * K));
+      buf->D.reset(std::size_t(int64_t(num_tokens) * N));
+      cutlass::initialize_block(buf->A, seed + 2023);
+      cutlass::initialize_block(buf->B, seed + 2022);
+      cutlass::initialize_block(buf->D, seed + 2021);
+
+      // Per-expert counts -> device int32 (the kernel's M_per_group). The mapping
+      // carries them on the host too, for verify and the uniform-M check.
+      std::vector<int32_t> counts32(M_per_expert.begin(), M_per_expert.end());
+      buf->experts_token_count.reset(num_experts);
+      buf->experts_token_count.copy_from_host(counts32.data());
+
+      vendor_tm.scatter_tokens = buf->A.get();
+      vendor_tm.experts_weight = buf->B.get();
+      vendor_tm.y              = buf->D.get();
+      vendor_tm.experts_token_count_device = buf->experts_token_count.get();
+
+      // The mapping is complete — check it here, on the side that filled it,
+      // rather than inside the launch. Throws; run() reports it as a skip.
+      moe_validate_mapping<Config>(vendor_tm);
+      return vendor_tm;
+    };
 
     // FLOP count over all per-expert problems.
     uint64_t fmas = 0;
@@ -387,19 +552,51 @@ struct MoEBenchmarkRunner {
       state.counters["M_" + std::to_string(i)] = M_per_expert[i];
     }
 
+    // Build the inputs once (outside the timed loop): host scale grids plus the
+    // device A/B/D allocation + fill. Store the vendor_tm as raw bytes so the
+    // loop body stays dtype-agnostic.
+    std::vector<char> vtm_storage;
+    auto store_vtm = [&](auto config_tag) {
+      auto vtm = build_inputs(config_tag);
+      vtm_storage.resize(sizeof(vtm));
+      std::memcpy(vtm_storage.data(), &vtm, sizeof(vtm));
+    };
+    try {
+      switch (family) {
+      case DtypeFamily::Bf16:          store_vtm(TypeTag<cutlass::moe::Bf16Config>{});          break;
+      case DtypeFamily::MxFp8E4m3:     store_vtm(TypeTag<cutlass::moe::MxFp8E4m3Config>{});     break;
+      case DtypeFamily::MxFp4E2m1:     store_vtm(TypeTag<cutlass::moe::MxFp4E2m1Config>{});     break;
+      case DtypeFamily::Fp8TensorE4m3: store_vtm(TypeTag<cutlass::moe::Fp8TensorE4m3Config>{}); break;
+      }
+    } catch (std::exception const &e) {
+      // Device allocation / fill failure (most often out-of-memory on a large
+      // shape) — report it as a skip instead of terminating the whole suite.
+      state.SkipWithError(e.what());
+      return;
+    }
+    const void *vtm_ptr = vtm_storage.data();
+
+    // verify only on the first iteration; all subsequent runs are timing-only.
+    int current_verify = options.verify ? moe_bench::kVerifyDevice : moe_bench::kVerifyNone;
+    
     initialize_counters(state);
     for (auto _ : state) {
-      // Timed body lives entirely in the lean .cpp; returns elapsed ms.
-      double ms_elapsed = moe_bench::moe_launch_once(handle);
+      std::string error;
+      double ms_elapsed = moe_bench::launch_moe(vtm_ptr, dtype_tag,
+                                                current_verify, &error);
+      if (ms_elapsed < 0.0) {
+        state.SkipWithError(error.empty() ? "launch_moe failed" : error.c_str());
+        return;
+      }
+      current_verify = moe_bench::kVerifyNone; // verify once, then timing-only
       update_counters(state, ms_elapsed);
       state.SetIterationTime(ms_elapsed / 1000);
     }
     finalize_counters(state, gflop);
-
-    moe_bench::moe_teardown(handle);
   }
 
 private:
+
   static void initialize_counters(::benchmark::State &state) {
     state.counters["avg_runtime_ms"] = 0;
     state.counters["best_runtime_ms"] = std::numeric_limits<double>::max();
@@ -453,8 +650,7 @@ private:
       cutlass::benchmark::MoEBenchmarkOptions>::Register(                      \
       CUTLASS_MOE_STR(Name), &CUTLASS_MOE_CAT(Name, _func))
 
-// The runner is no longer templated on Config (the config is baked into
-// moe_kernel_launch.cpp via -DMOE_BENCH_CONFIG), so this macro just builds the
+// The runner is not templated on Config, so this macro just builds the
 // registration thunk under the requested name.
 #define CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(Name)                            \
   static void CUTLASS_MOE_CAT(Name, _func)(                                    \
@@ -467,38 +663,21 @@ private:
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-// ONE config compiled per binary, selected by -DMOE_BENCH_CONFIG=<name> at
-// build time (consumed in moe_kernel_launch.cpp). Compiling all configs into a
-// single device image triggers an IGC internal compiler error, so — like
-// example 12, which is one .cpp/target per dtype — each benchmark executable
-// holds a single dtype. The registered benchmark name (the config-file token)
-// is fixed below per binary so the .in files stay stable regardless of which
-// binary is built. This benchmark TU only needs MOE_BENCH_NAME.
-// TILE SWEEP: this binary holds ALL tiles for its dtype (selected by
-// -DMOE_DTYPE_<TAG>). moe_tile_list.hpp expands to X(NAME,CONFIG) entries; we
-// create a registration thunk per NAME and register them all. The .in line's
-// first token selects which tile runs (grouped_gemm-style). moe_setup_by_name
-// in the .cpp maps the same NAME back to the right cute config.
-#include "moe_tile_list.hpp"
+// MOE_DTYPE_TAG_LIST expands to one F(DTYPE) per active dtype; pick_tile() chooses
+// the tile geometry from the problem size at runtime.
+#include "moe_grouped_gemm/runner/moe_tile_list.hpp"
 
-#ifdef MOE_TILE_X_LIST
-#define X(NAME, CONFIG) CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(NAME)
-#define X_DOUBLE_BUFFER(NAME, CONFIG) CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(NAME)
-#define X_DOUBLE_BUFFER_SCALED(NAME, CONFIG) CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(NAME)
-MOE_TILE_X_LIST
-#undef X
-#undef X_DOUBLE_BUFFER
-#undef X_DOUBLE_BUFFER_SCALED
+// Regular families (auto-selected tile).
+#ifdef MOE_DTYPE_TAG_LIST
+#define F(DTYPE) CUTLASS_CREATE_GROUPED_GEMM_BENCHMARK(DTYPE)
+MOE_DTYPE_TAG_LIST
+#undef F
 #endif
 
 static void register_grouped_gemm_benchmarks() {
-#ifdef MOE_TILE_X_LIST
-#define X(NAME, CONFIG) CUTLASS_GROUPED_GEMM_BENCHMARK(NAME);
-#define X_DOUBLE_BUFFER(NAME, CONFIG) CUTLASS_GROUPED_GEMM_BENCHMARK(NAME);
-#define X_DOUBLE_BUFFER_SCALED(NAME, CONFIG) CUTLASS_GROUPED_GEMM_BENCHMARK(NAME);
-  MOE_TILE_X_LIST
-#undef X
-#undef X_DOUBLE_BUFFER
-#undef X_DOUBLE_BUFFER_SCALED
+#ifdef MOE_DTYPE_TAG_LIST
+#define F(DTYPE) CUTLASS_GROUPED_GEMM_BENCHMARK(DTYPE);
+  MOE_DTYPE_TAG_LIST
+#undef F
 #endif
 }

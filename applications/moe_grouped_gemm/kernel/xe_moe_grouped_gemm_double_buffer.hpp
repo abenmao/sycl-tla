@@ -98,6 +98,11 @@ MoEGEMMDoubleBuffer(const ElementA *Activations, const ElementB *Weights,
 
   auto tCrD_even = thr_mma.partition_sg_fragment_C(gD_even_init);
   auto tCrD_odd  = thr_mma.partition_sg_fragment_C(gD_odd_init);
+  // cute::gemm accumulates (C += A*B) over every K-tile, so the accumulators
+  // must start at zero. In-loop clears only run after a store; the very first
+  // accumulation reads these fragments, so clear them up front.
+  clear(tCrD_even);
+  clear(tCrD_odd);
 
   bool is_first_wave  = true;
   ElementD *ptr_D_prev    = Outputs;

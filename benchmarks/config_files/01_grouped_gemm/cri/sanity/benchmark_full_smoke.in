@@ -1,39 +1,63 @@
-# Smoke test for benchmark_full.in tiles — one shape per tile, verify=true.
-# Double-buffer: M=1*tile_m, N=tile_n, K=1*tile_k, 1 expert.
-# Regular single-buffer: same convention.
-
-# ---- Regular single-buffer ----
-
-# TileShape 384x320 (SG_8x4)
-CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_384_320_64              --bm_name=benchmark_full_smoke --n=320 --k=64  --m=384 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_384_320_64  --bm_name=benchmark_full_smoke --n=320 --k=64  --m=384 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_384_320_128 --bm_name=benchmark_full_smoke --n=320 --k=128 --m=384 --num_experts=1 --verify=true
-
-# TileShape 192x512 (SG_4x8)
-CriGroupedGemm_E4M3E4M3BF16_RRR_TileShape_192_512_64              --bm_name=benchmark_full_smoke --n=512 --k=64  --m=192 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemm_E4M3E4M3BF16_RRR_TileShape_192_512_64  --bm_name=benchmark_full_smoke --n=512 --k=64  --m=192 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemm_E2M1E2M1BF16_RCR_TileShape_192_512_128 --bm_name=benchmark_full_smoke --n=512 --k=128 --m=192 --num_experts=1 --verify=true
-
-# ---- Double-buffer ----
-
-# TileShape 256x256
-CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_256_256_32               --bm_name=benchmark_full_smoke --n=256 --k=32  --m=256 --num_experts=1 --verify=true
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64              --bm_name=benchmark_full_smoke --n=256 --k=64  --m=256 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_256_256_64  --bm_name=benchmark_full_smoke --n=256 --k=64  --m=256 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_256_256_128 --bm_name=benchmark_full_smoke --n=256 --k=128 --m=256 --num_experts=1 --verify=true
-
-# TileShape 288x256
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64              --bm_name=benchmark_full_smoke --n=256 --k=64  --m=288 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_288_256_64  --bm_name=benchmark_full_smoke --n=256 --k=64  --m=288 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_288_256_128 --bm_name=benchmark_full_smoke --n=256 --k=128 --m=288 --num_experts=1 --verify=true
-
-# TileShape 192x256
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_256_64              --bm_name=benchmark_full_smoke --n=256 --k=64  --m=192 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_192_256_64  --bm_name=benchmark_full_smoke --n=256 --k=64  --m=192 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_192_256_128 --bm_name=benchmark_full_smoke --n=256 --k=128 --m=192 --num_experts=1 --verify=true
-
-# TileShape 224x256
-CriGroupedGemmDoubleBufferBF16BF16BF16_RRR_TileShape_224_256_32               --bm_name=benchmark_full_smoke --n=256 --k=32  --m=224 --num_experts=1 --verify=true
-CriGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64              --bm_name=benchmark_full_smoke --n=256 --k=64  --m=224 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemmDoubleBuffer_E4M3E4M3BF16_RRR_TileShape_224_256_64  --bm_name=benchmark_full_smoke --n=256 --k=64  --m=224 --num_experts=1 --verify=true
-CriBLockScalingGroupedGemmDoubleBuffer_E2M1E2M1BF16_RCR_TileShape_224_256_128 --bm_name=benchmark_full_smoke --n=256 --k=128 --m=224 --num_experts=1 --verify=true
+# MoE grouped-GEMM benchmark shapes — CRI / Xe3p (reference src0 + src1 configs)
+#
+# Per line: <dtype> --bm_name --ep_size --num_experts --topk --hidden_size
+#           --new_hidden_size --num_of_tokens --override_number_experts --verify
+#
+# What the benched GEMM actually is (see MoEBenchmarkOptions::build_rows):
+#   M_per_expert = (num_of_tokens * topk / ep_size) / (num_experts / ep_size)
+#                == num_of_tokens * topk / num_experts   (ep_size cancels)
+#   groups       = override_number_experts        <- replaces the routing count
+#   K, N         = hidden_size, new_hidden_size   (proj=up; down swaps them)
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=3584 --num_of_tokens=16392 --override_number_experts=16 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=3584 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=3584 --num_of_tokens=61440 --override_number_experts=8 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=3584 --num_of_tokens=65544 --override_number_experts=10 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=3584 --num_of_tokens=131088 --override_number_experts=6 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=3584 --num_of_tokens=16392 --override_number_experts=16 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=3584 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=3584 --num_of_tokens=61440 --override_number_experts=8 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=3584 --num_of_tokens=65544 --override_number_experts=10 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=3584 --num_of_tokens=131088 --override_number_experts=6 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=256 --new_hidden_size=3584 --num_of_tokens=16392 --override_number_experts=16 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=256 --new_hidden_size=3584 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=256 --new_hidden_size=3584 --num_of_tokens=61440 --override_number_experts=8 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=256 --new_hidden_size=3584 --num_of_tokens=65544 --override_number_experts=10 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=256 --new_hidden_size=3584 --num_of_tokens=131088 --override_number_experts=6 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=96 --topk=1 --hidden_size=128 --new_hidden_size=3584 --num_of_tokens=16416 --override_number_experts=16 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=96 --topk=1 --hidden_size=128 --new_hidden_size=3584 --num_of_tokens=16416 --override_number_experts=16 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=96 --topk=1 --hidden_size=256 --new_hidden_size=3584 --num_of_tokens=16416 --override_number_experts=16 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=192 --topk=1 --hidden_size=128 --new_hidden_size=3584 --num_of_tokens=81984 --override_number_experts=8 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=192 --topk=1 --hidden_size=128 --new_hidden_size=3584 --num_of_tokens=81984 --override_number_experts=8 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=192 --topk=1 --hidden_size=256 --new_hidden_size=3584 --num_of_tokens=81984 --override_number_experts=8 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=16392 --override_number_experts=8 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=61440 --override_number_experts=8 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=65544 --override_number_experts=12 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=131088 --override_number_experts=8 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=16392 --override_number_experts=8 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=61440 --override_number_experts=8 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=65544 --override_number_experts=12 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=131088 --override_number_experts=8 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=256 --new_hidden_size=2560 --num_of_tokens=16392 --override_number_experts=8 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=256 --new_hidden_size=2560 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=256 --new_hidden_size=2560 --num_of_tokens=61440 --override_number_experts=8 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=256 --new_hidden_size=2560 --num_of_tokens=65544 --override_number_experts=12 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=256 --new_hidden_size=2560 --num_of_tokens=131088 --override_number_experts=8 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=48 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=48 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=48 --topk=1 --hidden_size=256 --new_hidden_size=2560 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=96 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=16416 --override_number_experts=28 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=96 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=16416 --override_number_experts=28 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=96 --topk=1 --hidden_size=256 --new_hidden_size=2560 --num_of_tokens=16416 --override_number_experts=28 --verify=true
+fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=192 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=81984 --override_number_experts=16 --verify=true
+mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=192 --topk=1 --hidden_size=128 --new_hidden_size=2560 --num_of_tokens=81984 --override_number_experts=16 --verify=true
+mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=192 --topk=1 --hidden_size=256 --new_hidden_size=2560 --num_of_tokens=81984 --override_number_experts=16 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=64 --new_hidden_size=3072 --num_of_tokens=384 --override_number_experts=4 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=64 --new_hidden_size=3072 --num_of_tokens=896 --override_number_experts=24 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=64 --new_hidden_size=3072 --num_of_tokens=1024 --override_number_experts=24 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=64 --new_hidden_size=3072 --num_of_tokens=1792 --override_number_experts=12 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=64 --new_hidden_size=3072 --num_of_tokens=4096 --override_number_experts=6 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=64 --new_hidden_size=3072 --num_of_tokens=5120 --override_number_experts=8 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=64 --new_hidden_size=3072 --num_of_tokens=10240 --override_number_experts=4 --verify=true
+bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=64 --new_hidden_size=3072 --num_of_tokens=32768 --override_number_experts=2 --verify=true
