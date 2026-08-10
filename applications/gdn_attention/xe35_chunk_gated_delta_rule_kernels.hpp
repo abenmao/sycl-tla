@@ -1,24 +1,27 @@
 /*!
   \file xe35_chunk_gated_delta_rule_kernels.hpp
-  \brief Xe35 SYCL device kernels for the five-stage chunkwise Gated DeltaNet
+  \brief Xe35 SYCL device kernels for the four-stage chunkwise Gated DeltaNet
          (GDN) attention forward pass, plus the host-side kernel_launcher.
 
   Algorithm overview (one chunk of C=64 tokens at a time, per head; C=64 is the
   baseline Xe2 (BMG) value inherited from the upstream port and not retuned for
   Xe3 -- see cutlass::gdn::kChunkSize):
-    Stage 1 -- chunk_prepare:
-      L2-normalize Q (with 1/sqrt(D) scale) and K in-place; compute the
-      per-token cumulative gate a[t] = cumsum_t( softplus(a+dt_bias)*(-exp(A_log)) ).
-    Stage 2 -- chunk_compute_A:
-      Build the lower-triangular transition matrix L[m,n] = (K_m·K_n)*exp(a[m]-a[n])*b[m],
-      with L[m,m]=1 and L[m,n]=0 for m<n.  L encodes within-chunk token mixing.
-    Stage 3 -- chunk_inverse:
+    Stage 1 -- chunk_compute_A_o2 (fuses the former chunk_prepare):
+       Per (chunk, k_head): per v_head compute the per-token cumulative gate
+       a[t] = cumsum_t( softplus(a+dt_bias)*(-exp(A_log)) ) (fused from chunk_prepare),
+       then L2-normalize Q (with 1/sqrt(D) scale) and K in-place.
+       Build the lower-triangular transition matrix
+      L[m,n] = (K_m·K_n)*exp(a[m]-a[n])*b[m] (A), with L[m,m]=1, L[m,n]=0 for m<n,
+      and the decay-gated O2[m,n] = (Q_m·K_n)*exp(a[m]-a[n]) for m>=n. L encodes
+      within-chunk token mixing. The cumsum gate is also written back to gmem for
+      the wu/fwd_o stages below.
+    Stage 2 -- chunk_inverse:
       Invert L in-place (lower-triangular, so a block forward-substitution suffices).
       Done by the DPAS-accelerated `chunk_inverse_opt_kernel`.
-    Stage 4 -- chunk_compute_wu:
+    Stage 3 -- chunk_compute_wu:
       U = L^-1 * V * diag(b)  (V projection)
       W = L^-1 * K * diag(exp(a)*b)  (K-weighted update, only when a prior state exists)
-    Stage 5 -- chunk_fwd_o:
+    Stage 4 -- chunk_fwd_o:
       O = Q*S^T*exp(g) + O2*U   (inter-chunk + intra-chunk output)
       S_{out} = exp(g_last)*S_prev + U^T * K_scaled  (SSM state update)
 
@@ -88,149 +91,14 @@ using chunk_gemm_policy_fwd_o = chunk_gemm_policy_64x64x32_4x2;
 CUTE_DEVICE float
 act_softplus(float& x, float beta = 1.0f, float threshold = 20.0f) {
   if (beta * x < threshold) {
-    return sycl::log(1.0f + sycl::exp(beta * x)) / beta;
+    return sycl::log(1.0f + sycl::native::exp(beta * x)) / beta;
   } else
     return x;
 }
 
-template <typename T>
-CUTE_DEVICE void chunk_prepare_kernel(
-    T* q,
-    T* k,
-    float* a,
-    const float* A_log,
-    const T* dt_bias,
-    const int* query_start_loc,
-    const int total_virtual_seqlen,
-    const int batch_size,
-    const int num_k_heads,
-    const int head_k_dim,
-    const int num_v_heads,
-    const int head_v_dim) {
-  auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
-  int local_id = item.get_local_linear_id();
-  int local_range = item.get_local_range(2);
-
-  int group_id = item.get_group(1);
-  int group_range = item.get_group_range(1);
-  auto sg = item.get_sub_group();
-  int sg_id = sg.get_group_linear_id();
-  int sg_range = sg.get_group_linear_range();
-  int sg_local_id = sg.get_local_linear_id();
-
-  int total_sg_range = group_range * sg_range;
-  int total_sg_id = group_id * sg_range + sg_id;
-  /* ---- Stage 1a: L2-normalize Q and K in-place ----
-   * Each sub-group owns one (token, k-head) row of Q and K.
-   * Two-pass: (1) accumulate squared norm across the head dimension via a
-   * sub-group reduce, (2) write back q[i] /= ||q|| * q_scale,
-   *                                  k[i] /= ||k||.
-   * eps prevents division by zero for zero-norm vectors. */
-  float q_scale = 1.0f / sycl::sqrt(static_cast<float>(head_k_dim));
-  for (int64_t handle_idx = total_sg_id;
-       handle_idx < total_virtual_seqlen * num_k_heads;
-       handle_idx += total_sg_range) {
-    auto q_ptr = q + handle_idx * head_k_dim;
-    auto k_ptr = k + handle_idx * head_k_dim;
-    float q_sum = 0.0f;
-    float k_sum = 0.0f;
-    CUTE_UNROLL
-    for (int k_dim_idx = sg_local_id * elem_per_item; k_dim_idx < head_k_dim;
-         k_dim_idx += sub_group_size * elem_per_item) {
-      CUTE_UNROLL
-      for (int e = 0; e < elem_per_item; ++e) {
-        float q_value = q_ptr[k_dim_idx + e];
-        float k_value = k_ptr[k_dim_idx + e];
-        q_value *= q_value;
-        k_value *= k_value;
-        q_sum += q_value;
-        k_sum += k_value;
-      }
-    }
-    q_sum = sycl::reduce_over_group(sg, q_sum, sycl::plus<>());
-    k_sum = sycl::reduce_over_group(sg, k_sum, sycl::plus<>());
-    q_sum += eps;
-    k_sum += eps;
-    q_sum = sycl::sqrt(q_sum);
-    k_sum = sycl::sqrt(k_sum);
-    CUTE_UNROLL
-    for (int k_dim_idx = sg_local_id * elem_per_item; k_dim_idx < head_k_dim;
-         k_dim_idx += sub_group_size * elem_per_item) {
-      CUTE_UNROLL
-      for (int e = 0; e < elem_per_item; ++e) {
-        q_ptr[k_dim_idx + e] = static_cast<T>(
-            static_cast<float>(q_ptr[k_dim_idx + e]) / q_sum * q_scale);
-        k_ptr[k_dim_idx + e] =
-            static_cast<T>(static_cast<float>(k_ptr[k_dim_idx + e]) / k_sum);
-      }
-    }
-  }
-
-  int pre_chunks = 0;
-  const int chunk_range = total_sg_range / num_v_heads;
-  int chunk_id = total_sg_id % chunk_range;
-  const int v_head_id = total_sg_id / chunk_range;
-
-  const float A_log_exp_h = -sycl::exp(A_log[v_head_id]);
-  const float dt_bias_h = static_cast<float>(dt_bias[v_head_id]);
-
-  for (int batch_id = 0; batch_id < batch_size; ++batch_id) {
-    const int seq_start_offset = query_start_loc[batch_id];
-    const int seq_end_offset = query_start_loc[batch_id + 1];
-    const int seq_len = seq_end_offset - seq_start_offset;
-
-    const int current_chunks = (seq_len + chunk_size - 1) / chunk_size;
-    const int cumsum_chunks = pre_chunks + current_chunks;
-
-    if (chunk_id >= cumsum_chunks) {
-      pre_chunks = cumsum_chunks;
-      continue;
-    }
-
-    while (chunk_id < cumsum_chunks) {
-      const int chunk_start_offset = chunk_id * chunk_size;
-
-      /* ---- Stage 1b: compute per-token cumulative gate a[t] ----
-       * Each sub-group lane owns local_num = chunk_size/sub_group_size consecutive
-       * tokens in the chunk.  Computation:
-       *   g[t] = softplus(a[t] + dt_bias) * (-exp(A_log))    (log-scale decay)
-       *   a[t] = cumsum_{i<=t} g[i]                          (prefix sum over chunk)
-       * The inclusive_scan_over_group gives the lane-level partial sum; the
-       * reversed inner loop then writes back the element-level running total. */
-      /* (chunk_size % sub_group_size == 0) guaranteed by static constants */
-      constexpr int local_num = chunk_size / sub_group_size;
-      float g_local[local_num] = {};
-      float g_local_sum = 0.0f;
-      CUTE_UNROLL
-      for (int c = 0; c < local_num; ++c) {
-        g_local[c] =
-            a[(chunk_start_offset + sg_local_id * local_num + c) +
-              v_head_id * total_virtual_seqlen];
-      }
-      CUTE_UNROLL
-      for (int c = 0; c < local_num; ++c) {
-        float a_h = g_local[c] + dt_bias_h;
-        a_h = act_softplus(a_h) * A_log_exp_h;
-        g_local[c] = a_h;
-        g_local_sum += a_h;
-      }
-      g_local_sum =
-          sycl::inclusive_scan_over_group(sg, g_local_sum, sycl::plus<float>());
-      CUTE_UNROLL
-      for (int c = local_num - 1; c >= 0; --c) {
-        a[(chunk_start_offset + sg_local_id * local_num + c) +
-              v_head_id * total_virtual_seqlen] = g_local_sum;
-        g_local_sum -= g_local[c];
-      }
-
-      chunk_id += chunk_range;
-    }
-    pre_chunks = cumsum_chunks;
-  }
-}
-
-/* For each (chunk, kv_head_id) this kernel issues two 64×64 GEMMs sharing the
- * same K operand (B):
+/* Per (chunk, k_head) pair, it L2-normalizes that head's Q and K rows in-place
+ * and then issues two 64×64 GEMMs with the same K operand in K_tensor,
+ * writing to two distinct destinations:
  *
  *   A[v_head, chunk, :]  <- masked  K · K^T          (lower-tri L, fed to inverse)
  *   o2[v_head, chunk, :] <- masked  Q · K^T          (decay-gated O2, fed to fwd_o)
@@ -238,9 +106,11 @@ CUTE_DEVICE void chunk_prepare_kernel(
  * The GEMMs run once per kv_head_id and the result is reused across the kv_ratio
  * v-heads in that group; the inner loop only applies the per-v_head masks and
  * stores to the two destinations. K-side tile loads from the second GEMM hit
- * the L1/L2 cache populated by the first.
+ * the L1/L2 cache populated by the first. Pipeline change: this kernel runs
+ * BEFORE chunk_inverse, so o2 must live in its own buffer (compute_wu still
+ * overwrites A with U/W intermediates by reading the inverted L).
  *
- * Mask differences:
+ * Mask differences mirror the originals:
  *   compute_A : m>n -> *= exp(g[m]-g[n]) * b[m]; m==n -> 1; m<n -> 0
  *   compute_o2: m>=n -> *= exp(g[m]-g[n]);                  m<n -> 0
  */
@@ -249,10 +119,12 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
     const sycl::local_accessor<float, 1>& slm_mem_const,
     T* A,
     T* o2,
-    const T* q,
-    const T* k,
+    T* q,
+    T* k,
     const float* b,
-    const float* a,
+    float* a,
+    const float* A_log,
+    const T* dt_bias,
     const int* query_start_loc,
     const int total_virtual_seqlen,
     const int batch_size,
@@ -261,17 +133,20 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
     const int num_v_heads) {
   auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
   int local_id = item.get_local_linear_id();
-  int local_range = item.get_local_range(2);
-  int chunk_id = item.get_group(1);
-  const int global_chunk_range = item.get_group_range(1);
+  /* Flat persistent work-list over every (chunk, k_head) pair: one machine-
+   * sized WG pool striped over dim1, no per-head grid boundary. Any WG can pull
+   * any pair, so no WG idles behind its own head's exhausted chunk list. */
+  const int wg_id = item.get_group(1);
+  const int wgs_total = item.get_group_range(1);
 
   auto sg = item.get_sub_group();
+  int sg_id = sg.get_group_linear_id();
+  int sg_range = sg.get_group_linear_range();
   int sg_local_id = sg.get_local_linear_id();
 
   float* slm_mem = static_cast<float*>(
       slm_mem_const.template get_multi_ptr<sycl::access::decorated::no>()
           .get());
-  float* g_slm_ptr = slm_mem;
 
   TiledMMA mma{};
   auto wg_tile = mma.tile_mnk();
@@ -290,34 +165,86 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
 
   auto sg_local_m_coord = cutlass::get_sub_group_id() / ATOM_N;
   auto sg_local_n_coord = cutlass::get_sub_group_id() % ATOM_N;
-  int m_tile_start = 0;
-  int n_tile_start = 0;
   int m_sg_start = sg_local_m_coord * SG_M;
   int n_sg_start = sg_local_n_coord * SG_N;
 
-  int pre_chunks = 0;
-
   const int kv_ratio = num_v_heads / num_k_heads;
+  const float q_scale = 1.0f / sycl::sqrt(static_cast<float>(head_k_dim));
 
+  /* Total chunks across all batches (each batch is padded to a whole number of
+   * chunks in the virtual seqlen), one work item per (chunk, k_head) pair. */
+  int total_chunks_all = 0;
   for (int batch_id = 0; batch_id < batch_size; ++batch_id) {
-    const int seq_start_offset = query_start_loc[batch_id];
-    const int seq_end_offset = query_start_loc[batch_id + 1];
-    const int seq_len = seq_end_offset - seq_start_offset;
+    const int seq_len = query_start_loc[batch_id + 1] - query_start_loc[batch_id];
+    total_chunks_all += (seq_len + chunk_size - 1) / chunk_size;
+  }
+  const int total_work = total_chunks_all * num_k_heads;
 
-    const int current_chunks = (seq_len + chunk_size - 1) / chunk_size;
-    const int cumsum_chunks = pre_chunks + current_chunks;
+  for (int w = wg_id; w < total_work; w += wgs_total) {
+    /* w % num_k_heads / w / num_k_heads makes consecutive w share the same
+     * chunk across heads, so co-resident WGs reuse that chunk's K/Q rows in
+     * L1 instead of each head re-fetching from gmem. */
+    const int kv_head_id = w % num_k_heads;
+    const int chunk_global = w / num_k_heads;
 
-    if (chunk_id >= cumsum_chunks) {
-      pre_chunks = cumsum_chunks;
-      continue;
+    /* Decode the global chunk index into its (batch, local chunk) so the
+     * partial-chunk tail can be sized. batch_size is small, so this scan is a
+     * few integer ops — negligible against the GEMM / exp work. */
+    int seq_len = 0;
+    int local_chunk_idx = chunk_global;
+    for (int batch_id = 0; batch_id < batch_size; ++batch_id) {
+      seq_len = query_start_loc[batch_id + 1] - query_start_loc[batch_id];
+      const int current_chunks = (seq_len + chunk_size - 1) / chunk_size;
+      if (local_chunk_idx < current_chunks) break;
+      local_chunk_idx -= current_chunks;
     }
 
-    while (chunk_id < cumsum_chunks) {
-      const int chunk_start_offset = chunk_id * chunk_size;
-      const int local_chunk_idx = chunk_id - pre_chunks;
+    {
+      const int chunk_start_offset = chunk_global * chunk_size;
       int current_chunk_size = chunk_size;
       if ((local_chunk_idx + 1) * chunk_size > seq_len) {
         current_chunk_size = seq_len - local_chunk_idx * chunk_size;
+      }
+      /* Fused Stage-1 cumsum gate, hoisted so its fence folds into the barrier
+       * below. v_heads striped one-per-sub-group keep each whole-chunk scan
+       * within one sub-group:
+       *   a[t] = cumsum_{i<=t} softplus(a[i]+dt_bias)*(-exp(A_log))
+       * Writes each token's running total to BOTH gmem a[] (wu/fwd_o read it)
+       * and this v_head's SLM gate slot (the mask below reads it there — no
+       * gmem read-back). SLM tail past current_chunk_size is zero-padded so
+       * exp(0)=1 on those rows/cols. */
+      const int vh_lo = kv_head_id * kv_ratio;
+      const int vh_hi = vh_lo + kv_ratio;
+      for (int vh = vh_lo + sg_id; vh < vh_hi; vh += sg_range) {
+        const float A_log_exp_h = -sycl::native::exp(A_log[vh]);
+        const float dt_bias_h = static_cast<float>(dt_bias[vh]);
+        float* vh_slm_ptr = slm_mem + (vh - vh_lo) * chunk_size;
+        constexpr int local_num = chunk_size / sub_group_size;
+        float g_local[local_num] = {};
+        float g_local_sum = 0.0f;
+        CUTE_UNROLL
+        for (int c = 0; c < local_num; ++c) {
+          g_local[c] =
+              a[(chunk_start_offset + sg_local_id * local_num + c) +
+                vh * total_virtual_seqlen];
+        }
+        CUTE_UNROLL
+        for (int c = 0; c < local_num; ++c) {
+          float a_h = g_local[c] + dt_bias_h;
+          a_h = act_softplus(a_h) * A_log_exp_h;
+          g_local[c] = a_h;
+          g_local_sum += a_h;
+        }
+        g_local_sum = sycl::inclusive_scan_over_group(
+            sg, g_local_sum, sycl::plus<float>());
+        CUTE_UNROLL
+        for (int c = local_num - 1; c >= 0; --c) {
+          const int tok = sg_local_id * local_num + c;
+          a[(chunk_start_offset + tok) + vh * total_virtual_seqlen] =
+              g_local_sum;
+          vh_slm_ptr[tok] = (tok < current_chunk_size) ? g_local_sum : 0.0f;
+          g_local_sum -= g_local[c];
+        }
       }
 
       /* Reuse the K·Kᵀ / Q·Kᵀ GEMM pair out of the v_head loop: the kv_ratio
@@ -327,109 +254,146 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
        *
        * CRITICAL ASSUMPTION: num_v_heads is an exact integer multiple of
        * num_k_heads (num_v_heads >= num_k_heads, GQA-style head grouping). */
-      for (int kv_head_id = 0; kv_head_id < num_k_heads; ++kv_head_id) {
-        auto k_ptr = k +
-                     static_cast<int64_t>(chunk_start_offset) * num_k_heads *
-                         head_k_dim +
-                     kv_head_id * head_k_dim;
-        auto K_tensor_shape = make_shape(chunk_size, head_k_dim);
-        auto K_tensor = make_tensor(
-            make_gmem_ptr(k_ptr),
-            make_layout(
-                K_tensor_shape, make_stride(head_k_dim * num_k_heads, _1{})));
-
-        auto q_ptr = q +
-                     static_cast<int64_t>(chunk_start_offset) * num_k_heads *
-                         head_k_dim +
-                     kv_head_id * head_k_dim;
-        auto Q_tensor_shape = make_shape(chunk_size, head_k_dim);
-        auto Q_tensor = make_tensor(
-            make_gmem_ptr(q_ptr),
-            make_layout(
-                Q_tensor_shape, make_stride(head_k_dim * num_k_heads, _1{})));
-
-        /* Identity tensor and base accumulators are layout-only — independent
-         * of v_head_id since A and o2 share the same per-chunk shape/stride. */
-        auto C_tensor_shape = make_shape(chunk_size, chunk_size);
-        Tensor cC = make_identity_tensor(C_tensor_shape);
-        Tensor gC =
-            local_tile(cC, wg_tile, make_coord(0, 0, 0), Step<_1, _1, X>{});
-
-        auto tSrA_base = thr_mma.partition_sg_fragment_C(gC);
-        auto tSrO2_base = thr_mma.partition_sg_fragment_C(gC);
-
-        clear(tSrA_base);
-        clear(tSrO2_base);
-        gemm_TTS_shareB(
-            K_tensor, Q_tensor, K_tensor, tSrA_base, tSrO2_base, 0, 0, mma);
-
-        for (int g_idx = 0; g_idx < kv_ratio; ++g_idx) {
-          const int v_head_id = kv_head_id * kv_ratio + g_idx;
-
-          /* Single SLM load of cumsum gate a[t]; both the L mask and the O2
-           * mask read it. Zero-pad past the partial-chunk tail so exp(0)=1
-           * there (those rows/cols are not consumed downstream). */
+      for (int row = sg_id; row < current_chunk_size; row += sg_range) {
+        int64_t handle_idx =
+            (static_cast<int64_t>(chunk_start_offset) + row) * num_k_heads +
+            kv_head_id;
+        auto q_norm_ptr = q + handle_idx * head_k_dim;
+        auto k_norm_ptr = k + handle_idx * head_k_dim;
+        float q_sum = 0.0f;
+        float k_sum = 0.0f;
+        CUTE_UNROLL
+        for (int k_dim_idx = sg_local_id * elem_per_item;
+              k_dim_idx < head_k_dim;
+              k_dim_idx += sub_group_size * elem_per_item) {
           CUTE_UNROLL
-          for (int e = local_id; e < current_chunk_size; e += local_range) {
-            g_slm_ptr[e] =
-                a[(chunk_start_offset + e) + v_head_id * total_virtual_seqlen];
+          for (int e = 0; e < elem_per_item; ++e) {
+            float q_value = q_norm_ptr[k_dim_idx + e];
+            float k_value = k_norm_ptr[k_dim_idx + e];
+            q_sum += q_value * q_value;
+            k_sum += k_value * k_value;
           }
+        }
+        q_sum = sycl::reduce_over_group(sg, q_sum, sycl::plus<>());
+        k_sum = sycl::reduce_over_group(sg, k_sum, sycl::plus<>());
+        q_sum = sycl::sqrt(q_sum + eps);
+        k_sum = sycl::sqrt(k_sum + eps);
+        CUTE_UNROLL
+        for (int k_dim_idx = sg_local_id * elem_per_item;
+              k_dim_idx < head_k_dim;
+              k_dim_idx += sub_group_size * elem_per_item) {
           CUTE_UNROLL
-          for (int e = current_chunk_size + local_id; e < chunk_size;
-               e += local_range) {
-            g_slm_ptr[e] = 0.0f;
+          for (int e = 0; e < elem_per_item; ++e) {
+            q_norm_ptr[k_dim_idx + e] = static_cast<T>(
+                static_cast<float>(q_norm_ptr[k_dim_idx + e]) / q_sum *
+                q_scale);
+            k_norm_ptr[k_dim_idx + e] = static_cast<T>(
+                static_cast<float>(k_norm_ptr[k_dim_idx + e]) / k_sum);
           }
-          item.barrier(sycl::access::fence_space::local_space);
+        }
+      }
+      item.barrier(sycl::access::fence_space::global_and_local);
 
-          auto A_ptr = A +
-                       static_cast<int64_t>(v_head_id) * total_virtual_seqlen *
-                           chunk_size +
-                       chunk_start_offset * chunk_size;
-          auto A_tensor = make_tensor(
-              make_gmem_ptr(A_ptr),
-              make_layout(C_tensor_shape, make_stride(chunk_size, _1{})));
+      auto k_ptr = k +
+                    static_cast<int64_t>(chunk_start_offset) * num_k_heads *
+                        head_k_dim +
+                    kv_head_id * head_k_dim;
+      auto K_tensor_shape = make_shape(chunk_size, head_k_dim);
+      auto K_tensor = make_tensor(
+          make_gmem_ptr(k_ptr),
+          make_layout(
+              K_tensor_shape, make_stride(head_k_dim * num_k_heads, _1{})));
 
-          auto copy_A_c = get_block_2d_copy_D<void>(mma, A_tensor);
-          auto thr_copy_A_c = copy_A_c.get_slice(local_id);
-          auto tCrA_c = thr_copy_A_c.partition_sg_fragment_S(gC);
-          auto tCgA_c = thr_copy_A_c.partition_D(gC);
+      auto q_ptr = q +
+                    static_cast<int64_t>(chunk_start_offset) * num_k_heads *
+                        head_k_dim +
+                    kv_head_id * head_k_dim;
+      auto Q_tensor_shape = make_shape(chunk_size, head_k_dim);
+      auto Q_tensor = make_tensor(
+          make_gmem_ptr(q_ptr),
+          make_layout(
+              Q_tensor_shape, make_stride(head_k_dim * num_k_heads, _1{})));
 
-          auto O2_ptr = o2 +
-                        static_cast<int64_t>(v_head_id) * total_virtual_seqlen *
-                            chunk_size +
-                        chunk_start_offset * chunk_size;
-          auto O2_tensor = make_tensor(
-              make_gmem_ptr(O2_ptr),
-              make_layout(C_tensor_shape, make_stride(chunk_size, _1{})));
+      /* Identity tensor and base accumulators are layout-only — independent
+       * of v_head_id since A and o2 share the same per-chunk shape/stride. */
+      auto C_tensor_shape = make_shape(chunk_size, chunk_size);
+      Tensor cC = make_identity_tensor(C_tensor_shape);
+      Tensor gC =
+          local_tile(cC, wg_tile, make_coord(0, 0, 0), Step<_1, _1, X>{});
 
-          auto copy_O2_c = get_block_2d_copy_D<void>(mma, O2_tensor);
-          auto thr_copy_O2_c = copy_O2_c.get_slice(local_id);
-          auto tCrO2_c = thr_copy_O2_c.partition_sg_fragment_S(gC);
-          auto tCgO2_c = thr_copy_O2_c.partition_D(gC);
+      auto tSrA_base = thr_mma.partition_sg_fragment_C(gC);
+      auto tSrO2_base = thr_mma.partition_sg_fragment_C(gC);
 
-          /* Per-v_head working copies of the shared base accumulators; the mask
-           * mutates these in place while the base stays clean for the next
-           * iteration. */
-          auto tSrA_c = thr_mma.partition_sg_fragment_C(gC);
-          auto tSrO2_c = thr_mma.partition_sg_fragment_C(gC);
-          cute::copy(tSrA_base, tSrA_c);
-          cute::copy(tSrO2_base, tSrO2_c);
+      clear(tSrA_base);
+      clear(tSrO2_base);
+      gemm_TTS_shareB(
+          K_tensor, Q_tensor, K_tensor, tSrA_base, tSrO2_base, 0, 0, mma);
+
+      for (int g_idx = 0; g_idx < kv_ratio; ++g_idx) {
+        const int v_head_id = kv_head_id * kv_ratio + g_idx;
+
+        /* This v_head's cumsum gate was written straight into SLM by the
+         * hoisted gate loop above (with the tail already zero-padded); the
+         * global_and_local barrier after normalization fenced it, so no
+         * per-v_head read-back is needed — just point at the slot. */
+        float* g_slm_ptr = slm_mem + g_idx * chunk_size;
+
+        auto A_ptr = A +
+                      static_cast<int64_t>(v_head_id) * total_virtual_seqlen *
+                          chunk_size +
+                      chunk_start_offset * chunk_size;
+        auto A_tensor = make_tensor(
+            make_gmem_ptr(A_ptr),
+            make_layout(C_tensor_shape, make_stride(chunk_size, _1{})));
+
+        auto copy_A_c = get_block_2d_copy_D<void>(mma, A_tensor);
+        auto thr_copy_A_c = copy_A_c.get_slice(local_id);
+        auto tCrA_c = thr_copy_A_c.partition_sg_fragment_S(gC);
+        auto tCgA_c = thr_copy_A_c.partition_D(gC);
+
+        auto O2_ptr = o2 +
+                      static_cast<int64_t>(v_head_id) * total_virtual_seqlen *
+                          chunk_size +
+                      chunk_start_offset * chunk_size;
+        auto O2_tensor = make_tensor(
+            make_gmem_ptr(O2_ptr),
+            make_layout(C_tensor_shape, make_stride(chunk_size, _1{})));
+
+        auto copy_O2_c = get_block_2d_copy_D<void>(mma, O2_tensor);
+        auto thr_copy_O2_c = copy_O2_c.get_slice(local_id);
+        auto tCrO2_c = thr_copy_O2_c.partition_sg_fragment_S(gC);
+        auto tCgO2_c = thr_copy_O2_c.partition_D(gC);
+
+        /* Per-v_head working copies of the shared base accumulators; the mask
+          * mutates these in place while the base stays clean for the next
+          * iteration. */
+        auto tSrA_c = thr_mma.partition_sg_fragment_C(gC);
+        auto tSrO2_c = thr_mma.partition_sg_fragment_C(gC);
+        cute::copy(tSrA_base, tSrA_c);
+        cute::copy(tSrO2_base, tSrO2_c);
 
           /* Fused mask:
            *   L  (A):  m>n  => *=exp(g[m]-g[n])*b[m]; m==n => 1; m<n => 0.
-           *   O2:      m>=n => *=exp(g[m]-g[n]);                m<n => 0. */
+           *   O2:      m>=n => *=exp(g[m]-g[n]);                m<n => 0.
+           * b[m] depends only on sm, so hoist it into a per-lane register. */
+          float beta_reg[SG_M];
+          CUTE_UNROLL
+          for (int sm = 0; sm < SG_M; ++sm) {
+            beta_reg[sm] =
+                b[(chunk_start_offset + m_sg_start + sm) +
+                  v_head_id * total_virtual_seqlen];
+          }
           CUTE_UNROLL
           for (int sn = 0; sn < SG_N / sub_group_size; ++sn) {
             int n_idx =
-                n_tile_start + n_sg_start + sn * sub_group_size + sg_local_id;
+                n_sg_start + sn * sub_group_size + sg_local_id;
             CUTE_UNROLL
             for (int sm = 0; sm < SG_M; ++sm) {
-              int m_idx = m_tile_start + m_sg_start + sm;
+              int m_idx = m_sg_start + sm;
               int idx = sn * SG_M + sm;
-              float beta_value =
-                  b[(chunk_start_offset + m_idx) +
-                    v_head_id * total_virtual_seqlen];
-              float e = sycl::exp(g_slm_ptr[m_idx] - g_slm_ptr[n_idx]);
+              float beta_value = beta_reg[sm];
+              float e =
+                  sycl::native::exp(g_slm_ptr[m_idx] - g_slm_ptr[n_idx]);
 
               tSrA_c(idx) *= e * beta_value;
               tSrO2_c(idx) *= e;
@@ -440,21 +404,31 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
                 tSrA_c(idx) = 0.0f;
                 tSrO2_c(idx) = 0.0f;
               }
+              /* Tail rows (m past current_chunk_size) hold un-normalized K/Q,
+               * so L's exp(g[m]-g[n])*(K_m·K_n)*b[m] entries there overflow and
+               * the lower-triangular inverse blows up to Inf on those rows.
+               *   L  (A):  m>=cur => identity row (m==n => 1; else 0).
+               *   O2:      m>=cur => 0.
+               * Keeps L block-triangular so L^-1/U/W tail rows stay finite; the
+               * zero tail weights downstream then give 0, not 0*Inf = NaN. */
+              if (m_idx >= current_chunk_size) {
+                tSrA_c(idx) = (m_idx == n_idx) ? 1.0f : 0.0f;
+                tSrO2_c(idx) = 0.0f;
+              }
             }
           }
 
-          reorder(tSrA_c, tCrA_c);
-          copy(copy_A_c, tCrA_c, tCgA_c);
-          reorder(tSrO2_c, tCrO2_c);
-          copy(copy_O2_c, tCrO2_c, tCgO2_c);
-
-          // Write-after-read fence on the shared g_slm_ptr buffer.
-          item.barrier(sycl::access::fence_space::local_space);
-        }
+        reorder(tSrA_c, tCrA_c);
+        copy(copy_A_c, tCrA_c, tCgA_c);
+        reorder(tSrO2_c, tCrO2_c);
+        copy(copy_O2_c, tCrO2_c, tCgO2_c);
       }
-      chunk_id += global_chunk_range;
+
+      /* One WAR fence per chunk (not per v_head): each g_idx read its own SLM
+       * slot, so no barrier is needed between them — only before the next
+       * work-item's gate loop overwrites these slots. */
+      item.barrier(sycl::access::fence_space::local_space);
     }
-    pre_chunks = cumsum_chunks;
   }
 }
 
@@ -1275,9 +1249,6 @@ CUTE_DEVICE void chunk_fwd_o_kernel(
 }
 
 template <typename T, typename StateTag>
-class ChunkPrepareKernel;
-
-template <typename T, typename StateTag>
 class ChunkComputeAO2Kernel;
 
 template <typename T, typename StateTag>
@@ -1305,32 +1276,10 @@ class ChunkFwdOKernel;
  * ------------------------------------------------------------------------- */
 
 template <typename T, typename StateT, typename Props>
-sycl::event launch_stage_prepare(
-    sycl::queue& queue, Props const& props, int xe_core_count,
-    T* q, T* k, float* a, const float* A_log, const T* dt_bias,
-    const int* query_start_loc, const int total_virtual_seqlen,
-    const int batch_size, const int num_k_heads, const int head_k_dim,
-    const int num_v_heads, const int head_v_dim) {
-  sycl::range<3> local_prepare(1, 1, MaxThreadsPerXeCore);
-  sycl::range<3> global_prepare(1, xe_core_count, 1);
-  auto ev = queue.submit([&](sycl::handler& cgh) {
-    cgh.parallel_for<ChunkPrepareKernel<T, StateT>>(
-        sycl::nd_range<3>{global_prepare * local_prepare, local_prepare},
-        props,
-        [=](auto) {
-          chunk_prepare_kernel<T>(
-              q, k, a, A_log, dt_bias, query_start_loc, total_virtual_seqlen,
-              batch_size, num_k_heads, head_k_dim, num_v_heads, head_v_dim);
-        });
-  });
-  EventManager::getInstance().addEvent(ev);
-  return ev;
-}
-
-template <typename T, typename StateT, typename Props>
 sycl::event launch_stage_compute_A_o2(
     sycl::queue& queue, Props const& props, int xe_core_count,
-    T* A, T* o2, const T* q, T* k, const float* b, float* a,
+    T* A, T* o2, T* q, T* k, const float* b, float* a,
+    const float* A_log, const T* dt_bias,
     const int* query_start_loc, const int total_virtual_seqlen,
     const int batch_size, const int num_k_heads, const int head_k_dim,
     const int num_v_heads) {
@@ -1346,7 +1295,10 @@ sycl::event launch_stage_compute_A_o2(
   sycl::range<3> local_compute_A_o2(1, 1, MaxThreadsPerWorkgroupComputeA_o2);
   sycl::range<3> global_compute_A_o2(
       1, xe_core_count * MaxThreadsPerXeCore / MaxThreadsPerWorkgroupComputeA_o2, 1);
-  int slm_size_compute_A_o2 = chunk_size;
+  /* One gate slot per v_head sharing this WG's k_head (kv_ratio slots), so the
+   * hoisted cumsum writes each v_head's gate straight into SLM and the mask
+   * reads it there — no per-v_head gmem read-back. */
+  int slm_size_compute_A_o2 = (num_v_heads / num_k_heads) * chunk_size;
   auto ev = queue.submit([&](sycl::handler& cgh) {
     sycl::local_accessor<float, 1> local_mem(
         sycl::range<1>(slm_size_compute_A_o2), cgh);
@@ -1355,7 +1307,7 @@ sycl::event launch_stage_compute_A_o2(
         props,
         [=](auto) {
           chunk_compute_A_o2_kernel<T, MMAComputeA_o2>(
-              local_mem, A, o2, q, k, b, a, query_start_loc,
+              local_mem, A, o2, q, k, b, a, A_log, dt_bias, query_start_loc,
               total_virtual_seqlen, batch_size, num_k_heads, head_k_dim,
               num_v_heads);
         });
@@ -1519,17 +1471,10 @@ void kernel_launcher(
 #endif
   };
 
-  // The five stages, submitted in order to the in-order queue. Each stage's
-  // grid/SLM/MMA setup now lives in its launch_stage_* entry above (the single
-  // source of truth shared with the per-kernel harness).
-  launch_stage_prepare<T, StateT>(
-      queue, kernel_props, xe_core_count, q, k, a, A_log, dt_bias,
-      query_start_loc, total_virtual_seqlen, batch_size, num_k_heads,
-      head_k_dim, num_v_heads, head_v_dim);
-
   launch_stage_compute_A_o2<T, StateT>(
-      queue, kernel_props, xe_core_count, A, o2, q, k, b, a, query_start_loc,
-      total_virtual_seqlen, batch_size, num_k_heads, head_k_dim, num_v_heads);
+      queue, kernel_props, xe_core_count, A, o2, q, k, b, a, A_log, dt_bias,
+      query_start_loc, total_virtual_seqlen, batch_size, num_k_heads,
+      head_k_dim, num_v_heads);
 
   launch_stage_inverse<T, StateT>(
       queue, kernel_props, xe_core_count, A, query_start_loc,

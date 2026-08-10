@@ -1,9 +1,11 @@
 # Xe35 Chunkwise Gated DeltaNet (GDN) Attention
 
 A direct CuTe-on-SYCL port of the Gated DeltaNet (GDN) **chunkwise
-attention forward pass** from the vllm-xpu-kernels project for Intel Xe GPUs. The kernel runs as five raw
+attention forward pass** from the vllm-xpu-kernels project for Intel Xe GPUs. The kernel runs as four raw
 device kernels submitted back-to-back on a single in-order SYCL queue — there
-is **no** CUTLASS collective/kernel scaffolding.
+is **no** CUTLASS collective/kernel scaffolding. (The upstream port had a
+separate Stage-1 `chunk_prepare` kernel for the cumulative-sum gate; it is now
+**fused into** `chunk_compute_A_o2`, so the pipeline is four stages.)
 
 > ⚠️ **Status — initial port, not yet Xe3-optimized.**
 > This is the **first step** of bringing the upstream Xe2 GDN kernels into the
@@ -23,7 +25,7 @@ is **no** CUTLASS collective/kernel scaffolding.
 ## Contents
 
 - [Where the code lives](#where-the-code-lives)
-- [The five-stage pipeline](#the-five-stage-pipeline)
+- [The four-stage pipeline](#the-four-stage-pipeline)
   - [Data flow through the stages](#data-flow-through-the-stages)
 - [Work hierarchy & GPU mapping](#work-hierarchy--gpu-mapping)
 - [Public API](#public-api)
@@ -66,20 +68,19 @@ runner directly and never touches them. See the full [file map](#file-map)
 below for every header and its purpose.
 
 
-## The five-stage pipeline
+## The four-stage pipeline
 
 Each call to
 [`cutlass::gdn::chunk_gated_delta_rule_launch<T, StateT>`](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule.hpp)
-submits five device kernels on one in-order SYCL queue — no host wait between
+submits four device kernels on one in-order SYCL queue — no host wait between
 stages.
 
 | # | Stage | What it computes |
 |---|---|---|
-| 1 | `chunk_prepare` | L2-normalize Q (scaled by `1/sqrt(D)`) and K in place; cumulative-sum the per-token log-scale gate into `a[t] = cumsum(softplus(a + dt_bias) * -exp(A_log))`. |
-| 2 | `chunk_compute_A_o2` | **Fused dual GEMM** sharing the `K` operand: build the lower-triangular transition matrix `L[m,n] = (K_m·K_n) * exp(a[m] - a[n]) * b[m]` into `A_workspace`, **and** the decay-gated intra-chunk score `O2[m,n] = (Q_m·K_n) * exp(a[m] - a[n])` (causal, `m>=n`) into `o2_workspace`. |
-| 3 | `chunk_inverse` | Invert `L` in place  |
-| 4 | `chunk_compute_wu` | `U = L^-1 * V * diag(b)` and `W = L^-1 * K * diag(exp(a) * b)`. |
-| 5 | `chunk_fwd_o` | `O = Q * S^T * exp(g) + O2 * U` (reads the precomputed `O2`); update SSM state `S_out = exp(g_last) * S_prev + U^T * K_scaled`. |
+| 1 | `chunk_compute_A_o2` | **(a) Cumulative gate (fused, was `chunk_prepare`):** compute `a[t] = cumsum(softplus(a + dt_bias) * -exp(A_log))` in place — hoisted ahead of the norm, the `kv_ratio` v-heads of this k-head striped one-per-sub-group so each whole-chunk scan stays inside one sub-group. **(b) L2-normalize** Q (scaled by `1/sqrt(D)`) and K in place — per k-head, on the rows this work item is about to consume. **(c) Fused dual GEMM** sharing the `K` operand: build the lower-triangular transition matrix `L[m,n] = (K_m·K_n) * exp(a[m] - a[n]) * b[m]` into `A_workspace`, **and** the decay-gated intra-chunk score `O2[m,n] = (Q_m·K_n) * exp(a[m] - a[n])` (causal, `m>=n`) into `o2_workspace`. |
+| 2 | `chunk_inverse` | Invert `L` in place  |
+| 3 | `chunk_compute_wu` | `U = L^-1 * V * diag(b)` and `W = L^-1 * K * diag(exp(a) * b)`. |
+| 4 | `chunk_fwd_o` | `O = Q * S^T * exp(g) + O2 * U` (reads the precomputed `O2`); update SSM state `S_out = exp(g_last) * S_prev + U^T * K_scaled`. |
 
 **Workspaces.** Four workspace tensors are supplied by the caller
 (`A_workspace`, `o2_workspace`, `w_workspace`, `u_workspace`); element counts
@@ -98,19 +99,18 @@ are mutated **in place** (see [mutability contract](#mutability-contract)); the
 ```
   STAGE              READS                          WRITES
   ─────              ─────                          ──────
-  1 prepare          q, k, a, A_log, dt_bias        q, k, a            (in place)
-        │
-        ▼
-  2 compute_A_o2     q, k, a, b                     A  (L, lower-tri)  [workspace]
+  1 compute_A_o2     a, A_log, dt_bias              a                  (cumsum gate, in place)
+    (incl. fused     q, k, a, b                     q, k               (L2-norm, in place)
+     prepare gate)                                  A  (L, lower-tri)  [workspace]
         │                                           o2 (O2, causal)    [workspace]
         ▼
-  3 inverse          A                              A  (L^-1)          [workspace, in place]
+  2 inverse          A                              A  (L^-1)          [workspace, in place]
         │
         ▼
-  4 compute_wu       A, q, k, v, b, a, A_log,       w (W), u (U)       [workspace]
+  3 compute_wu       A, q, k, v, b, a, A_log,       w (W), u (U)       [workspace]
         │            dt_bias, has_initial_state
         ▼
-  5 fwd_o            o2, w, u, q, k, a, ssm_state   core_attn_out  [total_seqlen, n_vh, hv]
+  4 fwd_o            o2, w, u, q, k, a, ssm_state   core_attn_out  [total_seqlen, n_vh, hv]
                                                     ssm_state      (recurrent state, in place)
 
   Legend:  in place = mutates a caller tensor   ·   workspace = A/o2/w/u scratch (per launch)
@@ -136,40 +136,42 @@ geometry of each stage and the `xe_core_count` floor.
   inverted as a 4×4 grid of 16×16 DPAS blocks.
 ```
 
-**How each stage is launched.** All five stages share one in-order queue.
+**How each stage is launched.** All four stages share one in-order queue.
 `xe_core_count` is the device Xe-core count (floored — see [Constraints](#constraints));
 `MaxThreadsPerXeCore == 512`, `sub_group_size == 16`.
 
 ```
   Stage               grid (global, dim-1 axis)        work-group   work split
   ──────────────────  ───────────────────────────────  ───────────  ─────────────────────────
-  1 chunk_prepare     xe_core_count                     512 threads  1 sub-group ↦ (v_head,chunk);
-                                                                      persistent loop over chunks
-  2 chunk_compute_A_o2 xe_core_count·512 / wg_size      MMA wg_size  1 work-group ↦ one chunk
-                                                                      (fused L + O2 dual GEMM)
-  3 chunk_inverse     max(xe_core_count·512/16,         16 (1 sub-   1 work-group ↦ (chunk,v_head);
+  1 chunk_compute_A_o2 xe_core_count·512 / wg_size      MMA wg_size  1 work-group ↦ one (chunk,k_head)
+                                                                      pair from a flat work-list;
+                                                                      fused cumsum gate + per-k_head
+                                                                      L2-norm + L + O2 dual GEMM
+  2 chunk_inverse     max(xe_core_count·512/16,         16 (1 sub-   1 work-group ↦ (chunk,v_head);
                           ⌈tvs/64⌉·num_v_heads)         group)       4×4 block forward-substitution
-  4 chunk_compute_wu  xe_core_count·512 / wg_size       MMA wg_size  1 work-group ↦ (v_head,chunk)
-  5 chunk_fwd_o       grid = (batch, num_v_heads,       MMA wg_size  1 work-group ↦ (batch,v_head,dv);
+  3 chunk_compute_wu  xe_core_count·512 / wg_size       MMA wg_size  1 work-group ↦ (v_head,chunk)
+  4 chunk_fwd_o       grid = (batch, num_v_heads,       MMA wg_size  1 work-group ↦ (batch,v_head,dv);
                              head_v_dim / kChunkSize)                 sequential scan over chunks
 ```
 
-Stages 1–4 launch a *persistent* grid (sized to fill the device) and use an
-internal `while` loop to stride over all `(v_head, chunk)` pairs, so a short
-grid still covers every unit of work. Stage 5 launches one work-group per
-`(batch, v_head, dv)` tile — its chunk loop must walk that head's chunks **in
-order** (the SSM-state recurrence carries `S` across chunks), but the
-`head_v_dim` tiling axis (`dv`, one 64-wide `head_v_dim` slice per tile) is
-independent across tiles because the recurrence only touches `S[dv, :]`, so it
-is mapped to the third grid dimension (`head_v_dim / kChunkSize` tiles) instead
-of an in-kernel loop.
-
-> **Why the `xe_core_count` floor matters here:** stage 1 derives each sub-group's
-> `(v_head, chunk)` assignment from `total_sg_range / num_v_heads`. If a
-> degenerate `xe_core_count` (e.g. `1` on the CRI simulator) makes the total
-> sub-group count smaller than `num_v_heads`, that division underflows to zero
-> and per-head work is silently dropped. The floor guarantees at least one
-> sub-group per v-head.
+Stages 1–3 launch a *persistent* grid (sized to fill the device) and use an
+internal grid-stride loop to stride over all their work units, so a short grid
+still covers every unit of work. Stage 1 differs in how that work is indexed:
+instead of a 2D per-k_head grid it launches **one flat pool**
+(`global(1, wgs_pool, 1)`) striped over a single work-list of every
+`(chunk, k_head)` pair (`w % num_k_heads → k_head`, `w / num_k_heads → chunk`).
+Any work-group can pull any pair, so none idles behind its own head's exhausted
+chunk list; and because consecutive `w` share a chunk across heads, co-resident
+work-groups reuse that chunk's K/Q rows in L1. The fused cumsum gate runs at the
+top of each chunk iteration: the `kv_ratio` v-heads of the chunk's k-head are
+striped one-per-sub-group so each whole-chunk prefix-sum stays inside a single
+sub-group, and the gate's fence folds into the normalization barrier (no added
+barrier). Stage 4 instead launches one work-group per `(batch, v_head, dv)`
+tile: its chunk loop must walk that head's chunks **in order** (the SSM-state
+recurrence carries `S` across chunks), but the `head_v_dim` tiling axis (`dv`,
+one 64-wide `head_v_dim` slice per tile) is independent across tiles because the
+recurrence only touches `S[dv, :]`, so it is mapped to the third grid dimension
+(`head_v_dim / kChunkSize` tiles) instead of an in-kernel loop.
 
 ## Public API
 
@@ -251,7 +253,7 @@ layouts below — the kernel trusts them and indexes accordingly.
 | `k` | `void*` → `T` | `[tvs, num_k_heads, head_k_dim]` | **in/out** — L2-normalized in place by stage 1 |
 | `v` | `const void*` → `T` | `[tvs, num_v_heads, head_v_dim]` | in |
 | `b` | `const float*` | `[num_v_heads, tvs]` | in — per-token gate `b` |
-| `a` | `float*` | `[num_v_heads, tvs]` | **in/out** — per-token log-scale gate; cumsum'd in place by stage 1 |
+| `a` | `float*` | `[num_v_heads, tvs]` | **in/out** — per-token log-scale gate; cumsum'd in place by stage 1 (fused prepare) |
 | `A_log` | `const float*` | `[num_v_heads]` | in — per-head log decay |
 | `dt_bias` | `const void*` → `T` | `[num_v_heads]` | in — per-head timestep bias |
 | `query_start_loc` | `const int*` | `[batch_size + 1]` | in — packed sequence boundaries (prefix-sum offsets) |
@@ -283,15 +285,15 @@ the arithmetic.
 
 | Field | Type | Layout | Produced by → consumed by |
 |---|---|---|---|
-| `A_workspace` | `void*` → `T` | `[num_v_heads, tvs, kChunkSize]` | stage 2 (`L`) → stage 3 (`L⁻¹`) → stage 4 |
-| `o2_workspace` | `void*` → `T` | `[num_v_heads, tvs, kChunkSize]` | stage 2 (`O2`) → stage 5 |
-| `w_workspace` | `void*` → `T` | `[num_v_heads, tvs, head_k_dim]` | stage 4 (`W`) → stage 5 |
-| `u_workspace` | `void*` → `T` | `[num_v_heads, tvs, head_v_dim]` | stage 4 (`U`) → stage 5 |
+| `A_workspace` | `void*` → `T` | `[num_v_heads, tvs, kChunkSize]` | stage 1 (`L`) → stage 2 (`L⁻¹`) → stage 3 |
+| `o2_workspace` | `void*` → `T` | `[num_v_heads, tvs, kChunkSize]` | stage 1 (`O2`) → stage 4 |
+| `w_workspace` | `void*` → `T` | `[num_v_heads, tvs, head_k_dim]` | stage 3 (`W`) → stage 4 |
+| `u_workspace` | `void*` → `T` | `[num_v_heads, tvs, head_v_dim]` | stage 3 (`U`) → stage 4 |
 
 ### Return status
 
 `chunk_gated_delta_rule_launch` is **asynchronous**: it validates the problem
-shape on the host, submits the five stages, and returns immediately. The caller
+shape on the host, submits the four stages, and returns immediately. The caller
 must `queue.wait_and_throw()` (or otherwise synchronize) before reading
 `core_attn_out` / `ssm_state`. The returned `cutlass::Status` reflects only the
 host-side validation that happens *before* dispatch:
@@ -301,7 +303,7 @@ host-side validation that happens *before* dispatch:
 | `batch_size <= 0` or `total_virtual_seqlen <= 0` | `Status::kSuccess` (valid no-op — nothing is submitted) |
 | Any of `num_k_heads / num_v_heads / head_k_dim / head_v_dim <= 0` | `Status::kErrorInvalidProblem` (guards the GQA modulo) |
 | `num_v_heads % num_k_heads != 0` | `Status::kErrorInvalidProblem` |
-| otherwise | `Status::kSuccess` (five stages submitted) |
+| otherwise | `Status::kSuccess` (four stages submitted) |
 
 A `kSuccess` return therefore means **submitted**, not **finished** — runtime
 faults (e.g. a null required pointer) surface from `queue.wait_and_throw()`, not
@@ -487,18 +489,20 @@ queue.wait_and_throw();
   of SSM state elements exceed the 5% tolerance band, typically within 10-20%).
   Accordingly, the example driver, benchmark, and unit test all use only
   chunk-aligned `seq_len` values.
-- **In-order queue required.** The launcher submits five stages without any
+- **In-order queue required.** The launcher submits four stages without any
   host wait; an out-of-order queue would corrupt the pipeline.
 - **No framework dependency.** Inputs are raw `void*` device pointers; this
   kernel does NOT plug into the CUTLASS collective/kernel `GemmUniversal`
   scaffolding. It is intentionally a direct CuTe-on-SYCL kernel.
-- **`xe_core_count` floor.** Stage 1b (prepare-A reduction) needs one subgroup per
-  v-head. On targets that report a degenerate `xe_core_count` (e.g. the CRI
-  simulator with `xe_core_count = 1`), the launcher raises `xe_core_count` to the
-  minimum that keeps
-  `xe_core_count * (MaxThreadsPerXeCore / sub_group_size) >= num_v_heads`. Without this
-  floor, the chunk-range arithmetic would underflow to zero and drop per-head
-  work silently.
+- **Inverse-stage grid is a multiple of `num_v_heads`.** Stage 2
+  (`chunk_inverse`) derives its `(chunk, v_head)` assignment from
+  `group(1) % num_v_heads` and `group(1) / num_v_heads`, so the launcher rounds 
+  its machine-sized grid **up** to a multiple of `num_v_heads`
+  (`⌈machine_groups / num_v_heads⌉ · num_v_heads`) so the head id and the
+  persistent chunk stride divide exactly. (The former Stage-1 `chunk_prepare`
+  also constrained the grid this way; with prepare fused into Stage 1 the flat
+  `(chunk, k_head)` work-list no longer divides by `num_v_heads`, so that floor
+  is gone.)
 
 
 - the public `GDNArguments` wrapper (this repo's preferred ABI) and its
@@ -527,7 +531,7 @@ the public header.
                                                   │ includes
                                                   ▼
                                              xe35_chunk_gated_delta_rule_kernels.hpp
-                                             (5 device kernels + kernel_launcher)
+                                             (4 device kernels + kernel_launcher)
                                                   │ uses
                                                   ▼
                                              xe35_chunk_gated_delta_rule_gemm.hpp
@@ -542,7 +546,7 @@ the public header.
 |---|---|
 | [xe35_chunk_gated_delta_rule.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule.hpp) | Lightweight public API: `GDNArguments`, `get_workspace_sizes`, `chunk_gated_delta_rule_launch` declaration |
 | [xe35_chunk_gated_delta_rule_launch.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_launch.hpp) | Header-only launcher: argument validation + `chunk_gated_delta_rule_launch<T, StateT>` definition (inline template, instantiated at each call site) |
-| [xe35_chunk_gated_delta_rule_kernels.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_kernels.hpp) | Five device kernels + `detail::kernel_launcher` (upstream-aligned signature) |
+| [xe35_chunk_gated_delta_rule_kernels.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_kernels.hpp) | Four device kernels + `detail::kernel_launcher` (upstream-aligned signature; the Stage-1 `chunk_prepare` gate is fused into `chunk_compute_A_o2`) |
 | [xe35_chunk_gated_delta_rule_gemm.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_gemm.hpp) | CuTe GEMM helpers (`gemm_TTS`, `gemm_STS`, `gemm_TSS`, `gemm_TTS_k_multi`, `gemm_TTS_shareB`) |
 | [gdn_runner.hpp](../../../applications/gdn_attention/gdn_runner.hpp) | Shared host harness: `GdnRunner` (alloc + init + sigmoid(b) + args + launch + oracles), the `parse_gdn_shape`/`validate_gdn_shape` CLI helpers, and the `ExampleOptions`/`BenchmarkOptions` structs. Used by all three consumers |
 | [xe35_gdn_attention_stage_references.hpp](../../../tools/util/include/cutlass/util/reference/host/xe35_gdn_attention_stage_references.hpp) | Per-stage host reference + `apply_sigmoid_b` (in `cutlass/util/reference/host/`), driving the chunkwise oracle |

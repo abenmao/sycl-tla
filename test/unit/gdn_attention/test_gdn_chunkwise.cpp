@@ -37,6 +37,9 @@
  *                    state-update loop in `chunk_fwd_o_kernel`).
  *    - seq_len=256 : four chunks per batch (state hand-off between chunks is
  *                    exercised, including the `has_prev = (c != 0)` branch).
+ *    - seq_len=65/127 : non-multiple-of-64 lengths, so the final chunk is
+ *                    partial (current_chunk_size < chunk_size). Guards the
+ *                    tail-sizing / zero-pad path that the aligned shapes miss.
  *    - multi-batch (batch>1) : multiple equal-length sequences, exercising
  *                    query_start_loc / cache_indices folding and per-batch
  *                    state slots (the example/benchmark batching).
@@ -142,6 +145,29 @@ TEST(XE35_GDN_Chunkwise_bf16, batch_two_single_chunk) {
   tb.num_v_heads = 4;
   tb.num_k_heads = 1;
   tb.seq_len     = 64;
+  EXPECT_TRUE(tb.run());
+}
+
+/* Partial tail, minimal remainder: seq_len=65 => 2 chunks, the second with a
+ * single valid row (current_chunk_size = 1). Sole guard on the partial-tail
+ * path the multiple-of-64 shapes never reach; row=1 is the extreme off-by-one. */
+TEST(XE35_GDN_Chunkwise_bf16, seq_len_65_partial_tail) {
+  test::gdn_attention::ChunkwiseTestbed<cutlass::bfloat16_t, float> tb;
+  tb.num_v_heads = 16;
+  tb.num_k_heads = 4;
+  tb.seq_len     = 65;
+  EXPECT_TRUE(tb.run());
+}
+
+/* Partial-tail chunk, near-full remainder: seq_len=127 => 2 chunks, the second
+ * holding 63 valid rows (current_chunk_size = 63). Complements seq_len=65 by
+ * exercising the tail at the opposite end of its range, so both a nearly-empty
+ * and a nearly-full final chunk cover the tail-sizing arithmetic. */
+TEST(XE35_GDN_Chunkwise_bf16, seq_len_127_partial_tail) {
+  test::gdn_attention::ChunkwiseTestbed<cutlass::bfloat16_t, float> tb;
+  tb.num_v_heads = 16;
+  tb.num_k_heads = 4;
+  tb.seq_len     = 127;
   EXPECT_TRUE(tb.run());
 }
 
