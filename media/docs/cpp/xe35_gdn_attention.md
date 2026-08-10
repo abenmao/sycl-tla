@@ -150,15 +150,19 @@ geometry of each stage and the `xe_core_count` floor.
   3 chunk_inverse     max(xe_core_count·512/16,         16 (1 sub-   1 work-group ↦ (chunk,v_head);
                           ⌈tvs/64⌉·num_v_heads)         group)       4×4 block forward-substitution
   4 chunk_compute_wu  xe_core_count·512 / wg_size       MMA wg_size  1 work-group ↦ (v_head,chunk)
-  5 chunk_fwd_o       grid = (batch, num_v_heads)       MMA wg_size  1 work-group ↦ (batch,v_head);
-                                                                      sequential scan over chunks
+  5 chunk_fwd_o       grid = (batch, num_v_heads,       MMA wg_size  1 work-group ↦ (batch,v_head,dv);
+                             head_v_dim / kChunkSize)                 sequential scan over chunks
 ```
 
 Stages 1–4 launch a *persistent* grid (sized to fill the device) and use an
 internal `while` loop to stride over all `(v_head, chunk)` pairs, so a short
-grid still covers every unit of work. Stage 5 instead launches exactly one
-work-group per `(batch, v_head)` because the SSM-state recurrence must walk that
-head's chunks **in order**.
+grid still covers every unit of work. Stage 5 launches one work-group per
+`(batch, v_head, dv)` tile — its chunk loop must walk that head's chunks **in
+order** (the SSM-state recurrence carries `S` across chunks), but the
+`head_v_dim` tiling axis (`dv`, one 64-wide `head_v_dim` slice per tile) is
+independent across tiles because the recurrence only touches `S[dv, :]`, so it
+is mapped to the third grid dimension (`head_v_dim / kChunkSize` tiles) instead
+of an in-kernel loop.
 
 > **Why the `xe_core_count` floor matters here:** stage 1 derives each sub-group's
 > `(v_head, chunk)` assignment from `total_sg_range / num_v_heads`. If a

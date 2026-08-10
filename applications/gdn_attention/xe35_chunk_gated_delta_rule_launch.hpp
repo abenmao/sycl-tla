@@ -70,6 +70,15 @@ inline cutlass::Status chunk_gated_delta_rule_launch(
   if (args.num_v_heads % args.num_k_heads != 0) {
     return cutlass::Status::kErrorInvalidProblem;
   }
+  // The head dimensions are tiled by kChunkSize: the grid dispatches
+  // head_v_dim / kChunkSize tiles and the state update strides head_k_dim in
+  // kChunkSize steps. A head dim below kChunkSize would yield a zero-length
+  // grid dimension (invalid nd_range at submit), and a non-multiple would
+  // silently drop the tail of the head. Require both to be exact positive
+  // multiples of kChunkSize.
+  if (args.head_k_dim % kChunkSize != 0 || args.head_v_dim % kChunkSize != 0) {
+    return cutlass::Status::kErrorInvalidProblem;
+  }
 
   // NOTE: device pointers (q/k/v, the A/o2/w/u workspaces, core_attn_out,
   // ssm_state, the gate/bias arrays) are NOT null-checked here. They are part
