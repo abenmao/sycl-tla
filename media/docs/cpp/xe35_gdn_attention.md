@@ -78,7 +78,7 @@ stages.
 | # | Stage | What it computes |
 |---|---|---|
 | 1 | `chunk_compute_A_o2` | **(a) Cumulative gate (fused, was `chunk_prepare`):** compute `a[t] = cumsum(softplus(a + dt_bias) * -exp(A_log))` in place — hoisted ahead of the norm, the `kv_ratio` v-heads of this k-head striped one-per-sub-group so each whole-chunk scan stays inside one sub-group. **(b) L2-normalize** Q (scaled by `1/sqrt(D)`) and K in place — per k-head, on the rows this work item is about to consume. **(c) Fused dual GEMM** sharing the `K` operand: build the lower-triangular transition matrix `L[m,n] = (K_m·K_n) * exp(a[m] - a[n]) * b[m]` into `A_workspace`, **and** the decay-gated intra-chunk score `O2[m,n] = (Q_m·K_n) * exp(a[m] - a[n])` (causal, `m>=n`) into `o2_workspace`. |
-| 2 | `chunk_inverse` | Invert `L` in place  |
+| 2 | `chunk_inverse` | Invert `L` in place, one 64×64 chunk matrix per sub-group: a 4×4 grid of 16×16 blocks, diagonal blocks inverted in registers, off-diagonal blocks filled by 16×16×16 DPAS (block forward substitution). |
 | 3 | `chunk_compute_wu` | `U = L^-1 * V * diag(b)` and `W = L^-1 * K * diag(exp(a) * b)`. |
 | 4 | `chunk_fwd_o` | `O = Q * S^T * exp(g) + O2 * U` (reads the precomputed `O2`); update SSM state `S_out = exp(g_last) * S_prev + U^T * K_scaled`. |
 
@@ -120,7 +120,7 @@ are mutated **in place** (see [mutability contract](#mutability-contract)); the
 
 GDN decomposes the problem along three nested axes, and the kernels map them
 onto the Xe execution hierarchy. Understanding this mapping explains the launch
-geometry of each stage and the `xe_core_count` floor.
+geometry of each stage.
 
 ```
   PROBLEM DECOMPOSITION                         Xe EXECUTION HIERARCHY
@@ -133,7 +133,7 @@ geometry of each stage and the `xe_core_count` floor.
                └─ head_dim element               │   └─ sub-group (16 lanes, 1 DPAS row)
                                                  │       └─ work-item (SIMD lane)
   Tile math per chunk: kChunkSize×kChunkSize (64x64) transition matrix,
-  inverted as a 4×4 grid of 16×16 DPAS blocks.
+  inverted by ONE sub-group as a 4×4 grid of 16×16 DPAS blocks.
 ```
 
 **How each stage is launched.** All four stages share one in-order queue.
@@ -172,6 +172,7 @@ recurrence carries `S` across chunks), but the `head_v_dim` tiling axis (`dv`,
 one 64-wide `head_v_dim` slice per tile) is independent across tiles because the
 recurrence only touches `S[dv, :]`, so it is mapped to the third grid dimension
 (`head_v_dim / kChunkSize` tiles) instead of an in-kernel loop.
+
 
 ## Public API
 

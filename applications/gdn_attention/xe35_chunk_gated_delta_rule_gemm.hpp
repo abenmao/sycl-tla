@@ -405,6 +405,122 @@ CUTE_DEVICE void gemm_TTS_k_multi(
     barrier_wait(barrier_scope);
   }
 }
+/* ---- Sub-group-scoped GEMM (16x16x16 WG layout, single k-tile) variants ----
+ * MMA/copy slicing uses the *sub-group-local* lane id (0..15), not
+ *      the work-group-global id (0..WIs - 1) -- the subgroup's
+ *      16-thread layout, so get_slice() expects an index in [0,16).
+ *   2. No barrier at all:  a work-group barrier would deadlock on the divergent arrival counts,
+ *      and there is nothing left to fence within a sub-group (see below).
+ *
+ * A 16x16x16 tile is a single k-tile, so there is no k-loop and no
+ * prefetch pipeline to hide, and the copy->MMA `reorder()` is a no-op:
+ * `make_block_2d_copy_{A,B}` derive their TV-layout from this same MMA's
+ * `atom_partition_{A,B}`, so both fragments map value v of lane t to the same
+ * (M,K)/(N,K) coordinate -- the coalesced TV-layouts are identical
+ * ((_16,_16):(_1@1,_1@0) for A, (_2,_16,_8):(_1@1,_1@0,_2@1) for B). Only the
+ * mode *nesting* differs (the MMA fragment splits K into per-DPAS-atom modes,
+ * the copy fragment keeps one flat 2D-load mode), and `copy()` dispatches on
+ * that nesting, so the load cannot target the MMA fragment directly.
+ *
+ * These helpers therefore alias the MMA fragment's registers with the copy
+ * fragment's layout and load straight into them. That drops the second set of
+ * GRFs (a 16-value A tile and a 16-value B tile per DPAS operand), the identity
+ * reorder, the prefetches and the split barrier. */
+template <
+    class ATensor,
+    class BTensor,
+    class SGCTensor,
+    class TiledMMA>
+/* gemm_TTS_sg: sub-group-local C += A(gmem) * B(gmem)^T. See note above. */
+CUTE_DEVICE void gemm_TTS_sg(
+    ATensor const& A,  // (M,K)
+    BTensor const& B,  // (N,K)
+    SGCTensor& tCrC,   // (M,N)
+    int wg_m,          // m tile start id
+    int wg_n,          // n tile start id
+    TiledMMA const& mma) {
+  auto sg = sycl::ext::oneapi::this_work_item::get_nd_item<3>().get_sub_group();
+  int sg_local_id = sg.get_local_linear_id();
+
+  Tensor cA = make_identity_tensor(A.shape());
+  Tensor cB = make_identity_tensor(B.shape());
+
+  auto wg_tile = mma.tile_mnk();
+
+  Tensor gA = local_tile(
+      cA, select<0, 2>(wg_tile), make_coord(wg_m, _));  // (BLK_M,BLK_K,k)
+  Tensor gB = local_tile(
+      cB, select<1, 2>(wg_tile), make_coord(wg_n, _));  // (BLK_N,BLK_K,k)
+
+  auto copy_a = get_block_2d_copy_A<void>(mma, A);
+  auto copy_b = get_block_2d_copy_B<void>(mma, B);
+
+  auto thr_mma = mma.get_slice(sg_local_id);
+  auto thr_copy_a = copy_a.get_slice(sg_local_id);
+  auto thr_copy_b = copy_b.get_slice(sg_local_id);
+
+  auto tCrA = thr_mma.partition_sg_fragment_A(gA(_, _, 0));
+  auto tCrB = thr_mma.partition_sg_fragment_B(gB(_, _, 0));
+
+  /* Alias the MMA fragments with the copy fragments' layout: same registers,
+   * the nesting `copy()` dispatches on. See the note above for why this is
+   * layout-safe and replaces reorder() here. */
+  Tensor tArA = make_tensor(
+      tCrA.data(), thr_copy_a.partition_sg_fragment_D(gA(_, _, 0)).layout());
+  Tensor tBrB = make_tensor(
+      tCrB.data(), thr_copy_b.partition_sg_fragment_D(gB(_, _, 0)).layout());
+
+  Tensor tAgA = thr_copy_a.partition_S(gA);
+  Tensor tBgB = thr_copy_b.partition_S(gB);
+
+  // Only k-tile 0 is consumed.
+  copy(copy_a, tAgA(_, _, _, 0), tArA);
+  copy(copy_b, tBgB(_, _, _, 0), tBrB);
+
+  cute::gemm(mma, tCrA, tCrB, tCrC);
+}
+
+template <
+    class ASGCTensor,
+    class BTensor,
+    class CSGCTensor,
+    class TiledMMA>
+/* gemm_STS_sg: sub-group-local C += A(regs) * B(gmem)^T. See note above. */
+CUTE_DEVICE void gemm_STS_sg(
+    ASGCTensor const& tCrA,  // (M,K)
+    BTensor const& B,        // (N,K)
+    CSGCTensor& tCrC,        // (M,N)
+    int wg_m,                // m tile start id
+    int wg_n,                // n tile start id
+    TiledMMA const& mma) {
+  auto sg = sycl::ext::oneapi::this_work_item::get_nd_item<3>().get_sub_group();
+  int sg_local_id = sg.get_local_linear_id();
+
+  Tensor cB = make_identity_tensor(B.shape());
+
+  auto wg_tile = mma.tile_mnk();
+
+  Tensor gB = local_tile(
+      cB, select<1, 2>(wg_tile), make_coord(wg_n, _));  // (BLK_N,BLK_K,k)
+
+  auto copy_b = get_block_2d_copy_B<void>(mma, B);
+
+  auto thr_mma = mma.get_slice(sg_local_id);
+  auto thr_copy_b = copy_b.get_slice(sg_local_id);
+
+  auto tCrB = thr_mma.partition_sg_fragment_B(gB(_, _, 0));
+
+  /* Alias the MMA fragment with the copy fragment's layout -- see gemm_TTS_sg. */
+  Tensor tBrB = make_tensor(
+      tCrB.data(), thr_copy_b.partition_sg_fragment_D(gB(_, _, 0)).layout());
+
+  Tensor tBgB = thr_copy_b.partition_S(gB);
+
+  /* Only k-tile 0 is consumed -- see gemm_TTS_sg. */
+  copy(copy_b, tBgB(_, _, _, 0), tBrB);
+
+  cute::gemm(mma, tCrA, tCrB, tCrC);
+}
 
 template <
     class A1Tensor,

@@ -440,20 +440,46 @@ CUTE_DEVICE void chunk_inverse_opt_kernel(
     const int batch_size,
     const int num_v_heads) {
   auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
-  int local_id = item.get_local_linear_id();
-  int local_range = item.get_local_range(2);
-  int v_head_id = item.get_group(1) % num_v_heads;
-  int chunk_id = item.get_group(1) / num_v_heads;
-  const int global_chunk_range = item.get_group_range(1) / num_v_heads;
 
   auto sg = item.get_sub_group();
+  int sg_id = sg.get_group_linear_id();
+  int sg_range = sg.get_group_linear_range();
   int sg_local_id = sg.get_local_linear_id();
+
+  int group_id = item.get_group(1);
+  int group_range = item.get_group_range(1);
+
+  /* Each sub-group inverts one independent matrix (chunk, v_head).
+   * Work is mapped at sub-group granularity:
+   * a sub-group owns a fixed v_head and strides across chunks by chunk_range.
+   * (The previous version used one 16-thread work-group per (chunk, v_head)
+   * and sliced the MMA/copies by the work-group-global local_id, which only
+   * worked because wg_size == size(MMA) == 16.) */
+  int total_sg_range = group_range * sg_range;
+  int total_sg_id = group_id * sg_range + sg_id;
+
+  /* Grid is sized off xe_core_count alone (see launch_stage_inverse()), so
+   * total_sg_range is not guaranteed to be a multiple of -- or even >= --
+   * num_v_heads. Clamp chunk_range to >= 1 to keep the divide/modulo below
+   * well-defined. */
+  const int chunk_range = cute::max(1, total_sg_range / num_v_heads);
+  int chunk_id = total_sg_id % chunk_range;
+  const int v_head_id = total_sg_id / chunk_range;
+
+  /* Tail sub-groups (total_sg_range not a multiple of num_v_heads, or fewer
+   * sub-groups than v_heads) can map to v_head_id >= num_v_heads; drop them
+   * before any A access. v_head_id is derived from sg_id, not the lane id, so
+   * this return is uniform across the 16 lanes -- safe w.r.t. the sub-group
+   * broadcasts below. */
+  if (v_head_id >= num_v_heads) {
+    return;
+  }
 
   int pre_chunks = 0;
 
   TiledMMA mma{};
   auto wg_tile = mma.tile_mnk();
-  auto thr_mma = mma.get_slice(local_id);
+  auto thr_mma = mma.get_slice(sg_local_id);
 
   for (int batch_id = 0; batch_id < batch_size; ++batch_id) {
     const int seq_start_offset = query_start_loc[batch_id];
@@ -630,15 +656,24 @@ CUTE_DEVICE void chunk_inverse_opt_kernel(
       auto tCrB = thr_mma.partition_sg_fragment_B(gB(_, _, 0));
       auto tCrC = thr_mma.partition_sg_fragment_C(gC);
 
+      /* Off-diagonal blocks use the sub-group-scoped GEMM/copy path: each of
+       * the 32 sub-groups drives its own 16x16x16 DPAS on its own chunk, so the
+       * MMA and copies are sliced by sg_local_id (0..15) -- slicing by the
+       * work-group-global id would index the 16-thread MMA layout out of range.
+       * The gemm_*_sg helpers carry no barrier of any kind: the 16x16x16 tile is
+       * a single k-tile, so there is no k-loop to fence, and the 16 lanes of one
+       * sub-group already advance in lockstep. A work-group barrier would in
+       * fact deadlock here, because the 32 sub-groups walk independent
+       * grid-stride chunk streams of differing length. */
       auto copy_D_21 = get_block_2d_copy_D<void>(mma, A_21_tensor);
-      auto thr_copy_D_21 = copy_D_21.get_slice(local_id);
+      auto thr_copy_D_21 = copy_D_21.get_slice(sg_local_id);
       auto tCrD_21 = thr_copy_D_21.partition_sg_fragment_S(gC);
       auto tCgD_21 = thr_copy_D_21.partition_D(gC);
       clear(tCrC);
-      gemm_TTS(A_22_tensor, A_21_tensor_T, tCrC, 0, 0, mma);
+      gemm_TTS_sg(A_22_tensor, A_21_tensor_T, tCrC, 0, 0, mma);
       reorder(tCrC, tCrA);
       clear(tCrC);
-      gemm_STS(tCrA, A_11_tensor_T, tCrC, 0, 0, mma);
+      gemm_STS_sg(tCrA, A_11_tensor_T, tCrC, 0, 0, mma);
       CUTE_UNROLL
       for (int i = 0; i < tCrC.size(); ++i) {
         tCrC(i) *= -1.0f;
@@ -647,16 +682,16 @@ CUTE_DEVICE void chunk_inverse_opt_kernel(
       copy(copy_D_21, tCrD_21, tCgD_21);
 
       auto copy_D_31 = get_block_2d_copy_D<void>(mma, A_31_tensor);
-      auto thr_copy_D_31 = copy_D_31.get_slice(local_id);
+      auto thr_copy_D_31 = copy_D_31.get_slice(sg_local_id);
       auto tCrD_31 = thr_copy_D_31.partition_sg_fragment_S(gC);
       auto tCgD_31 = thr_copy_D_31.partition_D(gC);
       clear(tCrC);
-      gemm_TTS(A_31_tensor, A_11_tensor_T, tCrC, 0, 0, mma);
-      gemm_TTS(A_32_tensor, A_21_tensor_T, tCrC, 0, 0, mma);
+      gemm_TTS_sg(A_31_tensor, A_11_tensor_T, tCrC, 0, 0, mma);
+      gemm_TTS_sg(A_32_tensor, A_21_tensor_T, tCrC, 0, 0, mma);
       reorder(tCrC, tCrD_31);
       copy(copy_D_31, tCrD_31, tCgD_31);
       clear(tCrC);
-      gemm_TTS(A_33_tensor, A_31_tensor_T, tCrC, 0, 0, mma);
+      gemm_TTS_sg(A_33_tensor, A_31_tensor_T, tCrC, 0, 0, mma);
       CUTE_UNROLL
       for (int i = 0; i < tCrC.size(); ++i) {
         tCrC(i) *= -1.0f;
@@ -665,17 +700,17 @@ CUTE_DEVICE void chunk_inverse_opt_kernel(
       copy(copy_D_31, tCrD_31, tCgD_31);
 
       auto copy_D_41 = get_block_2d_copy_D<void>(mma, A_41_tensor);
-      auto thr_copy_D_41 = copy_D_41.get_slice(local_id);
+      auto thr_copy_D_41 = copy_D_41.get_slice(sg_local_id);
       auto tCrD_41 = thr_copy_D_41.partition_sg_fragment_S(gC);
       auto tCgD_41 = thr_copy_D_41.partition_D(gC);
       clear(tCrC);
-      gemm_TTS(A_41_tensor, A_11_tensor_T, tCrC, 0, 0, mma);
-      gemm_TTS(A_42_tensor, A_21_tensor_T, tCrC, 0, 0, mma);
-      gemm_TTS(A_43_tensor, A_31_tensor_T, tCrC, 0, 0, mma);
+      gemm_TTS_sg(A_41_tensor, A_11_tensor_T, tCrC, 0, 0, mma);
+      gemm_TTS_sg(A_42_tensor, A_21_tensor_T, tCrC, 0, 0, mma);
+      gemm_TTS_sg(A_43_tensor, A_31_tensor_T, tCrC, 0, 0, mma);
       reorder(tCrC, tCrD_41);
       copy(copy_D_41, tCrD_41, tCgD_41);
       clear(tCrC);
-      gemm_TTS(A_44_tensor, A_41_tensor_T, tCrC, 0, 0, mma);
+      gemm_TTS_sg(A_44_tensor, A_41_tensor_T, tCrC, 0, 0, mma);
       CUTE_UNROLL
       for (int i = 0; i < tCrC.size(); ++i) {
         tCrC(i) *= -1.0f;
@@ -684,14 +719,14 @@ CUTE_DEVICE void chunk_inverse_opt_kernel(
       copy(copy_D_41, tCrD_41, tCgD_41);
 
       auto copy_D_32 = get_block_2d_copy_D<void>(mma, A_32_tensor);
-      auto thr_copy_D_32 = copy_D_32.get_slice(local_id);
+      auto thr_copy_D_32 = copy_D_32.get_slice(sg_local_id);
       auto tCrD_32 = thr_copy_D_32.partition_sg_fragment_S(gC);
       auto tCgD_32 = thr_copy_D_32.partition_D(gC);
       clear(tCrC);
-      gemm_TTS(A_33_tensor, A_32_tensor_T, tCrC, 0, 0, mma);
+      gemm_TTS_sg(A_33_tensor, A_32_tensor_T, tCrC, 0, 0, mma);
       reorder(tCrC, tCrA);
       clear(tCrC);
-      gemm_STS(tCrA, A_22_tensor_T, tCrC, 0, 0, mma);
+      gemm_STS_sg(tCrA, A_22_tensor_T, tCrC, 0, 0, mma);
       CUTE_UNROLL
       for (int i = 0; i < tCrC.size(); ++i) {
         tCrC(i) *= -1.0f;
@@ -700,16 +735,16 @@ CUTE_DEVICE void chunk_inverse_opt_kernel(
       copy(copy_D_32, tCrD_32, tCgD_32);
 
       auto copy_D_42 = get_block_2d_copy_D<void>(mma, A_42_tensor);
-      auto thr_copy_D_42 = copy_D_42.get_slice(local_id);
+      auto thr_copy_D_42 = copy_D_42.get_slice(sg_local_id);
       auto tCrD_42 = thr_copy_D_42.partition_sg_fragment_S(gC);
       auto tCgD_42 = thr_copy_D_42.partition_D(gC);
       clear(tCrC);
-      gemm_TTS(A_42_tensor, A_22_tensor_T, tCrC, 0, 0, mma);
-      gemm_TTS(A_43_tensor, A_32_tensor_T, tCrC, 0, 0, mma);
+      gemm_TTS_sg(A_42_tensor, A_22_tensor_T, tCrC, 0, 0, mma);
+      gemm_TTS_sg(A_43_tensor, A_32_tensor_T, tCrC, 0, 0, mma);
       reorder(tCrC, tCrD_42);
       copy(copy_D_42, tCrD_42, tCgD_42);
       clear(tCrC);
-      gemm_TTS(A_44_tensor, A_42_tensor_T, tCrC, 0, 0, mma);
+      gemm_TTS_sg(A_44_tensor, A_42_tensor_T, tCrC, 0, 0, mma);
       CUTE_UNROLL
       for (int i = 0; i < tCrC.size(); ++i) {
         tCrC(i) *= -1.0f;
@@ -718,14 +753,14 @@ CUTE_DEVICE void chunk_inverse_opt_kernel(
       copy(copy_D_42, tCrD_42, tCgD_42);
 
       auto copy_D_43 = get_block_2d_copy_D<void>(mma, A_43_tensor);
-      auto thr_copy_D_43 = copy_D_43.get_slice(local_id);
+      auto thr_copy_D_43 = copy_D_43.get_slice(sg_local_id);
       auto tCrD_43 = thr_copy_D_43.partition_sg_fragment_S(gC);
       auto tCgD_43 = thr_copy_D_43.partition_D(gC);
       clear(tCrC);
-      gemm_TTS(A_44_tensor, A_43_tensor_T, tCrC, 0, 0, mma);
+      gemm_TTS_sg(A_44_tensor, A_43_tensor_T, tCrC, 0, 0, mma);
       reorder(tCrC, tCrA);
       clear(tCrC);
-      gemm_STS(tCrA, A_33_tensor_T, tCrC, 0, 0, mma);
+      gemm_STS_sg(tCrA, A_33_tensor_T, tCrC, 0, 0, mma);
       CUTE_UNROLL
       for (int i = 0; i < tCrC.size(); ++i) {
         tCrC(i) *= -1.0f;
@@ -733,7 +768,7 @@ CUTE_DEVICE void chunk_inverse_opt_kernel(
       reorder(tCrC, tCrD_43);
       copy(copy_D_43, tCrD_43, tCgD_43);
 
-      chunk_id += global_chunk_range;
+      chunk_id += chunk_range;
     }
     pre_chunks = cumsum_chunks;
   }
@@ -1315,7 +1350,15 @@ sycl::event launch_stage_compute_A_o2(
   EventManager::getInstance().addEvent(ev);
   return ev;
 }
-
+/* Inverse stage partitions the 64x64 chunk inverse into a 4x4 grid of 16x16
+ * sub-blocks: each sub-group inverts the diagonal blocks in registers via
+ * `sycl::group_broadcast` (no SLM, no barriers), and the six off-diagonal
+ * blocks are filled with 16x16x16 DPAS via cute MMA.
+ *
+ * Full work-group resolution: the work-group is the whole Xe-core (512 threads
+ * == 32 sub-groups), and each sub-group inverts one independent (chunk, v_head)
+ * 64x64 matrix. The grid is one work-group per Xe-core; the kernel's internal
+ * grid-stride loop (`chunk_id += chunk_range`) sweeps all chunks. */
 template <typename T, typename StateT, typename Props>
 sycl::event launch_stage_inverse(
     sycl::queue& queue, Props const& props, int xe_core_count,
@@ -1327,12 +1370,8 @@ sycl::event launch_stage_inverse(
   using SGLayoutInverse = chunk_gemm_policy_inverse::SGLayout;
   using MMAInverse      = typename TiledMMAHelper<
       MMA_Atom<decltype(op)>, Layout<WGTileInverse>, SGLayoutInverse>::TiledMMA;
-  int MaxThreadsPerWorkgroupInverse = size(MMAInverse{});
-  sycl::range<3> local_inverse(1, 1, MaxThreadsPerWorkgroupInverse);
-  int inverse_groups =
-      xe_core_count * MaxThreadsPerXeCore / MaxThreadsPerWorkgroupInverse;
-  inverse_groups = (inverse_groups + num_v_heads - 1) / num_v_heads * num_v_heads;
-  sycl::range<3> global_inverse(1, inverse_groups, 1);
+  sycl::range<3> local_inverse(1, 1, MaxThreadsPerXeCore);
+  sycl::range<3> global_inverse(1, xe_core_count, 1);
   auto ev = queue.submit([&](sycl::handler& cgh) {
     cgh.parallel_for<ChunkInverseOptKernel<T, StateT>>(
         sycl::nd_range<3>{global_inverse * local_inverse, local_inverse},
