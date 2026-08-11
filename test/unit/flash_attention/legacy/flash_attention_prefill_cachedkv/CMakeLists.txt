@@ -46,8 +46,12 @@ cutlass_test_unit_add_executable(
 )
 
 cutlass_test_unit_add_executable(
-  cutlass_test_unit_flash_attention_prefill_cachedkv_192_xe
+  cutlass_test_unit_flash_attention_prefill_cachedkv_bf16_192_xe
   xe_flash_prefill_cachedkv_bf16_fp32_fp32_192.cpp
+)
+
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_flash_attention_prefill_cachedkv_fp16_192_xe
   xe_flash_prefill_cachedkv_fp16_fp32_fp32_192.cpp
 )
 
@@ -57,7 +61,8 @@ add_custom_target(
   cutlass_test_unit_flash_attention_prefill_cachedkv_64_xe
   cutlass_test_unit_flash_attention_prefill_cachedkv_96_xe
   cutlass_test_unit_flash_attention_prefill_cachedkv_128_xe
-  cutlass_test_unit_flash_attention_prefill_cachedkv_192_xe
+  cutlass_test_unit_flash_attention_prefill_cachedkv_bf16_192_xe
+  cutlass_test_unit_flash_attention_prefill_cachedkv_fp16_192_xe
 )
 
 add_custom_target(
@@ -66,5 +71,6 @@ add_custom_target(
   test_unit_flash_attention_prefill_cachedkv_64_xe
   test_unit_flash_attention_prefill_cachedkv_96_xe
   test_unit_flash_attention_prefill_cachedkv_128_xe
-  test_unit_flash_attention_prefill_cachedkv_192_xe
+  test_unit_flash_attention_prefill_cachedkv_bf16_192_xe
+  test_unit_flash_attention_prefill_cachedkv_fp16_192_xe
 )

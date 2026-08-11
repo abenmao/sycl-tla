@@ -107,36 +107,12 @@ struct MainloopIntelXeXMX16GroupMixedPrecision_GemmConfig {
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
 };
 
-// Non-parameterized tests for MainloopIntelXeXMX16GroupMixedPrecision
-
 TEST(MainloopIntelXeXMX16GroupMixedPrecision, GroupedGemm_Small) {
   using Gemm = MainloopIntelXeXMX16GroupMixedPrecision_GemmConfig<
       cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
   std::vector<cutlass::gemm::GemmCoord> problem_sizes = {
     {128, 128, 256},
     {256, 256, 128}
-  };
-  EXPECT_TRUE(test::gemm::device::TestXeGrouped<Gemm>(problem_sizes, 1.0f, 1.0f));
-}
-
-TEST(MainloopIntelXeXMX16GroupMixedPrecision, GroupedGemm_Medium) {
-  using Gemm = MainloopIntelXeXMX16GroupMixedPrecision_GemmConfig<
-      cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
-  std::vector<cutlass::gemm::GemmCoord> problem_sizes = {
-    {512, 512, 1024},
-    {1024, 512, 512},
-    {512, 1024, 512}
-  };
-  EXPECT_TRUE(test::gemm::device::TestXeGrouped<Gemm>(problem_sizes, 1.0f, 1.0f));
-}
-
-TEST(MainloopIntelXeXMX16GroupMixedPrecision, GroupedGemm_Large) {
-  using Gemm = MainloopIntelXeXMX16GroupMixedPrecision_GemmConfig<
-      cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
-  std::vector<cutlass::gemm::GemmCoord> problem_sizes = {
-    {1024, 1024, 2048},
-    {2048, 1024, 1024},
-    {1024, 2048, 1024}
   };
   EXPECT_TRUE(test::gemm::device::TestXeGrouped<Gemm>(problem_sizes, 1.0f, 1.0f));
 }
@@ -151,43 +127,4 @@ TEST(MainloopIntelXeXMX16GroupMixedPrecision, GroupedGemm_TensorParallel) {
   EXPECT_TRUE(test::gemm::device::TestXeGrouped<Gemm>(problem_sizes, 1.0f, 1.0f));
 }
 
-TEST(MainloopIntelXeXMX16GroupMixedPrecision, GroupedGemm_ModelParallel) {
-  using Gemm = MainloopIntelXeXMX16GroupMixedPrecision_GemmConfig<
-      cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
-  std::vector<cutlass::gemm::GemmCoord> problem_sizes = {
-    {512, 2048, 2048},
-    {512, 2048, 2048}
-  };
-  EXPECT_TRUE(test::gemm::device::TestXeGrouped<Gemm>(problem_sizes, 1.0f, 1.0f));
-}
-
-TEST(MainloopIntelXeXMX16GroupMixedPrecision, GroupedGemm_MicroBatch) {
-  using Gemm = MainloopIntelXeXMX16GroupMixedPrecision_GemmConfig<
-      cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
-  std::vector<cutlass::gemm::GemmCoord> problem_sizes = {
-    {128, 128, 8192},
-    {128, 128, 8192},
-    {128, 128, 8192},
-    {128, 128, 8192}
-  };
-  EXPECT_TRUE(test::gemm::device::TestXeGrouped<Gemm>(problem_sizes, 1.0f, 1.0f));
-}
-
-TEST(MainloopIntelXeXMX16GroupMixedPrecision, GroupedGemm_LargeBatch) {
-  using Gemm = MainloopIntelXeXMX16GroupMixedPrecision_GemmConfig<
-      cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
-  std::vector<cutlass::gemm::GemmCoord> problem_sizes = {
-    {512, 512, 2048},
-    {512, 512, 2048},
-    {512, 512, 2048},
-    {512, 512, 2048},
-    {512, 512, 2048},
-    {512, 512, 2048},
-    {512, 512, 2048},
-    {512, 512, 2048}
-  };
-  EXPECT_TRUE(test::gemm::device::TestXeGrouped<Gemm>(problem_sizes, 1.0f, 1.0f));
-}
-
 } // namespace
- 

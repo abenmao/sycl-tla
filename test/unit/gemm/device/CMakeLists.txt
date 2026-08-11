@@ -85,13 +85,58 @@ if(CUTLASS_ENABLE_SYCL)
     xe_gemm_fp16_fp8_fp32_tensor_op_fp32_group_gemm.cpp
   )
 
-    # Single unified test executable combining all new test files
     cutlass_test_unit_add_executable(
-      cutlass_test_unit_gemm_device_unified_tests
-      gemm_universal_lincomb_per_rowbias_eltact.cpp
-      xe_gemm_universal_mainloop_group.cpp
+      cutlass_test_unit_gemm_device_lincomb_per_rowbias_eltact_configs
+      gemm_universal_lincomb_per_rowbias_eltact_configs.cpp
+    )
+
+    cutlass_test_unit_add_executable(
+      cutlass_test_unit_gemm_device_lincomb_per_rowbias_eltact_basic
+      gemm_universal_lincomb_per_rowbias_eltact_basic.cpp
+    )
+
+    cutlass_test_unit_add_executable(
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_llm
+      gemm_universal_mainloopintelxexmx16group_llm.cpp
+    )
+
+    cutlass_test_unit_add_executable(
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_nonparam_1
+      gemm_universal_mainloopintelxexmx16group_nonparam_1.cpp
+    )
+
+    cutlass_test_unit_add_executable(
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_nonparam_2
+      gemm_universal_mainloopintelxexmx16group_nonparam_2.cpp
+    )
+
+    cutlass_test_unit_add_executable(
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16_group_fp8
       xe_gemm_universal_mainloop_group_fp8.cpp
-      xe_gemm_universal_mainloop_group_precision.cpp
+    )
+
+    cutlass_test_unit_add_executable(
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_precision_large
+      gemm_universal_mainloopintelxexmx16group_precision_large.cpp
+    )
+
+    cutlass_test_unit_add_executable(
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_precision_tensor_parallel
+      gemm_universal_mainloopintelxexmx16group_precision_tensor_parallel.cpp
+    )
+
+    cutlass_test_unit_add_executable(
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_precision_model_parallel
+      gemm_universal_mainloopintelxexmx16group_precision_model_parallel.cpp
+    )
+
+    cutlass_test_unit_add_executable(
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_precision_batch_variants
+      gemm_universal_mainloopintelxexmx16group_precision_batch_variants.cpp
+    )
+
+    cutlass_test_unit_add_executable(
+      cutlass_test_unit_gemm_device_fp_scaling
       gemm_universal_fp_scaling.cpp
     )
 
@@ -105,7 +150,17 @@ if(CUTLASS_ENABLE_SYCL)
       cutlass_test_unit_gemm_device_tensorop_xe_group_gemm
       cutlass_test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
       cutlass_test_unit_gemm_device_tensorop_xe
-      cutlass_test_unit_gemm_device_unified_tests
+      cutlass_test_unit_gemm_device_lincomb_per_rowbias_eltact_configs
+      cutlass_test_unit_gemm_device_lincomb_per_rowbias_eltact_basic
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_llm
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_nonparam_1
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_nonparam_2
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16_group_fp8
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_precision_large
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_precision_tensor_parallel
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_precision_model_parallel
+      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_precision_batch_variants
+      cutlass_test_unit_gemm_device_fp_scaling
     )
 
   add_custom_target(

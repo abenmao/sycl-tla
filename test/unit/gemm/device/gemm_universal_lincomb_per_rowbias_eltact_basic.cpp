@@ -119,35 +119,6 @@ TEST(MainloopIntelXeXMX16_LinCombPerRowBiasEltAct_NonParam, Basic) {
   EXPECT_TRUE((test::gemm::device::TestXe<Gemm, cutlass::epilogue::thread::ReLu>(256, 256, 32, 1, 1.0f, 0.0f)));
 }
 
-// Test: MicroBatch
-TEST(MainloopIntelXeXMX16_LinCombPerRowBiasEltAct_NonParam, MicroBatch) {
-  using Gemm = typename MainloopIntelXeXMX16_LinCombPerRowBiasEltAct_GemmConfig<
-      cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
-  EXPECT_TRUE((test::gemm::device::TestXe<Gemm, cutlass::epilogue::thread::ReLu>(128, 128, 8192, 4, 1.0f, 0.0f)));
-}
-
-// Test: Multiple batch sizes
-TEST(MainloopIntelXeXMX16_LinCombPerRowBiasEltAct_NonParam, MultipleBatchSizes) {
-  using Gemm = typename MainloopIntelXeXMX16_LinCombPerRowBiasEltAct_GemmConfig<
-      cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
-  EXPECT_TRUE((test::gemm::device::TestXe<Gemm, cutlass::epilogue::thread::ReLu>(512, 512, 1024, 2, 1.0f, 0.0f)));
-  EXPECT_TRUE((test::gemm::device::TestXe<Gemm, cutlass::epilogue::thread::ReLu>(256, 256, 512, 3, 1.0f, 0.0f)));
-}
-
-// Test: Tensor parallel config (small M, large N)
-TEST(MainloopIntelXeXMX16_LinCombPerRowBiasEltAct_NonParam, TensorParallelConfig) {
-  using Gemm = typename MainloopIntelXeXMX16_LinCombPerRowBiasEltAct_GemmConfig<
-      cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
-  EXPECT_TRUE((test::gemm::device::TestXe<Gemm, cutlass::epilogue::thread::ReLu>(128, 4096, 4096, 1, 1.0f, 0.0f)));
-}
-
-// Test: Model parallel config (large M, small N)
-TEST(MainloopIntelXeXMX16_LinCombPerRowBiasEltAct_NonParam, ModelParallelConfig) {
-  using Gemm = typename MainloopIntelXeXMX16_LinCombPerRowBiasEltAct_GemmConfig<
-      cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
-  EXPECT_TRUE((test::gemm::device::TestXe<Gemm, cutlass::epilogue::thread::ReLu>(4096, 128, 4096, 1, 1.0f, 0.0f)));
-}
-
 // Test: Edge case - zero beta
 TEST(MainloopIntelXeXMX16_LinCombPerRowBiasEltAct_NonParam, ZeroBetaEdgeCase) {
   using Gemm = typename MainloopIntelXeXMX16_LinCombPerRowBiasEltAct_GemmConfig<
@@ -176,4 +147,4 @@ TEST(MainloopIntelXeXMX16_LinCombPerRowBiasEltAct_NonParam, LargeKSmallMN) {
       cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
   EXPECT_TRUE((test::gemm::device::TestXe<Gemm, cutlass::epilogue::thread::ReLu>(32, 32, 8192, 1, 1.0f, 0.0f)));
   EXPECT_TRUE((test::gemm::device::TestXe<Gemm, cutlass::epilogue::thread::ReLu>(64, 64, 16384, 1, 1.0f, 0.0f)));
-} 
+}

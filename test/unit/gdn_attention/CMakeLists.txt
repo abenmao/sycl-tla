@@ -28,14 +28,21 @@
 
 # The GDN kernels, launcher, and shared GdnRunner are header-only under
 # applications/gdn_attention/ (the launcher is an inline template instantiated
-# in test_gdn_chunkwise.cpp). The CUTLASS_APPLICATIONS_DIR include path is
-# added automatically by cutlass_test_unit_add_executable, so the runner is
-# reached as "gdn_attention/gdn_runner.hpp" with no extra include dir.
+# in the test_gdn_chunkwise_*.cpp files). The CUTLASS_APPLICATIONS_DIR include
+# path is added automatically by cutlass_test_unit_add_executable, so the
+# runner is reached as "gdn_attention/gdn_runner.hpp" with no extra include dir.
 set(CUTLASS_APPLICATIONS_DIR ${CUTLASS_DIR}/applications)
 
 cutlass_test_unit_add_executable(
-  cutlass_test_unit_gdn_attention_chunkwise
-  test_gdn_chunkwise.cpp
+  cutlass_test_unit_gdn_attention_chunkwise_shapes
+  test_gdn_chunkwise_shapes.cpp
+  EXTRA_INCLUDE_DIRS
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+cutlass_test_unit_add_executable(
+  cutlass_test_unit_gdn_attention_chunkwise_variants
+  test_gdn_chunkwise_variants.cpp
   EXTRA_INCLUDE_DIRS
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
@@ -43,11 +50,13 @@ cutlass_test_unit_add_executable(
 add_custom_target(
   cutlass_test_unit_gdn_attention
   DEPENDS
-  cutlass_test_unit_gdn_attention_chunkwise
+  cutlass_test_unit_gdn_attention_chunkwise_shapes
+  cutlass_test_unit_gdn_attention_chunkwise_variants
 )
 
 add_custom_target(
   test_unit_gdn_attention
   DEPENDS
-  test_unit_gdn_attention_chunkwise
+  test_unit_gdn_attention_chunkwise_shapes
+  test_unit_gdn_attention_chunkwise_variants
 )

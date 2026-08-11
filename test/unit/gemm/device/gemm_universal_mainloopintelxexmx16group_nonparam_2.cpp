@@ -115,60 +115,6 @@ struct MainloopIntelXeXMX16Group_GemmConfig {
   using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
 };
 
-// Helper to generate LLM-like grouped GEMM shapes
-inline std::vector<cutlass::gemm::GemmCoord> make_llm_grouped_shapes(int groups, int m, int n, int k, int m_stride = 0, int n_stride = 0, int k_stride = 0) {
-  std::vector<cutlass::gemm::GemmCoord> shapes;
-  for (int i = 0; i < groups; ++i) {
-    shapes.emplace_back(
-      m + i * m_stride,
-      n + i * n_stride,
-      k + i * k_stride
-    );
-  }
-  return shapes;
-}
-
-// GPT-2: M=1024, N=1024, K=4096, groups=2, with stride in K
-TEST(MainloopIntelXeXMX16Group_LLM, GPT2_KStride) {
-  using Gemm = typename MainloopIntelXeXMX16Group_GemmConfig<
-      cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
-  int groups = 2, m = 1024, n = 1024, k = 4096, k_stride = 512;
-  auto problem_sizes = make_llm_grouped_shapes(groups, m, n, k, 0, 0, k_stride);
-  EXPECT_TRUE(test::gemm::device::TestXeGrouped<Gemm>(problem_sizes, 1.0f, 0.0f));
-}
-
-// Basic grouped GEMM test
-TEST(MainloopIntelXeXMX16Group_NonParam, BasicGroupedGemm) {
-  using Gemm = typename MainloopIntelXeXMX16Group_GemmConfig<
-      cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
-  std::vector<cutlass::gemm::GemmCoord> problem_sizes = {
-    {256, 256, 256},
-    {512, 512, 512}
-  };
-  EXPECT_TRUE(test::gemm::device::TestXeGrouped<Gemm>(problem_sizes, 1.0f, 0.0f));
-}
-
-// Small batch, single group
-TEST(MainloopIntelXeXMX16Group_NonParam, SmallBatchSingleGroup) {
-  using Gemm = typename MainloopIntelXeXMX16Group_GemmConfig<
-      cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
-  std::vector<cutlass::gemm::GemmCoord> problem_sizes = {
-    {128, 128, 512}
-  };
-  EXPECT_TRUE(test::gemm::device::TestXeGrouped<Gemm>(problem_sizes, 1.0f, 0.0f));
-}
-
-// Edge case: zero beta
-TEST(MainloopIntelXeXMX16Group_NonParam, ZeroBetaEdgeCase) {
-  using Gemm = typename MainloopIntelXeXMX16Group_GemmConfig<
-      cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
-  std::vector<cutlass::gemm::GemmCoord> problem_sizes = {
-    {512, 512, 2048},
-    {1024, 1024, 4096}
-  };
-  EXPECT_TRUE(test::gemm::device::TestXeGrouped<Gemm>(problem_sizes, 1.0f, 0.0f));
-}
-
 // Edge case: zero alpha
 TEST(MainloopIntelXeXMX16Group_NonParam, ZeroAlphaEdgeCase) {
   using Gemm = typename MainloopIntelXeXMX16Group_GemmConfig<
@@ -178,17 +124,6 @@ TEST(MainloopIntelXeXMX16Group_NonParam, ZeroAlphaEdgeCase) {
     {1024, 1024, 4096}
   };
   EXPECT_TRUE(test::gemm::device::TestXeGrouped<Gemm>(problem_sizes, 0.0f, 1.0f));
-}
-
-// Edge case: tiny matrices
-TEST(MainloopIntelXeXMX16Group_NonParam, TinyMatrices) {
-  using Gemm = typename MainloopIntelXeXMX16Group_GemmConfig<
-      cutlass::layout::RowMajor, cutlass::layout::RowMajor>::Gemm;
-  std::vector<cutlass::gemm::GemmCoord> problem_sizes = {
-    {8, 8, 8},
-    {16, 16, 16}
-  };
-  EXPECT_TRUE(test::gemm::device::TestXeGrouped<Gemm>(problem_sizes, 1.0f, 1.0f));
 }
 
 // Edge case: large K, small M/N
