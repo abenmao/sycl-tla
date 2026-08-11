@@ -278,7 +278,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     return params.ptr_page_table[batch_offset + page_idx] * tiles_per_page + tile_in_page;
   }
 
-  template <bool GqaFusion = false, bool disable_V_prefetch = false, typename QVCoord>
+  template <bool DisableKVPrefetch = false, bool DisableVPrefetch = false, typename QVCoord>
   CUTLASS_DEVICE
   void
   operator()(TensorQ2D const& Q_2D,     // (q,d)
@@ -581,14 +581,14 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         update_payloads(prepared_pv, k_start_delta);
       }
     }
-    if constexpr (!GqaFusion) {
+    if constexpr (!DisableKVPrefetch) {
       if (blk_k1 > kblocks_cache && subgroup_id < RegularKVPrefetchSGs) {
         CUTLASS_PRAGMA_UNROLL
         for (int K = 0; K < Stages; K++) {
           prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
           update_payloads(prepared_pk, kv_stride);
         }
-        if constexpr (!disable_V_prefetch) {
+        if constexpr (!DisableVPrefetch) {
           CUTLASS_PRAGMA_UNROLL
           for (int K = 0; K < Stages; K++) {
             prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
@@ -598,7 +598,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       }
     }
     // Cache K prefetch init, still uses legacy API.
-    if constexpr (CachedKV && !GqaFusion) {
+    if constexpr (CachedKV && !DisableKVPrefetch) {
       if (subgroup_id < RegularKVPrefetchSGs) {
         for (int D = 0; D < size<4>(pKgK_cache); D++) {
           CUTLASS_PRAGMA_UNROLL
@@ -627,7 +627,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         prefetch(tiled_prefetch_scaleQ, prefetch_iter_scaleQ(_, _, _, D));
       }
 
-      if constexpr (CachedKV && !GqaFusion) {
+      if constexpr (CachedKV && !DisableKVPrefetch) {
         auto& tiled_prefetch_scaleK_cache = get<0>(get<3>(scale_context_qk_cache));
         auto  prefetch_iter_scaleK_cache = get<1>(get<3>(scale_context_qk_cache));
         for (int K = 0; K < Stages; K++) {
@@ -642,7 +642,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
       }
 
-      if constexpr (!GqaFusion) {
+      if constexpr (!DisableKVPrefetch) {
         if (blk_k1 > kblocks_cache) {
           for (int K = 0; K < Stages; K++) {
             const int k_coord = K * BLK_K + (subgroup_id % ATOM_K)  * SG_K;
@@ -727,7 +727,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       }
 
       // V prefetch for next iteration (non-cache only; cache prefetch lives below).
-      if constexpr (!is_cache && !GqaFusion && !disable_V_prefetch) {
+      if constexpr (!is_cache && !DisableKVPrefetch && !DisableVPrefetch) {
         if (subgroup_id < RegularKVPrefetchSGs) {
           prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
           update_payloads(prepared_pv, kv_stride);
@@ -820,11 +820,13 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       /* Prefetch V current and K next after QK to cover K latency with softmax/PV. */
       int K_next = K + Stages;
       [[maybe_unused]] int k_idx_next_cache = K_next;
-      if constexpr (is_cache && !GqaFusion) {
-        if (subgroup_id < RegularKVPrefetchSGs) {
-          CUTLASS_PRAGMA_UNROLL
-          for (int VV = 0; VV < VTiles; VV++) {
-            prefetch(prefetch_v_cache, pVgV_cache(_,_,_,VV,k_idx));
+      if constexpr (is_cache) {
+        if constexpr (!DisableKVPrefetch) {
+          if (subgroup_id < RegularKVPrefetchSGs) {
+            CUTLASS_PRAGMA_UNROLL
+            for (int VV = 0; VV < VTiles; VV++) {
+              prefetch(prefetch_v_cache, pVgV_cache(_,_,_,VV,k_idx));
+            }
           }
         }
         if (K_next < kblocks_cache) {
@@ -857,21 +859,23 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
             last_prefetched_logical_k = K_next;
             last_prefetched_physical_k = physical_next;
           }
-          if (subgroup_id < RegularKVPrefetchSGs) {
-            for (int D = 0; D < size<4>(pKgK_cache); D++) {
-              prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_next,D));
+          if constexpr (!DisableKVPrefetch) {
+            if (subgroup_id < RegularKVPrefetchSGs) {
+              for (int D = 0; D < size<4>(pKgK_cache); D++) {
+                prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_next,D));
+              }
             }
           }
           k_idx_next_cache = physical_K_next;
         }
-      } else if constexpr (!GqaFusion) {
+      } else if constexpr (!DisableKVPrefetch) {
         if (subgroup_id < RegularKVPrefetchSGs) {
           prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
           update_payloads(prepared_pk, kv_stride);
         }
       }
       // Prefetch V scale
-      if constexpr (HardwareBlockScale && !GqaFusion) {
+      if constexpr (HardwareBlockScale && !DisableKVPrefetch) {
         auto& scale_prefetch_V_ctx = get<2>(scale_ctx_pv_cur);
         auto& tiled_prefetch_scaleV = get<0>(scale_prefetch_V_ctx);
         auto  prefetch_iter_scaleV = get<1>(scale_prefetch_V_ctx);
@@ -1033,7 +1037,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       }
 
       // Prefetch K scale
-      if constexpr (HardwareBlockScale && !GqaFusion) {
+      if constexpr (HardwareBlockScale && !DisableKVPrefetch) {
         auto& scale_prefetch_K_ctx = get<3>(scale_ctx_qk_cur);
         bool const has_next = !is_cache || (K_next < kblocks_cache);
         if (has_next) {
@@ -1073,7 +1077,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
                     scaleK, scaleV);
     }
 
-    if constexpr (!GqaFusion) {
+    if constexpr (!DisableKVPrefetch) {
       for (int K = blk_k1; K < prefetch_k1; K++) {
 #if not defined(CUTLASS_TEST_FOR_CRI)
         barrier_arrive(ScopeWorkgroup);
@@ -1081,7 +1085,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         if (subgroup_id < RegularKVPrefetchSGs) {
           prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
           update_payloads(prepared_pk, kv_stride);
-          if constexpr (!disable_V_prefetch) {
+          if constexpr (!DisableVPrefetch) {
             prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
             update_payloads(prepared_pv, kv_stride);
           }

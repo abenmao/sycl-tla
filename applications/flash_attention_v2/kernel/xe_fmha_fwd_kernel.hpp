@@ -1429,7 +1429,8 @@ public:
 
       CollectiveMainloop mainloop(params.mainloop, shared_storage.mainloop);
 
-      mainloop.template operator()<CollectiveMainloop::CausalMask>(
+      // splitKV kernel keep prefetch as default
+      mainloop.template operator()<false>(
               Q(_,_,head,l_coord),
               K(_,_,head,l_coord),
               V(_,_,head,l_coord),
