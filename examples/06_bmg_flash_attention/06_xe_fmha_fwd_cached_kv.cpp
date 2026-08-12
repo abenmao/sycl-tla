@@ -137,65 +137,85 @@ int main(int argc, const char **argv) {
 #endif
 #elif defined(DECODE)
 
+#if (defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3) || defined(IS_FLOAT_E2M1))
 #define KV_TILE_SIZE _256
+#else
+#define KV_TILE_SIZE _128
+#endif
 
 #if HEAD_DIM == 16
   /* Tiny config for testing */
-  using PVTileN  = _16;
+  using KVTileSize = _64;
+  using SubgroupsK = _4;
+  using PVTileN    = _16;
   using QKTileK    = _16;
   using HeadDimSize = _16;
 #elif HEAD_DIM == 64
-  using PVTileN  = _32;
+  using KVTileSize = _64;
+  using SubgroupsK = _4;
+  using PVTileN    = _64;
   using QKTileK    = _64;
   using HeadDimSize = _64;
 #elif HEAD_DIM == 96
-  using PVTileN  = _32;
+  using KVTileSize = _64;
+  using SubgroupsK = _4;
+  using PVTileN    = _32;
   using QKTileK    = _32;
   using HeadDimSize = _96;
 #elif HEAD_DIM == 128
+  using KVTileSize = KV_TILE_SIZE;
+  using SubgroupsK = _8;
 #if defined(IS_BFLOAT16)
-  using PVTileN  = _64;
+  using PVTileN    = _64;
 #else
-  using PVTileN  = _128;
+  using PVTileN    = _128;
 #endif
-  using QKTileK  = _128;
+  using QKTileK    = _128;
   using HeadDimSize = _128;
 #elif HEAD_DIM == 192
-  using PVTileN  = _32;
+  using KVTileSize = _128;
+  using SubgroupsK = _8;
+  using PVTileN    = _32;
   using QKTileK    = _64;
   using HeadDimSize = _192;
 #endif
 
-  using ShapeQK8  = Shape<_8,   KV_TILE_SIZE, QKTileK>;   // (q,k,d)
-  using ShapePV8  = Shape<_8,  PVTileN,  KV_TILE_SIZE>; // (q,v,k)
+  using ShapeQK8  = Shape<_8, KVTileSize, QKTileK>; // (q,k,d)
+  using ShapePV8  = Shape<_8, PVTileN, KVTileSize>; // (q,v,k)
   using ShapeOut8 = Shape<_8,  HeadDimSize>;        // (q,v)
-  using SubgroupLayoutQK8  = Layout<Shape<_1, _8, _1>>;
+  using SubgroupLayoutQK8 = Layout<Shape<_1, SubgroupsK, _1>>;
 
- #if HEAD_DIM == 128
-   using QKTileK16 = _64;  // use QKTileK=64 instead of 128 for better performance on cached-KV Q=16
- #else
-   using QKTileK16 = QKTileK;
- #endif
+#if HEAD_DIM == 128
+  using QKTileK16 = _64;
+#else
+  using QKTileK16 = QKTileK;
+#endif
 
-  using ShapeQK16  = Shape<_16,  KV_TILE_SIZE, QKTileK16>;
-  using ShapePV16  = Shape<_16, PVTileN,  KV_TILE_SIZE>;
+  using ShapeQK16  = Shape<_16, KVTileSize, QKTileK16>;
+  using ShapePV16  = Shape<_16, PVTileN, KVTileSize>;
   using ShapeOut16 = Shape<_16, HeadDimSize>;
-  using SubgroupLayoutQK16 = Layout<Shape<_2, _8, _1>>;
+  using SubgroupLayoutQK16 = Layout<Shape<_2, SubgroupsK, _1>>;
 
-  using ShapeQK32  = Shape<_32,  KV_TILE_SIZE, QKTileK>;
-  using ShapePV32  = Shape<_32, PVTileN,  KV_TILE_SIZE>;
+  using ShapeQK32  = Shape<_32, KVTileSize, QKTileK>;
+  using ShapePV32  = Shape<_32, PVTileN, KVTileSize>;
   using ShapeOut32 = Shape<_32, HeadDimSize>;
-  using SubgroupLayoutQK32 = Layout<Shape<_4, _8, _1>>;
+  using SubgroupLayoutQK32 = Layout<Shape<_4, SubgroupsK, _1>>;
 
-  using ShapeQK40  = Shape<_40, _64, QKTileK>;
-  using ShapePV40  = Shape<_40, PVTileN, _64>;
+#if (defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3) || defined(IS_FLOAT_E2M1))
+  using KVTileSizeLargeRows = _128;
+#else
+  using KVTileSizeLargeRows = _64;
+#endif
+
+  using ShapeQK40  = Shape<_40, KVTileSizeLargeRows, QKTileK>;
+  using ShapePV40  = Shape<_40, PVTileN, KVTileSizeLargeRows>;
   using ShapeOut40 = Shape<_40, HeadDimSize>;
-  using SubgroupLayoutQK40 = Layout<Shape<_5, _1, _1>>;
+  using SubgroupLayoutQK40 = Layout<Shape<_5, _4, _1>>;
 
-  using ShapeQK48  = Shape<_48, _64, QKTileK>;
-  using ShapePV48  = Shape<_48, PVTileN, _64>;
+  using ShapeQK48  = Shape<_48, KVTileSizeLargeRows, QKTileK>;
+  using ShapePV48  = Shape<_48, PVTileN, KVTileSizeLargeRows>;
   using ShapeOut48 = Shape<_48, HeadDimSize>;
-  using SubgroupLayoutQK48 = Layout<Shape<_6, _1, _1>>;
+  using SubgroupLayoutQK48 = Layout<Shape<_6, _4, _1>>;
 
   using ShapeQK64  = Shape<_64, _64, QKTileK>;
   using ShapePV64  = Shape<_64, PVTileN, _64>;
@@ -217,7 +237,7 @@ int main(int argc, const char **argv) {
   const int q_len      = options.seq_len_qo;
   const int total_rows = gqa_group * q_len;
 
-  const int kv_tile    = int(KV_TILE_SIZE::value);
+  const int kv_tile    = int(KVTileSize::value);
   const int kv_blocks  = (options.seq_len_kv + kv_tile - 1) / kv_tile
                        + (options.seq_len_kv_cache + kv_tile - 1) / kv_tile;
   const int base_units = options.batch * options.num_heads_kv;

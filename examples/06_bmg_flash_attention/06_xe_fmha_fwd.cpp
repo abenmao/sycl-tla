@@ -152,7 +152,11 @@ int main(int argc, const char **argv) {
 #endif
 #elif defined(DECODE)
 
+#if (defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3) || defined(IS_FLOAT_E2M1))
 #define KV_TILE_SIZE _256
+#else
+#define KV_TILE_SIZE _128
+#endif
 
 #if HEAD_DIM == 16
   /* Tiny config for testing */
