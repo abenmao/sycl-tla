@@ -78,6 +78,11 @@ struct chunk_gemm_policy_64x64x32_4x2 {
   using SGLayout = Layout<Shape<_4, _2, _1>, Stride<_2, _1, _0>>;
 };
 
+struct chunk_gemm_policy_64x64x64_4x2 {
+  using WGTile = Shape<_64, _64, _64>;
+  using SGLayout = Layout<Shape<_4, _2, _1>, Stride<_2, _1, _0>>;
+};
+
 struct chunk_gemm_policy_16x16x16 {
   using WGTile = Shape<_16, _16, _16>;
   using SGLayout = Layout<Shape<_1, _1, _1>, Stride<_1, _1, _0>>;
@@ -86,7 +91,7 @@ struct chunk_gemm_policy_16x16x16 {
 using chunk_gemm_policy_compute_A_O2 = chunk_gemm_policy_64x64x32_4x2;
 using chunk_gemm_policy_inverse = chunk_gemm_policy_16x16x16;
 using chunk_gemm_policy_compute_wu = chunk_gemm_policy_64x64x32_4x2;
-using chunk_gemm_policy_fwd_o = chunk_gemm_policy_64x64x32_4x2;
+using chunk_gemm_policy_fwd_o = chunk_gemm_policy_64x64x64_4x2;
 
 CUTE_DEVICE float
 act_softplus(float& x, float beta = 1.0f, float threshold = 20.0f) {
