@@ -35,6 +35,9 @@
 #include "cute/tensor.hpp"
 #include "cutlass/fast_math.h"
 #include "cutlass/gemm/kernel/tile_scheduler_params.h"
+// Base class PersistentTileSchedulerXeGroup; include via tile_scheduler.hpp so
+// it is pulled in with `using namespace cute` in the right lookup context.
+#include "cutlass/gemm/kernel/tile_scheduler.hpp"
 #include "cutlass/gemm_coord.hpp"
 #include "cutlass/kernel_hardware_info.hpp"
 
@@ -93,16 +96,14 @@ public:
   // Methods
   //
 
-  // Given the inputs, computes the total number of output blocks this problem
-  // will compute over Note that this is only the logical size of our grid, not
-  // the physical grid we will actually launch.
+  // Total number of output blocks this problem computes over. This is the
+  // logical grid size, not the physical grid actually launched.
   template <class ClusterShape>
   CUTLASS_HOST_DEVICE static dim3
   get_tiled_cta_shape_mnl(const KernelHardwareInfo &hw_info,
                           ClusterShape cluster_shape) {
     uint32_t total_ctas = 0;
-    uint32_t cta_in_N_dim =
-        1; // We linearize the blocks across all the problems here
+    uint32_t cta_in_N_dim = 1; // blocks linearized across all problems
 
     total_ctas = hw_info.sm_count;
 
@@ -160,8 +161,7 @@ public:
     uint64_t ctas_along_m = (num_rows_per_expert_[0] + tile_m - 1) / tile_m;
     uint64_t ctas_along_n = (N_ + tile_n - 1) / tile_n;
 
-    // Use actual tile counts, not swizzle-rounded values
-    // Swizzling is for hardware scheduling, not logical tile count
+    // Actual tile counts, not swizzle-rounded (swizzle is HW scheduling only).
     tiles_in_m_ = ctas_along_m;
     tiles_in_n_ = ctas_along_n;
     tiles_per_group_ = tiles_in_m_ * tiles_in_n_;
@@ -175,11 +175,11 @@ public:
       return WorkTileInfo::invalid_work_tile();
     }
 
-    // Direct computation: which expert and tile within expert
+    // Which expert, and tile within expert.
     int32_t group_idx = static_cast<int32_t>(linear_idx / tiles_per_group_);
     uint64_t tile_idx_within_group = linear_idx % tiles_per_group_;
 
-    // Map tile index to (m, n) coordinates based on raster order
+    // Map tile index to (m, n) per raster order.
     int32_t m_tile, n_tile;
 
     if (raster_order == RasterOrder::AlongN) {

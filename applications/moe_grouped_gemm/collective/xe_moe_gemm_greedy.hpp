@@ -68,30 +68,39 @@ namespace MoE {
 
 using namespace cute;
 
+// ---------------------------------------------------------------------------
+// GREEDY plain (bf16) mainloop. blk_coord get<0> is the M-ROW ORIGIN (m_off), NOT
+// a tile index -- the greedy split emits mixed tile_m per expert, so a tile's row
+// origin is not wg_m*BLK_M in general. A/D origins are domain_offset by m_off; B
+// is untouched. Pre-cleared accumulator (clear + gemm<false> every K-tile).
 template <
     class GmemTiledCopyA, class GmemTiledCopyB, class GmemTiledCopyD,
     class ATensor, class BTensor, class DTensor, class TiledMMA,
     class = std::enable_if_t<is_16_bit_fp_v<typename ATensor::element_type> &&
                              is_16_bit_fp_v<typename BTensor::element_type>>>
 CUTE_DEVICE void
-moe_gemm(ATensor const &A, // (M,K)
+moe_gemm_greedy(ATensor const &A, // (M,K)
          BTensor const &B, // (N,K)
          DTensor &D,       // (M,N)
          cute::Coord<int, int, cute::Underscore, int> blk_coord,
          TiledMMA const &mma) {
   auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
   auto local_id = item.get_local_linear_id();
-  auto wg_m = get<0>(blk_coord);
-  auto wg_n = get<1>(blk_coord);
+  const int m_off = get<0>(blk_coord);   // M-row origin
+  auto wg_n = get<1>(blk_coord);         // N tile index
 
-  Tensor cA = make_identity_tensor(A.shape()); // (M,K)
-  Tensor cB = make_identity_tensor(B.shape()); // (N,K)
-  Tensor cD = make_identity_tensor(D.shape()); // (M,N)
-
-  auto wg_coord = make_coord(wg_m, wg_n, 0);
   auto wg_tile = mma.tile_mnk();
 
-  Tensor gA = local_tile(cA, select<0, 2>(wg_tile), make_coord(wg_m, _));
+  // Shift the M origin so logical M-tile 0 begins at row m_off. domain_offset
+  // moves the identity coords (which drive both the 2D gmem address and M-bounds
+  // predication) by (m_off, 0) for A/D; B untouched. Then always pick M-tile 0.
+  Tensor cA = domain_offset(make_coord(m_off, 0), make_identity_tensor(A.shape())); // (M,K)
+  Tensor cB = make_identity_tensor(B.shape());                                      // (N,K)
+  Tensor cD = domain_offset(make_coord(m_off, 0), make_identity_tensor(D.shape())); // (M,N)
+
+  auto wg_coord = make_coord(_0{}, wg_n, 0);
+
+  Tensor gA = local_tile(cA, select<0, 2>(wg_tile), make_coord(_0{}, _));
   Tensor gB = local_tile(cB, select<1, 2>(wg_tile), make_coord(wg_n, _));
   Tensor gD = local_tile(cD, wg_tile, wg_coord, Step<_1, _1, X>{});
 
@@ -126,8 +135,8 @@ moe_gemm(ATensor const &A, // (M,K)
   auto pAgA = thr_prefetch_A.partition_S(gA);
   auto pBgB = thr_prefetch_B.partition_S(gB);
 
-  // No clear(tCrD): the first K-tile MMA uses null-src0 (NoAcc) to write
-  // D = A*B directly, eliding the accumulator init.
+  // Pre-clear, then accumulate D += A*B every K-tile (single gemm<false>).
+  clear(tCrD);
 
   constexpr SPIRVScope barrier_scope = ScopeWorkgroup;
   int k_start_idx = 0;
@@ -156,71 +165,44 @@ moe_gemm(ATensor const &A, // (M,K)
     reorder(tArA, tCrA);
     reorder(tBrB, tCrB);
 
-    // First K tile: null-src0 DPAS (D = A*B), no accumulator read/clear.
-    // Subsequent tiles accumulate (D += A*B).
-    if (k_tile == k_start_idx) {
-      cute::gemm<true>(mma, tCrA, tCrB, tCrD);
-    } else {
-      cute::gemm<false>(mma, tCrA, tCrB, tCrD);
-    }
+    cute::gemm<false>(mma, tCrA, tCrB, tCrD);
     barrier_wait(barrier_scope);
   }
   reorder(tCrD, tCrD_final);
   copy(tiled_copy_d, tCrD_final, tCgD);
 }
 
-// ---------------------------------------------------------------------------
-// Block-scaled (mixed-precision) MoE GEMM mainloop.
-//
-// Scale model is selected by CfgGroupK (Config::group_k):
-//
-//  * CfgGroupK == 0 -> TENSOR scale (ScaleKind::Tensor). A single global scale
-//    spans all of K and N (GroupN/GroupK are the runtime full extents). This
-//    uses the software 2-element-zip path of XE_BDPAS_TT, whose mma_unpack
-//    computes out[i] = (A[i]*B[i]) * (SFA(i)*SFB(i)) + C[i] with SFB broadcast
-//    across the subgroup N tile. Left BYTE-IDENTICAL.
-//
-//  * CfgGroupK >  0 -> MX BLOCK scale (ScaleKind::Block). MX-exact, matching
-//    example 51 / the production collective xe_mma_blockscaled_native.hpp:
-//    scale A and scale B are 2D-block-loaded from gmem and fed to the hardware
-//    BDPAS 4-element-zip path (data, scale, mn_offset, k_offset). Scale B is
-//    per-N-row (group_n == 1). The scale machinery is the shared cutlass
-//    collective helpers in xe_mma_blockscaled_scale_traits.hpp.
-//
-// Scale tensor conventions (MN-major, matching the collective):
-//   TENSOR: mAscale (M, scale_k) stride (1, M); mBscale (scale_n, scale_k)
-//           stride (scale_k, 1).
-//   BLOCK : mAscale (M, scale_k, 1) MN-major stride (1, round_up(M,64), ...);
-//           mBscale (scale_n, scale_k, 1) MN-major stride (1,
-//           round_up(scale_n,64), ...).
-// ---------------------------------------------------------------------------
+// GREEDY block-scaled mainloop. blk_coord get<0> is the M-ROW ORIGIN (m_off), not
+// a tile index -- the greedy split emits mixed tile_m per expert. A/D origins are
+// domain_offset by m_off; the A-scale row is m_off + sub-group row; B-scale is
+// untouched. Pre-cleared accumulator (clear + gemm<false> every K-tile).
 template <int CfgGroupN, int CfgGroupK, class GmemTiledCopyA,
           class GmemTiledCopyB, class GmemTiledCopyD, class ATensor,
           class BTensor, class SATensor, class SBTensor, class DTensor,
           class TiledMMA>
 CUTE_DEVICE void
-moe_gemm_scaled(ATensor const &A,        // (M,K)
-                BTensor const &B,        // (N,K)
-                SATensor const &mAscale, // see conventions
-                SBTensor const &mBscale, // see conventions
-                DTensor &D,              // (M,N)
-                cute::Coord<int, int, cute::Underscore, int> blk_coord,
-                TiledMMA const &mma, int GroupN, int GroupK) {
+moe_gemm_scaled_greedy(ATensor const &A,        // (M,K)
+                     BTensor const &B,        // (N,K)
+                     SATensor const &mAscale, // MN-major, see moe_gemm_scaled
+                     SBTensor const &mBscale, // MN-major, see moe_gemm_scaled
+                     DTensor &D,              // (M,N)
+                     cute::Coord<int, int, cute::Underscore, int> blk_coord,
+                     TiledMMA const &mma, int GroupN, int GroupK) {
   auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
   auto local_id = item.get_local_linear_id();
-  auto wg_m = get<0>(blk_coord);
-  auto wg_n = get<1>(blk_coord);
+  const int m_off = get<0>(blk_coord);   // M-row origin
+  auto wg_n = get<1>(blk_coord);         // N tile index
 
-  Tensor cA = make_identity_tensor(A.shape()); // (M,K)
-  Tensor cB = make_identity_tensor(B.shape()); // (N,K)
-  Tensor cD = make_identity_tensor(D.shape()); // (M,N)
-
-  auto wg_coord = make_coord(wg_m, wg_n, 0);
   auto wg_tile = mma.tile_mnk();
 
-  Tensor gA = local_tile(cA, select<0, 2>(wg_tile), make_coord(wg_m, _));
+  // Shift A/D origins so logical M-tile 0 begins at row m_off (as in moe_gemm).
+  Tensor cA = domain_offset(make_coord(m_off, 0), make_identity_tensor(A.shape())); // (M,K)
+  Tensor cB = make_identity_tensor(B.shape());                                      // (N,K)
+  Tensor cD = domain_offset(make_coord(m_off, 0), make_identity_tensor(D.shape())); // (M,N)
+
+  Tensor gA = local_tile(cA, select<0, 2>(wg_tile), make_coord(_0{}, _));
   Tensor gB = local_tile(cB, select<1, 2>(wg_tile), make_coord(wg_n, _));
-  Tensor gD = local_tile(cD, wg_tile, wg_coord, Step<_1, _1, X>{});
+  Tensor gD = local_tile(cD, wg_tile, make_coord(_0{}, wg_n, 0), Step<_1, _1, X>{});
 
   auto thr_mma = mma.get_slice(local_id);
 
@@ -265,11 +247,12 @@ moe_gemm_scaled(ATensor const &A,        // (M,K)
   constexpr int SG_K = ceil_div(BLK_K, SG_NUMS_K);
 
   const int sg_id = cutlass::get_sub_group_id();
-  const int m_coord = wg_m * BLK_M + (sg_id / SG_NUMS_N) * SG_M;
+  // A-scale row = absolute M row: m_off + sub-group row (not wg_m*BLK_M).
+  const int m_coord = m_off + (sg_id / SG_NUMS_N) * SG_M;
   const int n_coord = wg_n * BLK_N + (sg_id % SG_NUMS_N) * SG_N;
 
-  // Both paths use NoAcc (null-src0) on the first K tile to skip
-  // accumulator init, then accumulate on subsequent tiles.
+  // Pre-clear, then accumulate D += A*B every K-tile (single gemm<false>).
+  clear(tCrD);
 
   constexpr SPIRVScope barrier_scope = ScopeWorkgroup;
   int k_start_idx = 0;
@@ -278,27 +261,12 @@ moe_gemm_scaled(ATensor const &A,        // (M,K)
   int k_tile_count = ceil_div(shape<1>(A), get<2>(wg_tile));
 
   if constexpr (CfgGroupK == 0) {
-    // =========================================================================
-    // TENSOR scale path — hardware BDPAS with 8-bit (E8M0) scale factors.
-    // Semantics: scale-A per M row (one scalar spanning all K),
-    //            scale-B per tensor (one scalar per expert).
-    // Implementation: GroupK=MMA_K keeps Height=ceil_div(SG_K,MMA_K)=2, which
-    // is required for the BDPAS register offset scheme to work correctly with
-    // large SG_M values. The scale surface has scale_k=2 (two identical K
-    // entries). Scales are loaded ONCE before the K-loop and reused for every
-    // K-tile. The K-offsets from make_scaled_offsets point at the same data
-    // (both K positions hold the same value), so BDPAS sees one constant scale.
-    // =========================================================================
+    // TENSOR scale path (see moe_gemm_scaled for full commentary).
     namespace coll = cutlass::gemm::collective;
     using ElementScaleA = typename SATensor::element_type;
     using ElementScaleB = typename SBTensor::element_type;
 
-    // K-elements processed by one DPAS instruction (e.g. 32 for FP8).
     constexpr int MMA_K = get<2>(typename TiledMMA::Shape_MNK{});
-    // Number of K-elements that share one scale factor. Set to MMA_K so the
-    // scale surface has minimal height (ceil_div(SG_K, MMA_K) = 2). Both K
-    // slots hold the same duplicated value — satisfies BDPAS's 2D scale grid
-    // requirement while semantically applying one constant scale per row/tensor.
     constexpr int TensorGroupK = MMA_K;
 
     using GemmIterM = Int<decltype(size<1>(tCrA.shape()))::value>;
@@ -334,11 +302,9 @@ moe_gemm_scaled(ATensor const &A,        // (M,K)
     using scaleB_vec_t =
         intel::vector_t<ElementScaleB, decltype(size(fragment_scaleB))::value>;
 
-    // Prefetch scales once (scale_k=2, loaded in one 2D block read).
     prefetch(tiled_prefetch_scaleA, prefetch_iter_scaleA(_, _, _, 0));
     prefetch(tiled_prefetch_scaleB, prefetch_iter_scaleB(_, _, _, 0));
 
-    // Load scales once before the K-loop.
     copy(tiled_copy_scaleA, copy_iter_scaleA(_, _, _, 0), fragment_scaleA);
     copy(tiled_copy_scaleB, copy_iter_scaleB(_, _, _, 0), fragment_scaleB);
 
@@ -358,38 +324,23 @@ moe_gemm_scaled(ATensor const &A,        // (M,K)
     for (int k_tile = k_start_idx; k_tile < k_tile_count;
          k_tile++, prefetch_k++) {
       barrier_arrive(barrier_scope);
-
       copy(tiled_copy_a, tAgA(_, _, _, k_tile), tArA);
       copy(tiled_copy_b, tBgB(_, _, _, k_tile), tBrB);
-
       if (prefetch_k < k_tile_count) {
         prefetch(prefetch_a, pAgA(_, _, _, prefetch_k));
         prefetch(prefetch_b, pBgB(_, _, _, prefetch_k));
       }
-
       reorder(tArA, tCrA);
       reorder(tBrB, tCrB);
-
-      if (k_tile == k_start_idx) {
-        cute::gemm<true>(
-            mma,
-            make_zip_tensor(tCrA, scaleA, scale_m_offsets, scale_ak_offsets),
-            make_zip_tensor(tCrB, scaleB, scale_n_offsets, scale_bk_offsets),
-            tCrD);
-      } else {
-        cute::gemm<false>(
-            mma,
-            make_zip_tensor(tCrA, scaleA, scale_m_offsets, scale_ak_offsets),
-            make_zip_tensor(tCrB, scaleB, scale_n_offsets, scale_bk_offsets),
-            tCrD);
-      }
+      cute::gemm<false>(
+          mma,
+          make_zip_tensor(tCrA, scaleA, scale_m_offsets, scale_ak_offsets),
+          make_zip_tensor(tCrB, scaleB, scale_n_offsets, scale_bk_offsets),
+          tCrD);
       barrier_wait(barrier_scope);
     }
   } else {
-    // =========================================================================
-    // MX BLOCK scale path (hardware BDPAS 4-element zip). Mirrors
-    // include/cutlass/gemm/collective/xe_mma_blockscaled_native.hpp operator().
-    // =========================================================================
+    // MX BLOCK scale path (see moe_gemm_scaled for full commentary).
     namespace coll = cutlass::gemm::collective;
     using ElementScaleA = typename SATensor::element_type;
     using ElementScaleB = typename SBTensor::element_type;
@@ -401,8 +352,7 @@ moe_gemm_scaled(ATensor const &A,        // (M,K)
     using GemmIterN = Int<decltype(size<1>(tCrB.shape()))::value>;
     using GemmIterK = Int<decltype(size<2>(tCrB.shape()))::value>;
 
-    const int l_coord = 0; // per-expert tensor already sliced.
-
+    const int l_coord = 0;
     constexpr int k_reload_factor = cute::max(GroupK / BLK_K, 1);
 
     auto [tiled_copy_scaleA, copy_iter_scaleA, fragment_scaleA] =
@@ -444,17 +394,12 @@ moe_gemm_scaled(ATensor const &A,        // (M,K)
     for (int k_tile = k_start_idx; k_tile < k_tile_count;
          k_tile++, prefetch_k++) {
       barrier_arrive(barrier_scope);
-
       copy(tiled_copy_a, tAgA(_, _, _, k_tile), tArA);
       copy(tiled_copy_b, tBgB(_, _, _, k_tile), tBrB);
-
       copy(tiled_copy_scaleA,
-           copy_iter_scaleA(_, _, _, k_tile / k_reload_factor),
-           fragment_scaleA);
+           copy_iter_scaleA(_, _, _, k_tile / k_reload_factor), fragment_scaleA);
       copy(tiled_copy_scaleB,
-           copy_iter_scaleB(_, _, _, k_tile / k_reload_factor),
-           fragment_scaleB);
-
+           copy_iter_scaleB(_, _, _, k_tile / k_reload_factor), fragment_scaleB);
       if (prefetch_k < k_tile_count) {
         prefetch(prefetch_a, pAgA(_, _, _, prefetch_k));
         prefetch(prefetch_b, pBgB(_, _, _, prefetch_k));
@@ -463,31 +408,19 @@ moe_gemm_scaled(ATensor const &A,        // (M,K)
         prefetch(tiled_prefetch_scaleB,
                  prefetch_iter_scaleB(_, _, _, prefetch_k / k_reload_factor));
       }
-
       reorder(tArA, tCrA);
       reorder(tBrB, tCrB);
-
       Tensor scaleA = make_tensor(
           recast<scaleA_vec_t>(fragment_scaleA).data(),
           make_layout(Shape<_1, GemmIterM, _1>{}, Stride<_1, _0, _0>{}));
       Tensor scaleB = make_tensor(
           recast<scaleB_vec_t>(fragment_scaleB).data(),
           make_layout(Shape<_1, GemmIterN, _1>{}, Stride<_1, _0, _0>{}));
-      // First K tile: null-src0 BDPAS (D = A*B), no accumulator read/clear.
-      // Subsequent tiles accumulate (D += A*B).
-      if (k_tile == k_start_idx) {
-        cute::gemm<true>(
-            mma,
-            make_zip_tensor(tCrA, scaleA, scale_m_offsets, scale_ak_offsets),
-            make_zip_tensor(tCrB, scaleB, scale_n_offsets, scale_bk_offsets),
-            tCrD);
-      } else {
-        cute::gemm<false>(
-            mma,
-            make_zip_tensor(tCrA, scaleA, scale_m_offsets, scale_ak_offsets),
-            make_zip_tensor(tCrB, scaleB, scale_n_offsets, scale_bk_offsets),
-            tCrD);
-      }
+      cute::gemm<false>(
+          mma,
+          make_zip_tensor(tCrA, scaleA, scale_m_offsets, scale_ak_offsets),
+          make_zip_tensor(tCrB, scaleB, scale_n_offsets, scale_bk_offsets),
+          tCrD);
       barrier_wait(barrier_scope);
     }
   }

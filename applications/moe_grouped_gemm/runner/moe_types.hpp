@@ -94,8 +94,7 @@ using ScaleStoreFor =
 // Fill a flat host scale buffer with random dequant-scale values.
 template <class ElementScaleStore>
 void fill_flat_scales(std::vector<ElementScaleStore> &buf, uint64_t seed, bool constant) {
-  // Dequant scales span a deliberate 5 octaves (2^5): wide enough to exercise
-  // different per-block exponents, without dipping into E8M0 underflow noise.
+  // Span 10 octaves to exercise varied per-block exponents without E8M0 underflow.
   const float scale_max = 0.25f;                    // == 2^-2
   const float scale_min = constant ? scale_max      // constant fill: single value
                                     : scale_max / 1024.0f;  // 2^-12 → 10 octaves
@@ -196,6 +195,89 @@ void pack_moe_scales(const ElementScaleIn *per_token_scale,
   out_sA.copy_from_host(h_sA.data());
   out_sB.copy_from_host(h_sB.data());
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// GREEDY configs. Each carries the LARGE/SMALL/TINY WG-tile variants the on-device
+// greedy split dispatches to. TinyTile has its own SG layout (its few rows can't
+// tile under the main one) but the same WG thread count, so all three share one
+// nd_range. `is_dynamic_m` selects the MoEGEMMGreedy<IsDynamicM> instantiation.
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+using SG_4x8 = Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>;
+using SG_1x32 = Layout<Shape<_1, cute::Int<32>, _1>, Stride<cute::Int<32>, _1, _0>>;
+
+// 3 buckets: LARGE 256x512, SMALL 192x512, TINY 8x512. tile_k per dtype.
+using MoeTile_256_512_32  = Shape<_256, _512, _32>;
+using MoeTile_192_512_32  = Shape<cute::Int<192>, _512, _32>;
+using MoeTile_8_512_32    = Shape<_8, _512, _32>;
+using MoeTile_256_512_64  = Shape<_256, _512, _64>;
+using MoeTile_192_512_64  = Shape<cute::Int<192>, _512, _64>;
+using MoeTile_8_512_64    = Shape<_8, _512, _64>;
+using MoeTile_256_512_128 = Shape<_256, _512, _128>;
+using MoeTile_192_512_128 = Shape<cute::Int<192>, _512, _128>;
+using MoeTile_8_512_128   = Shape<_8, _512, _128>;
+
+template <bool IsDynamicM, class TLarge, class TSmall, class TSG,
+          class TTiny = MoeTile_8_512_32, class TTinySG = SG_1x32>
+struct Bf16GreedyConfig {
+  using Element = cutlass::bfloat16_t;
+  using ElementScale = void;
+  using ElementOutput = cutlass::bfloat16_t;
+  using LargeTile = TLarge;
+  using SmallTile = TSmall;
+  using TinyTile  = TTiny;
+  using SGLayout = TSG;
+  using TinySGLayout = TTinySG;
+  using LayoutA = cutlass::layout::RowMajor;
+  using LayoutB = cutlass::layout::RowMajor;
+  using LayoutD = cutlass::layout::RowMajor;
+  static constexpr int group_k = 0;
+  static constexpr int group_n = 0;
+  static constexpr ScaleKind scale_kind = ScaleKind::Plain;
+  static constexpr bool is_dynamic_m = IsDynamicM;
+};
+
+template <bool IsDynamicM, class TElement, class TScale, int GroupK, int GroupN,
+          ScaleKind Kind, class TLarge, class TSmall, class TSG,
+          class TTiny, class TTinySG = SG_1x32, class TOut = cutlass::bfloat16_t>
+struct LowpGreedyConfig {
+  using Element = TElement;
+  using ElementScale = TScale;
+  using ElementOutput = TOut;
+  using LargeTile = TLarge;
+  using SmallTile = TSmall;
+  using TinyTile  = TTiny;
+  using SGLayout = TSG;
+  using TinySGLayout = TTinySG;
+  using LayoutA = cutlass::layout::RowMajor;
+  using LayoutB = cutlass::layout::RowMajor;   // mxfp4 overrides to ColumnMajor
+  using LayoutD = cutlass::layout::RowMajor;
+  static constexpr int group_k = GroupK;
+  static constexpr int group_n = GroupN;
+  static constexpr ScaleKind scale_kind = Kind;
+  static constexpr bool is_dynamic_m = IsDynamicM;
+};
+
+template <bool IsDynamicM, class TElement, class TScale, int GroupK, int GroupN,
+          ScaleKind Kind, class TLarge, class TSmall, class TSG,
+          class TTiny, class TTinySG = SG_1x32, class TOut = cutlass::bfloat16_t>
+struct MxFp4GreedyConfig
+    : LowpGreedyConfig<IsDynamicM, TElement, TScale, GroupK, GroupN, Kind, TLarge,
+                       TSmall, TSG, TTiny, TTinySG, TOut> {
+  using LayoutB = cutlass::layout::ColumnMajor;   // mxfp4 weights are K-contiguous
+};
+
+// Uniform-M and dynamic-M greedy configs per dtype (same tiles; differ only by
+// is_dynamic_m). The benchmark picks the dynamic-M variant when M varies across
+// experts, else the uniform-M variant.
+using Bf16Greedy      = Bf16GreedyConfig<false, MoeTile_256_512_32, MoeTile_192_512_32, SG_4x8, MoeTile_8_512_32>;
+using Bf16GreedyDynM  = Bf16GreedyConfig<true,  MoeTile_256_512_32, MoeTile_192_512_32, SG_4x8, MoeTile_8_512_32>;
+using MxFp8Greedy     = LowpGreedyConfig<false, cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_64, MoeTile_192_512_64, SG_4x8, MoeTile_8_512_64>;
+using MxFp8GreedyDynM = LowpGreedyConfig<true,  cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_64, MoeTile_192_512_64, SG_4x8, MoeTile_8_512_64>;
+using MxFp4Greedy     = MxFp4GreedyConfig<false, cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, MoeTile_192_512_128, SG_4x8, MoeTile_8_512_128>;
+using MxFp4GreedyDynM = MxFp4GreedyConfig<true,  cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, MoeTile_192_512_128, SG_4x8, MoeTile_8_512_128>;
+using Fp8TensorGreedy     = LowpGreedyConfig<false, cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_256_512_64, MoeTile_192_512_64, SG_4x8, MoeTile_8_512_64>;
+using Fp8TensorGreedyDynM = LowpGreedyConfig<true,  cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_256_512_64, MoeTile_192_512_64, SG_4x8, MoeTile_8_512_64>;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Per-dtype configs. Each is a pure bag of type/constant members (no kernel types):

@@ -30,13 +30,12 @@
  *
  **************************************************************************************************/
 /*! \file
-    \brief Shared config-driven MoE grouped-GEMM runner: the device kernel
-           launchers + verification. Source-only; depends on nothing from
-           benchmarks/ or examples/. The kernel-free shared declarations come
-           from moe_types.hpp. Everything lives in namespace cutlass::moe.
+    \brief Shared config-driven MoE grouped-GEMM runner: device kernel launchers
+           + verification. Source-only (no deps on benchmarks/ or examples/).
+           Kernel-free shared declarations come from moe_types.hpp.
 
-    The device kernel (MoE::MoEGEMM) is only instantiated by the consumer's
-    device-codegen TU (moe_api.cpp), keeping AOT device codegen localized there.
+    The device kernel is only instantiated by the consumer's device-codegen TU
+    (moe_api.cpp), keeping AOT device codegen localized there.
 */
 
 #pragma once
@@ -69,10 +68,9 @@
 
 #include "moe_grouped_gemm/runner/moe_types.hpp"
 
-#include "moe_grouped_gemm/kernel/xe_moe_grouped_gemm.hpp"
+#include "moe_grouped_gemm/kernel/xe_moe_gemm_greedy.hpp"
 #include "moe_grouped_gemm/kernel/xe_moe_tile_scheduler.hpp"
-#include "moe_grouped_gemm/kernel/xe_moe_grouped_gemm_double_buffer.hpp"
-#include "moe_grouped_gemm/kernel/xe_moe_grouped_gemm_double_buffer_scaled.hpp"
+#include "moe_grouped_gemm/kernel/xe_moe_gemm_double_buffer.hpp"
 
 #pragma clang diagnostic ignored "-Wpass-failed"
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -98,7 +96,7 @@ struct VerificationHelper {
   void parse(const int num_experts, const int *num_tokens_per_expert_host,
              int moe_n, int moe_k,
              const int *num_tokens_per_expert_device = nullptr) {
-    m = 0; // reset so a reused helper doesn't accumulate a stale row total
+    m = 0; // reset so a reused helper doesn't accumulate stale rows
     n = moe_n;
     k = moe_k;
     groups = num_experts;
@@ -125,8 +123,7 @@ struct VerificationHelper {
     return {base * (1.0f + 0.1f * log2_k), atol};
   }
 
-  // BF16 verify via a host reference GEMM (no scaling): A/B upcast to FP32,
-  // each expert compared with a relative tolerance.
+  // BF16 verify via host reference GEMM (no scaling); per-expert relative tol.
   template <class ElementA, class ElementB, class ElementD,
             class = std::enable_if_t<
                 is_any_of_v<ElementA, cute::bfloat16_t, cute::half_t> &&
@@ -154,11 +151,9 @@ struct VerificationHelper {
     const float rtol = tol.rtol;
     const float atol = tol.atol;
 
-    // Reference mirrors the device numerics: operands stay in their native
-    // input type, the inner product accumulates in FP32 (ElementAccumulator,
-    // like DPAS), and the result is rounded to ElementD on store the same way
-    // the kernel's epilogue does. Only the accumulation ORDER differs, which is
-    // what tolerance_for() covers.
+    // Reference mirrors the device numerics: native input type, FP32
+    // accumulation (like DPAS), round-to-ElementD on store like the epilogue.
+    // Only accumulation ORDER differs, which tolerance_for() covers.
     std::vector<ElementD> h_C(D_elems, ElementD(0.f)); // beta=0, unused C
     std::vector<ElementD> h_ref_D;
     bool passed = true;
@@ -213,11 +208,11 @@ struct VerificationHelper {
     return passed;
   }
 
-  // Verify block/tensor scaled low-precision: dequant A/B to FP32 on the host,
-  // per-expert host reference GEMM, compare with relative tolerance.
+  // Verify block/tensor scaled low-precision: dequant A/B to FP32 on host,
+  // per-expert host reference GEMM, relative-tol compare.
   //
-  // Scales are read from the UNPADDED host grids, not the kernel's packed surface,
-  // so verify stays independent of pack_moe_scales.
+  // Scales read from the UNPADDED host grids (not the packed surface), keeping
+  // verify independent of pack_moe_scales.
     template <bool IsTensor, bool BColMajor, class ScaleQ, class ElementA,
             class ElementScaleIn, class ElementD>
   bool verify_scaled(sycl::queue &Q, const ElementA *d_A, const ElementA *d_B,
@@ -324,10 +319,9 @@ struct VerificationHelper {
     const float rtol = tol.rtol;
     const float atol = tol.atol;
 
-    // A/B stay FP32 here: the dequantized value (quant * scale) has no
-    // representation in ElementA, and the kernel's BDPAS applies the scale in
-    // FP32 too. D is ElementD so the epilogue's round-to-output is modelled,
-    // matching what the kernel actually stores.
+    // A/B stay FP32: the dequantized value (quant*scale) isn't representable in
+    // ElementA, and BDPAS applies the scale in FP32 too. D is ElementD to model
+    // the epilogue's round-to-output.
     std::vector<ElementD> h_C(int64_t(m) * n, ElementD(0.f)); // beta=0, unused C
     std::vector<ElementD> h_ref_D;
     bool passed = true;
@@ -385,8 +379,8 @@ struct VerificationHelper {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Per-target workgroup tile from a Config. Config::TileShape{Cri,Bmg} are
-// dependent names, so this may precede the config definitions.
+// Per-target workgroup tile from a Config. TileShape{Cri,Bmg} are dependent
+// names, so this may precede the config definitions.
 template <class Config>
 using MoETileShape =
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
@@ -395,7 +389,6 @@ using MoETileShape =
     typename Config::TileShapeBmg;
 #endif
 
-// Select the MMA atom for the config
 namespace detail {
 // SGLayout selection: Config::SGLayout if declared, else Def.
 template <class C, class Def, class = void> struct ConfigSGLayoutT { using type = Def; };
@@ -412,8 +405,8 @@ auto choose_tiled_mma(TA *A, TB *B) {
   using TB_non_CV = cutlass::platform::remove_cv_t<TB>;
 
   // Subgroup tiling, n-major, per hardware target. Per-SG N (BLK_N/SG_N) must
-  // stay >= the GroupN scale-broadcast width in the block-scale mainloop, or the
-  // broadcast breaks (e.g. a 4x8 layout -> per-SG N=16).
+  // stay >= the GroupN scale-broadcast width in the block-scale mainloop, else
+  // the broadcast breaks (e.g. 4x8 layout -> per-SG N=16).
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
   using DefaultSGLayout = Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>;
 #else
@@ -437,87 +430,62 @@ auto choose_tiled_mma(TA *A, TB *B) {
   }
 }
 
-// Unique sycl kernel name. The trailing Config is required: A/B/D + layouts +
-// TileShape are not unique alone — two configs can share them yet differ in
-// scaling (fp8-tensor vs mxfp8-e4m3 are both e4m3->bf16 at 256x256x64), and one
-// binary compiles more than one config.
+// Unique sycl kernel name. Trailing Config is required: A/B/D + layouts +
+// TileShape aren't unique alone — configs can share them yet differ in scaling
+// (fp8-tensor vs mxfp8-e4m3 are both e4m3->bf16 at 256x256x64), and one binary
+// compiles more than one config.
 template <typename, typename, typename, typename, typename, typename, typename>
 class GemmCuteName;
 
-// single timed launch: the single source of truth for launch
-// geometry (tile shape, scheduler params, MMA, grid/nd_range, kernel props).
-// Submits one N x K kernel, waits, returns elapsed device ms.
-//
-// Every operand comes from the client's VendorTensorMapping — including the device
-// copy of the per-expert counts (the kernel's M_per_group). The scale block sizes
-// are read off the Config, so the runtime values passed to the kernel can never
-// disagree with the template arguments it is instantiated with.
-template <class Config, typename ElementA, typename ElementScaleIn,
-          typename ElementD>
-double moe_launch_timed(
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// GREEDY launch (plain bf16). Per-expert tile size chosen ON-DEVICE by the
+// greedy split; LARGE/SMALL/TINY variants share one WG thread count so a single
+// nd_range hosts all three. Grid = sm_count persistent workgroups.
+// Config::is_dynamic_m selects uniform-M vs dynamic-M instantiation.
+template <class Config, typename ElementA, typename ElementScaleIn, typename ElementD>
+double moe_launch_timed_greedy(
     const VendorTensorMapping<ElementA, ElementScaleIn, ElementD> &tm) {
-  using ElementB = ElementA;
-  // The kernel's scale type is void on the plain path, which also takes null
-  // surfaces; elsewhere it reads the client's packed, padded ones.
-  using ElementS =
-      cutlass::platform::conditional_t<Config::scale_kind == ScaleKind::Plain,
-                                       void, ElementScaleIn>;
-  const ElementS *scalesA = nullptr;
-  const ElementS *scalesB = nullptr;
-  if constexpr (Config::scale_kind != ScaleKind::Plain) {
-    scalesA = tm.packed_scale_a;
-    scalesB = tm.packed_scale_b;
-  }
-
-  const ElementA *activations = tm.scatter_tokens;
-  const ElementB *weights     = tm.experts_weight;
-  ElementD       *outputs     = tm.y;
-  const int32_t *num_rows_per_expert_device = tm.experts_token_count_device;
-  const int gemm_n = tm.N, gemm_k = tm.K;
-  const int num_experts = tm.num_experts;
-  constexpr int group_n = Config::group_n;
-  constexpr int group_k = Config::group_k;
-
-  int sm_count =
-      cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
-  cutlass::KernelHardwareInfo hw_info{0, sm_count};
-  auto dummy_problem_shape = cute::Shape<int, int, int>{1, gemm_k, gemm_n};
-  // MoEGEMM's tile scheduler derives each expert's shape itself, so the
-  // GroupedGEMM API is fed a single dummy ProblemShape rather than one per group.
-  auto dummy_group_problem_shape =
-      cutlass::gemm::GroupProblemShape<Shape<int, int, int>>{
-          1, &dummy_problem_shape, nullptr};
-  // Same MoETileShape<Config> as choose_tiled_mma()'s WGTile, so scheduler and
-  // MMA can never drift.
-  using TileShape = MoETileShape<Config>;
-  using ClusterShape = Shape<_1, _1, _1>;
   using LayoutA = typename Config::LayoutA;
   using LayoutB = typename Config::LayoutB;
   using LayoutD = typename Config::LayoutD;
-  auto scheduler_params =
-      PersistentTileSchedulerXeMoE<ProblemShape>::to_underlying_arguments(
-          dummy_group_problem_shape, TileShape{}, ClusterShape{}, hw_info,
-          PersistentTileSchedulerXeMoE<ProblemShape>::Arguments{
-              1, RasterOrderOptions::AlongN});
-  auto group_distribution =
-      PersistentTileSchedulerXeMoE<ProblemShape>::get_grid_shape(
-          scheduler_params, dummy_group_problem_shape, TileShape{},
-          ClusterShape{}, hw_info,
-          PersistentTileSchedulerXeMoE<ProblemShape>::Arguments{
-              1, RasterOrderOptions::AlongN});
-  auto mma = choose_tiled_mma<Config>(activations, weights);
-  auto MaxThreadsPerWorkgroup = size(mma);
-  dim3 local_range{MaxThreadsPerWorkgroup, 1, 1};
+  using SubgroupLayout = typename Config::SGLayout;
+  using LargeTile = typename Config::LargeTile;
+  using SmallTile = typename Config::SmallTile;
+  using TinyTile  = typename Config::TinyTile;
+  using TinySGLayout = typename Config::TinySGLayout;
 
-  sycl::range<3> local = {local_range.z, local_range.y, local_range.x};
-  sycl::range<3> groups = {group_distribution.z, group_distribution.y,
-                           group_distribution.x};
-  sycl::range<3> global = {local[0] * groups[0], local[1] * groups[1],
-                           local[2] * groups[2]};
+  using DpasOp = XE_DPAS_TT<8, float, ElementA, ElementA>;
+  using MmaLarge = typename TiledMMAHelper<
+      MMA_Atom<DpasOp>, Layout<LargeTile>, SubgroupLayout>::TiledMMA;
+  using MmaSmall = typename TiledMMAHelper<
+      MMA_Atom<DpasOp>, Layout<SmallTile>, SubgroupLayout>::TiledMMA;
+  using MmaTiny = typename TiledMMAHelper<
+      MMA_Atom<DpasOp>, Layout<TinyTile>, TinySGLayout>::TiledMMA;
+  static_assert(size(MmaLarge{}) == size(MmaSmall{}) &&
+                size(MmaLarge{}) == size(MmaTiny{}),
+                "greedy tile variants must share one workgroup thread count");
+
+  const ElementA *activations = tm.scatter_tokens;
+  const ElementA *weights     = tm.experts_weight;
+  ElementD       *outputs     = tm.y;
+  const int32_t *num_rows_per_expert_device = tm.experts_token_count_device;
+  const int gemm_n = tm.N, gemm_k = tm.K, num_experts = tm.num_experts;
+  // Uniform per-expert M, computed host-side and passed as a scalar so the
+  // uniform-M kernel path needn't read it back from the device counts array.
+  const int32_t uniform_m =
+      (num_experts > 0 && tm.experts_token_count) ? tm.experts_token_count[0] : 0;
+
+  int sm_count =
+      cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
+  const size_t threads_per_workgroup = size(MmaLarge{});
+  sycl::range<3> local_range  = {1, 1, threads_per_workgroup};
+  sycl::range<3> group_range  = {1, 1, static_cast<size_t>(sm_count)};
+  sycl::range<3> global_range = {local_range[0] * group_range[0],
+                                 local_range[1] * group_range[1],
+                                 local_range[2] * group_range[2]};
 
   namespace syclex = sycl::ext::oneapi::experimental;
   namespace intelex = sycl::ext::intel::experimental;
-
   syclex::properties kernel_props{syclex::sub_group_size<16>,
 #if (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
                                   intelex::grf_size<512>
@@ -526,26 +494,86 @@ double moe_launch_timed(
 #endif
   };
   sycl::queue Q = compat::get_default_queue();
-
   GPU_Clock timer;
   timer.start();
   auto event = Q.parallel_for<
-      GemmCuteName<ElementA, ElementB, ElementD, LayoutA, LayoutB, TileShape,
-                   Config>>(
-      sycl::nd_range<3>(global, local), kernel_props, [=](auto) {
-        if constexpr (Config::scale_kind == ScaleKind::Plain) {
-          MoE::MoEGEMM<void, void, void,
-                       LayoutA, LayoutB, LayoutD>(activations, weights, scalesA, scalesB,
-                                      outputs, mma, num_rows_per_expert_device,
-                                      num_experts, gemm_n, gemm_k,
-                                      scheduler_params);
-        } else {
-          MoE::MoEGEMM<void, void, void, LayoutA, LayoutB, LayoutD,
-                       Config::group_n, Config::group_k>(
-              activations, weights, scalesA, scalesB, outputs, mma,
-              num_rows_per_expert_device, num_experts, gemm_n, gemm_k,
-              scheduler_params, group_n, group_k);
-        }
+      GemmCuteName<ElementA, ElementA, ElementD, LayoutA, LayoutB, LargeTile, Config>>(
+      sycl::nd_range<3>(global_range, local_range), kernel_props, [=](auto) {
+        MoE::MoEGEMMGreedy<Config::is_dynamic_m, void, void, void,
+                           LayoutA, LayoutB, LayoutD,
+                           MmaLarge, MmaSmall, MmaTiny>(
+            activations, weights, outputs, num_rows_per_expert_device,
+            num_experts, gemm_n, gemm_k, uniform_m);
+      });
+  EventManager::getInstance().addEvent(event);
+  Q.wait_and_throw();
+  return double(timer.seconds() * 1000);
+}
+
+// GREEDY scaled launch (fp8, mxfp8, mxfp4): builds BDPAS MMAs (incl. TINY) and
+// passes scale pointers to MoEGEMMGreedyScaled. Config::is_dynamic_m selects mode.
+template <class Config, typename ElementA, typename ElementB, typename ElementS,
+          typename ElementD>
+double moe_launch_timed_greedy_scaled(
+    const ElementA *activations, const ElementB *weights,
+    const ElementS *scalesA, const ElementS *scalesB, ElementD *outputs,
+    const int gemm_n, const int gemm_k,
+    const int32_t *num_rows_per_expert_device, const int num_experts,
+    const int32_t uniform_m) {
+  static_assert(Config::scale_kind != ScaleKind::Plain,
+                "use moe_launch_timed_greedy for plain BF16");
+  using LayoutA = typename Config::LayoutA;
+  using LayoutB = typename Config::LayoutB;
+  using LayoutD = typename Config::LayoutD;
+  using SubgroupLayout = typename Config::SGLayout;
+  using LargeTile = typename Config::LargeTile;
+  using SmallTile = typename Config::SmallTile;
+  using TinyTile  = typename Config::TinyTile;
+  using TinySGLayout = typename Config::TinySGLayout;
+
+  using DpasOp = XE_BDPAS_TT<8, float, cutlass::platform::remove_cv_t<ElementA>>;
+  using MmaLarge = typename TiledMMAHelper<
+      MMA_Atom<DpasOp>, Layout<LargeTile>, SubgroupLayout>::TiledMMA;
+  using MmaSmall = typename TiledMMAHelper<
+      MMA_Atom<DpasOp>, Layout<SmallTile>, SubgroupLayout>::TiledMMA;
+  using MmaTiny = typename TiledMMAHelper<
+      MMA_Atom<DpasOp>, Layout<TinyTile>, TinySGLayout>::TiledMMA;
+  static_assert(size(MmaLarge{}) == size(MmaSmall{}) &&
+                size(MmaLarge{}) == size(MmaTiny{}),
+                "greedy tile variants must share one workgroup thread count");
+
+  int sm_count =
+      cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
+  const size_t threads_per_workgroup = size(MmaLarge{});
+  sycl::range<3> local_range  = {1, 1, threads_per_workgroup};
+  sycl::range<3> group_range  = {1, 1, static_cast<size_t>(sm_count)};
+  sycl::range<3> global_range = {local_range[0] * group_range[0],
+                                 local_range[1] * group_range[1],
+                                 local_range[2] * group_range[2]};
+
+  namespace syclex = sycl::ext::oneapi::experimental;
+  namespace intelex = sycl::ext::intel::experimental;
+  syclex::properties kernel_props{syclex::sub_group_size<16>,
+#if (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+                                  intelex::grf_size<512>
+#else
+                                  intelex::grf_size<256>
+#endif
+  };
+  sycl::queue Q = compat::get_default_queue();
+  GPU_Clock timer;
+  timer.start();
+  auto event = Q.parallel_for<
+      GemmCuteName<ElementA, ElementB, ElementD, LayoutA, LayoutB, LargeTile, Config>>(
+      sycl::nd_range<3>(global_range, local_range), kernel_props, [=](auto) {
+        MoE::MoEGEMMGreedyScaled<Config::is_dynamic_m, void, void, void,
+                                 LayoutA, LayoutB, LayoutD,
+                                 Config::group_n, Config::group_k,
+                                 MmaLarge, MmaSmall, MmaTiny,
+                                 ElementA, ElementB, ElementS, ElementD>(
+            activations, weights, scalesA, scalesB, outputs,
+            num_rows_per_expert_device, num_experts, gemm_n, gemm_k,
+            Config::group_n, Config::group_k, uniform_m);
       });
   EventManager::getInstance().addEvent(event);
   Q.wait_and_throw();
@@ -559,53 +587,15 @@ double moe_launch_timed(
 
 using SG_8x4 = Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>;
 using SG_8x2 = Layout<Shape<_8, _2, _1>, Stride<_2, _1, _0>>;
-using SG_4x8 = Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>;
-
-template <class TElement, class TScale, int GroupK, int GroupN, ScaleKind Kind,
-          class TTileCri, class TSG, class TOut = cutlass::bfloat16_t>
-struct LowpConfigSG {
-  using Element = TElement;
-  using ElementScale = TScale;
-  using ElementOutput = TOut;
-  using TileShapeCri = TTileCri;
-  using SGLayout = TSG;
-  using LayoutA = cutlass::layout::RowMajor;
-  using LayoutB = cutlass::layout::RowMajor;
-  using LayoutD = cutlass::layout::RowMajor;
-  static constexpr int group_k = GroupK;
-  static constexpr int group_n = GroupN;
-  static constexpr ScaleKind scale_kind = Kind;
-};
-template <class TTileCri, class TSG>
-struct Bf16ConfigSG {
-  using Element = cutlass::bfloat16_t;
-  using ElementScale = void;
-  using ElementOutput = cutlass::bfloat16_t;
-  using TileShapeCri = TTileCri;
-  using TileShapeBmg = TTileCri;
-  using SGLayout = TSG;
-  using LayoutA = cutlass::layout::RowMajor;
-  using LayoutB = cutlass::layout::RowMajor;
-  using LayoutD = cutlass::layout::RowMajor;
-  static constexpr int group_k = 0;
-  static constexpr int group_n = 0;
-  static constexpr ScaleKind scale_kind = ScaleKind::Plain;
-};
-
-template <class TElement, class TScale, int GroupK, int GroupN, ScaleKind Kind,
-          class TTileCri, class TSG, class TOut = cutlass::bfloat16_t>
-struct MxFp4ConfigSG
-    : LowpConfigSG<TElement, TScale, GroupK, GroupN, Kind, TTileCri, TSG, TOut> {
-  using LayoutB = cutlass::layout::ColumnMajor;
-};
+// SG_4x8 comes from moe_types.hpp (greedy configs); do not redefine here.
+// (Single-buffer LowpConfigSG / Bf16ConfigSG / MxFp4ConfigSG removed: greedy
+//  replaced that path. The double-buffer *DoubleBufferConfigSG templates below
+//  are still used.)
 
 using MoeTile_256_256_32 = Shape<_256, _256, _32>;
 using MoeTile_256_256_64 = Shape<_256, _256, _64>;
 using MoeTile_256_256_128 = Shape<_256, _256, _128>;
-// K-tile: 8-bit dtypes use 64, 4-bit (mxfp4) uses 128.
-using MoeTile_256_512_64 = Shape<_256, _512, _64>;
-using MoeTile_256_512_128 = Shape<_256, _512, _128>;
-using MoeTile_192_512_64 = Shape<cute::Int<192>, _512, _64>;
+// (MoeTile_*_512_* aliases come from moe_types.hpp; not redefined here.)
 using MoeTile_384_320_64 = Shape<cute::Int<384>, cute::Int<320>, _64>;
 using MoeTile_384_320_128 = Shape<cute::Int<384>, cute::Int<320>, _128>;
 // Double-buffer tile shapes.
@@ -617,13 +607,7 @@ using MoeTile_224_256_128 = Shape<cute::Int<224>, _256, _128>;
 using MoeTile_288_256_64  = Shape<cute::Int<288>, _256, _64>;
 using MoeTile_288_256_128 = Shape<cute::Int<288>, _256, _128>;
 
-// SG layouts are divisibility-verified (per-SG M % 8 == 0, per-SG N % 16 == 0).
-using Fp8Tensor_256_512_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_256_512_64, SG_4x8>;
-using Fp8Tensor_192_512_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_192_512_64, SG_4x8>;
-using MxFp8_256_512_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_64, SG_4x8>;
-using MxFp8_192_512_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_192_512_64, SG_4x8>;
-using MxFp4_256_512_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, SG_4x8>;
-
+// (Single-buffer SG-sweep configs removed: greedy replaced that path.)
 
 using MoeTile_192_256_32 = Shape<cute::Int<192>, cute::Int<256>, cute::Int<32>>;
 using MoeTile_192_384_32 = Shape<cute::Int<192>, cute::Int<384>, cute::Int<32>>;
@@ -654,7 +638,7 @@ struct Bf16DoubleBufferConfigSG {
 
 // Uniform-M launch from the client's mapping. uniform_m is the one argument not
 // taken from it: the mapping holds per-expert counts, and collapsing them to a
-// single M is the client's check to make (see MoEBenchmarkRunner::run).
+// single M is the client's call (see MoEBenchmarkRunner::run).
 template <class Config, typename ElementA, typename ElementScaleIn,
           typename ElementD>
 double moe_launch_timed_double_buffer(
@@ -686,7 +670,7 @@ double moe_launch_timed_double_buffer(
   using ClusterShape = Shape<_1, _1, _1>;
 
   // The uniform kernel only reads raster_order_ from the params; grid is a flat
-  // sm_count x 1 x 1, so no tile-count math is needed.
+  // sm_count x 1 x 1, so no tile-count math needed.
   auto scheduler_params =
       PersistentTileSchedulerXeMoE<ProblemShape>::to_underlying_arguments(
           dummy_group_problem_shape, TileShape{}, ClusterShape{}, hw_info,
@@ -743,7 +727,7 @@ using Bf16DoubleBuffer_256_256_32 = Bf16DoubleBufferConfigSG<MoeTile_256_256_32,
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Scaled uniform-M double-buffer configs + launcher.
-// Mirrors LowpConfigSG but adds uniform_m = true so the benchmark wiring can
+// Mirrors LowpConfigSG but adds uniform_m = true so benchmark wiring can
 // distinguish it from the variable-M path.
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -764,8 +748,7 @@ struct ScaledDoubleBufferConfigSG {
   static constexpr ScaleKind scale_kind = Kind;
   static constexpr bool uniform_m = true;
 
-  // SG_N must be divisible by 16; violating this produces silent incorrect D
-  // writes for experts 1+.
+  // SG_N must be divisible by 16, else silent incorrect D writes for experts 1+.
   static constexpr int SG_NUMS_N = get<1>(TSG{}.shape());
   static constexpr int BLK_N    = get<1>(TTileCri{});
   static constexpr int SG_N     = BLK_N / SG_NUMS_N;
@@ -782,8 +765,8 @@ struct MxFp4ScaledDoubleBufferConfigSG
 };
 
 // Scaled uniform-M launch from the client's mapping; uniform_m as above. Scale
-// block sizes come from the Config, so the runtime values reaching the kernel
-// cannot disagree with the template arguments it is instantiated with.
+// block sizes come from the Config, so runtime values can't disagree with the
+// template arguments the kernel is instantiated with.
 template <class Config, typename ElementA, typename ElementScaleIn,
           typename ElementD>
 double moe_launch_timed_double_buffer_scaled(
@@ -880,24 +863,16 @@ using MoeTile_224_512_64 = Shape<cute::Int<224>, cute::Int<512>, cute::Int<64>>;
 using MoeTile_320_384_64 = Shape<cute::Int<320>, cute::Int<384>, cute::Int<64>>;
 using MoeTile_384_256_64 = Shape<cute::Int<384>, cute::Int<256>, cute::Int<64>>;
 using MoeTile_384_320_64 = Shape<cute::Int<384>, cute::Int<320>, cute::Int<64>>;
-using MoeTile_192_512_128 = Shape<cute::Int<192>, cute::Int<512>, cute::Int<128>>;
+// (MoeTile_192_512_128 / _192_512_32 / _256_512_32 come from moe_types.hpp.)
 using MoeTile_224_512_128 = Shape<cute::Int<224>, cute::Int<512>, cute::Int<128>>;
 using MoeTile_320_384_128 = Shape<cute::Int<320>, cute::Int<384>, cute::Int<128>>;
 using MoeTile_384_256_128 = Shape<cute::Int<384>, cute::Int<256>, cute::Int<128>>;
 using MoeTile_384_320_128 = Shape<cute::Int<384>, cute::Int<320>, cute::Int<128>>;
-using MoeTile_192_512_32 = Shape<cute::Int<192>, cute::Int<512>, cute::Int<32>>;
 using MoeTile_224_512_32 = Shape<cute::Int<224>, cute::Int<512>, cute::Int<32>>;
-using MoeTile_256_512_32 = Shape<cute::Int<256>, cute::Int<512>, cute::Int<32>>;
 using MoeTile_320_384_32 = Shape<cute::Int<320>, cute::Int<384>, cute::Int<32>>;
 using MoeTile_384_256_32 = Shape<cute::Int<384>, cute::Int<256>, cute::Int<32>>;
 using MoeTile_384_320_32 = Shape<cute::Int<384>, cute::Int<320>, cute::Int<32>>;
-using Fp8Tensor_320_384_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_320_384_64, SG_4x8>;
-using MxFp8_320_384_64 = LowpConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_320_384_64, SG_4x8>;
-using MxFp4_192_512_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_192_512_128, SG_4x8>;
-using MxFp4_320_384_128 = MxFp4ConfigSG<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_320_384_128, SG_4x8>;
-using Bf16_192_512_32 = Bf16ConfigSG<MoeTile_192_512_32, SG_4x8>;
-using Bf16_256_512_32 = Bf16ConfigSG<MoeTile_256_512_32, SG_4x8>;
-using Bf16_320_384_32 = Bf16ConfigSG<MoeTile_320_384_32, SG_4x8>;
+// (Single-buffer SG-sweep configs removed: greedy replaced that path.)
 using Fp8TensorDoubleBuffer_192_256_64 = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_192_256_64, SG_4x8>;
 using MxFp8DoubleBuffer_192_256_64 = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_192_256_64, SG_4x8>;
 using Fp8TensorDoubleBuffer_192_384_64 = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_192_384_64, SG_4x8>;

@@ -1,0 +1,24 @@
+
+# MoE greedy sanity. The greedy kernel supports BOTH dynamic-M and uniform M:
+# tile-select routes varying-M shapes to MoEGEMMGreedy<true> (forward-scan) and
+# uniform shapes to MoEGEMMGreedy<false> (closed-form divmod).
+# All lines use explicit --m_per_expert and --verify=true.
+
+# --- (A) DYNAMIC M (n=1536, k=512, 4 experts, M=200/512/683/1024) ---
+#         Exercises the dynamic-M greedy path (per-expert scan + per-expert bases).
+fp8_tensor_moe --bm_name=moe_fp8_tensor_sanity_dynamic_m --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=200,512,683,1024 --verify=true
+bf16_moe       --bm_name=moe_bf16_sanity_dynamic_m  --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=200,512,683,1024 --verify=true
+mxfp8_e4m3_moe --bm_name=moe_mxfp8_sanity_dynamic_m --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=200,512,683,1024 --verify=true
+mxfp4_moe      --bm_name=moe_mxfp4_sanity_dynamic_m --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=200,512,683,1024 --verify=true
+
+# --- (B) UNIFORM M = 683 (greedy split [256,256,192]) ---
+fp8_tensor_moe --bm_name=moe_fp8_tensor_sanity_uniform683 --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=683,683,683,683 --verify=true
+bf16_moe       --bm_name=moe_bf16_sanity_uniform683       --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=683,683,683,683 --verify=true
+mxfp8_e4m3_moe --bm_name=moe_mxfp8_sanity_uniform683      --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=683,683,683,683 --verify=true
+mxfp4_moe      --bm_name=moe_mxfp4_sanity_uniform683      --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=683,683,683,683 --verify=true
+
+# --- (C) UNIFORM M = 1366 (exercises the LOOK-2 two-small tail [.,.,.,.,192,192]) ---
+fp8_tensor_moe --bm_name=moe_fp8_tensor_sanity_uniform1366 --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=1366,1366,1366,1366 --verify=true
+bf16_moe       --bm_name=moe_bf16_sanity_uniform1366       --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=1366,1366,1366,1366 --verify=true
+mxfp8_e4m3_moe --bm_name=moe_mxfp8_sanity_uniform1366      --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=1366,1366,1366,1366 --verify=true
+mxfp4_moe      --bm_name=moe_mxfp4_sanity_uniform1366      --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=1366,1366,1366,1366 --verify=true

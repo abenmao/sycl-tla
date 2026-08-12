@@ -45,15 +45,16 @@ namespace moe_bench {
 // Verification toggle passed across the TU boundary (device / host check).
 enum VerifyKind { kVerifyNone = 0, kVerifyDevice = 1, kVerifyHost = 2 };
 
-// Single entry point (defined in moe_api.cpp). The client builds a host-side
-// cutlass::moe::VendorTensorMapping<ElementA, float, ElementD> and passes it here
-// type-erased, with every device buffer (A/B/D, the packed scale surfaces, and the
-// device copy of the per-expert counts) already allocated and filled. Selects the
-// best tile, optionally verifies, runs one timed kernel, and returns elapsed ms
-// (-1.0 on failure, *error set). Allocates no device memory itself.
-//   vendor_tm : the host-side VendorTensorMapping<ElementA,float,ElementD>
-//   dtype     : the .in line's first token (selects the tile candidate list)
+// Single entry point (defined in moe_api.cpp). The client passes a host-side
+// VendorTensorMapping<ElementA, float, ElementD> type-erased, with every device
+// buffer (A/B/D, packed scale surfaces, device copy of the per-expert counts)
+// already allocated and filled. Selects the best tile, optionally verifies, runs
+// one timed kernel, returns elapsed ms (-1.0 on failure, *error set). Allocates no
+// device memory itself.
+//   dtype        : the .in line's first token (selects the tile candidate list)
+//   force_greedy : from the .in override_use_greedy_always flag; when true always
+//                  picks greedy (ignores the hardcoded DB set).
 double launch_moe(const void *vendor_tm, const char *dtype, int verify,
-                  std::string *error);
+                  std::string *error, bool force_greedy = false);
 
 } // namespace moe_bench

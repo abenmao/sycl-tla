@@ -4,15 +4,15 @@
  **************************************************************************************************/
 
 /*! \file
-    \brief Tile registry (dtype -> compiled tiles, + pick_tile lookup) and the entry
-           points that run a client-built VendorTensorMapping (moe_run /
+    \brief Tile registry (dtype -> compiled tiles, + pick_best_solution lookup) and
+           the entry points that run a client-built VendorTensorMapping
+           (moe_run /
            moe_run_double_buffer). No device memory is owned or touched here: the
-           client allocates, fills and uploads every operand — A/B/D, the padded
-           scale surfaces (see scale_surface_geom / pack_moe_scales in
-           runner/moe_types.hpp), and the device copy of the per-expert counts, and
-           validates the finished mapping (moe_validate_mapping) before the launch.
-           For the benchmark that all happens in MoEBenchmarkRunner::run's
-           build_inputs.
+           client allocates, fills, uploads every operand — A/B/D, the padded
+           scale surfaces (scale_surface_geom / pack_moe_scales in
+           runner/moe_types.hpp), the device per-expert counts — and validates
+           the mapping (moe_validate_mapping) before launch. For the benchmark
+           that happens in MoEBenchmarkRunner::run's build_inputs.
 */
 
 #pragma once
@@ -30,19 +30,19 @@
 namespace cutlass::moe {
 
 // Tile registry. moe_api.cpp registers every compiled tile (geometry + kind +
-// run function), keyed by dtype tag; launch_moe() does pick_tile() + dispatch.
-// The run function is type-erased to double, so no cute/Config type crosses into
-// this header.
+// run fn), keyed by dtype tag; launch_moe() does the tile-select + dispatch. The
+// run fn is type-erased to double, so no cute/Config type crosses into this
+// header.
 
 // Which impl the tile's run function calls.
 enum class KernelKind {
-  Regular,      // moe_run_impl<Config>              — variable-M, any dtype
+  Greedy,       // moe_run_impl_greedy<Config>        — greedy split, uniform + dynamic M
   DoubleBuffer, // moe_run_impl_double_buffer<Config> — uniform-M
 };
 
-// Per-tile run function: runs the tile's kernel, returns elapsed ms. The exact
-// Config (SGLayout, TileShape, element types) is baked in at registration time —
-// it cannot be recovered from the dtype string alone.
+// Per-tile run fn: runs the tile's kernel, returns elapsed ms. The exact Config
+// (SGLayout, TileShape, element types) is baked in at registration — it can't be
+// recovered from the dtype string alone.
 using TileRunFn =
     double (*)(const void *vendor_tm, int verify, std::string *error);
 
@@ -63,11 +63,13 @@ inline void moe_register_tile(const char *dtype, TileGeom geom,
   moe_tile_registry()[dtype].push_back({geom, kind, run});
 }
 
-// Registry lookup + pick_tile() for `dtype` and this problem shape. Returns the
-// chosen TileEntry, or nullptr if the dtype has no registered tiles (*error set).
-inline const TileEntry *select_tile(const char *dtype, int N, int K,
-                                     std::vector<int> const &M_per_expert,
-                                     int num_experts, std::string *error) {
+// Registry lookup + pick_best_solution() for `dtype` and this problem shape.
+// `M`/`dynamic_m` are decided once by the caller (where the M list is built) and
+// passed in. Returns the chosen TileEntry, or nullptr if the dtype has no
+// registered tiles (sets *error).
+inline const TileEntry *select_tile(const char *dtype, int N, int K, int M,
+                                     bool dynamic_m, std::string *error,
+                                     bool force_greedy = false) {
   auto &reg = moe_tile_registry();
   auto it = reg.find(dtype);
   if (it == reg.end() || it->second.empty()) {
@@ -77,28 +79,16 @@ inline const TileEntry *select_tile(const char *dtype, int N, int K,
   }
   auto const &entries = it->second;
 
-  std::vector<TileGeom> geoms;
-  geoms.reserve(entries.size());
-  for (auto const &e : entries)
-    geoms.push_back(e.geom);
-
-  const int idx = pick_tile(geoms, dtype, N, K, M_per_expert, num_experts);
+  // Read the entries in place; project each to its geom (no copy of the list).
+  const int idx = pick_best_solution(
+      entries, [](TileEntry const &e) -> TileGeom const & { return e.geom; },
+      dtype, N, K, M, dynamic_m, force_greedy);
   return &entries[idx];
 }
 
-// One timed launch of the variable-M kernel from a client-built mapping (elapsed
-// ms). Pure launch: every operand — A/B/D, the padded scale surfaces, the
-// per-expert count array — is already on the device, allocated and filled by the
-// client (for the benchmark, MoEBenchmarkRunner::run's build_inputs). Nothing is
-// allocated, padded, copied or re-derived here.
-template <class Config, class ElementA, class ElementD, class ElementScaleIn>
-double moe_run(const VendorTensorMapping<ElementA, ElementScaleIn, ElementD> &tm) {
-  return moe_launch_timed<Config>(tm);
-}
-
-// Same through the double-buffer kernel, which requires uniform M across experts
+// Run through the double-buffer kernel, which requires uniform M across experts
 // (throws otherwise) and takes it as a scalar. The client's scale surfaces are
-// already in the layout this kernel reads, so no repack is needed.
+// already in the layout this kernel reads, so no repack.
 template <class Config, class ElementA, class ElementD, class ElementScaleIn>
 double moe_run_double_buffer(
     const VendorTensorMapping<ElementA, ElementScaleIn, ElementD> &tm) {

@@ -73,25 +73,34 @@ else()
   set(MOE_FULL_RUN_DEF "")
 endif()
 
+# Diagnostic prints (field-transform tile-routing dump). Independent of
+# FULL_RUN_TIMING_AND_VERIFY so prints can be toggled without changing the
+# timing/verify build. On by default.
+option(MOE_DEBUG_PRINT "Enable MoE diagnostic prints (tile-routing dump)" ON)
+if(MOE_DEBUG_PRINT)
+  set(MOE_DEBUG_PRINT_DEF MOE_DEBUG_PRINT)
+else()
+  set(MOE_DEBUG_PRINT_DEF "")
+endif()
+
 # ---------------------------------------------------------------------------
 # VARIANT fields: <target_suffix>|<MOE_DTYPE_<TAG>_PART<n> define>
 # The suffix names the binary cutlass_benchmarks_moe_gemm_<suffix>_sycl.
+# These per-dtype split binaries exist for parallel compilation; real runs use the
+# merged all-dtype binary (MOE_BENCH_ALL) below, which has every tile so the
+# field-transform can route to double buffer. Only PARTs that still register tiles
+# are listed: greedy (one per dtype) + the double-buffer tiles the field-transform
+# actually selects (mxfp4 192x256 + 224x256, mxfp8 224x256). bf16/fp8_tensor DB and
+# the emptied _p1 parts were removed.
 set(MOE_BENCH_VARIANTS
-    # -- single-buffer (3 tiles each -> 1 part) --
-    "bf16_p0|MOE_DTYPE_BF16_PART0"
-    "mxfp8_e4m3_p0|MOE_DTYPE_MXFP8_E4M3_PART0"
-    "mxfp4_e2m1_p0|MOE_DTYPE_MXFP4_E2M1_PART0"
-    "fp8_tensor_e4m3_p0|MOE_DTYPE_FP8_TENSOR_E4M3_PART0"
-    # -- double-buffer --
-    "bf16_db_p0|MOE_DTYPE_DOUBLE_BUFFER_BF16_PART0"
-    "bf16_db_p1|MOE_DTYPE_DOUBLE_BUFFER_BF16_PART1"
-    "bf16_db_p2|MOE_DTYPE_DOUBLE_BUFFER_BF16_PART2"
-    "mxfp8_e4m3_db_p0|MOE_DTYPE_DOUBLE_BUFFER_MXFP8_E4M3_PART0"
-    "mxfp8_e4m3_db_p1|MOE_DTYPE_DOUBLE_BUFFER_MXFP8_E4M3_PART1"
-    "mxfp4_e2m1_db_p0|MOE_DTYPE_DOUBLE_BUFFER_MXFP4_E2M1_PART0"
-    "mxfp4_e2m1_db_p1|MOE_DTYPE_DOUBLE_BUFFER_MXFP4_E2M1_PART1"
-    "fp8_tensor_e4m3_db_p0|MOE_DTYPE_DOUBLE_BUFFER_FP8_TENSOR_E4M3_PART0"
-    "fp8_tensor_e4m3_db_p1|MOE_DTYPE_DOUBLE_BUFFER_FP8_TENSOR_E4M3_PART1")
+    # -- greedy (one binary per dtype; each holds uniform + dynamic-M tiles) --
+    "bf16|MOE_DTYPE_BF16"
+    "mxfp8_e4m3|MOE_DTYPE_MXFP8_E4M3"
+    "mxfp4_e2m1|MOE_DTYPE_MXFP4_E2M1"
+    "fp8_tensor_e4m3|MOE_DTYPE_FP8_TENSOR_E4M3"
+    # -- double-buffer (only the tiles the field-transform uses) --
+    "mxfp8_e4m3_db|MOE_DTYPE_DOUBLE_BUFFER_MXFP8_E4M3"
+    "mxfp4_e2m1_db|MOE_DTYPE_DOUBLE_BUFFER_MXFP4_E2M1")
 
 foreach(VARIANT ${MOE_BENCH_VARIANTS})
   string(REPLACE "|" ";" VPARTS ${VARIANT})
@@ -112,7 +121,7 @@ foreach(VARIANT ${MOE_BENCH_VARIANTS})
   target_compile_definitions(cutlass_benchmarks_moe_gemm_${VSUFFIX}_sycl
       PRIVATE ${VDTYPE}
               CUTE_ENABLE_XE_BLOCK_2D_ASSERT ${MOE_ALL_SHAPES_DEF}
-              ${MOE_FULL_RUN_DEF})
+              ${MOE_FULL_RUN_DEF} ${MOE_DEBUG_PRINT_DEF})
   if(NOT DPCPP_SYCL_TARGET STREQUAL "spir64")
     target_link_options(cutlass_benchmarks_moe_gemm_${VSUFFIX}_sycl PRIVATE
         -Xs "-options \"-igc_opts 'VectorAliasBBThreshold=10000'\"")
@@ -137,7 +146,7 @@ cutlass_benchmark_add_executable(
 )
 target_compile_definitions(cutlass_benchmarks_grouped_gemm_sycl
     PRIVATE MOE_BENCH_ALL CUTE_ENABLE_XE_BLOCK_2D_ASSERT ${MOE_ALL_SHAPES_DEF}
-            ${MOE_FULL_RUN_DEF})
+            ${MOE_FULL_RUN_DEF} ${MOE_DEBUG_PRINT_DEF})
 if(NOT DPCPP_SYCL_TARGET STREQUAL "spir64")
   target_link_options(cutlass_benchmarks_grouped_gemm_sycl PRIVATE
       -Xs "-options \"-igc_opts 'VectorAliasBBThreshold=10000'\"")
