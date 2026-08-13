@@ -1,8 +1,8 @@
-mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=16392 --override_number_experts=16 --verify=true
-mxfp8_e4m3 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=32784 --override_number_experts=16 --verify=true
-fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=16392 --override_number_experts=16 --verify=true
-fp8_tensor --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=32784 --override_number_experts=16 --verify=true
-mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=16392 --override_number_experts=16 --verify=true
-mxfp4 --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=32784 --override_number_experts=16 --verify=true
-bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --override_number_experts=4 --verify=true
-bf16 --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --override_number_experts=24 --verify=true
+mxfp8_e4m3_moe --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=16392 --override_number_experts=16 --verify=true
+mxfp8_e4m3_moe --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+fp8_tensor_moe --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=16392 --override_number_experts=16 --verify=true
+fp8_tensor_moe --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+mxfp4_moe --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=16392 --override_number_experts=16 --verify=true
+mxfp4_moe --bm_name=bm_src0 --ep_size=1 --num_experts=24 --topk=1 --hidden_size=1280 --new_hidden_size=3584 --num_of_tokens=32784 --override_number_experts=16 --verify=true
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --override_number_experts=4 --verify=true
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --override_number_experts=24 --verify=true
