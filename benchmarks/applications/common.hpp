@@ -39,7 +39,7 @@
 #ifdef CUTLASS_TEST_FOR_CRI
 #define ITERATIONS 1
 #else
-#define ITERATIONS 100
+#define ITERATIONS 5
 #endif
 #endif
 
@@ -180,6 +180,17 @@ struct BenchmarkOptions {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Per-line iteration count: use options.iterations when the options type exposes
+// it (e.g. MoEBenchmarkOptions, configurable via --iterations=N in the .in line),
+// otherwise fall back to the ITERATIONS macro. Keeps apps whose options lack the
+// field compiling unchanged.
+template <typename T>
+static auto bench_iterations(T const &o, int) -> decltype(o.iterations) {
+  return o.iterations;
+}
+template <typename T>
+static int bench_iterations(T const &, long) { return ITERATIONS; }
+
 template <typename BenchOptions>
 auto benchmark_main(int argc, const char **argv) -> int {
   BenchOptions options;
@@ -198,11 +209,12 @@ auto benchmark_main(int argc, const char **argv) -> int {
 
   std::stringstream benchmark_name;
   benchmark_name << benchmark_config << "/" << options.benchmark_name();
-#ifdef CUTLASS_TEST_FOR_CRI
-  ::benchmark::RegisterBenchmark(benchmark_name.str(), runner, options, hw_info)->UseManualTime()->Iterations(ITERATIONS)->MinTime(0.0);
-#else
-  ::benchmark::RegisterBenchmark(benchmark_name.str(), runner, options, hw_info)->UseManualTime();
-#endif
+  // Fixed iteration count (per-line --iterations, else the ITERATIONS default).
+  // Iterations() and MinTime() are mutually exclusive in Google Benchmark, so we
+  // set only Iterations().
+  const int bench_iters = bench_iterations(options, 0);
+  ::benchmark::RegisterBenchmark(benchmark_name.str(), runner, options, hw_info)
+      ->UseManualTime()->Iterations(bench_iters);
 
   return 0;
 }

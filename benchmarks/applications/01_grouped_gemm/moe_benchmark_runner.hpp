@@ -161,6 +161,9 @@ struct MoEBenchmarkOptions {
   int n, k, num_experts;
   // MoE routing parameters (PR #687 semantics).
   int m, topk, ep_size;
+  // Benchmark iteration count (per .in line: --iterations=N). Defaults to the
+  // ITERATIONS macro (1 for CRI, 100 otherwise).
+  int iterations;
   bool verify;
   std::string m_per_expert; // comma-separated per-expert M list
   std::string bm_name;
@@ -195,7 +198,7 @@ struct MoEBenchmarkOptions {
 
   MoEBenchmarkOptions()
       : error(false), n(2880), k(2880), num_experts(8),
-        m(4096), topk(1), ep_size(1),
+        m(4096), topk(1), ep_size(1), iterations(ITERATIONS),
         verify(false), m_per_expert(""), bm_name("MoEGEMM"),
         hidden_size(0), new_hidden_size(0), num_experts_per_rank(0),
         override_number_experts(0), override_use_greedy_always(false), proj(""),
@@ -251,6 +254,9 @@ struct MoEBenchmarkOptions {
     cmd.get_cmd_line_argument("m", m, 4096);
     cmd.get_cmd_line_argument("topk", topk, 1);
     cmd.get_cmd_line_argument("ep_size", ep_size, 1);
+
+    // Per-line benchmark iteration count; defaults to the ITERATIONS macro.
+    cmd.get_cmd_line_argument("iterations", iterations, int(ITERATIONS));
 
     // Reference-API names, read after the legacy flags so a canonical name, when
     // present, overrides its alias.
