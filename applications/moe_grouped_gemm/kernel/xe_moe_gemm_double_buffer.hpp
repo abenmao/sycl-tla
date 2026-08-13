@@ -568,10 +568,11 @@ MoEGEMMDoubleBufferScaled(const ElementA *Activations, const ElementB *Weights,
 
     auto sA_block = [&]() {
       if constexpr (CfgGroupK > 0)
+        // Padded M extent (round_up_M) for DWord-aligned MXFP scale load.
         return make_tensor(
             make_gmem_ptr(const_cast<ElementS *>(ScalesA) +
                           padded_cumulative_M_i * scale_k_block),
-            make_layout(make_shape(uniform_M, scale_k_block, 1),
+            make_layout(make_shape(round_up_M, scale_k_block, 1),
                         make_stride(_1{}, round_up_M,
                                     int64_t(round_up_M) * scale_k_block)));
       else return make_tensor(make_gmem_ptr(const_cast<ElementS *>(ScalesA)),
@@ -658,7 +659,8 @@ MoEGEMMDoubleBufferScaled(const ElementA *Activations, const ElementB *Weights,
         auto sA_block_t = make_tensor(
             make_gmem_ptr(const_cast<ElementS *>(ScalesA) +
                           padded_cumM_tensor * scale_k_tensor),
-            make_layout(make_shape(uniform_M, scale_k_tensor, 1),
+            // Padded M extent (round_up_M_tensor) for DWord-aligned MXFP scale load.
+            make_layout(make_shape(round_up_M_tensor, scale_k_tensor, 1),
                         make_stride(_1{}, round_up_M_tensor,
                                     int64_t(round_up_M_tensor) * scale_k_tensor)));
         auto sB_block_t = make_tensor(

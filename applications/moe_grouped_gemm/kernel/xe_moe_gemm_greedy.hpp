@@ -437,9 +437,10 @@ MoEGEMMGreedyScaled(const ElementA *Activations, const ElementB *Weights,
 
     const int32_t round_up_M_e =
         (expert_m_rows + kScaleAlign - 1) & ~(kScaleAlign - 1);
+    // Padded M extent (round_up_M_e) for DWord-aligned MXFP scale load.
     auto sA = make_tensor(
         make_gmem_ptr(const_cast<ElementS *>(sA_base)),
-        make_layout(make_shape(expert_m_rows, int(scale_k), 1),
+        make_layout(make_shape(round_up_M_e, int(scale_k), 1),
                     make_stride(_1{}, round_up_M_e,
                                 int64_t(round_up_M_e) * scale_k)));
     auto sB = make_tensor(

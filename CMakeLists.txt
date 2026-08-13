@@ -388,6 +388,11 @@ if (NOT (CMAKE_BUILD_TYPE OR CONFIGURATION_TYPES))
   set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "RelWithDebInfo" "Release")
 endif()
 
+# Explicitly define NDEBUG for Release so asserts are always compiled out, even if
+# a toolchain's CMAKE_CXX_FLAGS_RELEASE doesn't carry -DNDEBUG or it fails to reach
+# the SYCL device pass. Applies to every target's host+device compile in Release.
+add_compile_definitions($<$<CONFIG:Release>:NDEBUG>)
+
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 if (DEFINED CMAKE_DEBUG_POSTFIX)
   set(CUTLASS_LIBRARY_DEBUG_POSTFIX_INIT ${CMAKE_DEBUG_POSTFIX})
