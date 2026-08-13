@@ -137,7 +137,8 @@ CUTE_DEVICE void gemm_TTS(
   int k_tile_prefetch = 0;
 
   CUTE_UNROLL
-  for (; k_tile_prefetch < prefetch_dist; k_tile_prefetch++) {
+  for (; k_tile_prefetch < prefetch_dist && k_tile_prefetch < k_tile_count;
+      k_tile_prefetch++) {
     prefetch(prefetch_a, pAgA(_, _, _, k_tile_prefetch));
     prefetch(prefetch_b, pBgB(_, _, _, k_tile_prefetch));
   }
@@ -210,7 +211,8 @@ CUTE_DEVICE void gemm_STS(
   int k_tile_prefetch = 0;
 
   CUTE_UNROLL
-  for (; k_tile_prefetch < prefetch_dist; k_tile_prefetch++) {
+  for (; k_tile_prefetch < prefetch_dist && k_tile_prefetch < k_tile_count;
+      k_tile_prefetch++) {
     prefetch(prefetch_b, pBgB(_, _, _, k_tile_prefetch));
   }
 
@@ -279,7 +281,8 @@ CUTE_DEVICE void gemm_TSS(
   int k_tile_prefetch = 0;
 
   CUTE_UNROLL
-  for (; k_tile_prefetch < prefetch_dist; k_tile_prefetch++) {
+  for (; k_tile_prefetch < prefetch_dist && k_tile_prefetch < k_tile_count;
+      k_tile_prefetch++) {
     prefetch(prefetch_a, pAgA(_, _, _, k_tile_prefetch));
   }
 
@@ -366,7 +369,8 @@ CUTE_DEVICE void gemm_TTS_k_multi(
   int k_tile_prefetch = 0;
 
   CUTE_UNROLL
-  for (; k_tile_prefetch < prefetch_dist; k_tile_prefetch++) {
+  for (; k_tile_prefetch < prefetch_dist && k_tile_prefetch < k_tile_count;
+      k_tile_prefetch++) {
     prefetch(prefetch_a, pAgA(_, _, _, k_tile_prefetch));
     prefetch(prefetch_b, pBgB(_, _, _, k_tile_prefetch));
   }
