@@ -48,9 +48,11 @@
     gemm_TTS_k_multi : same as TTS, but each k-slice of A is pre-scaled by
                        a per-lane float from an SLM array (used for diagonal
                        scaling in compute_wu / fwd_o).
-    gemm_TTS_shareB  : two TTS GEMMs sharing the B operand, fused into a
-                       single k-loop so B is loaded/prefetched/reordered
-                       once per k-tile and consumed by both DPAS calls.
+    gemm_TTS_shareB_pergroup : two TTS GEMMs sharing the B operand, fused into
+                       a single k-loop so B is loaded/prefetched/reordered
+                       once per k-tile and consumed by both DPAS calls. Takes a
+                       group-local lane id and has no WG barriers, so WGs that
+                       host multiple co-resident groups can call it per group.
 
   All helpers accumulate into the caller's register fragment tCrC, so
   multiple calls can be chained (C += A1*B1 + A2*B2 ...) without intermediate
@@ -529,13 +531,18 @@ template <
     class C1SGCTensor,
     class C2SGCTensor,
     class TiledMMA>
-/* gemm_TTS_shareB: two TTS GEMMs that share the B operand, fused into one
- * k-loop.
+/* gemm_TTS_shareB_pergroup: two TTS GEMMs that share the B operand, fused into
+ * one k-loop.
  *   C1 += A1(gmem, M×K) * B(gmem, N×K)^T
  *   C2 += A2(gmem, M×K) * B(gmem, N×K)^T
- * B is loaded, prefetched, and reordered once per k-tile and consumed by
- * both DPAS calls — replaces two back-to-back gemm_TTS calls that share B. */
-CUTE_DEVICE void gemm_TTS_shareB(
+ * B is loaded, prefetched, and reordered once per k-tile and consumed by both
+ * DPAS calls — replaces two back-to-back gemm_TTS calls that share B. Takes the
+ * group-local `local_id` (0..size(mma)-1) instead of deriving it from
+ * `this_work_item`, and has no internal WG barriers (all work is
+ * register-private per lane), so WGs that host multiple co-resident groups can
+ * call it per group and idle groups can skip it entirely at the caller. */
+CUTE_DEVICE void gemm_TTS_shareB_pergroup(
+    int local_id,        // group-local, 0..size(mma)-1
     A1Tensor const& A1,  // (M,K)
     A2Tensor const& A2,  // (M,K)
     BTensor const& B,    // (N,K)
@@ -544,9 +551,6 @@ CUTE_DEVICE void gemm_TTS_shareB(
     int wg_m,            // m tile start id
     int wg_n,            // n tile start id
     TiledMMA const& mma) {
-  auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
-  int local_id = item.get_local_linear_id();
-
   Tensor cA1 = make_identity_tensor(A1.shape());
   Tensor cA2 = make_identity_tensor(A2.shape());
   Tensor cB = make_identity_tensor(B.shape());
@@ -595,22 +599,20 @@ CUTE_DEVICE void gemm_TTS_shareB(
 
   const int prefetch_dist = 3;
 
-  constexpr auto barrier_scope = SPIRVScope::ScopeWorkgroup;
-
   int k_tile_count = ceil_div(shape<1>(B), get<2>(wg_tile));
   int k_tile_prefetch = 0;
 
   CUTE_UNROLL
-  for (; k_tile_prefetch < prefetch_dist && k_tile_prefetch < k_tile_count; 
+  for (; k_tile_prefetch < prefetch_dist && k_tile_prefetch < k_tile_count;
       ++k_tile_prefetch) {
     prefetch(prefetch_a1, pA1gA1(_, _, _, k_tile_prefetch));
     prefetch(prefetch_a2, pA2gA2(_, _, _, k_tile_prefetch));
     prefetch(prefetch_b, pBgB(_, _, _, k_tile_prefetch));
   }
 
+  /* No WG barriers here: the copy/reorder/DPAS are all register-private per
+   * lane, so the former split barrier was pure over-sync. */
   for (int k_tile = 0; k_tile < k_tile_count; k_tile++, k_tile_prefetch++) {
-    barrier_arrive(barrier_scope);
-
     copy(copy_a1, tA1gA1(_, _, _, k_tile), tA1rA1);
     copy(copy_a2, tA2gA2(_, _, _, k_tile), tA2rA2);
     copy(copy_b, tBgB(_, _, _, k_tile), tBrB);
@@ -627,8 +629,6 @@ CUTE_DEVICE void gemm_TTS_shareB(
 
     cute::gemm(mma, tCrA1, tCrB, tCrC1);
     cute::gemm(mma, tCrA2, tCrB, tCrC2);
-
-    barrier_wait(barrier_scope);
   }
 }
 

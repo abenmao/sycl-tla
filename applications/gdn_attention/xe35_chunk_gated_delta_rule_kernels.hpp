@@ -132,25 +132,11 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
     const int head_k_dim,
     const int num_v_heads) {
   auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
-  int local_id = item.get_local_linear_id();
-  /* Flat persistent work-list over every (chunk, k_head) pair: one machine-
-   * sized WG pool striped over dim1, no per-head grid boundary. Any WG can pull
-   * any pair, so no WG idles behind its own head's exhausted chunk list. */
   const int wg_id = item.get_group(1);
   const int wgs_total = item.get_group_range(1);
 
-  auto sg = item.get_sub_group();
-  int sg_id = sg.get_group_linear_id();
-  int sg_range = sg.get_group_linear_range();
-  int sg_local_id = sg.get_local_linear_id();
-
-  float* slm_mem = static_cast<float*>(
-      slm_mem_const.template get_multi_ptr<sycl::access::decorated::no>()
-          .get());
-
   TiledMMA mma{};
   auto wg_tile = mma.tile_mnk();
-  auto thr_mma = mma.get_slice(local_id);
 
   static constexpr auto tile_m = get<0>(wg_tile);
   static constexpr auto tile_n = get<1>(wg_tile);
@@ -163,62 +149,109 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
   static constexpr auto SG_M = tile_m / ATOM_M;  // BLK_M / ATOM_M;
   static constexpr auto SG_N = tile_n / ATOM_N;  // BLK_N / ATOM_N;
 
-  auto sg_local_m_coord = cutlass::get_sub_group_id() / ATOM_N;
-  auto sg_local_n_coord = cutlass::get_sub_group_id() % ATOM_N;
+  /* This WG hosts groups_per_wg co-resident groups; a *group* is the
+   * ATOM_M*ATOM_N-subgroup cooperative unit that owns one (chunk, k_head). On
+   * Xe3p (MaxThreadsPerXeCore=512, lanes_per_group=size(mma)=128) that is 4
+   * groups/WG. All group-local ids below derive from the raw WG-linear id. */
+  static constexpr int sgs_per_group = ATOM_M * ATOM_N;
+  static constexpr int lanes_per_group = sgs_per_group * sub_group_size;
+  /* WG size is MaxThreadsPerXeCore; exact divisibility guarantees no remainder
+   * lanes, whose group_id would exceed groups_per_wg and index past the SLM. */
+  static_assert(
+      MaxThreadsPerXeCore % lanes_per_group == 0,
+      "MaxThreadsPerXeCore must be an exact multiple of lanes_per_group");
+  const int local_id_raw = item.get_local_linear_id();
+  const int local_range_raw = item.get_local_range().size();
+  const int groups_per_wg = local_range_raw / lanes_per_group;
+  const int group_id = local_id_raw / lanes_per_group;
+  const int local_id = local_id_raw % lanes_per_group;
+
+  auto sg = item.get_sub_group();
+  const int sg_id = sg.get_group_linear_id() % sgs_per_group;
+  const int sg_range = sgs_per_group;
+  const int sg_local_id = sg.get_local_linear_id();
+
+  float* slm_mem = static_cast<float*>(
+      slm_mem_const.template get_multi_ptr<sycl::access::decorated::no>()
+          .get());
+
+  auto thr_mma = mma.get_slice(local_id);
+
+  const int sg_local_m_coord = sg_id / ATOM_N;
+  const int sg_local_n_coord = sg_id % ATOM_N;
   int m_sg_start = sg_local_m_coord * SG_M;
   int n_sg_start = sg_local_n_coord * SG_N;
 
   const int kv_ratio = num_v_heads / num_k_heads;
   const float q_scale = 1.0f / sycl::sqrt(static_cast<float>(head_k_dim));
 
+  /* Per-group SLM slot: this group's kv_ratio cumsum gates (v_head-major,
+   * chunk_size floats each). The prolog fills all kv_ratio v_heads; Phase 3
+   * reads slot g_idx directly — no gmem readback. */
+  float* group_slm_ptr = slm_mem + group_id * kv_ratio * chunk_size;
+
   /* Total chunks across all batches (each batch is padded to a whole number of
-   * chunks in the virtual seqlen), one work item per (chunk, k_head) pair. */
+   * chunks in the virtual seqlen), one work item per (chunk, k_head) pair.
+   * kv_head_id = w % num_k_heads keeps consecutive groups on the same chunk so
+   * co-resident groups reuse that chunk's K/Q rows in L1. */
   int total_chunks_all = 0;
   for (int batch_id = 0; batch_id < batch_size; ++batch_id) {
     const int seq_len = query_start_loc[batch_id + 1] - query_start_loc[batch_id];
     total_chunks_all += (seq_len + chunk_size - 1) / chunk_size;
   }
   const int total_work = total_chunks_all * num_k_heads;
+  const int total_groups = wgs_total * groups_per_wg;
+  const int global_group_id = wg_id * groups_per_wg + group_id;
 
-  for (int w = wg_id; w < total_work; w += wgs_total) {
-    /* w % num_k_heads / w / num_k_heads makes consecutive w share the same
-     * chunk across heads, so co-resident WGs reuse that chunk's K/Q rows in
-     * L1 instead of each head re-fetching from gmem. */
-    const int kv_head_id = w % num_k_heads;
-    const int chunk_global = w / num_k_heads;
+  /* Persistent loop. All groups in a WG run the same num_iters (they share
+   * WG-scope barriers); trailing groups with no work iterate with
+   * has_work=false — skipping gmem / DPAS but still arriving at every
+   * unconditional barrier so busy siblings never stall. */
+  const int num_iters = (total_work + total_groups - 1) / total_groups;
+  for (int it = 0; it < num_iters; ++it) {
+    const int w = global_group_id + it * total_groups;
+    const bool has_work = (w < total_work);
 
-    /* Decode the global chunk index into its (batch, local chunk) so the
-     * partial-chunk tail can be sized. batch_size is small, so this scan is a
-     * few integer ops — negligible against the GEMM / exp work. */
-    int seq_len = 0;
-    int local_chunk_idx = chunk_global;
-    for (int batch_id = 0; batch_id < batch_size; ++batch_id) {
-      seq_len = query_start_loc[batch_id + 1] - query_start_loc[batch_id];
-      const int current_chunks = (seq_len + chunk_size - 1) / chunk_size;
-      if (local_chunk_idx < current_chunks) break;
-      local_chunk_idx -= current_chunks;
-    }
+    /* Safe placeholders keep idle groups' address math in-bounds. */
+    int kv_head_id = 0;
+    int chunk_start_offset = 0;
+    int current_chunk_size = 0;
+    if (has_work) {
+      kv_head_id = w % num_k_heads;
+      const int chunk_global = w / num_k_heads;
 
-    {
-      const int chunk_start_offset = chunk_global * chunk_size;
-      int current_chunk_size = chunk_size;
+      /* Decode the global chunk index into its (batch, local chunk) so the
+       * partial-chunk tail can be sized. */
+      int seq_len = 0;
+      int local_chunk_idx = chunk_global;
+      for (int batch_id = 0; batch_id < batch_size; ++batch_id) {
+        seq_len = query_start_loc[batch_id + 1] - query_start_loc[batch_id];
+        const int current_chunks = (seq_len + chunk_size - 1) / chunk_size;
+        if (local_chunk_idx < current_chunks) break;
+        local_chunk_idx -= current_chunks;
+      }
+      chunk_start_offset = chunk_global * chunk_size;
+      current_chunk_size = chunk_size;
       if ((local_chunk_idx + 1) * chunk_size > seq_len) {
         current_chunk_size = seq_len - local_chunk_idx * chunk_size;
       }
-      /* Fused Stage-1 cumsum gate, hoisted so its fence folds into the barrier
-       * below. v_heads striped one-per-sub-group keep each whole-chunk scan
-       * within one sub-group:
-       *   a[t] = cumsum_{i<=t} softplus(a[i]+dt_bias)*(-exp(A_log))
-       * Writes each token's running total to BOTH gmem a[] (wu/fwd_o read it)
-       * and this v_head's SLM gate slot (the mask below reads it there — no
-       * gmem read-back). SLM tail past current_chunk_size is zero-padded so
-       * exp(0)=1 on those rows/cols. */
+    }
+
+    /* Fused Stage-1 cumsum gate, hoisted so its fence folds into the barrier
+     * below. v_heads striped one-per-sub-group keep each whole-chunk scan
+     * within one sub-group:
+     *   a[t] = cumsum_{i<=t} softplus(a[i]+dt_bias)*(-exp(A_log))
+     * Writes each token's running total to BOTH gmem a[] (wu/fwd_o read it)
+     * and this v_head's SLM gate slot (the mask below reads it there — no
+     * gmem read-back). SLM tail past current_chunk_size is zero-padded so
+     * exp(0)=1 on those rows/cols. */
+    if (has_work) {
       const int vh_lo = kv_head_id * kv_ratio;
       const int vh_hi = vh_lo + kv_ratio;
       for (int vh = vh_lo + sg_id; vh < vh_hi; vh += sg_range) {
         const float A_log_exp_h = -sycl::native::exp(A_log[vh]);
         const float dt_bias_h = static_cast<float>(dt_bias[vh]);
-        float* vh_slm_ptr = slm_mem + (vh - vh_lo) * chunk_size;
+        float* vh_slm_ptr = group_slm_ptr + (vh - vh_lo) * chunk_size;
         constexpr int local_num = chunk_size / sub_group_size;
         float g_local[local_num] = {};
         float g_local_sum = 0.0f;
@@ -246,74 +279,84 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
           g_local_sum -= g_local[c];
         }
       }
+    }
 
-      /* Reuse the K·Kᵀ / Q·Kᵀ GEMM pair out of the v_head loop: the kv_ratio
-       * v_heads sharing a kv_head_id get identical raw accumulators, so compute
-       * them once per k_head; the inner loop copies the base and masks per
-       * v_head.
-       *
-       * CRITICAL ASSUMPTION: num_v_heads is an exact integer multiple of
-       * num_k_heads (num_v_heads >= num_k_heads, GQA-style head grouping). */
-      for (int row = sg_id; row < current_chunk_size; row += sg_range) {
-        int64_t handle_idx =
-            (static_cast<int64_t>(chunk_start_offset) + row) * num_k_heads +
-            kv_head_id;
-        auto q_norm_ptr = q + handle_idx * head_k_dim;
-        auto k_norm_ptr = k + handle_idx * head_k_dim;
-        float q_sum = 0.0f;
-        float k_sum = 0.0f;
+    /* Fused K/Q L2-normalization, one SG per row reducing and rescaling both
+     * K and Q. The K·Kᵀ / Q·Kᵀ GEMM pair below is hoisted out of the v_head
+     * loop: the kv_ratio v_heads sharing a kv_head_id get identical raw
+     * accumulators, so compute them once per k_head and mask per v_head.
+     *
+     * CRITICAL ASSUMPTION: num_v_heads is an exact integer multiple of
+     * num_k_heads (num_v_heads >= num_k_heads, GQA-style head grouping).
+     *
+     * No has_work guard: idle groups have current_chunk_size == 0, so the
+     * row loop runs zero iterations on its own. */
+    for (int row = sg_id; row < current_chunk_size; row += sg_range) {
+      int64_t handle_idx =
+          (static_cast<int64_t>(chunk_start_offset) + row) * num_k_heads +
+          kv_head_id;
+      auto q_norm_ptr = q + handle_idx * head_k_dim;
+      auto k_norm_ptr = k + handle_idx * head_k_dim;
+      float q_sum = 0.0f;
+      float k_sum = 0.0f;
+      CUTE_UNROLL
+      for (int k_dim_idx = sg_local_id * elem_per_item;
+            k_dim_idx < head_k_dim;
+            k_dim_idx += sub_group_size * elem_per_item) {
         CUTE_UNROLL
-        for (int k_dim_idx = sg_local_id * elem_per_item;
-              k_dim_idx < head_k_dim;
-              k_dim_idx += sub_group_size * elem_per_item) {
-          CUTE_UNROLL
-          for (int e = 0; e < elem_per_item; ++e) {
-            float q_value = q_norm_ptr[k_dim_idx + e];
-            float k_value = k_norm_ptr[k_dim_idx + e];
-            q_sum += q_value * q_value;
-            k_sum += k_value * k_value;
-          }
-        }
-        q_sum = sycl::reduce_over_group(sg, q_sum, sycl::plus<>());
-        k_sum = sycl::reduce_over_group(sg, k_sum, sycl::plus<>());
-        q_sum = sycl::sqrt(q_sum + eps);
-        k_sum = sycl::sqrt(k_sum + eps);
-        CUTE_UNROLL
-        for (int k_dim_idx = sg_local_id * elem_per_item;
-              k_dim_idx < head_k_dim;
-              k_dim_idx += sub_group_size * elem_per_item) {
-          CUTE_UNROLL
-          for (int e = 0; e < elem_per_item; ++e) {
-            q_norm_ptr[k_dim_idx + e] = static_cast<T>(
-                static_cast<float>(q_norm_ptr[k_dim_idx + e]) / q_sum *
-                q_scale);
-            k_norm_ptr[k_dim_idx + e] = static_cast<T>(
-                static_cast<float>(k_norm_ptr[k_dim_idx + e]) / k_sum);
-          }
+        for (int e = 0; e < elem_per_item; ++e) {
+          float q_value = q_norm_ptr[k_dim_idx + e];
+          float k_value = k_norm_ptr[k_dim_idx + e];
+          q_sum += q_value * q_value;
+          k_sum += k_value * k_value;
         }
       }
-      item.barrier(sycl::access::fence_space::global_and_local);
+      q_sum = sycl::reduce_over_group(sg, q_sum, sycl::plus<>());
+      k_sum = sycl::reduce_over_group(sg, k_sum, sycl::plus<>());
+      q_sum = sycl::sqrt(q_sum + eps);
+      k_sum = sycl::sqrt(k_sum + eps);
+      CUTE_UNROLL
+      for (int k_dim_idx = sg_local_id * elem_per_item;
+            k_dim_idx < head_k_dim;
+            k_dim_idx += sub_group_size * elem_per_item) {
+        CUTE_UNROLL
+        for (int e = 0; e < elem_per_item; ++e) {
+          q_norm_ptr[k_dim_idx + e] = static_cast<T>(
+              static_cast<float>(q_norm_ptr[k_dim_idx + e]) / q_sum *
+              q_scale);
+          k_norm_ptr[k_dim_idx + e] = static_cast<T>(
+              static_cast<float>(k_norm_ptr[k_dim_idx + e]) / k_sum);
+        }
+      }
+    }
+    item.barrier(sycl::access::fence_space::global_and_local);
 
-      auto k_ptr = k +
-                    static_cast<int64_t>(chunk_start_offset) * num_k_heads *
-                        head_k_dim +
-                    kv_head_id * head_k_dim;
-      auto K_tensor_shape = make_shape(chunk_size, head_k_dim);
-      auto K_tensor = make_tensor(
-          make_gmem_ptr(k_ptr),
-          make_layout(
-              K_tensor_shape, make_stride(head_k_dim * num_k_heads, _1{})));
+    auto k_ptr = k +
+                  static_cast<int64_t>(chunk_start_offset) * num_k_heads *
+                      head_k_dim +
+                  kv_head_id * head_k_dim;
+    auto K_tensor_shape = make_shape(chunk_size, head_k_dim);
+    auto K_tensor = make_tensor(
+        make_gmem_ptr(k_ptr),
+        make_layout(
+            K_tensor_shape, make_stride(head_k_dim * num_k_heads, _1{})));
 
-      auto q_ptr = q +
-                    static_cast<int64_t>(chunk_start_offset) * num_k_heads *
-                        head_k_dim +
-                    kv_head_id * head_k_dim;
-      auto Q_tensor_shape = make_shape(chunk_size, head_k_dim);
-      auto Q_tensor = make_tensor(
-          make_gmem_ptr(q_ptr),
-          make_layout(
-              Q_tensor_shape, make_stride(head_k_dim * num_k_heads, _1{})));
+    auto q_ptr = q +
+                  static_cast<int64_t>(chunk_start_offset) * num_k_heads *
+                      head_k_dim +
+                  kv_head_id * head_k_dim;
+    auto Q_tensor_shape = make_shape(chunk_size, head_k_dim);
+    auto Q_tensor = make_tensor(
+        make_gmem_ptr(q_ptr),
+        make_layout(
+            Q_tensor_shape, make_stride(head_k_dim * num_k_heads, _1{})));
 
+    /* Accumulator setup, the shared GEMM, and the per-v_head mask/store are all
+     * v_head-independent-or-register work that idle groups never read, so guard
+     * the whole span with one has_work block; the base fragments and layout-only
+     * identity tensor live inside it too (unused when has_work=false). Idle
+     * groups fall straight through to the unconditional WAR barrier below. */
+    if (has_work) {
       /* Identity tensor and base accumulators are layout-only — independent
        * of v_head_id since A and o2 share the same per-chunk shape/stride. */
       auto C_tensor_shape = make_shape(chunk_size, chunk_size);
@@ -326,8 +369,9 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
 
       clear(tSrA_base);
       clear(tSrO2_base);
-      gemm_TTS_shareB(
-          K_tensor, Q_tensor, K_tensor, tSrA_base, tSrO2_base, 0, 0, mma);
+      gemm_TTS_shareB_pergroup(
+          local_id, K_tensor, Q_tensor, K_tensor, tSrA_base,
+          tSrO2_base, 0, 0, mma);
 
       for (int g_idx = 0; g_idx < kv_ratio; ++g_idx) {
         const int v_head_id = kv_head_id * kv_ratio + g_idx;
@@ -336,7 +380,7 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
          * hoisted gate loop above (with the tail already zero-padded); the
          * global_and_local barrier after normalization fenced it, so no
          * per-v_head read-back is needed — just point at the slot. */
-        float* g_slm_ptr = slm_mem + g_idx * chunk_size;
+        float* g_slm_ptr = group_slm_ptr + g_idx * chunk_size;
 
         auto A_ptr = A +
                       static_cast<int64_t>(v_head_id) * total_virtual_seqlen *
@@ -365,70 +409,70 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
         auto tCgO2_c = thr_copy_O2_c.partition_D(gC);
 
         /* Per-v_head working copies of the shared base accumulators; the mask
-          * mutates these in place while the base stays clean for the next
-          * iteration. */
+         * mutates these in place while the base stays clean for the next
+         * iteration. */
         auto tSrA_c = thr_mma.partition_sg_fragment_C(gC);
         auto tSrO2_c = thr_mma.partition_sg_fragment_C(gC);
         cute::copy(tSrA_base, tSrA_c);
         cute::copy(tSrO2_base, tSrO2_c);
 
-          /* Fused mask:
-           *   L  (A):  m>n  => *=exp(g[m]-g[n])*b[m]; m==n => 1; m<n => 0.
-           *   O2:      m>=n => *=exp(g[m]-g[n]);                m<n => 0.
-           * b[m] depends only on sm, so hoist it into a per-lane register. */
-          float beta_reg[SG_M];
+        /* Fused mask:
+         *   L  (A):  m>n  => *=exp(g[m]-g[n])*b[m]; m==n => 1; m<n => 0.
+         *   O2:      m>=n => *=exp(g[m]-g[n]);                m<n => 0.
+         * b[m] depends only on sm, so hoist it into a per-lane register. */
+        float beta_reg[SG_M];
+        CUTE_UNROLL
+        for (int sm = 0; sm < SG_M; ++sm) {
+          beta_reg[sm] =
+              b[(chunk_start_offset + m_sg_start + sm) +
+                v_head_id * total_virtual_seqlen];
+        }
+        CUTE_UNROLL
+        for (int sn = 0; sn < SG_N / sub_group_size; ++sn) {
+          int n_idx =
+              n_sg_start + sn * sub_group_size + sg_local_id;
           CUTE_UNROLL
           for (int sm = 0; sm < SG_M; ++sm) {
-            beta_reg[sm] =
-                b[(chunk_start_offset + m_sg_start + sm) +
-                  v_head_id * total_virtual_seqlen];
-          }
-          CUTE_UNROLL
-          for (int sn = 0; sn < SG_N / sub_group_size; ++sn) {
-            int n_idx =
-                n_sg_start + sn * sub_group_size + sg_local_id;
-            CUTE_UNROLL
-            for (int sm = 0; sm < SG_M; ++sm) {
-              int m_idx = m_sg_start + sm;
-              int idx = sn * SG_M + sm;
-              float beta_value = beta_reg[sm];
-              float e =
-                  sycl::native::exp(g_slm_ptr[m_idx] - g_slm_ptr[n_idx]);
+            int m_idx = m_sg_start + sm;
+            int idx = sn * SG_M + sm;
+            float beta_value = beta_reg[sm];
+            float e =
+                sycl::native::exp(g_slm_ptr[m_idx] - g_slm_ptr[n_idx]);
 
-              tSrA_c(idx) *= e * beta_value;
-              tSrO2_c(idx) *= e;
-              if (m_idx == n_idx) {
-                tSrA_c(idx) = 1.0f;
-              }
-              if (m_idx < n_idx) {
-                tSrA_c(idx) = 0.0f;
-                tSrO2_c(idx) = 0.0f;
-              }
-              /* Tail rows (m past current_chunk_size) hold un-normalized K/Q,
-               * so L's exp(g[m]-g[n])*(K_m·K_n)*b[m] entries there overflow and
-               * the lower-triangular inverse blows up to Inf on those rows.
-               *   L  (A):  m>=cur => identity row (m==n => 1; else 0).
-               *   O2:      m>=cur => 0.
-               * Keeps L block-triangular so L^-1/U/W tail rows stay finite; the
-               * zero tail weights downstream then give 0, not 0*Inf = NaN. */
-              if (m_idx >= current_chunk_size) {
-                tSrA_c(idx) = (m_idx == n_idx) ? 1.0f : 0.0f;
-                tSrO2_c(idx) = 0.0f;
-              }
+            tSrA_c(idx) *= e * beta_value;
+            tSrO2_c(idx) *= e;
+            if (m_idx == n_idx) {
+              tSrA_c(idx) = 1.0f;
+            }
+            if (m_idx < n_idx) {
+              tSrA_c(idx) = 0.0f;
+              tSrO2_c(idx) = 0.0f;
+            }
+            /* Tail rows (m past current_chunk_size) hold un-normalized K/Q,
+             * so L's exp(g[m]-g[n])*(K_m·K_n)*b[m] entries there overflow and
+             * the lower-triangular inverse blows up to Inf on those rows.
+             *   L  (A):  m>=cur => identity row (m==n => 1; else 0).
+             *   O2:      m>=cur => 0.
+             * Keeps L block-triangular so L^-1/U/W tail rows stay finite; the
+             * zero tail weights downstream then give 0, not 0*Inf = NaN. */
+            if (m_idx >= current_chunk_size) {
+              tSrA_c(idx) = (m_idx == n_idx) ? 1.0f : 0.0f;
+              tSrO2_c(idx) = 0.0f;
             }
           }
+        }
 
         reorder(tSrA_c, tCrA_c);
         copy(copy_A_c, tCrA_c, tCgA_c);
         reorder(tSrO2_c, tCrO2_c);
         copy(copy_O2_c, tCrO2_c, tCgO2_c);
       }
-
-      /* One WAR fence per chunk (not per v_head): each g_idx read its own SLM
-       * slot, so no barrier is needed between them — only before the next
-       * work-item's gate loop overwrites these slots. */
-      item.barrier(sycl::access::fence_space::local_space);
     }
+
+    /* One WAR fence per chunk (not per v_head): each g_idx read its own SLM
+     * slot, so no barrier is needed between them — only before the next
+     * work-item's gate loop overwrites these slots. */
+    item.barrier(sycl::access::fence_space::local_space);
   }
 }
 
@@ -1326,14 +1370,21 @@ sycl::event launch_stage_compute_A_o2(
       MMA_Atom<decltype(op)>, Layout<WGTileComputeA_o2>,
       SGLayoutComputeA_o2>::TiledMMA;
   auto mmaComputeA_o2 = MMAComputeA_o2{};
-  int MaxThreadsPerWorkgroupComputeA_o2 = size(mmaComputeA_o2);
-  sycl::range<3> local_compute_A_o2(1, 1, MaxThreadsPerWorkgroupComputeA_o2);
-  sycl::range<3> global_compute_A_o2(
-      1, xe_core_count * MaxThreadsPerXeCore / MaxThreadsPerWorkgroupComputeA_o2, 1);
-  /* One gate slot per v_head sharing this WG's k_head (kv_ratio slots), so the
-   * hoisted cumsum writes each v_head's gate straight into SLM and the mask
-   * reads it there — no per-v_head gmem read-back. */
-  int slm_size_compute_A_o2 = (num_v_heads / num_k_heads) * chunk_size;
+  /* Co-resident groups: one WG fills a whole XeCore (MaxThreadsPerXeCore
+   * lanes) and hosts GroupsPerWg cooperative groups of size(mma) lanes each;
+   * every group owns one (chunk, k_head) per persistent-loop iteration. Grid
+   * is one WG per XeCore. */
+  int GroupsPerWgComputeA_o2 = MaxThreadsPerXeCore / size(mmaComputeA_o2);
+
+  sycl::range<3> local_compute_A_o2(1, 1, MaxThreadsPerXeCore);
+  sycl::range<3> global_compute_A_o2(1, xe_core_count, 1);
+  /* One gate slot per v_head sharing a k_head (kv_ratio slots), per co-resident
+   * group: the hoisted cumsum writes each v_head's gate straight into its
+   * group's SLM slot and the mask reads it there — no per-v_head gmem
+   * read-back. */
+  int kv_ratio_A_o2 = num_v_heads / num_k_heads;
+  int slm_size_compute_A_o2 =
+      GroupsPerWgComputeA_o2 * kv_ratio_A_o2 * chunk_size;
   auto ev = queue.submit([&](sycl::handler& cgh) {
     sycl::local_accessor<float, 1> local_mem(
         sycl::range<1>(slm_size_compute_A_o2), cgh);
