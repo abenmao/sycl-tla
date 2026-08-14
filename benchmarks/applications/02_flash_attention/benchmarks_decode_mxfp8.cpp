@@ -55,14 +55,14 @@ using mxfp8_e4m3 = cutlass::mx_float8_t<float_e4m3_t>;
 using CriFMHADecode_MXFP8E4M3_MXFP8E4M3_MXFP8E4M3_BF16_RCR_WgQ8K256V64_SgQ8K32_HDimQK64V128_Causal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ mxfp8_e4m3::DataType, /*ElementK*/ mxfp8_e4m3::DataType, /*ElementV*/ mxfp8_e4m3::DataType, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ mxfp8_e4m3::ScaleFactorType, /*Causal*/ true, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ true, /*WgTileQ*/ 8, /*WgTileK*/ 256, /*WgTileV*/ 64,
+  /*ElementScale*/ mxfp8_e4m3::ScaleFactorType, /*Causal*/ true, /*VarLen*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ true, /*WgTileQ*/ 8, /*WgTileK*/ 256, /*WgTileV*/ 64,
   /*SgTileQ*/ 8, /*SgTileK*/ 32, /*HeadDimQK*/ 64, /*HeadDimV*/ 128, /*GqaFusion*/ true
 >::type;
 
 using CriFMHADecode_MXFP8E4M3_MXFP8E4M3_MXFP8E4M3_BF16_RCR_WgQ8K256V64_SgQ8K32_HDimQK64V128_NonCausal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ mxfp8_e4m3::DataType, /*ElementK*/ mxfp8_e4m3::DataType, /*ElementV*/ mxfp8_e4m3::DataType, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ mxfp8_e4m3::ScaleFactorType, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ true, /*WgTileQ*/ 8, /*WgTileK*/ 256, /*WgTileV*/ 64,
+  /*ElementScale*/ mxfp8_e4m3::ScaleFactorType, /*Causal*/ false, /*VarLen*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ true, /*WgTileQ*/ 8, /*WgTileK*/ 256, /*WgTileV*/ 64,
   /*SgTileQ*/ 8, /*SgTileK*/ 32, /*HeadDimQK*/ 64, /*HeadDimV*/ 128, /*GqaFusion*/ true
 >::type;
 
@@ -70,14 +70,14 @@ using CriFMHADecode_MXFP8E4M3_MXFP8E4M3_MXFP8E4M3_BF16_RCR_WgQ8K256V64_SgQ8K32_H
 using CriFMHADecode_MXFP8E5M2_MXFP8E5M2_MXFP8E5M2_BF16_RCR_WgQ8K256V64_SgQ8K32_HDimQK64V128_Causal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ mxfp8_e5m2::DataType, /*ElementK*/ mxfp8_e5m2::DataType, /*ElementV*/ mxfp8_e5m2::DataType, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ mxfp8_e5m2::ScaleFactorType, /*Causal*/ true, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ true, /*WgTileQ*/ 8, /*WgTileK*/ 256, /*WgTileV*/ 64,
+  /*ElementScale*/ mxfp8_e5m2::ScaleFactorType, /*Causal*/ true, /*VarLen*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ true, /*WgTileQ*/ 8, /*WgTileK*/ 256, /*WgTileV*/ 64,
   /*SgTileQ*/ 8, /*SgTileK*/ 32, /*HeadDimQK*/ 64, /*HeadDimV*/ 128, /*GqaFusion*/ true
 >::type;
 
 using CriFMHADecode_MXFP8E5M2_MXFP8E5M2_MXFP8E5M2_BF16_RCR_WgQ8K256V64_SgQ8K32_HDimQK64V128_NonCausal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ mxfp8_e5m2::DataType, /*ElementK*/ mxfp8_e5m2::DataType, /*ElementV*/ mxfp8_e5m2::DataType, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ mxfp8_e5m2::ScaleFactorType, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ true, /*WgTileQ*/ 8, /*WgTileK*/ 256, /*WgTileV*/ 64,
+  /*ElementScale*/ mxfp8_e5m2::ScaleFactorType, /*Causal*/ false, /*VarLen*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*BlockScale*/ true, /*WgTileQ*/ 8, /*WgTileK*/ 256, /*WgTileV*/ 64,
   /*SgTileQ*/ 8, /*SgTileK*/ 32, /*HeadDimQK*/ 64, /*HeadDimV*/ 128, /*GqaFusion*/ true
 >::type;
 

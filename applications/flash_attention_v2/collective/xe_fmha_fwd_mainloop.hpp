@@ -59,7 +59,6 @@ template <class DispatchPolicy_,
           bool BlockScale_,
           bool F8kvF16mma_,
           bool PerTensorScale_,
-          bool CachedKV_,
           bool PagedKV_,
           class TiledMMAQK_,          // Tiling for Q*K GEMM
           class TiledMMAPV_,          // Tiling for P*V GEMM
@@ -84,7 +83,7 @@ struct FMHAFwdMainloop {
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <int Stages,
-          bool CausalMask_, bool BlockScale_, bool F8kvF16mma_, bool PerTensorScale_, bool CachedKV_, bool PagedKV_,
+          bool CausalMask_, bool BlockScale_, bool F8kvF16mma_, bool PerTensorScale_, bool PagedKV_,
           class TiledMMAQK_, class TiledMMAPV_, int VTiles_,
           class TensorQ_, class TensorK_, class TensorV_,
           class TensorScaleQ_, class TensorScaleK_, class TensorScaleV_,
@@ -92,7 +91,7 @@ template <int Stages,
           class TiledCopyQ_, class TiledCopyK_, class TiledCopyV_,
           class TiledCopyK_cache_, class TiledCopyV_cache_>
 struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
-                       PerTensorScale_, CachedKV_, PagedKV_, TiledMMAQK_, TiledMMAPV_, VTiles_,
+                       PerTensorScale_, PagedKV_, TiledMMAQK_, TiledMMAPV_, VTiles_,
                        TensorQ_, TensorK_, TensorV_,
                        TensorScaleQ_, TensorScaleK_, TensorScaleV_,
                        TensorK_cache_, TensorV_cache_,
@@ -179,7 +178,6 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
   using ElementA = typename TiledMMAPV::ValTypeD;
 
   static constexpr bool CausalMask = CausalMask_;
-  static constexpr bool CachedKV = CachedKV_;
   static constexpr bool PagedKV = PagedKV_;
 
   static constexpr int BLK_Q = get<0>(TileShapeQK{});
@@ -457,7 +455,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     }();
 
     auto scale_context_qk_cache = [&]() {
-      if constexpr (HardwareBlockScale && CachedKV) {
+      if constexpr (HardwareBlockScale && PagedKV) {
         auto scale_copy_K = gemm::collective::make_scaled_copy<ScaleCopyQK, ElementScaleK, SG_K, SG_QK_D, GROUP_K>(
                                                       scaleK_cache, 0, 0, size<4>(tKgK));
         auto scale_prefetch_K = gemm::collective::make_scaled_prefetch<decltype(get<0>(scale_copy_K)), SG_K, SG_QK_D, GROUP_K>(
@@ -469,7 +467,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     }();
 
     auto scale_context_pv_cache = [&]() {
-      if constexpr (HardwareBlockScale && CachedKV) {
+      if constexpr (HardwareBlockScale && PagedKV) {
         auto scale_copy_V = gemm::collective::make_scaled_copy<ScaleCopyPV, ElementScaleV, SG_V, SG_PV_D, GROUP_K>(
                                                       scaleV_cache, 0, 0, blk_k1);
         auto scale_prefetch_V = gemm::collective::make_scaled_prefetch<decltype(get<0>(scale_copy_V)), SG_V, SG_PV_D, GROUP_K>(
@@ -517,39 +515,11 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       ? params.num_pages_per_seq[l_coord]
       : l_coord * cute::ceil_div(seq_len_kv_cache, params.page_size);
 
-    // Conservative optimization for cached non-paged path:
-    // keep legacy prefetch, but switch K/V copy to payload pipeline.
-    using PreparedK_cache_t = decltype(prepare_payloads(copy_k_cache, tKgK_cache(_,_,_,0,0), tKrK));
-    using PreparedV_cache_t = decltype(prepare_payloads(copy_v_cache, tVgV_cache(_,_,_,0,0), tVrV));
-    std::array<PreparedK_cache_t, DTiles> prepared_k_cache;
-    std::array<PreparedV_cache_t, VTiles> prepared_v_cache;
     std::array<int, Stages> physical_k_tiles_cache{};
     [[maybe_unused]] int last_prefetched_logical_k = -1;
     [[maybe_unused]] int last_prefetched_physical_k = 0;
 
-    if constexpr (CachedKV && !PagedKV) {
-      CUTLASS_PRAGMA_UNROLL
-      for (int d = 0; d < DTiles; d++) {
-        prepared_k_cache[d] = prepare_payloads(copy_k_cache, tKgK_cache(_,_,_,0,d), tKrK);
-      }
-      CUTLASS_PRAGMA_UNROLL
-      for (int VV = 0; VV < VTiles; VV++) {
-        prepared_v_cache[VV] = prepare_payloads(copy_v_cache, tVgV_cache(_,_,_,VV,0), tVrV);
-      }
-      if (blk_k0 > 0) {
-        int const cache_start_delta = blk_k0 * kv_stride;
-        CUTLASS_PRAGMA_UNROLL
-        for (int d = 0; d < DTiles; d++) {
-          update_payloads(prepared_k_cache[d], cache_start_delta);
-        }
-        CUTLASS_PRAGMA_UNROLL
-        for (int VV = 0; VV < VTiles; VV++) {
-          update_payloads(prepared_v_cache[VV], cache_start_delta);
-        }
-      }
-    }
-
-    if constexpr (CachedKV && PagedKV) {
+    if constexpr (PagedKV) {
       CUTLASS_PRAGMA_UNROLL
       for (int s = 0; s < Stages; s++) {
         int logical_k = blk_k0 + s;
@@ -598,19 +568,15 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       }
     }
     // Cache K prefetch init, still uses legacy API.
-    if constexpr (CachedKV && !DisableKVPrefetch) {
+    if constexpr (PagedKV && !DisableKVPrefetch) {
       if (subgroup_id < RegularKVPrefetchSGs) {
         for (int D = 0; D < size<4>(pKgK_cache); D++) {
           CUTLASS_PRAGMA_UNROLL
           for (int K = 0; K < Stages; K++) {
             int logical_k = blk_k0 + K;
             if (logical_k < kblocks_cache) {
-              if constexpr (PagedKV) {
-                int physical_K_tile = physical_k_tiles_cache[K];
-                prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_tile,D));
-              } else {
-                prefetch(prefetch_k_cache, pKgK_cache(_,_,_,logical_k,D));
-              }
+              int physical_K_tile = physical_k_tiles_cache[K];
+              prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_tile,D));
             }
           }
         }
@@ -627,13 +593,13 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         prefetch(tiled_prefetch_scaleQ, prefetch_iter_scaleQ(_, _, _, D));
       }
 
-      if constexpr (CachedKV && !DisableKVPrefetch) {
+      if constexpr (PagedKV && !DisableKVPrefetch) {
         auto& tiled_prefetch_scaleK_cache = get<0>(get<3>(scale_context_qk_cache));
         auto  prefetch_iter_scaleK_cache = get<1>(get<3>(scale_context_qk_cache));
         for (int K = 0; K < Stages; K++) {
           int const logical_k = blk_k0 + K;
           if (logical_k >= kblocks_cache) { break; }
-          int const physical_k = PagedKV ? physical_k_tiles_cache[K] : logical_k;
+          int const physical_k = physical_k_tiles_cache[K];
           const int k_coord = physical_k * BLK_K + (subgroup_id % ATOM_K) * SG_K;
           prefetch_iter_scaleK_cache.data().coord_ = {k_coord, 0, l_coord};
           for (int D = 0; D < DTiles; D++) {
@@ -716,12 +682,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
       int k_idx;
       if constexpr (is_cache) {
-        k_idx = K;
-        if constexpr (PagedKV) {
-          constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
-          int slot = (stage_mask >= 0) ? ((K - blk_k0) & stage_mask) : ((K - blk_k0) % Stages);
-          k_idx = physical_k_tiles_cache[slot];
-        }
+        constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
+        int slot = (stage_mask >= 0) ? ((K - blk_k0) & stage_mask) : ((K - blk_k0) % Stages);
+        k_idx = physical_k_tiles_cache[slot];
       } else {
         k_idx = K - kblocks_cache;
       }
@@ -738,12 +701,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
       for (int D = 0; D < DTiles; D++) {
         if constexpr (is_cache) {
-          if constexpr (!PagedKV) {
-            copy_with_multi_payloads(copy_k_cache, prepared_k_cache[D], tKrK);
-            update_payloads(prepared_k_cache[D], kv_stride);
-          } else {
-            copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
-          }
+          copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
         } else {
           copy_with_multi_payloads(copy_k, prepared_k[D], tKrK);
           update_payloads(prepared_k[D], kv_stride);
@@ -831,34 +789,32 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
         if (K_next < kblocks_cache) {
           int physical_K_next = K_next;
-          if constexpr (PagedKV) {
-            constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
-            int slot_next = (stage_mask >= 0) ? ((K_next - blk_k0) & stage_mask) : ((K_next - blk_k0) % Stages);
-            bool const is_continuous_next = (K_next == last_prefetched_logical_k + 1);
-            int physical_next;
+          constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
+          int slot_next = (stage_mask >= 0) ? ((K_next - blk_k0) & stage_mask) : ((K_next - blk_k0) % Stages);
+          bool const is_continuous_next = (K_next == last_prefetched_logical_k + 1);
+          int physical_next;
 
-            if (is_continuous_next) {
-              if (tiles_per_page > 0 && (tiles_per_page & (tiles_per_page - 1)) == 0) {
-                int const page_mask = tiles_per_page - 1;
-                int const tile_in_page = K_next & page_mask;
-                physical_next = (tile_in_page != 0)
-                  ? (last_prefetched_physical_k + 1)
-                  : get_physical_k_tile(K_next, batch_offset, tiles_per_page);
-              } else {
-                int const tile_in_page = K_next % tiles_per_page;
-                physical_next = (tile_in_page != 0)
-                  ? (last_prefetched_physical_k + 1)
-                  : get_physical_k_tile(K_next, batch_offset, tiles_per_page);
-              }
+          if (is_continuous_next) {
+            if (tiles_per_page > 0 && (tiles_per_page & (tiles_per_page - 1)) == 0) {
+              int const page_mask = tiles_per_page - 1;
+              int const tile_in_page = K_next & page_mask;
+              physical_next = (tile_in_page != 0)
+                ? (last_prefetched_physical_k + 1)
+                : get_physical_k_tile(K_next, batch_offset, tiles_per_page);
             } else {
-              physical_next = get_physical_k_tile(K_next, batch_offset, tiles_per_page);
+              int const tile_in_page = K_next % tiles_per_page;
+              physical_next = (tile_in_page != 0)
+                ? (last_prefetched_physical_k + 1)
+                : get_physical_k_tile(K_next, batch_offset, tiles_per_page);
             }
-
-            physical_k_tiles_cache[slot_next] = physical_next;
-            physical_K_next = physical_next;
-            last_prefetched_logical_k = K_next;
-            last_prefetched_physical_k = physical_next;
+          } else {
+            physical_next = get_physical_k_tile(K_next, batch_offset, tiles_per_page);
           }
+
+          physical_k_tiles_cache[slot_next] = physical_next;
+          physical_K_next = physical_next;
+          last_prefetched_logical_k = K_next;
+          last_prefetched_physical_k = physical_next;
           if constexpr (!DisableKVPrefetch) {
             if (subgroup_id < RegularKVPrefetchSGs) {
               for (int D = 0; D < size<4>(pKgK_cache); D++) {
@@ -920,7 +876,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       {
         int seq_len_new = seq_len - seq_len_kv_cache;
         bool check_remainder_k = (seq_len_new % get<1>(TileShapeQK{}) != 0);
-        bool check_remainder_k_cache = CachedKV && (seq_len_kv_cache % get<1>(TileShapeQK{}) != 0);
+        bool check_remainder_k_cache = PagedKV && (seq_len_kv_cache % get<1>(TileShapeQK{}) != 0);
         bool has_remainder = is_cache
             ? (check_remainder_k_cache && K == kblocks_cache - 1)
             : (check_remainder_k && K == total_blk - 1);
@@ -961,12 +917,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       CUTLASS_PRAGMA_UNROLL
       for (int VV = 0; VV < VTiles; VV++) {
         if constexpr (is_cache) {
-          if constexpr (!PagedKV) {
-            copy_with_multi_payloads(copy_v_cache, prepared_v_cache[VV], tVrV);
-            update_payloads(prepared_v_cache[VV], kv_stride);
-          } else {
-            copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
-          }
+          copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
         } else {
           copy_with_multi_payloads(copy_v, prepared_v[VV], tVrV);
           update_payloads(prepared_v[VV], kv_stride);
@@ -1057,7 +1008,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     };
 
     /* Main loop, blocked in k. */
-    if constexpr (CachedKV) {
+    if constexpr (PagedKV) {
       for (int K = blk_k0; K < cute::min(blk_k1, kblocks_cache); K++) {
         mainloop_body(std::bool_constant<true>{}, K,
                       copy_k_cache, copy_v_cache,

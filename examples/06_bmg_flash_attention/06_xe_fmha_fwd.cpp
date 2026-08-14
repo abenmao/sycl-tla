@@ -272,11 +272,11 @@ int main(int argc, const char **argv) {
     return (tuned_options.is_causal                                                                  \
       ? FMHAConfig</*CausalMask=*/true, false, QK, PV, OUT, SGL, void, PipelineStages,               \
                    ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::template run<         \
-                   false, false, false, cutlass::fmha::kernel::XeFHMASplitKVTileScheduler, true>(    \
+                   false, false, cutlass::fmha::kernel::XeFHMASplitKVTileScheduler, true>(           \
                    tuned_options)                                                                    \
       : FMHAConfig</*CausalMask=*/false, false, QK, PV, OUT, SGL, void, PipelineStages,              \
                    ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::template run<         \
-                   false, false, false, cutlass::fmha::kernel::XeFHMASplitKVTileScheduler, true>(    \
+                   false, false, cutlass::fmha::kernel::XeFHMASplitKVTileScheduler, true>(           \
                    tuned_options));                                                                  \
   }()
 
@@ -285,20 +285,20 @@ int main(int argc, const char **argv) {
      ? (options.is_causal                                                                            \
          ? FMHAConfig</*CausalMask=*/true, false, QK, PV, OUT, SGL, void, PipelineStages,           \
                       ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::template run<     \
-                      false, false, false,                                                           \
+                      false, false,                                                                  \
                       cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options)      \
          : FMHAConfig</*CausalMask=*/false, false, QK, PV, OUT, SGL, void, PipelineStages,          \
                       ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::template run<     \
-                      false, false, false,                                                           \
+                      false, false,                                                                  \
                       cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options))     \
      : (options.is_causal                                                                            \
          ? FMHAConfig</*CausalMask=*/true, false, QK, PV, OUT, SGL, void, PipelineStages,           \
                       ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/true>::template run<      \
-                      false, false, false,                                                           \
+                      false, false,                                                                  \
                       cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options)              \
          : FMHAConfig</*CausalMask=*/false, false, QK, PV, OUT, SGL, void, PipelineStages,          \
                       ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/true>::template run<      \
-                      false, false, false,                                                           \
+                      false, false,                                                                  \
                       cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options)))
 
   if (!use_two_kernel_split) {
@@ -365,28 +365,28 @@ int main(int argc, const char **argv) {
   if (options.is_causal) {
     if (use_small) {
       if (options.varlen) {
-        return FMHACausal4::template run<true, false, false, CausalSmallScheduler>(options);
+        return FMHACausal4::template run<true, false, CausalSmallScheduler>(options);
       } else {
-        return FMHACausal8::template run<false, false, false, CausalSmallScheduler>(options);
+        return FMHACausal8::template run<false, false, CausalSmallScheduler>(options);
       }
     }
     if (options.varlen) {
-      return FMHACausal::template run<true, false, false, CausalScheduler>(options);
+      return FMHACausal::template run<true, false, CausalScheduler>(options);
     } else {
-      return FMHACausal::template run<false, false, false, DefaultScheduler>(options);
+      return FMHACausal::template run<false, false, DefaultScheduler>(options);
     }
   } else {
     if (options.seq_len_qo < 512) {
       if (options.varlen) {
-        return FMHANonCausal8::template run<true, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false,false,false,false,true>>(options);
+        return FMHANonCausal8::template run<true, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false,false,false,false,true>>(options);
       } else {
-        return FMHANonCausal8::template run<false, false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false,false,false,false,true>>(options);
+        return FMHANonCausal8::template run<false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false,false,false,false,true>>(options);
       }
     }
     if (options.varlen) {
-      return FMHANonCausal::template run<true, false, false, DefaultScheduler>(options);
+      return FMHANonCausal::template run<true, false, DefaultScheduler>(options);
     } else {
-      return FMHANonCausal::template run<false, false, false, DefaultScheduler>(options);
+      return FMHANonCausal::template run<false, false, DefaultScheduler>(options);
     }
   }
 #else
@@ -402,15 +402,15 @@ int main(int argc, const char **argv) {
 
   if (options.is_causal) {
     if (options.varlen) {
-      return FMHACausal::template run<true, false, false, Scheduler>(options);
+      return FMHACausal::template run<true, false, Scheduler>(options);
     } else {
-      return FMHACausal::template run<false, false, false, Scheduler>(options);
+      return FMHACausal::template run<false, false, Scheduler>(options);
     }
   } else {
     if (options.varlen) {
-      return FMHANonCausal::template run<true, false, false, Scheduler>(options);
+      return FMHANonCausal::template run<true, false, Scheduler>(options);
     } else {
-      return FMHANonCausal::template run<false, false, false, Scheduler>(options);
+      return FMHANonCausal::template run<false, false, Scheduler>(options);
     }
   }
 #endif

@@ -71,7 +71,7 @@ int main(int argc, const char **argv) {
     return -1;
   }
 
-#if defined(CACHED_KV)
+#if defined(PAGED_KV)
   if (options.seq_len_kv_cache <= 0) {
     std::cerr << "Error: this binary only instantiates CachedKV kernels; pass --seq_len_kv_cache." << std::endl;
     return -1;
@@ -190,7 +190,7 @@ int main(int argc, const char **argv) {
   const int q_len      = options.seq_len_qo;
   const int total_rows = gqa_group * q_len;
 
-#if defined(CACHED_KV)
+#if defined(PAGED_KV)
   const int kv_tile = int(KV_TILE_SIZE::value);
   const int kv_blocks = cute::ceil_div(options.seq_len_kv, kv_tile)
                       + cute::ceil_div(options.seq_len_kv_cache, kv_tile);
@@ -203,36 +203,29 @@ int main(int argc, const char **argv) {
                       && base_units < saturation_cores
                       && base_units * kv_blocks > saturation_cores;
 
-  // PagedKV is a runtime option, so both layouts are instantiated here.
-#define FMHA_RUN_ONE(QK, PV, OUT, SGL, CAUSAL, PAGED)                                                 \
+  #define FMHA_RUN_ONE(QK, PV, OUT, SGL, CAUSAL)                                                        \
     FMHAConfig<CAUSAL, BlockScale, QK, PV, OUT, SGL, void, PipelineStages,                            \
                ElementQ, ElementK, ElementV, ElementScale, /*kGqaFusion=*/true>::                     \
-               template run</*isVarLen=*/false, /*CachedKV=*/true, PAGED,                              \
+           template run</*isVarLen=*/false, /*PagedKV=*/true,                                     \
                cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options)
 
-#define FMHA_RUN_SPLIT(QK, PV, OUT, SGL, CAUSAL, PAGED)                                               \
+  #define FMHA_RUN_SPLIT(QK, PV, OUT, SGL, CAUSAL)                                                      \
     FMHAConfig<CAUSAL, BlockScale, QK, PV, OUT, SGL, void, PipelineStages,                            \
                ElementQ, ElementK, ElementV, ElementScale, /*kGqaFusion=*/false>::                    \
-               template run</*isVarLen=*/false, /*CachedKV=*/true, PAGED,                              \
+           template run</*isVarLen=*/false, /*PagedKV=*/true,                                     \
                cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options)
 
 #define FMHA_RUN_Q(QK, PV, OUT, SGL)                                                                  \
     (use_split                                                                                        \
-       ? (options.use_paged_kv                                                                        \
-            ? (options.is_causal ? FMHA_RUN_SPLIT(QK, PV, OUT, SGL, true,  true)                     \
-                                 : FMHA_RUN_SPLIT(QK, PV, OUT, SGL, false, true))                    \
-            : (options.is_causal ? FMHA_RUN_SPLIT(QK, PV, OUT, SGL, true,  false)                    \
-                                 : FMHA_RUN_SPLIT(QK, PV, OUT, SGL, false, false)))                  \
-       : (options.use_paged_kv                                                                        \
-            ? (options.is_causal ? FMHA_RUN_ONE(QK, PV, OUT, SGL, true,  true)                       \
-                                 : FMHA_RUN_ONE(QK, PV, OUT, SGL, false, true))                      \
-            : (options.is_causal ? FMHA_RUN_ONE(QK, PV, OUT, SGL, true,  false)                      \
-                                 : FMHA_RUN_ONE(QK, PV, OUT, SGL, false, false))))
+       ? (options.is_causal ? FMHA_RUN_SPLIT(QK, PV, OUT, SGL, true)                                 \
+                : FMHA_RUN_SPLIT(QK, PV, OUT, SGL, false))                               \
+       : (options.is_causal ? FMHA_RUN_ONE(QK, PV, OUT, SGL, true)                                  \
+                : FMHA_RUN_ONE(QK, PV, OUT, SGL, false)))
 #else
 #define FMHA_RUN_ONE(QK, PV, OUT, SGL, CAUSAL)                                                        \
     FMHAConfig<CAUSAL, BlockScale, QK, PV, OUT, SGL, void, PipelineStages,                            \
                ElementQ, ElementK, ElementV, ElementScale, /*kGqaFusion=*/true>::                     \
-               template run</*isVarLen=*/false, /*CachedKV=*/false, /*PagedKV=*/false,                 \
+               template run</*isVarLen=*/false, /*PagedKV=*/false,                                    \
                cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options)
 
 #define FMHA_RUN_Q(QK, PV, OUT, SGL)                                                                  \
@@ -250,7 +243,7 @@ int main(int argc, const char **argv) {
     return FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64);
 
 #undef FMHA_RUN_Q
-#if defined(CACHED_KV)
+#if defined(PAGED_KV)
 #undef FMHA_RUN_SPLIT
 #endif
 #undef FMHA_RUN_ONE
@@ -259,19 +252,14 @@ int main(int argc, const char **argv) {
   using FMHACausal    = FMHAConfig<true,  BlockScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV, ElementScale>;
   using FMHANonCausal = FMHAConfig<false, BlockScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV, ElementScale>;
 
-#if defined(CACHED_KV)
+#if defined(PAGED_KV)
 #define FMHA_RUN_PREFILL(CFG)                                          \
-  ((options.use_paged_kv && options.varlen)                            \
-     ? CFG::template run<true,  true, true,  Scheduler>(options)       \
-   : (options.use_paged_kv && !options.varlen)                         \
-     ? CFG::template run<false, true, true,  Scheduler>(options)       \
-   : options.varlen                                                    \
-     ? CFG::template run<true,  true, false, Scheduler>(options)       \
-     : CFG::template run<false, true, false, Scheduler>(options))
+  (options.varlen ? CFG::template run<true,  true, Scheduler>(options) \
+                  : CFG::template run<false, true, Scheduler>(options))
 #else
-#define FMHA_RUN_PREFILL(CFG)                                                  \
-  (options.varlen ? CFG::template run<true,  false, false, Scheduler>(options)  \
-                  : CFG::template run<false, false, false, Scheduler>(options))
+#define FMHA_RUN_PREFILL(CFG)                                           \
+  (options.varlen ? CFG::template run<true,  false, Scheduler>(options) \
+                  : CFG::template run<false, false, Scheduler>(options))
 #endif
 
   if (options.is_causal) {

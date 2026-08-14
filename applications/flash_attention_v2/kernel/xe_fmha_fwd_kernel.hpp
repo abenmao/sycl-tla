@@ -375,8 +375,8 @@ public:
       // when seq_len_kv_cache is not a multiple of the tile size.
       int k_blocks;
       int k_blocks_prefetch;
-      if constexpr (CollectiveMainloop::CausalMask || CollectiveMainloop::CachedKV) {
-        const int kblocks_cache = CollectiveMainloop::CachedKV ? cute::ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{})) : 0;
+      if constexpr (CollectiveMainloop::CausalMask || CollectiveMainloop::PagedKV) {
+        const int kblocks_cache = CollectiveMainloop::PagedKV ? cute::ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{})) : 0;
         const int kblocks_new = cute::ceil_div(seq_len_new, get<1>(TileShapeQK{}));
         k_blocks = kblocks_cache + kblocks_new;
         const int kblocks_new_wg = cute::ceil_div(seq_len_new_wg, get<1>(TileShapeQK{}));
@@ -507,7 +507,7 @@ public:
           fusion_seq_len          = seq_len_kv_cache + seq_len_kv;
           fusion_full_tile_offset = seq_len_kv - cute::min(q_len, seq_len_kv);
           fusion_discard          = 0;
-          const int fusion_cache_k_blocks = CollectiveMainloop::CachedKV
+          const int fusion_cache_k_blocks = CollectiveMainloop::PagedKV
               ? cute::ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{})) : 0;
           fusion_k_blocks = fusion_cache_k_blocks
                           + cute::ceil_div(seq_len_kv, get<1>(TileShapeQK{}));
@@ -873,7 +873,7 @@ public:
     int num_batch_heads = s.batch * s.num_heads_kv;
 
     constexpr int kv_tile_size = get<1>(TileShapeQK{});
-    int cache_k_blocks = CollectiveMainloop::CachedKV
+    int cache_k_blocks = CollectiveMainloop::PagedKV
       ? cute::ceil_div(s.seq_len_kv_cache, kv_tile_size): 0;
     int local_k_blocks = cache_k_blocks + cute::ceil_div(s.seq_len_kv, kv_tile_size);
     // total number of blocks need to be processed across all wgs

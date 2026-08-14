@@ -41,7 +41,7 @@ using mxfp4 = cutlass::mx_float4_t<float_e2m1_t>;
 using CriFMHAPrefill_MXFP4_MXFP4_BF16_BF16_RCR_h64_Causal_VarLen = FMHAConfigGen</*Mode*/FMHAMode::Prefill,
   /*ElementQ*/ mxfp4::DataType, /*ElementK*/ mxfp4::DataType, /*ElementV*/ cutlass::bfloat16_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ mxfp4::ScaleFactorType, /*Causal*/ true, /*VarLen*/ true, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ true, /*HeadDim*/ 64
+  /*ElementScale*/ mxfp4::ScaleFactorType, /*Causal*/ true, /*VarLen*/ true, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ true, /*HeadDim*/ 64
 >::type;
 
 CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHAPrefill_MXFP4_MXFP4_BF16_BF16_RCR_h64_Causal_VarLen);

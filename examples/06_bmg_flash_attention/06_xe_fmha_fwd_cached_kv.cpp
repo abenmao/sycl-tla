@@ -34,11 +34,11 @@
     This file instantiates only the CachedKV=true kernel variants,
     split out from the main 06_xe_fmha_fwd.cpp to reduce per-binary compile time.
 
-    Instantiated kernels (8 total):
+    Instantiated kernels (4 total):
       - Causal × {true, false}
       - VarLen × {true, false}
       - CachedKV = true
-      - PagedKV × {true, false}
+      - PagedKV = true (contiguous cache uses one identity-mapped page)
 
     To build & run (from your build dir):
       $ ninja 06_xe_fmha_fwd_prefill_cached_kv_bfloat16_t_hdim128
@@ -282,43 +282,39 @@ int main(int argc, const char **argv) {
     return cute::min(cute::max(parallel_splits, latency_splits), max_useful_splits);
   };
 
-  #define FMHA_RUN_TWO_KERNEL(CAUSAL, PAGED, QK, PV, OUT, SGL, Q_TILE)                       \
+  #define FMHA_RUN_TWO_KERNEL(CAUSAL, QK, PV, OUT, SGL, Q_TILE)                              \
     [&]() {                                                                                  \
       Options tuned_options = options;                                                       \
       tuned_options.num_kv_splits = select_num_kv_splits(Q_TILE);                            \
       return FMHAConfig<CAUSAL, false, QK, PV, OUT, SGL, void, PipelineStages,              \
                         ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::         \
-          template run<false, true, PAGED,                                                   \
+          template run<false, true,                                                          \
                        cutlass::fmha::kernel::XeFHMASplitKVTileScheduler, true>(tuned_options); \
     }()
 
-  #define FMHA_RUN_DYNAMIC(CAUSAL, PAGED, QK, PV, OUT, SGL)                                    \
+  #define FMHA_RUN_DYNAMIC(CAUSAL, QK, PV, OUT, SGL)                                           \
     FMHAConfig<CAUSAL, false, QK, PV, OUT, SGL, void, PipelineStages,                           \
                ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::                    \
-               template run<false, true, PAGED,                                                \
+               template run<false, true,                                                       \
                cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options)
 
   #define FMHA_RUN_TWO_KERNEL_Q(QK, PV, OUT, SGL, Q_TILE)                                      \
-    (options.is_causal                                                                               \
-       ? (options.use_paged_kv ? FMHA_RUN_TWO_KERNEL(true, true, QK, PV, OUT, SGL, Q_TILE)    \
-                               : FMHA_RUN_TWO_KERNEL(true, false, QK, PV, OUT, SGL, Q_TILE))  \
-       : (options.use_paged_kv ? FMHA_RUN_TWO_KERNEL(false, true, QK, PV, OUT, SGL, Q_TILE)   \
-                               : FMHA_RUN_TWO_KERNEL(false, false, QK, PV, OUT, SGL, Q_TILE)))
+    (options.is_causal                                                                         \
+       ? FMHA_RUN_TWO_KERNEL(true, QK, PV, OUT, SGL, Q_TILE)                                  \
+       : FMHA_RUN_TWO_KERNEL(false, QK, PV, OUT, SGL, Q_TILE))
 
-  #define FMHA_RUN_Q(QK, PV, OUT, SGL, PAGED)                                                 \
+  #define FMHA_RUN_Q(QK, PV, OUT, SGL)                                                        \
     (use_dynamic_split                                                                        \
        ? (options.is_causal                                                                           \
-           ? (options.use_paged_kv ? FMHA_RUN_DYNAMIC(true, true, QK, PV, OUT, SGL)             \
-                                   : FMHA_RUN_DYNAMIC(true, false, QK, PV, OUT, SGL))           \
-           : (options.use_paged_kv ? FMHA_RUN_DYNAMIC(false, true, QK, PV, OUT, SGL)            \
-                                   : FMHA_RUN_DYNAMIC(false, false, QK, PV, OUT, SGL)))         \
+           ? FMHA_RUN_DYNAMIC(true, QK, PV, OUT, SGL)                                           \
+           : FMHA_RUN_DYNAMIC(false, QK, PV, OUT, SGL))                                         \
        : (options.is_causal                                                                           \
            ? FMHAConfig</*CausalMask=*/true,  false, QK, PV, OUT, SGL, void, PipelineStages,          \
                         ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/true>::template run<      \
-                        false, true, PAGED, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options) \
+                        false, true, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options) \
            : FMHAConfig</*CausalMask=*/false, false, QK, PV, OUT, SGL, void, PipelineStages,          \
                         ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/true>::template run<      \
-                        false, true, PAGED, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options)))
+                        false, true, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options)))
 
   if (use_two_kernel) {
 #if defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
@@ -339,23 +335,17 @@ int main(int argc, const char **argv) {
   }
 
   if (total_rows <= 8)
-    return options.use_paged_kv ? FMHA_RUN_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, true)
-                                : FMHA_RUN_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, false);
+    return FMHA_RUN_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8);
   else if (total_rows <= 16)
-    return options.use_paged_kv ? FMHA_RUN_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16, true)
-                                : FMHA_RUN_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16, false);
+    return FMHA_RUN_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16);
   else if (total_rows <= 32)
-    return options.use_paged_kv ? FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32, true)
-                                : FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32, false);
+    return FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32);
   else if (total_rows <= 40)
-    return options.use_paged_kv ? FMHA_RUN_Q(ShapeQK40, ShapePV40, ShapeOut40, SubgroupLayoutQK40, true)
-                                : FMHA_RUN_Q(ShapeQK40, ShapePV40, ShapeOut40, SubgroupLayoutQK40, false);
+    return FMHA_RUN_Q(ShapeQK40, ShapePV40, ShapeOut40, SubgroupLayoutQK40);
   else if (total_rows <= 48)
-    return options.use_paged_kv ? FMHA_RUN_Q(ShapeQK48, ShapePV48, ShapeOut48, SubgroupLayoutQK48, true)
-                                : FMHA_RUN_Q(ShapeQK48, ShapePV48, ShapeOut48, SubgroupLayoutQK48, false);
+    return FMHA_RUN_Q(ShapeQK48, ShapePV48, ShapeOut48, SubgroupLayoutQK48);
   else
-    return options.use_paged_kv ? FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64, true)
-                                : FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64, false);
+    return FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64);
 
 #undef FMHA_RUN_Q
   #undef FMHA_RUN_TWO_KERNEL_Q
@@ -379,14 +369,10 @@ int main(int argc, const char **argv) {
   int total_wgs_256 = num_q_tiles_256 * options.num_heads_q * options.batch;
   bool use_small = options.seq_len_qo < 512 || total_wgs_256 < 2 * num_xe_cores;
 
-#define FMHA_DISPATCH_PAGED(CFG)                                          \
-  ((options.use_paged_kv && options.varlen)                              \
-     ? CFG::template run<true, true, true, Scheduler>(options)           \
-   : (options.use_paged_kv && !options.varlen)                          \
-     ? CFG::template run<false, true, true, Scheduler>(options)          \
-   : (!options.use_paged_kv && options.varlen)                          \
-     ? CFG::template run<true, true, false, Scheduler>(options)          \
-     : CFG::template run<false, true, false, Scheduler>(options))
+#define FMHA_DISPATCH_PAGED(CFG)                                         \
+  (options.varlen                                                       \
+  ? CFG::template run<true, true, Scheduler>(options)                   \
+  : CFG::template run<false, true, Scheduler>(options))
 
   if (options.is_causal) {
     if (use_small) {
@@ -405,25 +391,13 @@ int main(int argc, const char **argv) {
   using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
 
   if (options.is_causal) {
-    if (options.use_paged_kv && options.varlen) {
-      return FMHACausal::template run<true, true, true, Scheduler>(options);
-    } else if (options.use_paged_kv && !options.varlen) {
-      return FMHACausal::template run<false, true, true, Scheduler>(options);
-    } else if (!options.use_paged_kv && options.varlen) {
-      return FMHACausal::template run<true, true, false, Scheduler>(options);
-    } else {
-      return FMHACausal::template run<false, true, false, Scheduler>(options);
-    }
+    return options.varlen
+      ? FMHACausal::template run<true, true, Scheduler>(options)
+      : FMHACausal::template run<false, true, Scheduler>(options);
   } else {
-    if (options.use_paged_kv && options.varlen) {
-      return FMHANonCausal::template run<true, true, true, Scheduler>(options);
-    } else if (options.use_paged_kv && !options.varlen) {
-      return FMHANonCausal::template run<false, true, true, Scheduler>(options);
-    } else if (!options.use_paged_kv && options.varlen) {
-      return FMHANonCausal::template run<true, true, false, Scheduler>(options);
-    } else {
-      return FMHANonCausal::template run<false, true, false, Scheduler>(options);
-    }
+    return options.varlen
+      ? FMHANonCausal::template run<true, true, Scheduler>(options)
+      : FMHANonCausal::template run<false, true, Scheduler>(options);
   }
 #endif
 #endif

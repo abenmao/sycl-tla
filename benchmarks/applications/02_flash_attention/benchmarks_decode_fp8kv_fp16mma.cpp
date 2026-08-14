@@ -38,7 +38,7 @@ using namespace cutlass::flash_attention;
 using CriFMHADecode_FP16_E4M3_E4M3_BF16_RCR_h64_NonCausal_FixedLen = FMHAConfigGen</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::half_t, /*ElementK*/ cutlass::float_e4m3_t, /*ElementV*/ cutlass::float_e4m3_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*HeadDim*/ 64
+  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*HeadDim*/ 64
 >::type;
 
 CUTLASS_CREATE_FMHA_BENCHMARK(CriFMHADecode_FP16_E4M3_E4M3_BF16_RCR_h64_NonCausal_FixedLen);

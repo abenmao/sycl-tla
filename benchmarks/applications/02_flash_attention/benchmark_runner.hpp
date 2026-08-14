@@ -97,10 +97,10 @@ struct FMHAOptions {
 
     softmax_scale = 1 / std::sqrt(static_cast<float>(head_size_qk));
 
-    // page_size == 0 means paged KV cache is disabled (contiguous KV), which is
-    // a valid configuration (e.g. prefill without a paged cache). Negative
-    // values are invalid. Reject them at runtime (not via assert, which is
-    // compiled out under NDEBUG) so Release builds abort registration too.
+    // page_size == 0 selects a contiguous KV cache, represented internally as
+    // one identity-mapped page. Negative values are invalid. Reject them at
+    // runtime (not via assert, which is compiled out under NDEBUG) so Release
+    // builds abort registration too.
     if (page_size < 0) {
       std::cerr << "[ERROR] page_size must be non-negative." << std::endl;
       error = true;
@@ -201,39 +201,19 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
   using ProblemShapeType = typename FMHAConfiguration::ProblemShapeType;
   static constexpr bool Causal = FMHAConfiguration::Causal;
   static constexpr bool isVarLen = FMHAConfiguration::VarLen;
-  static constexpr bool CachedKV = FMHAConfiguration::CachedKV;
   static constexpr bool PagedKV = FMHAConfiguration::PagedKV;
   static constexpr bool Persistent = FMHAConfiguration::Persistent;
-  // Scale-related types are only defined when !Persistent & !CachedKV & !PagedKV
-  static constexpr bool BlockScale = (Persistent || CachedKV || PagedKV) ? false : FMHAKernel::BlockScale;
+  static constexpr bool BlockScale = FMHAKernel::BlockScale;
   // Whether the kernel packs GQA query heads into the Q rows (GQA fusion). This
   // changes the block-scale ScaleQ layout: rows are padded/packed per KV head
   // instead of one row per query head. Must match the example runner so the
   // stride/shape handed to the kernel is the GQA-fusion layout it expects.
   static constexpr bool PacksGqaQ = FMHAKernel::kPacksGqaQ;
 
-  // Helper to safely extract scale-related types from FMHA kernel
-  template<typename FMHAKernel, bool Enable>
-  struct ScaleTypeHelper {
-    using ElementScale = float;
-    using StrideScaleQ = Stride<_1, int, int, int>;
-    using StrideScaleK = Stride<_1, int, int, int>;
-    using StrideScaleV = Stride<_1, int, int, int>;
-  };
-
-  template<typename FMHAKernel>
-  struct ScaleTypeHelper<FMHAKernel, true> {
-    using ElementScale = typename FMHAKernel::ElementScale;
-    using StrideScaleQ = typename FMHAKernel::StrideScaleQ;
-    using StrideScaleK = typename FMHAKernel::StrideScaleK;
-    using StrideScaleV = typename FMHAKernel::StrideScaleV;
-  };
-
-  using ScaleTypes = ScaleTypeHelper<FMHAKernel, !Persistent>;
-  using ElementScale = typename ScaleTypes::ElementScale;
-  using StrideScaleQ = typename ScaleTypes::StrideScaleQ;
-  using StrideScaleK = typename ScaleTypes::StrideScaleK;
-  using StrideScaleV = typename ScaleTypes::StrideScaleV;
+  using ElementScale = typename CollectiveMainloop::TensorScaleQ::element_type;
+  using StrideScaleQ = decltype(cute::stride(typename CollectiveMainloop::TensorScaleQ{}));
+  using StrideScaleK = decltype(cute::stride(typename CollectiveMainloop::TensorScaleK{}));
+  using StrideScaleV = decltype(cute::stride(typename CollectiveMainloop::TensorScaleV{}));
 
   int32_t count;
 
@@ -250,10 +230,11 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
   StrideK stride_K_cache;
   StrideV stride_V_cache;
 
-  // Scale-related members only used when !Persistent
   StrideScaleQ stride_SQ;
   StrideScaleK stride_SK;
   StrideScaleV stride_SV;
+  StrideScaleK stride_SK_cache{};
+  StrideScaleV stride_SV_cache{};
 
   uint64_t seed = 0;
 
@@ -267,17 +248,24 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
 
   cutlass::DeviceAllocation<ElementQKMMAVerify> block_Q_dq; // Dequantized copy of Q for validation
   cutlass::DeviceAllocation<ElementQKMMAVerify> block_K_dq; // Dequantized copy of K for validation
-  cutlass::DeviceAllocation<ElementPVMMAVerify> block_V_dq; // Dequantized copy of V for validation  
+  cutlass::DeviceAllocation<ElementPVMMAVerify> block_V_dq; // Dequantized copy of V for validation
+  cutlass::DeviceAllocation<ElementQKMMAVerify> block_K_cache_dq;
+  cutlass::DeviceAllocation<ElementPVMMAVerify> block_V_cache_dq;
   cutlass::DeviceAllocation<ElementScale> block_scaleQ;
   cutlass::DeviceAllocation<ElementScale> block_scaleK;
   cutlass::DeviceAllocation<ElementScale> block_scaleV;
   cutlass::DeviceAllocation<ElementScale> block_scaleP;
+  cutlass::DeviceAllocation<ElementScale> block_scaleK_cache;
+  cutlass::DeviceAllocation<ElementScale> block_scaleV_cache;
   std::vector<int> cumulative_scale_q;
   std::vector<int> cumulative_scale_kv;
+  std::vector<int> cumulative_scale_kv_cache;
   cutlass::DeviceAllocation<int> device_cumulative_scale_q;
   cutlass::DeviceAllocation<int> device_cumulative_scale_kv;
-  ElementScale scale_k;
-  ElementScale scale_v;
+  cutlass::DeviceAllocation<int> device_cumulative_scale_kv_cache;
+  ElementScale scale_k = ElementScale(1);
+  ElementScale scale_v = ElementScale(1);
+  ElementScale scale_q = ElementScale(1);
 
   std::vector<int> cumulative_seqlen_q;
   std::vector<int> cumulative_seqlen_kv;
@@ -308,6 +296,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
       if constexpr (BlockScale) {
         shape.seq_len_qo.cumulative_scale_length = cumulative_scale_q.data();
         shape.seq_len_kv.cumulative_scale_length = cumulative_scale_kv.data();
+        shape.seq_len_kv_cache.cumulative_scale_length = cumulative_scale_kv_cache.data();
       }
     }
 
@@ -321,8 +310,8 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
     auto block_Q_ = BlockScale ? block_Q_dq : in_memory(block_Q);
     auto block_K_ = (BlockScale || F8kvF16mma) ? block_K_dq : in_memory(block_K);
     auto block_V_ = ((BlockScale && !FP4Input) || F8kvF16mma) ? block_V_dq : in_memory(block_V);
-    auto block_K_cache_ = in_memory(block_K_cache);
-    auto block_V_cache_ = in_memory(block_V_cache);
+    auto block_K_cache_ = (BlockScale || F8kvF16mma) ? block_K_cache_dq : in_memory(block_K_cache);
+    auto block_V_cache_ = ((BlockScale && !FP4Input) || F8kvF16mma) ? block_V_cache_dq : in_memory(block_V_cache);
     using ElementV_ = std::conditional_t<BlockScale && !FP4Input, 
                                     ElementPVMMAVerify,
                                     std::remove_pointer_t<decltype(block_V_.get())>>;
@@ -366,6 +355,9 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
         seq_len_kv_cache = shape.seq_len_kv_cache;
       }
       int seq_len_kv_total = seq_len_kv + seq_len_kv_cache;
+      int kv_cache_rows = (paged_kv_cache.page_size > 0)
+          ? ceil_div(seq_len_kv_cache, paged_kv_cache.page_size) * paged_kv_cache.page_size
+          : seq_len_kv_cache;
 
       int kv_group_update=1;
       for (int h = 0; h < num_heads_q; h++) {
@@ -380,10 +372,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
 
           if (paged_kv_cache.page_size > 0) {
             int page_size = paged_kv_cache.page_size;
-            // Reached only when paging is enabled; page_size must be > 0 here
-            // because the following code divides by it.
-            assert(page_size > 0 && "page_size must be > 0 in the paged KV cache path");
-            int start_page_idx = isVarLen ? num_pages_per_seq_host[b] : b * (seq_len_kv_cache / page_size);
+            int start_page_idx = isVarLen ? num_pages_per_seq_host[b] : b * ceil_div(seq_len_kv_cache, page_size);
             int num_pages = ceil_div(seq_len_kv_cache, page_size);
 
             for (int i = 0; i < num_pages; ++i) {
@@ -609,8 +598,8 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
         if(kv_group_update % q_group_size==0) {
           offset_k += seq_len_kv * head_size_qk;
           offset_v += seq_len_kv * head_size_vo;
-          offset_k_cache += seq_len_kv_cache * head_size_qk;
-          offset_v_cache += seq_len_kv_cache * head_size_vo;
+          offset_k_cache += kv_cache_rows * head_size_qk;
+          offset_v_cache += kv_cache_rows * head_size_vo;
         }
         kv_group_update++;
         offset_o += seq_len_qo * head_size_vo;
@@ -697,6 +686,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
     if constexpr (BlockScale) {
       cumulative_scale_q = {0};
       cumulative_scale_kv = {0};
+      cumulative_scale_kv_cache = {0};
     }
 
 
@@ -721,6 +711,8 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
         int scale_len_kv = cute::ceil_div(seqlen_kv, GROUP_SIZE);
         cumulative_scale_q.push_back(cumulative_scale_q.back() + scale_len_q);
         cumulative_scale_kv.push_back(cumulative_scale_kv.back() + scale_len_kv);
+        cumulative_scale_kv_cache.push_back(cumulative_scale_kv_cache.back()
+                                            + cute::ceil_div(seqlen_kv_cache, GROUP_SIZE));
       }
     }
 
@@ -810,17 +802,8 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
     compat::wait();
   }
 
-  template <typename LowpT, typename DeqT>
-  void apply_dequantization(const cutlass::DeviceAllocation<LowpT>& lowp, cutlass::DeviceAllocation<DeqT>& deq, float& scale) {
-    const float lowp_max = float(cutlass::platform::numeric_limits<LowpT>::max());
-    const float highp_max = float(cutlass::platform::numeric_limits<DeqT>::max());
-    auto s = highp_max / lowp_max;
-
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dis(1.0f, s/2.0f);
-    scale = dis(gen);
-
+  template <typename DeqT>
+  void scale_dequantized(cutlass::DeviceAllocation<DeqT>& deq, float scale) {
     auto deq_buff = std::vector<DeqT>(deq.size());
     compat::memcpy<DeqT>(deq_buff.data(), deq.get(), deq.size());
     compat::wait();
@@ -831,6 +814,19 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
 
     compat::memcpy<DeqT>(deq.get(), deq_buff.data(), deq.size());
     compat::wait();
+  }
+
+  template <typename LowpT, typename DeqT>
+  void apply_dequantization(const cutlass::DeviceAllocation<LowpT>& lowp, cutlass::DeviceAllocation<DeqT>& deq, float& scale) {
+    const float lowp_max = float(cutlass::platform::numeric_limits<LowpT>::max());
+    const float highp_max = float(cutlass::platform::numeric_limits<DeqT>::max());
+    auto s = highp_max / lowp_max;
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dis(1.0f, s/2.0f);
+    scale = dis(gen);
+    scale_dequantized(deq, scale);
   }
 
 
@@ -857,11 +853,31 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
     }
 
     auto [batch, num_heads_q, num_heads_kv, seq_len_qo, seq_len_kv, seq_len_kv_cache, head_size_qk, head_size_vo] = problem_size;
+
+    int kv_cache_rows = seq_len_kv_cache;
+    std::vector<int> num_pages_per_seq{0};
+    if constexpr (PagedKV) {
+      constexpr int kv_tile_size = CollectiveMainloop::BLK_K;
+      int max_seq_len_kv_cache = isVarLen ? int(shape.seq_len_kv_cache) : seq_len_kv_cache;
+      paged_kv_cache.page_size = options.page_size > 0
+          ? options.page_size
+          : cute::max(kv_tile_size, cutlass::round_up(max_seq_len_kv_cache, kv_tile_size));
+      int num_pages = 0;
+      for (int b = 0; b < shape.batch; b++) {
+        int seq_len_cache = isVarLen ? cumulative_seqlen_kv_cache[b + 1] - cumulative_seqlen_kv_cache[b] : seq_len_kv_cache;
+        int pages_per_seq = ceil_div(seq_len_cache, paged_kv_cache.page_size);
+        num_pages_per_seq.push_back(num_pages_per_seq.back() + pages_per_seq);
+        num_pages += pages_per_seq;
+      }
+      kv_cache_rows = isVarLen ? num_pages * paged_kv_cache.page_size
+                               : ceil_div(seq_len_kv_cache, paged_kv_cache.page_size) * paged_kv_cache.page_size;
+    }
+
     auto shape_Q = cute::make_shape(seq_len_qo, head_size_qk, num_heads_q,  batch);
     auto shape_K = cute::make_shape(seq_len_kv, head_size_qk, num_heads_kv, batch);
     auto shape_V = cute::make_shape(head_size_vo, seq_len_kv, num_heads_kv, batch);
-    auto shape_K_cache = cute::make_shape(seq_len_kv_cache, head_size_qk, num_heads_kv, batch);
-    auto shape_V_cache = cute::make_shape(head_size_vo, seq_len_kv_cache, num_heads_kv, batch);
+    auto shape_K_cache = cute::make_shape(kv_cache_rows, head_size_qk, num_heads_kv, batch);
+    auto shape_V_cache = cute::make_shape(head_size_vo, kv_cache_rows, num_heads_kv, batch);
     auto shape_O = cute::make_shape(seq_len_qo, head_size_vo, num_heads_q,  batch);
 
     stride_Q = cutlass::make_cute_packed_stride(StrideQ{}, shape_Q);
@@ -877,27 +893,16 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
     block_Q.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * head_size_qk);
     block_K.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv * head_size_qk);
     block_V.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv * head_size_vo);
-    block_K_cache.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv_cache * head_size_qk);
-    block_V_cache.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv_cache * head_size_vo);
+    block_K_cache.reset(static_cast<std::size_t>(batch) * num_heads_kv * kv_cache_rows * head_size_qk);
+    block_V_cache.reset(static_cast<std::size_t>(batch) * num_heads_kv * kv_cache_rows * head_size_vo);
     block_O.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * head_size_vo);
     block_ref_O.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * head_size_vo);
 
     // Zero-initialize output buffer for the kernel result
     // block_ref_O is fully written in verify() before being read, so no initialization needed
     compat::memset(block_O.get(), 0, block_O.size() * sizeof(ElementO));
-    if (PagedKV) {
-      paged_kv_cache.page_size = options.page_size;
-      // PagedKV requires a real page size; ceil_div below divides by it, so a
-      // page_size of 0 would be an integer division-by-zero (SIGFPE).
-      assert(paged_kv_cache.page_size > 0 && "PagedKV requires page_size > 0");
-      std::vector<int> num_pages_per_seq{0};
-      int num_pages = 0;
-      for(int b = 0; b < shape.batch; b++) {
-        int seq_len_cache = isVarLen ? cumulative_seqlen_kv_cache[b + 1] - cumulative_seqlen_kv_cache[b] : seq_len_kv_cache;
-        int pages_per_seq = ceil_div(seq_len_cache, paged_kv_cache.page_size);
-        num_pages_per_seq.push_back(num_pages_per_seq.back() + pages_per_seq);
-        num_pages += pages_per_seq;
-      }
+    if (paged_kv_cache.page_size > 0) {
+      int num_pages = num_pages_per_seq.back();
       paged_kv_cache.page_table.reset(num_pages);
 
       // initialize block table with random mapping for non-contiguous layout
@@ -952,24 +957,33 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
           device_cumulative_scale_kv.reset(cumulative_scale_kv.size());
           device_cumulative_scale_kv.copy_from_host(cumulative_scale_kv.data(), cumulative_scale_kv.size());
         }
+        if (!cumulative_scale_kv_cache.empty()) {
+          device_cumulative_scale_kv_cache.reset(cumulative_scale_kv_cache.size());
+          device_cumulative_scale_kv_cache.copy_from_host(cumulative_scale_kv_cache.data(), cumulative_scale_kv_cache.size());
+        }
         shape.seq_len_qo.cumulative_scale_length = device_cumulative_scale_q.get();
         shape.seq_len_kv.cumulative_scale_length = device_cumulative_scale_kv.get();
+        shape.seq_len_kv_cache.cumulative_scale_length = device_cumulative_scale_kv_cache.get();
       }
     }
 
     block_Q_dq.reset(block_Q.size());
     block_K_dq.reset(block_K.size());
     block_V_dq.reset(block_V.size());
+    block_K_cache_dq.reset(block_K_cache.size());
+    block_V_cache_dq.reset(block_V_cache.size());
 
     convert_dtype<ElementQ, ElementQKMMAVerify, BenchmarkRunnerFMHA>(block_Q, block_Q_dq);
     convert_dtype<ElementK, ElementQKMMAVerify, BenchmarkRunnerFMHA>(block_K, block_K_dq);
     convert_dtype<ElementV, ElementPVMMAVerify, BenchmarkRunnerFMHA>(block_V, block_V_dq);
-
-    if constexpr (Persistent) return shape;
+    convert_dtype<ElementK, ElementQKMMAVerify, BenchmarkRunnerFMHA>(block_K_cache, block_K_cache_dq);
+    convert_dtype<ElementV, ElementPVMMAVerify, BenchmarkRunnerFMHA>(block_V_cache, block_V_cache_dq);
 
     if constexpr (F8kvF16mma) {
       apply_dequantization(block_K, block_K_dq, scale_k);
       apply_dequantization(block_V, block_V_dq, scale_v);
+      scale_dequantized(block_K_cache_dq, scale_k);
+      scale_dequantized(block_V_cache_dq, scale_v);
     } else if constexpr (BlockScale) {
       auto scale_q = cute::ceil_div(head_size_qk, GROUP_SIZE);
       auto scale_k = cute::ceil_div(head_size_qk, GROUP_SIZE);
@@ -1073,12 +1087,8 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
 
   void run(::benchmark::State& state, const FMHAOptions &options, const cutlass::KernelHardwareInfo &hw_info) {
 
-    // Paged KV cache requires a positive page size. A page_size <= 0 would cause
-    // an integer division-by-zero (SIGFPE) during setup (ceil_div by page_size).
-    // Guard at runtime so this is caught in Release builds too, where the
-    // asserts above are compiled out under NDEBUG.
-    if (PagedKV && options.page_size <= 0) {
-      state.SkipWithError("Invalid config: PagedKV requires page_size > 0");
+    if (options.page_size < 0) {
+      state.SkipWithError("Invalid config: page_size must be non-negative");
       return;
     }
 

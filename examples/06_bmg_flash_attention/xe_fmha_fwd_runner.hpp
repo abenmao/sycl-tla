@@ -252,6 +252,8 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
 
   static constexpr bool IsPersistent = is_same_v<typename FMHAKernel::TileScheduler, cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>;
 
+  static constexpr bool PagedKV = CollectiveMainloop::PagedKV;
+
   static constexpr bool BlockScale = FMHAKernel::BlockScale;
 
   static constexpr bool PacksGqaQ = FMHAKernel::kPacksGqaQ;
@@ -914,8 +916,12 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
 
     int kv_cache_rows = seq_len_kv_cache;
     std::vector<int> num_pages_per_seq{0};
-    if (options.use_paged_kv) {
-      paged_kv_cache.page_size = options.page_size;
+    if constexpr (PagedKV) {
+      constexpr int kv_tile_size = CollectiveMainloop::BLK_K;
+      int max_seq_len_kv_cache = isVarLen ? int(shape.seq_len_kv_cache) : seq_len_kv_cache;
+      paged_kv_cache.page_size = options.use_paged_kv
+          ? options.page_size
+          : cutlass::round_up(max_seq_len_kv_cache, kv_tile_size);
       int num_pages = 0;
       for (int b = 0; b < shape.batch; b++) {
         int seq_len_cache = isVarLen ? cumulative_seqlen_kv_cache[b + 1] - cumulative_seqlen_kv_cache[b] : seq_len_kv_cache;
@@ -1240,9 +1246,9 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
           },
           {
             options.softmax_scale,
-            options.use_paged_kv ? paged_kv_cache.page_table.get() : nullptr,
-            options.use_paged_kv ? paged_kv_cache.page_size : 0,
-            options.use_paged_kv ? paged_kv_cache.num_pages_per_seq.get() : nullptr
+            paged_kv_cache.page_table.get(),
+            paged_kv_cache.page_size,
+            paged_kv_cache.num_pages_per_seq.get()
           },
           {},
           hw_info,
@@ -1269,9 +1275,9 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
           },
           {
             options.softmax_scale,
-            options.use_paged_kv ? paged_kv_cache.page_table.get() : nullptr,
-            options.use_paged_kv ? paged_kv_cache.page_size : 0,
-            options.use_paged_kv ? paged_kv_cache.num_pages_per_seq.get() : nullptr
+            paged_kv_cache.page_table.get(),
+            paged_kv_cache.page_size,
+            paged_kv_cache.num_pages_per_seq.get()
           },
           {},
           hw_info,
@@ -1298,9 +1304,9 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
           },
           {
             options.softmax_scale,
-            options.use_paged_kv ? paged_kv_cache.page_table.get() : nullptr,
-            options.use_paged_kv ? paged_kv_cache.page_size : 0,
-            options.use_paged_kv ? paged_kv_cache.num_pages_per_seq.get() : nullptr
+            paged_kv_cache.page_table.get(),
+            paged_kv_cache.page_size,
+            paged_kv_cache.num_pages_per_seq.get()
           },
           {},
           hw_info
@@ -1532,7 +1538,7 @@ struct FMHAConfig {
                                                decltype(cutlass::fmha::collective::get_sg_layout_pv(SubgroupLayoutQK{})),
                                                SubgroupLayoutPV_>;
 
-  template <bool isVarLen, bool CachedKV, bool PagedKV, class Scheduler, bool isSplitKV = false>
+  template <bool isVarLen, bool PagedKV, class Scheduler, bool isSplitKV = false>
   static int run(const Options &options) {
     //
     // Run examples
@@ -1574,7 +1580,7 @@ struct FMHAConfig {
     using MainloopDispatchPolicy = cutlass::fmha::XeDefault<PipelineStages>;
     using CollectiveMainloop = cutlass::fmha::collective::FMHAFwdMainloop<
         MainloopDispatchPolicy, Causal, BlockScale, F8kvF16mma, PerTensorScale,
-        CachedKV, PagedKV, TiledMMAQK, TiledMMAPV, VTiles,
+        PagedKV, TiledMMAQK, TiledMMAPV, VTiles,
         TensorQ, TensorK, TensorV,
         TensorScaleQ, TensorScaleK, TensorScaleV,
         TensorK_cache, TensorV_cache,

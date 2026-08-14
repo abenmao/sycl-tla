@@ -45,7 +45,7 @@ template <typename ElementQ, typename ElementK, typename ElementV, typename Elem
           typename ElementScale,
           typename TileShapeQK, typename TileShapePV, typename TileShapeOutput, 
           typename SubgroupLayoutQK, typename SubgroupLayoutPV_,
-          bool Causal_, bool VarLen_, bool CachedKV_, bool PagedKV_, bool Persistent_,
+          bool Causal_, bool VarLen_, bool PagedKV_, bool Persistent_,
           bool BlockScale, int PipelineStages,
           bool GqaFusion = false,
           typename GmemTiledCopyQ = void, 
@@ -68,12 +68,9 @@ struct FMHAConfig {
   
   static constexpr bool Causal = Causal_;
   static constexpr bool VarLen = VarLen_;
-  static constexpr bool CachedKV = CachedKV_;
   static constexpr bool PagedKV = PagedKV_;
   static constexpr bool Persistent = Persistent_;
   static_assert(!(Persistent & Causal), "persistent SDPA kernel not support Causal yet");
-  static_assert(!(CachedKV & BlockScale), "BlockScale doesn't support CachedKV");
-  static_assert(!(PagedKV & BlockScale), "BlockScale doesn't support PagedKV");
   
   static constexpr int SGTileQ = get<0>(shape_div(TileShapeQK{}, shape(SubgroupLayoutQK{})))();
 
@@ -142,7 +139,7 @@ struct FMHAConfig {
   using MainloopDispatchPolicy = cutlass::fmha::XeDefault<PipelineStages>;
   using CollectiveMainloop = cutlass::fmha::collective::FMHAFwdMainloop<
     MainloopDispatchPolicy, Causal, BlockScale, F8kvF16mma, PerTensorScale,
-    CachedKV, PagedKV, TiledMMAQK, TiledMMAPV, VTiles,
+    PagedKV, TiledMMAQK, TiledMMAPV, VTiles,
     TensorQ, TensorK, TensorV,
     TensorScaleQ, TensorScaleK, TensorScaleV,
     TensorK_cache, TensorV_cache,
@@ -283,21 +280,21 @@ struct PipelineStagesConfig<FMHAMode::Prefill> { static constexpr int value = 2;
 template<FMHAMode Mode,
          class ElementQ, class ElementK, class ElementV, class ElementO,
          class LayoutQ, class LayoutK, class LayoutV, class LayoutO,
-         class ElementScale, bool Causal, bool VarLen, bool CachedKV, bool PagedKV, bool Persistent, bool BlockScale, int HeadDim>
+         class ElementScale, bool Causal, bool VarLen, bool PagedKV, bool Persistent, bool BlockScale, int HeadDim>
 struct FMHAConfigGen{
   using TileShapeConfig = ShapeConfig<Mode, HeadDim, Persistent>;
   using type = cutlass::flash_attention::FMHAConfig<
     ElementQ, ElementK, ElementV, ElementO, LayoutQ, LayoutK, LayoutV, LayoutO, ElementScale,
     typename TileShapeConfig::ShapeQK, typename TileShapeConfig::ShapePV, typename TileShapeConfig::ShapeOutput,
     typename TileShapeConfig::SubgroupLayout, void,
-    Causal, VarLen, CachedKV, PagedKV, Persistent, BlockScale, PipelineStagesConfig<Mode>::value>;
+    Causal, VarLen, PagedKV, Persistent, BlockScale, PipelineStagesConfig<Mode>::value>;
 };
 
 // FMHAConfigGen with explicit tile and subgroup specification
 template<FMHAMode Mode,
          class ElementQ, class ElementK, class ElementV, class ElementO,
          class LayoutQ, class LayoutK, class LayoutV, class LayoutO,
-         class ElementScale, bool Causal, bool VarLen, bool CachedKV, bool PagedKV, bool Persistent, bool BlockScale,
+         class ElementScale, bool Causal, bool VarLen, bool PagedKV, bool Persistent, bool BlockScale,
          int WgTileQ, int WgTileK, int WgTileV,
          int SgTileQ, int SgTileK,
          int HeadDimQK, int HeadDimV, bool GqaFusion = false>
@@ -333,7 +330,7 @@ struct FMHAConfigGenWithTileShape{
     ElementQ, ElementK, ElementV, ElementO, LayoutQ, LayoutK, LayoutV, LayoutO, ElementScale,
     ShapeQK, ShapePV, ShapeOutput,
     SubgroupLayoutQK, void,
-    Causal, VarLen, CachedKV, PagedKV, Persistent, BlockScale, PipelineStagesConfig<Mode>::value, GqaFusion>;
+    Causal, VarLen, PagedKV, Persistent, BlockScale, PipelineStagesConfig<Mode>::value, GqaFusion>;
 };
 
 } // namespace flash_attention

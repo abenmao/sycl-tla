@@ -39,14 +39,14 @@ using namespace cutlass::flash_attention;
 using BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_h64_Causal_VarLen = FMHAConfigGen</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::bfloat16_t, /*ElementK*/ cutlass::bfloat16_t, /*ElementV*/ cutlass::bfloat16_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ true, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*HeadDim*/ 64
+  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ true, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*HeadDim*/ 64
 >::type;
 
 // FixedLen variants to align with example/06_xe_fmha_fwd.cpp (example never enables --varlen).
 using BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_h64_Causal_FixedLen = FMHAConfigGen</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::bfloat16_t, /*ElementK*/ cutlass::bfloat16_t, /*ElementV*/ cutlass::bfloat16_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*HeadDim*/ 64
+  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*HeadDim*/ 64
 >::type;
 
 CUTLASS_CREATE_FMHA_BENCHMARK(BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_h64_Causal_VarLen);
@@ -63,21 +63,21 @@ CUTLASS_CREATE_FMHA_BENCHMARK(BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_h64_Causal_F
 using BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_NonCausal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::bfloat16_t, /*ElementK*/ cutlass::bfloat16_t, /*ElementV*/ cutlass::bfloat16_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
+  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
   /*SgTileQ*/ 1, /*SgTileK*/ 64, /*HeadDimQK*/ 64, /*HeadDimV*/ 128
 >::type;
 
 using BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_VarLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::bfloat16_t, /*ElementK*/ cutlass::bfloat16_t, /*ElementV*/ cutlass::bfloat16_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ true, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
+  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ true, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
   /*SgTileQ*/ 1, /*SgTileK*/ 64, /*HeadDimQK*/ 64, /*HeadDimV*/ 128
 >::type;
 
 using BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_SgQ1K64_HDimQK64V128_Causal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::bfloat16_t, /*ElementK*/ cutlass::bfloat16_t, /*ElementV*/ cutlass::bfloat16_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
+  /*ElementScale*/ float, /*Causal*/ true, /*VarLen*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 1, /*WgTileK*/ 512, /*WgTileV*/ 32,
   /*SgTileQ*/ 1, /*SgTileK*/ 64, /*HeadDimQK*/ 64, /*HeadDimV*/ 128
 >::type;
 
@@ -88,7 +88,7 @@ CUTLASS_CREATE_FMHA_BENCHMARK(BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ1K512V32_
 using BmgFMHADecode_BF16_BF16_BF16_BF16_RCR_WgQ128K64V32_SgQ8K64_HDimQK32V64_NonCausal_FixedLen = FMHAConfigGenWithTileShape</*Mode*/FMHAMode::Decode,
   /*ElementQ*/ cutlass::bfloat16_t, /*ElementK*/ cutlass::bfloat16_t, /*ElementV*/ cutlass::bfloat16_t, /*ElementO*/ cutlass::bfloat16_t,
   /*LayoutQ*/ cutlass::layout::RowMajor, /*LayoutK*/ cutlass::layout::ColumnMajor, /*LayoutV*/ cutlass::layout::RowMajor, /*LayoutO*/ cutlass::layout::RowMajor,
-  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*CachedKV*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 128, /*WgTileK*/ 64, /*WgTileV*/ 32,
+  /*ElementScale*/ float, /*Causal*/ false, /*VarLen*/ false, /*PagedKV*/ false, /*Persistent*/ false, /*UseScale*/ false, /*WgTileQ*/ 128, /*WgTileK*/ 64, /*WgTileV*/ 32,
   /*SgTileQ*/ 8, /*SgTileK*/ 64, /*HeadDimQK*/ 32, /*HeadDimV*/ 64
 >::type;
 

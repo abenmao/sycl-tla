@@ -131,7 +131,7 @@ foreach(HEAD_DIM 64 96 128 192)
     target_compile_definitions(06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
     target_compile_definitions(06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
 
-    # --- Cached KV targets (CachedKV=true, split into separate binary) ---
+    # --- Paged KV targets (contiguous cache is represented as one page) ---
     if (INPUT_TYPE STREQUAL "mx_float_e5m2_t" OR INPUT_TYPE STREQUAL "mx_float_e4m3_t" OR INPUT_TYPE STREQUAL "mx_float_e2m1_t")
       cutlass_example_add_executable(
         06_xe_fmha_fwd_prefill_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM}
@@ -140,7 +140,7 @@ foreach(HEAD_DIM 64 96 128 192)
         TEST_KVCACHE_PREFILL
         TEST_KVCACHE_PAGED_PREFILL
       )
-      target_compile_definitions(06_xe_fmha_fwd_prefill_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL CACHED_KV SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
+      target_compile_definitions(06_xe_fmha_fwd_prefill_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL PAGED_KV SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
 
       cutlass_example_add_executable(
         06_xe_fmha_fwd_decode_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM}
@@ -149,7 +149,7 @@ foreach(HEAD_DIM 64 96 128 192)
         TEST_KVCACHE_DECODE
         TEST_KVCACHE_PAGED_DECODE
       )
-      target_compile_definitions(06_xe_fmha_fwd_decode_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE CACHED_KV SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
+      target_compile_definitions(06_xe_fmha_fwd_decode_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE PAGED_KV SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
     else()
       cutlass_example_add_executable(
         06_xe_fmha_fwd_prefill_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM}
@@ -185,7 +185,7 @@ foreach(HEAD_DIM 64 96 128 192)
       TEST_KVCACHE_PREFILL
       TEST_KVCACHE_PAGED_PREFILL
     )
-    target_compile_definitions(06_xe_fmha_fwd_prefill_cached_kv_fp8kvfp16mma_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL CACHED_KV SHOW_DIFF=1)
+    target_compile_definitions(06_xe_fmha_fwd_prefill_cached_kv_fp8kvfp16mma_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL PAGED_KV SHOW_DIFF=1)
 
     cutlass_example_add_executable(
       06_xe_fmha_fwd_decode_cached_kv_fp8kvfp16mma_hdim${HEAD_DIM}
@@ -194,7 +194,7 @@ foreach(HEAD_DIM 64 96 128 192)
       TEST_KVCACHE_DECODE
       TEST_KVCACHE_PAGED_DECODE
     )
-    target_compile_definitions(06_xe_fmha_fwd_decode_cached_kv_fp8kvfp16mma_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE CACHED_KV SHOW_DIFF=1)
+    target_compile_definitions(06_xe_fmha_fwd_decode_cached_kv_fp8kvfp16mma_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE PAGED_KV SHOW_DIFF=1)
 
     cutlass_example_add_executable(
       06_xe_fmha_fwd_prefill_mxfp8kvfp16mma_hdim${HEAD_DIM}
@@ -211,6 +211,6 @@ foreach(HEAD_DIM 64 96 128 192)
       TEST_KVCACHE_DECODE
       TEST_KVCACHE_PAGED_DECODE
     )
-    target_compile_definitions(06_xe_fmha_fwd_decode_cached_kv_mxfp8kvfp16mma_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE CACHED_KV MXFP8_KV SHOW_DIFF=1)
+    target_compile_definitions(06_xe_fmha_fwd_decode_cached_kv_mxfp8kvfp16mma_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE PAGED_KV MXFP8_KV SHOW_DIFF=1)
   endif()
 endforeach()
