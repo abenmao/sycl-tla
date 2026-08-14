@@ -48,7 +48,7 @@
 #include "cutlass/epilogue/collective/default_epilogue.hpp"
 #include "cutlass/epilogue/thread/linear_combination.h"
 
-#include "default_gemm_configuration.hpp"
+#include "xe_default_gemm_configuration.hpp"
 #include "../gemm_testbed_3x_ptr_array.hpp"
 using namespace cute;
 namespace cutlass {

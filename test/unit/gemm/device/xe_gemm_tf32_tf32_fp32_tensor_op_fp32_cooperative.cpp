@@ -35,7 +35,7 @@
 
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
 #include "cutlass/gemm/kernel/gemm_universal.hpp"
-#include "default_gemm_configuration.hpp"
+#include "xe_default_gemm_configuration.hpp"
 
 #include "gemm_testbed_3x.hpp"
 

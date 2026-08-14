@@ -37,8 +37,8 @@
 #include "cutlass/gemm/kernel/gemm_universal.hpp"
 #include "cutlass/gemm/group_array_problem_shape.hpp"
 
-#include "default_gemm_configuration.hpp"
-#include "default_gemm_group_configuration.hpp"
+#include "xe_default_gemm_configuration.hpp"
+#include "xe_default_gemm_group_configuration.hpp"
 #include "gemm_testbed_3x_ptr_array.hpp"
 
 namespace cutlass {
