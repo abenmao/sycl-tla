@@ -12,6 +12,7 @@ Native-load: Cursor, Codex, Copilot (Coding Agent + CLI), Aider, Continue. Claud
 | Understand SYCL*TLA code organization | [`media/docs/cpp/code_organization.md`](media/docs/cpp/code_organization.md), [`media/docs/cpp/efficient_gemm.md`](media/docs/cpp/efficient_gemm.md) |
 | Understand the Xe architecture redesign (atoms, copies, subgroup model) | [`media/docs/cpp/xe_rearchitecture.md`](media/docs/cpp/xe_rearchitecture.md) |
 | Tune a kernel (tile sizing, pipeline stages, prefetch, SLM, reorders) | [`media/docs/cpp/cute/12_intel_performance_guide.md`](media/docs/cpp/cute/12_intel_performance_guide.md) |
+| Select or tune an Xe block2D output-store cache policy | [`media/docs/cpp/xe_store_cache_policy.md`](media/docs/cpp/xe_store_cache_policy.md) |
 | GEMM-specific tuning companion | [`media/docs/cpp/cute/11_intel_gemm_companion.md`](media/docs/cpp/cute/11_intel_gemm_companion.md) |
 | Xe arch-tag vocabulary (Xe12 / Xe20 / …) | [`media/docs/cpp/cute/10_intel_overview.md`](media/docs/cpp/cute/10_intel_overview.md) |
 | Verify a kernel/change against CRI/Xe3p (or JGS/NVL) HW specs | [`media/docs/cpp/hw/README.md`](media/docs/cpp/hw/README.md) |

@@ -1498,7 +1498,8 @@ template <bool Causal,
           typename GmemTiledCopyQ = void,   /* void -> default block 2D */
           typename GmemTiledCopyK = void,
           typename GmemTiledCopyV = void,
-          typename GmemTiledCopyO = void>
+          typename GmemTiledCopyO = void,
+          XeStoreCachePolicy StoreCachePolicyO = XeStoreCachePolicy::kWT_WB_WB>
 struct FMHAConfig {
 
   static constexpr int SGTileQ = get<0>(shape_div(TileShapeQK{}, shape(SubgroupLayoutQK{})))();
@@ -1593,7 +1594,9 @@ struct FMHAConfig {
         CollectiveMainloop,
         TileShapeOutput,
         TensorO,
-        GmemTiledCopyO
+        GmemTiledCopyO,
+        void,
+        StoreCachePolicyO
     >;
 
     // Split-KV epilogue additionally stores per-split softmax statistics (exp
@@ -1604,7 +1607,8 @@ struct FMHAConfig {
         TileShapeOutput,
         TensorO,
         void,
-        TensorLSE
+        TensorLSE,
+        StoreCachePolicyO
     >;
 
     cutlass::Status status;

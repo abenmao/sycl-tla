@@ -101,12 +101,26 @@ public:
   static constexpr int CopyBitsC = cute::min(sizeof(NonVoidElementC) * 8, 64);
   static constexpr int CopyBitsD = cute::min(sizeof(ElementD) * 8, 64);
 
+  // CopyOpR2G may be void (fully automatic), C<XeStoreCachePolicy>
+  // (automatic block shape with explicit cache policy), or an explicit copy op.
+  static constexpr bool IsCachePolicyOnly = cute::is_xe_store_cache_v<CopyOpR2G>;
+  static constexpr auto StoreCachePolicy = [] {
+    if constexpr (IsCachePolicyOnly) {
+      return CopyOpR2G::value;
+    } else {
+      return cute::XeStoreCachePolicy::kDefault;
+    }
+  }();
+
   // NOTE: GmemTiledCopy* may not be the actual C/D copy operations. They are declared here only so
   //         that GemmUniversalAdapter can inspect their alignment requirements.
   //       The real C/D copy operations are deduced inside operator() once we have access to
   //         the TiledMMA.
   using GmemTiledCopyC = replace_void_t<CopyOpG2R,  XE_LOAD_2D<CopyBitsC, 8, 512 / CopyBitsC>>;
-  using GmemTiledCopyD = replace_void_t<CopyOpR2G, XE_STORE_2D<CopyBitsD, 8, 512 / CopyBitsD>>;
+  using DefaultGmemTiledCopyD = XE_STORE_2D<CopyBitsD, 8, 512 / CopyBitsD, StoreCachePolicy>;
+  using GmemTiledCopyD = conditional_t<IsCachePolicyOnly,
+                                       DefaultGmemTiledCopyD,
+                                       replace_void_t<CopyOpR2G, DefaultGmemTiledCopyD>>;
 
   static constexpr int SubgroupSize = DispatchPolicy::SubgroupSize;
 
@@ -314,10 +328,15 @@ public:
     using DefaultCopyOpG2RTranspose = XE_LOAD_2D_TRANSPOSE<CopyBitsCTranspose, cute::gcd(512 / CopyBitsC, get<1>(epilogue_tile)), cute::gcd(8 / Sub32BitFactor, get<0>(epilogue_tile))>;
     using DefaultCopyOpG2R = conditional_t<IsColMajorC, DefaultCopyOpG2RTranspose, DefaultCopyOpG2RNonTranspose>;
 
-    using DefaultCopyOpR2G = XE_STORE_2D<CopyBitsD, cute::gcd(8, get<0>(epilogue_tile)), cute::gcd(512 / CopyBitsD, get<1>(epilogue_tile))>;
+    using DefaultCopyOpR2G = XE_STORE_2D<CopyBitsD,
+                       cute::gcd(8, get<0>(epilogue_tile)),
+                       cute::gcd(512 / CopyBitsD, get<1>(epilogue_tile)),
+                       StoreCachePolicy>;
 
     using ActualGmemTiledCopyC = replace_void_t<CopyOpG2R, DefaultCopyOpG2R>;
-    using ActualGmemTiledCopyD = replace_void_t<CopyOpR2G, DefaultCopyOpR2G>;
+    using ActualGmemTiledCopyD = conditional_t<IsCachePolicyOnly,
+                           DefaultCopyOpR2G,
+                           replace_void_t<CopyOpR2G, DefaultCopyOpR2G>>;
 
     auto batch_idx = get<3>(tile_coord_mnkl);
 

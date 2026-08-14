@@ -55,6 +55,15 @@ cutlass_test_unit_add_executable(
   quantize_block_wise.cpp
   dequantize.cpp
 )
+if(SYCL_TARGET_INTEL_GPU_CRI)
+  # Keep the cache-policy variants in a separate device image and preserve the
+  # existing Xe copy kernels. Changing the large shared image's kernel shape
+  # triggers an IGC SIGSEGV for BMG and PVC with the 2026.2 toolchain.
+  cutlass_test_unit_add_executable(
+    cutlass_test_unit_cute_intel_xe_store_cache_policy
+    xe_store_cache_policy.cpp
+  )
+endif()
 else()
 cutlass_test_unit_add_executable(
   cutlass_test_unit_cute_intel_xe

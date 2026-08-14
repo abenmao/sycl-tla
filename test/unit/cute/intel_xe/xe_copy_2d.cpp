@@ -237,6 +237,10 @@ TEST(PVC_CuTe_Xe, XE_COPY_2D_char) {
 }
 
 TEST(PVC_CuTe_Xe, XE_COPY_2D_uint8) {
+  static_assert(std::is_same_v<XE_STORE_2D<8, 2, 64>,
+                               XE_STORE_2D<8, 2, 64, XeStoreCachePolicy::kDefault>>);
+  static_assert(is_xe_store_cache_v<cute::C<XeStoreCachePolicy::kWT_UC_UC>>);
+  static_assert(is_xe_block_2d_atom_v<XE_STORE_2D<8, 2, 64, XeStoreCachePolicy::kWB_WB_UC>>);
   test_xe_copy_2d<uint8_t, 8, 1, 16>();
   test_xe_copy_2d<uint8_t, 8, 2, 16>();
   test_xe_copy_2d<uint8_t, 8, 3, 16>();

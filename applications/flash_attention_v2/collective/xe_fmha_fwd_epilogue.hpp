@@ -51,8 +51,9 @@ using namespace cute;
 template <class CollectiveMainloop, // Attention mainloop
           class TileShapeO_,        // Shape of output tile, may be larger than P*V GEMM
           class TensorO_,           // 2D slice of global output tensor
-          class TiledCopyO_ = void, // Optional TiledCopy for loading O
-          class TensorLSE_ = void>  // Optional tensor for storing intermediate exp sums and max logits (split-KV)
+          class TiledCopyO_ = void, // Optional TiledCopy for storing O
+          class TensorLSE_ = void,  // Optional tensor for storing intermediate exp sums and max logits (split-KV)
+          XeStoreCachePolicy StoreCachePolicy_ = XeStoreCachePolicy::kDefault>
 class FMHAFwdEpilogue {
 
 public:
@@ -112,9 +113,10 @@ public:
 
   static auto default_tiled_copy_O_helper() {
     if constexpr (ReduceK{} == _1{})
-      return make_block_2d_copy_D(TiledMMAPV{}, TensorO2D{});
+      return make_block_2d_copy_D<StoreCachePolicy_>(TiledMMAPV{}, TensorO2D{});
     else
-      return make_block_2d_copy_D_subtiled(TiledMMAPV{}, ReduceFragA{}.tv_layout(), ReduceSGLayout{}, TensorO2D{});
+      return make_block_2d_copy_D_subtiled<StoreCachePolicy_>(
+        TiledMMAPV{}, ReduceFragA{}.tv_layout(), ReduceSGLayout{}, TensorO2D{});
   }
 
   using DefaultTiledCopyO = decltype(default_tiled_copy_O_helper());

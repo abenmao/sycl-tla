@@ -29,6 +29,7 @@
 
 
 set(CUTLASS_APPLICATIONS_DIR ${CUTLASS_DIR}/applications)
+
 # TODO For Multitarget, these input types may be wrong for non-cri hardware.
 # Skip non-supported tests at runtime, keep this flag as well to not increase compile
 # time for single target build.

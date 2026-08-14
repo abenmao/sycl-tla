@@ -499,9 +499,9 @@ struct Copy_Traits<XE_LOAD_2D_TRANSPOSE<CopyBits, Height, Width>, XMode, YMode, 
 
 // Block 2D store traits.
 template <class XMode, class YMode, typename ValType, typename TiledStrides,
-          int CopyBits, int Height, int Width>
-struct Copy_Traits<XE_STORE_2D<CopyBits, Height, Width>, XMode, YMode, ValType, TiledStrides>
-    : Xe2DTraitsBase<XE_STORE_2D<CopyBits, Height, Width>, XMode, YMode, ValType, TiledStrides>
+      int CopyBits, int Height, int Width, XeStoreCachePolicy CachePolicy>
+struct Copy_Traits<XE_STORE_2D<CopyBits, Height, Width, CachePolicy>, XMode, YMode, ValType, TiledStrides>
+  : Xe2DTraitsBase<XE_STORE_2D<CopyBits, Height, Width, CachePolicy>, XMode, YMode, ValType, TiledStrides>
 {
   // (src-thr, src-val) -> (x, y)
   using SrcLayout = XeInterleavedLayout<Layout<Shape<Int<Width>, Int<Height>>>,
@@ -511,7 +511,7 @@ struct Copy_Traits<XE_STORE_2D<CopyBits, Height, Width>, XMode, YMode, ValType, 
   using RefLayout = SrcLayout;
   using DstLayout = decltype(replace<0>(RefLayout{}, Layout<Shape<intel::_SGSize>, Stride<_0>>{}));
 
-  using Op = XE_STORE_2D<CopyBits, Height, Width>;
+  using Op = XE_STORE_2D<CopyBits, Height, Width, CachePolicy>;
   using Super = Xe2DTraitsBase<Op, XMode, YMode, ValType, TiledStrides>;
   using Traits = typename Super::Traits;  // a.k.a. this class
   using ThrID = typename Super::ThrID;
@@ -825,6 +825,7 @@ block_2d_transform_selector(DesiredCoordLayout const& layout,
 //                 (Note: a reorder may be required to achieve data in this layout)
 // GlobalStride: strides of data in memory
 template <typename MemType, typename RegType, bool Store = false,
+          XeStoreCachePolicy StoreCachePolicy = XeStoreCachePolicy::kDefault,
           typename CoordLayout, typename GlobalStride>
 CUTE_HOST_DEVICE
 constexpr auto
@@ -883,7 +884,7 @@ block_2d_selector(CoordLayout const&, GlobalStride const&)
 #endif
 
     if constexpr (Store)
-      return XE_STORE_2D    <CopyBits, height, cwidth>{};
+      return XE_STORE_2D    <CopyBits, height, cwidth, StoreCachePolicy>{};
     else if constexpr (kind == Block2DTransform::V)
       return XE_LOAD_2D_VNNI<CopyBits, height, cwidth, block_cwidth>{};
     else
@@ -951,7 +952,8 @@ template<typename T> struct is_xe_block_2d_atom : std::false_type {};
 template<int B, int H, int W, int BW> struct is_xe_block_2d_atom<XE_LOAD_2D<B,H,W,BW>> : std::true_type {};
 template<int B, int H, int W> struct is_xe_block_2d_atom<XE_LOAD_2D_TRANSPOSE<B,H,W>> : std::true_type {};
 template<int B, int H, int W, int BW> struct is_xe_block_2d_atom<XE_LOAD_2D_VNNI<B,H,W,BW>> : std::true_type {};
-template<int B, int H, int W> struct is_xe_block_2d_atom<XE_STORE_2D<B,H,W>> : std::true_type {};
+template<int B, int H, int W, XeStoreCachePolicy P>
+struct is_xe_block_2d_atom<XE_STORE_2D<B,H,W,P>> : std::true_type {};
 
 template<typename T> constexpr bool is_xe_block_2d_atom_v = is_xe_block_2d_atom<T>::value;
 
@@ -1123,6 +1125,16 @@ make_block_2d_copy_D(TiledMMA                 const& mma,   // TiledMMA instance
   return make_block_2d_copy_D<ValType>(mma, gmem.stride()).with(gmem);
 }
 
+template <XeStoreCachePolicy CachePolicy, class TiledMMA, class GEngine, class GLayout>
+CUTE_HOST_DEVICE
+auto
+make_block_2d_copy_D(TiledMMA                 const& mma,   // TiledMMA instance
+                     Tensor<GEngine, GLayout> const& gmem)  // Global tensor
+{
+  using ValType = typename GEngine::value_type;
+  return make_block_2d_copy_D<CachePolicy, ValType>(mma, gmem.stride()).with(gmem);
+}
+
 template <class TiledMMA, class CopyOp, class GEngine, class GLayout>
 CUTE_HOST_DEVICE
 auto
@@ -1158,6 +1170,20 @@ make_block_2d_copy_D(TiledMMA           const& mma,         // TiledMMA instance
   using MMAType = typename TiledMMA::ValTypeD;
   auto cD = make_identity_tensor(select<0,1>(mma.tile_mnk()));
   auto op = block_2d_selector<ValType, MMAType, true>(
+    mma.get_slice(0).atom_partition_C(cD).layout(), gstride
+  );
+  return make_block_2d_copy_CD<ValType>(op, mma, gstride);
+}
+
+template <XeStoreCachePolicy CachePolicy, class ValType, class TiledMMA, class... Strides>
+CUTE_HOST_DEVICE
+auto
+make_block_2d_copy_D(TiledMMA           const& mma,         // TiledMMA instance
+                     Stride<Strides...> const& gstride)     // Global memory strides
+{
+  using MMAType = typename TiledMMA::ValTypeD;
+  auto cD = make_identity_tensor(select<0,1>(mma.tile_mnk()));
+  auto op = block_2d_selector<ValType, MMAType, true, CachePolicy>(
     mma.get_slice(0).atom_partition_C(cD).layout(), gstride
   );
   return make_block_2d_copy_CD<ValType>(op, mma, gstride);
@@ -1556,6 +1582,21 @@ make_block_2d_copy_D_subtiled(TiledMMA                 const& mma,         // Ti
   return make_block_2d_copy_D_subtiled<ValType>(mma, stv_layout, ssg_layout, gmem.stride()).with(gmem);
 }
 
+template <XeStoreCachePolicy CachePolicy, class TiledMMA,
+          class SubtileTVCoordLayout, class SubtileSGLayout,
+          class GEngine, class GLayout,
+          __CUTE_REQUIRES(is_layout_v<SubtileSGLayout>)>
+CUTE_HOST_DEVICE
+auto
+make_block_2d_copy_D_subtiled(TiledMMA                 const& mma,         // TiledMMA instance
+                              SubtileTVCoordLayout     const& stv_layout,  // Subtile TV-layout: (T,V) -> coord
+                              SubtileSGLayout          const& ssg_layout,  // Subtile subgroup layout: SG_K -> (m_subtile,n_subtile)
+                              Tensor<GEngine, GLayout> const& gmem)        // Global tensor
+{
+  using ValType = typename GEngine::value_type;
+  return make_block_2d_copy_D_subtiled<CachePolicy, ValType>(mma, stv_layout, ssg_layout, gmem.stride()).with(gmem);
+}
+
 template <class TiledMMA,
           class SubtileShape, class SubtileSGLayout,
           class CopyOp, class GEngine, class GLayout,
@@ -1601,6 +1642,22 @@ make_block_2d_copy_D_subtiled(TiledMMA             const& mma,         // TiledM
 {
   using MMAType = typename TiledMMA::ValTypeD;
   auto op = block_2d_selector<ValType, MMAType, true>(stv_layout, gstride);
+  return make_block_2d_copy_CD_subtiled<ValType>(op, mma, atuple_coshape(stv_layout), ssg_layout, gstride);
+}
+
+template <XeStoreCachePolicy CachePolicy, class ValType, class TiledMMA,
+          class SubtileTVCoordLayout, class SubtileSGLayout,
+          class... Strides,
+          __CUTE_REQUIRES(is_layout_v<SubtileSGLayout>)>
+CUTE_HOST_DEVICE
+auto
+make_block_2d_copy_D_subtiled(TiledMMA             const& mma,         // TiledMMA instance
+                              SubtileTVCoordLayout const& stv_layout,  // Subtile TV-layout: (T,V) -> coord
+                              SubtileSGLayout      const& ssg_layout,  // Subtile subgroup layout: SG_K -> (m_subtile,n_subtile)
+                              Stride<Strides...>   const& gstride)     // Global memory strides
+{
+  using MMAType = typename TiledMMA::ValTypeD;
+  auto op = block_2d_selector<ValType, MMAType, true, CachePolicy>(stv_layout, gstride);
   return make_block_2d_copy_CD_subtiled<ValType>(op, mma, atuple_coshape(stv_layout), ssg_layout, gstride);
 }
 
@@ -1823,7 +1880,9 @@ auto get_block_2d_copy_C(TiledMMA const& tiled_mma, CTensor const& c_tensor)
 template <class CopyOp, class TiledMMA, class DTensor>
 auto get_block_2d_copy_D(TiledMMA const& tiled_mma, DTensor const& d_tensor)
 {
-  if constexpr (!std::is_void_v<CopyOp>) {
+  if constexpr (is_xe_store_cache_v<CopyOp>) {
+    return make_block_2d_copy_D<CopyOp::value>(tiled_mma, d_tensor);
+  } else if constexpr (!std::is_void_v<CopyOp>) {
     return make_block_2d_copy_CD(CopyOp{}, tiled_mma, d_tensor);
   } else {
     return make_block_2d_copy_D(tiled_mma, d_tensor);
@@ -1904,13 +1963,14 @@ print(Copy_Atom<Copy_Traits<XE_LOAD_2D_TRANSPOSE<CopyBits, Height, Width>,
 }
 
 template <class XMode, class YMode, typename ValType, typename TiledStrides, typename AtomValType,
-          int CopyBits, int Height, int Width>
+          int CopyBits, int Height, int Width, XeStoreCachePolicy CachePolicy>
 CUTE_HOST_DEVICE
 void
-print(Copy_Atom<Copy_Traits<XE_STORE_2D<CopyBits, Height, Width>,
+print(Copy_Atom<Copy_Traits<XE_STORE_2D<CopyBits, Height, Width, CachePolicy>,
                 XMode, YMode, ValType, TiledStrides>, AtomValType> const& atom)
 {
   print("Copy_Atom (XE_STORE_2D)\n");
+  print("  CachePolicy:  "); print(to_string<CachePolicy>().data()); print("\n");
   print_block_2d_traits(atom);
   print("\n");
   print_block_2d_atom<ValType>(atom);

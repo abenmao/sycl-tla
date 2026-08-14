@@ -31,6 +31,8 @@
 
 #pragma once
 
+#include <type_traits>
+
 #include "cute/numeric/int.hpp"
 
 #if defined(__SYCL_DEVICE_ONLY__) && defined(SYCL_INTEL_TARGET)
@@ -197,24 +199,85 @@ struct XE_PREFETCH_2D : XE_Copy_Op_2D_Base<Bits, Height, Width>
   using PREFETCH = XE_PREFETCH_2D;
 };
 
-template <int Bits, int Height, int Width>
+enum class XeStoreCachePolicy {
+  kDefault,
+  kUC_UC_UC,
+  kUC_UC_WB,
+  kUC_WB_UC,
+  kUC_WB_WB,
+  kWT_UC_UC,
+  kWT_UC_WB,
+  kWT_WB_UC,
+  kWT_WB_WB,
+  kWB_UC_UC,
+  kWB_UC_WB,
+  kWB_WB_UC
+};
+
+template <typename T>
+struct is_xe_store_cache : std::false_type {};
+
+template <XeStoreCachePolicy P>
+struct is_xe_store_cache<C<P>> : std::true_type {};
+
+template <typename T>
+constexpr bool is_xe_store_cache_v = is_xe_store_cache<T>::value;
+
+template <auto>
+constexpr bool dependent_false_v = false;
+
+#define CUTE_XE_STORE_2D_ASM(CACHE_SUFFIX)                                      \
+  asm (                                                                         \
+    "lsc_store_block2d.ugm" CACHE_SUFFIX                                        \
+    " (M1, 1) flat[%1+(0,0)] %0:d%2.%3x%4nn"                                    \
+      :: "rw"(sv), "rw.u"(payload), "P"(Bits), "P"(Width), "P"(Height)         \
+  )
+
+template <int Bits, int Height, int Width, XeStoreCachePolicy CachePolicy = XeStoreCachePolicy::kDefault>
 struct XE_STORE_2D : XE_Copy_Op_2D_Base<Bits, Height, Width>
 {
   static_assert(Height <= 8, "Height exceeds hardware limits");
+  static constexpr XeStoreCachePolicy StoreCachePolicy = CachePolicy;
 
   template <typename T>
   CUTE_HOST_DEVICE static void copy(const int *payload, const T *src) {
 #ifdef CUTE_ARCH_COPY_XE_ENABLED
     using namespace intel;
     auto &sv = *reinterpret_cast<const storage_vector_t<T, Width * Height * Bits / sg_size>*>(src);
-    asm (
-      "lsc_store_block2d.ugm (M1, 1) flat[%1+(0,0)] %0:d%2.%3x%4nn"
-        :: "rw"(sv), "rw.u"(payload), "P"(Bits), "P"(Width), "P"(Height)
-    );
+    if constexpr (CachePolicy == XeStoreCachePolicy::kDefault) {
+      CUTE_XE_STORE_2D_ASM("");
+    } else if constexpr (CachePolicy == XeStoreCachePolicy::kUC_UC_UC) {
+      CUTE_XE_STORE_2D_ASM(".uc.uc.uc");
+    } else if constexpr (CachePolicy == XeStoreCachePolicy::kUC_UC_WB) {
+      CUTE_XE_STORE_2D_ASM(".uc.uc.wb");
+    } else if constexpr (CachePolicy == XeStoreCachePolicy::kUC_WB_UC) {
+      CUTE_XE_STORE_2D_ASM(".uc.wb.uc");
+    } else if constexpr (CachePolicy == XeStoreCachePolicy::kUC_WB_WB) {
+      CUTE_XE_STORE_2D_ASM(".uc.wb.wb");
+    } else if constexpr (CachePolicy == XeStoreCachePolicy::kWT_UC_UC) {
+      CUTE_XE_STORE_2D_ASM(".wt.uc.uc");
+    } else if constexpr (CachePolicy == XeStoreCachePolicy::kWT_UC_WB) {
+      CUTE_XE_STORE_2D_ASM(".wt.uc.wb");
+    } else if constexpr (CachePolicy == XeStoreCachePolicy::kWT_WB_UC) {
+      CUTE_XE_STORE_2D_ASM(".wt.wb.uc");
+    } else if constexpr (CachePolicy == XeStoreCachePolicy::kWT_WB_WB) {
+      CUTE_XE_STORE_2D_ASM(".wt.wb.wb");
+    } else if constexpr (CachePolicy == XeStoreCachePolicy::kWB_UC_UC) {
+      CUTE_XE_STORE_2D_ASM(".wb.uc.uc");
+    } else if constexpr (CachePolicy == XeStoreCachePolicy::kWB_UC_WB) {
+      CUTE_XE_STORE_2D_ASM(".wb.uc.wb");
+    } else if constexpr (CachePolicy == XeStoreCachePolicy::kWB_WB_UC) {
+      CUTE_XE_STORE_2D_ASM(".wb.wb.uc");
+    } else {
+      static_assert(dependent_false_v<CachePolicy>,
+                    "Unsupported Xe store cache policy");
+    }
 #else
     CUTE_INVALID_CONTROL_PATH("Cannot use Xe block 2D copy atom on non-Xe hardware");
 #endif
   }
 };
+
+#undef CUTE_XE_STORE_2D_ASM
 
 } // end namespace cute
