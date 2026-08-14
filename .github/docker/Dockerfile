@@ -24,6 +24,6 @@ RUN mkdir -p /workspace/source /workspace/output /workspace/bin /workspace/tmp
 
 WORKDIR /workspace
 
-# build.sh is mounted at runtime from the source tree (not baked into the image)
+# entrypoint.sh is mounted at runtime from the source tree (not baked into the image)
 # so it always matches the current branch's version.
-ENTRYPOINT ["/workspace/bin/build.sh"]
+ENTRYPOINT ["/workspace/bin/entrypoint.sh"]

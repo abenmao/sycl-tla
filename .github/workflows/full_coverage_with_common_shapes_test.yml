@@ -13,41 +13,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Offload targets per GPU:
-  #   BMG -> Hermes, failing over to Atlas only if Hermes is unreachable.
-  #   PVC -> first server in PVC_BUILD_SERVERS with free RAM >= its budget
-  #          (Atlas first, then Hyperion).
-  # Each server's budget drives compile parallelism (global -j = budget/5, heavy
-  # flash-attention pool = budget/10) and its own admission-gate threshold.
-  BUILD_SERVER_NAME: "Hermes"           # BMG default (overridden per GPU at runtime)
-  BUILD_SERVER: "shliclel4165.sh.intel.com"
-  BUILD_SERVER_USER: "gta"
-  BUILD_MEM_BUDGET_GB: "224"
-  # BMG common-shape failover target, used ONLY when Hermes is unreachable
-  # (reachability-based; a busy-but-reachable Hermes is waited on, not skipped).
-  # On Atlas, BMG common shapes get a smaller, memory-aware budget so Atlas keeps
-  # room for its own small-shape traffic: 256GB if Atlas has >1TB free, else 196.
-  # Host is Atlas's DNS FQDN (its own `hostname -f`, a MAC-derived DDNS name) not
-  # a raw IP, so it survives DHCP/IP changes; "gnr630188" is only a local alias.
-  BMG_FAILOVER_NAME: "Atlas"
-  BMG_FAILOVER_HOST: "a4bf018cf32e.jf.intel.com"
-  BMG_FAILOVER_USER: "gta"
-  BMG_FAILOVER_FREE_HI_GB: "1024"
-  BMG_FAILOVER_BUDGET_HI_GB: "256"
-  BMG_FAILOVER_BUDGET_LO_GB: "196"
-  # PVC candidate pool, tried in order. Rows separated by ';', each row
-  # "NAME HOST USER BUDGET_GB". Kept on ONE line on purpose: a later
-  # `env >> $GITHUB_ENV` would choke on a multi-line value (its 2nd line
-  # would look like an invalid env assignment).
-  # Hosts are DNS FQDNs (each box's own `hostname -f`) not raw IPs, so they
-  # survive IP changes. Atlas is a dedicated build box; Hyperion (pvc125074)
-  # also runs PVC tests, so it is the fallback delegate with a smaller budget.
-  PVC_BUILD_SERVERS: "Atlas a4bf018cf32e.jf.intel.com gta 450;Hyperion pvc125074.jf.intel.com gta 350"
+  CI_BUILD_ID_TAG: "common"
   # Local/fallback builds size their budget from the runner's own RAM:
   #   strong local build = RAM * LOCAL_BUILD_MEM_PCT%  (Hyperion 1003G -> ~500)
-  #   fallback build     = RAM * FALLBACK_MEM_PCT%
   LOCAL_BUILD_MEM_PCT: "50"
-  FALLBACK_MEM_PCT: "90"
   SSH_OPTS: "-o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
   REMOTE_CPU_THRESHOLD: "32"
   REMOTE_RAM_THRESHOLD: "128"
@@ -55,7 +24,7 @@ env:
   # build-step timeout and the orphan-reap age derive from these, staying in
   # sync. A clean compile takes ~30 min; 90 is ~3x headroom for contention.
   # Reap age = timeout + grace = 105 min.
-  BUILD_STEP_TIMEOUT_MIN: "90"
+  BUILD_STEP_TIMEOUT_MIN: "120"
   ORPHAN_REAP_GRACE_MIN: "15"
 
 jobs:
@@ -66,18 +35,27 @@ jobs:
         include:
           - compiler: RELEASE
             gpu: BMG
+            platform: bmg
             intel_graphics: ROLLING
             sycl_target: intel_gpu_bmg_g21
+            remote_build_servers: "Hermes shliclel4165.sh.intel.com gta 224 224;Atlas a4bf018cf32e.jf.intel.com gta 1024 256;Atlas a4bf018cf32e.jf.intel.com gta 196 196"
             runner: [self-hosted, shanghai-bmg, Linux, X64]
           - compiler: RELEASE
             gpu: PVC
+            platform: pvc
             intel_graphics: ROLLING
             sycl_target: intel_gpu_pvc
+            remote_build_servers: "Atlas a4bf018cf32e.jf.intel.com gta 450 450;Hyperion pvc125074.jf.intel.com gta 350 350"
             runner: [self-hosted, shanghai-pvc, Linux, X64]
 
     name: Full Coverage with Common Shapes Test on ${{ matrix.gpu }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
+    env:
+      GPU: ${{ matrix.gpu }}
+      CI_PLATFORM: ${{ matrix.platform }}
+      SYCL_TARGET: ${{ matrix.sycl_target }}
+      REMOTE_BUILD_SERVERS: ${{ matrix.remote_build_servers }}
 
     steps:
       - name: Checkout
@@ -90,119 +68,18 @@ jobs:
       - name: Detect Build Strategy
         id: build-strategy
         shell: bash
-        run: |
-          CPU_THREADS=$(nproc)
-          RAM_GB=$(awk '/MemTotal/{print int($2/1024/1024)}' /proc/meminfo)
-          echo "Runner: ${CPU_THREADS} threads, ${RAM_GB} GB RAM"
-          echo "Thresholds: >= ${REMOTE_CPU_THRESHOLD} threads AND >= ${REMOTE_RAM_THRESHOLD} GB RAM for local build"
-          # Both conditions must be met to build locally; otherwise offload to
-          # the dedicated build server. This catches machines with enough cores
-          # but insufficient RAM (e.g. DUT1020PVC: 48 threads, 61 GB).
-          if [ "${CPU_THREADS}" -ge "${REMOTE_CPU_THRESHOLD}" ] && \
-             [ "${RAM_GB}" -ge "${REMOTE_RAM_THRESHOLD}" ]; then
-            echo "use_remote=false" >> $GITHUB_OUTPUT
-            echo "Strategy: LOCAL build (${CPU_THREADS} threads >= ${REMOTE_CPU_THRESHOLD}, ${RAM_GB} GB >= ${REMOTE_RAM_THRESHOLD})"
-          else
-            echo "use_remote=true" >> $GITHUB_OUTPUT
-            echo "Strategy: REMOTE build (${CPU_THREADS} threads / ${RAM_GB} GB below threshold)"
-          fi
+        run: bash .github/scripts/pr_ci.sh detect
 
       # ---- Select build server + admission gate ----
-      # Pick a build server, then wait on it for capacity. BMG prefers Hermes and
-      # fails over to Atlas only if Hermes is unreachable (reachability-based; a
-      # busy-but-reachable Hermes is waited on, not skipped). PVC tries
-      # PVC_BUILD_SERVERS in order (Atlas, then Hyperion) and takes the first with
-      # free RAM >= its budget (capacity-based). Re-checks up to 3x, 15 min apart;
-      # if nothing is admitted, fall back to a local build. The chosen server +
-      # budget are exported to $GITHUB_ENV for the steps that follow.
+      # Pick the first candidate with enough free RAM. Candidates are ordered per
+      # matrix entry and use NAME HOST USER ADMISSION_GATE_GB BUILD_BUDGET_GB.
+      # Re-check up to 3x, 15 min apart; if nothing is admitted, use local build.
       - name: Select & Wait for Build Server Capacity
         id: admission
         if: steps.build-strategy.outputs.use_remote == 'true'
         timeout-minutes: 40
         shell: bash
-        run: |
-          free_gb() {  # echoes MemAvailable in GB, or -1 if the host is unreachable
-            local out
-            out=$(ssh ${SSH_OPTS} "$1@$2" \
-              "awk '/MemAvailable/{print int(\$2/1048576)}' /proc/meminfo" 2>/dev/null)
-            [ -z "$out" ] && echo -1 || echo "$out"
-          }
-          CHECKS=3
-          INTERVAL_MIN=15
-          admitted=false
-          if [ "${{ matrix.gpu }}" = "PVC" ]; then
-            # ---- PVC: capacity-based pool selection (Atlas, then Hyperion) ----
-            for i in $(seq 1 $CHECKS); do
-              while read -r NAME HOST RUSER BUDGET; do
-                [ -z "$NAME" ] && continue
-                FREE_GB=$(free_gb "$RUSER" "$HOST")
-                echo "Check ${i}/${CHECKS}: ${NAME} (${HOST}) MemAvailable=${FREE_GB}GB (gate ${BUDGET}GB)"
-                if [ "${FREE_GB:-0}" -ge "$BUDGET" ]; then
-                  echo "Selected build server: ${NAME} (${HOST}), budget ${BUDGET}GB"
-                  {
-                    echo "BUILD_SERVER_NAME=${NAME}"
-                    echo "BUILD_SERVER=${HOST}"
-                    echo "BUILD_SERVER_USER=${RUSER}"
-                    echo "BUILD_MEM_BUDGET_GB=${BUDGET}"
-                  } >> $GITHUB_ENV
-                  admitted=true
-                  break
-                fi
-              done <<< "$(echo "${PVC_BUILD_SERVERS}" | tr ';' '\n')"
-              [ "$admitted" = "true" ] && break
-              if [ "$i" -lt "$CHECKS" ]; then
-                echo "All candidates below gate; waiting ${INTERVAL_MIN}min before recheck..."
-                sleep $((INTERVAL_MIN * 60))
-              fi
-            done
-          else
-            # ---- BMG: reachability failover (Hermes; Atlas only if Hermes unreachable) ----
-            SEL_NAME=""; SEL_HOST=""; SEL_USER=""; SEL_BUDGET=""; FIRST_FREE=-1
-            HF=$(free_gb "${BUILD_SERVER_USER}" "${BUILD_SERVER}")
-            if [ "$HF" -ge 0 ]; then
-              SEL_NAME="${BUILD_SERVER_NAME}"; SEL_HOST="${BUILD_SERVER}"
-              SEL_USER="${BUILD_SERVER_USER}"; SEL_BUDGET="${BUILD_MEM_BUDGET_GB}"; FIRST_FREE=$HF
-            else
-              echo "${BUILD_SERVER_NAME} (${BUILD_SERVER}) unreachable; failing over to ${BMG_FAILOVER_NAME}."
-              AF=$(free_gb "${BMG_FAILOVER_USER}" "${BMG_FAILOVER_HOST}")
-              if [ "$AF" -ge 0 ]; then
-                SEL_NAME="${BMG_FAILOVER_NAME}"; SEL_HOST="${BMG_FAILOVER_HOST}"
-                SEL_USER="${BMG_FAILOVER_USER}"; FIRST_FREE=$AF
-                if [ "$AF" -gt "${BMG_FAILOVER_FREE_HI_GB}" ]; then
-                  SEL_BUDGET="${BMG_FAILOVER_BUDGET_HI_GB}"
-                else
-                  SEL_BUDGET="${BMG_FAILOVER_BUDGET_LO_GB}"
-                fi
-              fi
-            fi
-            if [ -n "$SEL_NAME" ]; then
-              echo "Selected build server: ${SEL_NAME} (${SEL_HOST}), budget ${SEL_BUDGET}GB"
-              {
-                echo "BUILD_SERVER_NAME=${SEL_NAME}"
-                echo "BUILD_SERVER=${SEL_HOST}"
-                echo "BUILD_SERVER_USER=${SEL_USER}"
-                echo "BUILD_MEM_BUDGET_GB=${SEL_BUDGET}"
-              } >> $GITHUB_ENV
-              for i in $(seq 1 $CHECKS); do
-                if [ "$i" -eq 1 ]; then FREE_GB=$FIRST_FREE; else FREE_GB=$(free_gb "${SEL_USER}" "${SEL_HOST}"); fi
-                echo "Capacity check ${i}/${CHECKS}: ${SEL_NAME} (${SEL_HOST}) MemAvailable=${FREE_GB}GB (gate ${SEL_BUDGET}GB)"
-                if [ "${FREE_GB:-0}" -ge "$SEL_BUDGET" ]; then
-                  admitted=true
-                  break
-                fi
-                if [ "$i" -lt "$CHECKS" ]; then
-                  echo "Below gate; waiting ${INTERVAL_MIN}min before recheck..."
-                  sleep $((INTERVAL_MIN * 60))
-                fi
-              done
-            else
-              echo "No build server reachable."
-            fi
-          fi
-          echo "admitted=${admitted}" >> $GITHUB_OUTPUT
-          if [ "$admitted" != "true" ]; then
-            echo "::warning::No build server admitted after capacity checks; falling back to local build."
-          fi
+        run: bash .github/scripts/pr_ci.sh select-server
 
       - name: Remote Build
         id: remote-build
@@ -210,357 +87,46 @@ jobs:
         continue-on-error: true
         timeout-minutes: ${{ fromJSON(env.BUILD_STEP_TIMEOUT_MIN) }}
         shell: bash
-        run: |
-          BUILD_ID="${{ github.run_id }}-common-${{ runner.name }}-${{ github.run_attempt }}"
-          echo "BUILD_ID=${BUILD_ID}" >> $GITHUB_ENV
-
-          # Detect the runner's compiler version for ABI compatibility
-          RUNNER_ICPX_VER=$(/opt/intel/oneapi/compiler/latest/bin/icpx --version | head -1)
-          echo "Runner compiler: ${RUNNER_ICPX_VER}"
-
-          # --- Infrastructure checks (failure here → allow fallback) ---
-
-          # Layer 1: Quick connectivity check (30s timeout)
-          if ! ssh ${SSH_OPTS} \
-            ${BUILD_SERVER_USER}@${BUILD_SERVER} "timeout 30 docker info > /dev/null 2>&1"; then
-            echo "::warning::Build server unreachable or Docker not available."
-            echo "failure_type=infra" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          # Startup sweep: reap orphaned build containers from earlier
-          # cancelled/timed-out runs (docker run is parented by dockerd, so a
-          # cancelled run can leave the container alive). Only this layer reaps
-          # *other* runs' orphans; the trap and always() cleanup touch only this
-          # run. Best-effort. Reap age = BUILD_STEP_TIMEOUT_MIN +
-          # ORPHAN_REAP_GRACE_MIN (105 min) -- just above the step timeout, so any
-          # container that old is guaranteed orphaned.
-          REAP_AGE_S=$(( (BUILD_STEP_TIMEOUT_MIN + ORPHAN_REAP_GRACE_MIN) * 60 ))
-          ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} '
-            now=$(date +%s)
-            for cid in $(docker ps -q --filter "name=cutlass-build-"); do
-              started=$(docker inspect -f "{{.State.StartedAt}}" "$cid" 2>/dev/null)
-              [ -z "$started" ] && continue
-              # If StartedAt cannot be parsed, fall back to "now" (age 0) so the
-              # container is KEPT, not reaped -- never docker rm -f a container we
-              # cannot prove is old. A leaked orphan is caught later (24h cleanup);
-              # wrongly reaping a live build would break a legitimate run.
-              started_s=$(date -d "$started" +%s 2>/dev/null || echo "$now")
-              if [ $(( now - started_s )) -gt '"${REAP_AGE_S}"' ]; then
-                name=$(docker inspect -f "{{.Name}}" "$cid" 2>/dev/null)
-                echo "Reaping orphan build container ${name#/} (age $(( now - started_s ))s)"
-                docker rm -f "$cid" >/dev/null 2>&1 || true
-              fi
-            done
-          ' || true
-
-          # Find a oneAPI installation on build server with matching compiler version
-          ONEAPI_REAL_PATH=$(readlink -f /opt/intel/oneapi)
-          if ! MATCH=$(ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} "
-            # First try the same path as runner
-            if [ -d '${ONEAPI_REAL_PATH}' ] && \
-               '${ONEAPI_REAL_PATH}/compiler/latest/bin/icpx' --version 2>/dev/null | head -1 | grep -qF '${RUNNER_ICPX_VER}'; then
-              echo '${ONEAPI_REAL_PATH}'
-            else
-              # Search all installed versions
-              for d in /opt/intel/oneapi-pytorch/*/; do
-                if [ -x \"\${d}compiler/latest/bin/icpx\" ] && \
-                   \"\${d}compiler/latest/bin/icpx\" --version 2>/dev/null | head -1 | grep -qF '${RUNNER_ICPX_VER}'; then
-                  echo \"\${d%/}\"
-                  break
-                fi
-              done
-            fi
-          "); then
-            echo "::warning::SSH failed during compiler version check."
-            echo "failure_type=infra" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          if [ -n "${MATCH}" ]; then
-            ONEAPI_REAL_PATH="${MATCH}"
-            echo "Build server matching oneAPI found at: ${ONEAPI_REAL_PATH}"
-          else
-            echo "::warning::Build server has no oneAPI matching '${RUNNER_ICPX_VER}'. Falling back to local build."
-            echo "failure_type=infra" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          # Cleanup build artifacts older than 24 hours (by creation time, falling back to mtime)
-          # Only deletes directories matching our BUILD_ID pattern (runid-common/small-runner-attempt)
-          ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} "
-            cutoff=\$(date -d '24 hours ago' +%s)
-            for d in /home/${BUILD_SERVER_USER}/ci-builds/*/ /shared/builds/*/; do
-              [ -d \"\$d\" ] || continue
-              bname=\$(basename \"\$d\")
-              [[ \"\$bname\" =~ ^[0-9]+-(common|small)-.+-[0-9]+$ ]] || continue
-              created=\$(stat -c %W \"\$d\" 2>/dev/null || echo 0)
-              if [ \"\$created\" -le 0 ]; then
-                created=\$(stat -c %Y \"\$d\" 2>/dev/null || echo 0)
-              fi
-              if [ \"\$created\" -gt 0 ] && [ \"\$created\" -lt \"\$cutoff\" ]; then
-                sudo -n rm -rf \"\$d\"
-              fi
-            done
-          " || true
-
-          # Layer 2: Full remote build (protected by the BUILD_STEP_TIMEOUT_MIN step timeout)
-          # On re-run (attempt > 1), clean previous attempt's leftover dirs.
-          # Docker may leave root-owned artifacts that rsync cannot overwrite.
-          PREV_ATTEMPT_BUILD_ID="${{ github.run_id }}-common-${{ runner.name }}-$(( ${{ github.run_attempt }} - 1 ))"
-          if ! ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} "
-            sudo -n rm -rf /home/${BUILD_SERVER_USER}/ci-builds/${PREV_ATTEMPT_BUILD_ID} /shared/builds/${PREV_ATTEMPT_BUILD_ID};
-            mkdir -p /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source
-          "; then
-            echo "::warning::Failed to prepare remote build directory."
-            echo "failure_type=infra" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          if ! rsync -a --delete --exclude='.git' -e "ssh ${SSH_OPTS}" \
-            ${{ github.workspace }}/ \
-            ${BUILD_SERVER_USER}@${BUILD_SERVER}:/home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source/; then
-            echo "::warning::Failed to sync source to build server."
-            echo "failure_type=infra" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          # --- Compilation (EXIT_COMPILE_ERROR=42 from build.sh = code error → no fallback) ---
-
-          # Name the container so it can be force-removed if this step is cancelled
-          # or times out. The docker run is launched over SSH, so its real parent is
-          # dockerd on the build server — not this SSH client. Without an explicit
-          # kill, cancelling the run orphans the container, which keeps compiling and
-          # consuming RAM. This trap is a best-effort kill within the cancel grace
-          # period; the startup sweep and always() cleanup are the other two layers.
-          CONTAINER_NAME="cutlass-build-${BUILD_ID}"
-          kill_remote_container() {
-            ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} \
-              "docker rm -f ${CONTAINER_NAME} >/dev/null 2>&1" || true
-          }
-          trap kill_remote_container EXIT INT TERM
-
-          # Build parallelism from the memory budget (~5 GiB per average TU):
-          #   global -j   = budget / 5
-          #   heavy FA -j = budget / 10   (FA TUs peak ~2x; allow half as many)
-          # The heavy pool only throttles FA compiles; other targets leave it idle.
-          NINJA_J=$(( BUILD_MEM_BUDGET_GB / 5 ))
-          HEAVY_J=$(( BUILD_MEM_BUDGET_GB / 10 ))
-          POOL_FLAGS="-DCUTLASS_HEAVY_BUILD_JOBS=${HEAVY_J}"
-
-          set +e
-          ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} "
-            docker run --rm --name ${CONTAINER_NAME} \
-              -v ${ONEAPI_REAL_PATH}:/opt/intel/oneapi:ro \
-              -v /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source:/workspace/source:ro \
-              -v /shared/builds/${BUILD_ID}:/workspace/output \
-              -v /home/${BUILD_SERVER_USER}/tools/bmg-ocloc:/workspace/tools/bmg-ocloc:ro \
-              -v /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID}/source/.github/docker/build.sh:/workspace/bin/build.sh:ro \
-              -e DISABLE_FLASH_ATTENTION=0 \
-              -e SYCL_TARGET=${{ matrix.sycl_target }} \
-              -e BUILD_TARGETS=all \
-              -e NINJA_JOBS=${NINJA_J} \
-              -e REMOTE_BUILD_DIR=/tmp/cutlass-build-${BUILD_ID} \
-              -e REMOTE_SOURCE_DIR=${{ github.workspace }} \
-              -e CMAKE_EXTRA_FLAGS='-DCUTLASS_ENABLE_BENCHMARKS=ON -DCUTLASS_SYCL_PROFILING_ENABLED=ON -DCUTLASS_SYCL_RUNNING_CI=ON ${POOL_FLAGS}' \
-              cutlass-builder:latest
-          "
-          DOCKER_RC=$?
-          set -e
-          # docker run is synchronous: once it returns, the container has exited and
-          # --rm has removed it. Disarm the orphan-kill trap — nothing left to kill,
-          # and we don't want it firing on later (post-build) exit paths.
-          trap - EXIT INT TERM
-
-          if [ $DOCKER_RC -ne 0 ]; then
-            # EXIT_COMPILE_ERROR (42): compilation failure from build.sh (cmake/ninja)
-            # Other non-zero: infra error (SSH=255, Docker=125-127, OOM=137)
-            if [ $DOCKER_RC -eq 42 ]; then
-              echo "::error::Remote compilation failed (build error, exit code 42). Not falling back."
-              echo "failure_type=compile" >> $GITHUB_OUTPUT
-            else
-              echo "::warning::Remote build infrastructure error (exit code ${DOCKER_RC})."
-              echo "failure_type=infra" >> $GITHUB_OUTPUT
-            fi
-            exit 1
-          fi
-
-          # --- Sync results back (failure → allow fallback) ---
-
-          if ! rsync -a -e "ssh ${SSH_OPTS}" \
-            ${BUILD_SERVER_USER}@${BUILD_SERVER}:/shared/builds/${BUILD_ID}/build/ /tmp/cutlass-build-${BUILD_ID}/; then
-            echo "::warning::Failed to sync build output from build server."
-            echo "failure_type=infra" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          echo "BUILD_DIR=/tmp/cutlass-build-${BUILD_ID}" >> $GITHUB_ENV
-          echo "failure_type=none" >> $GITHUB_OUTPUT
+        run: bash .github/scripts/pr_ci.sh remote-build
 
       # ---- Fail fast on compilation errors (no fallback) ----
       - name: Fail on Remote Compile Error
         if: steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outputs.failure_type == 'compile'
         shell: bash
-        run: |
-          echo "::error::Remote compilation failed due to a code error (not infrastructure). Review the 'Remote Build' step logs."
-          exit 1
+        run: bash .github/scripts/pr_ci.sh fail-compile
 
-      - name: Fallback Local Build
+      - name: Fallback Notice
         if: steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outcome != 'success' && steps.remote-build.outputs.failure_type != 'compile'
+        env:
+          FALLBACK_REASON: >-
+            ${{ steps.admission.outputs.admitted != 'true' && 'No build server was admitted after capacity checks.' || steps.remote-build.outputs.failure_type == 'infra' && 'Remote build infrastructure error.' || 'Remote build did not complete with a classified result.' }}
         shell: bash
-        run: |
-          echo "::warning::Remote build failed or timed out. Falling back to local build."
-          source /opt/intel/oneapi/setvars.sh --force
-          export CC=icx
-          export CXX=icpx
-          # Disable flash attention for BMG target (build time too long, causes OOM)
-          if [ "${{ matrix.sycl_target }}" = "intel_gpu_bmg_g21" ] && \
-             [ -f examples/06_bmg_flash_attention/CMakeLists.txt ]; then
-            cat /dev/null > examples/06_bmg_flash_attention/CMakeLists.txt
-          fi
-          # Budget from the runner's own RAM (RAM * FALLBACK_MEM_PCT%); same
-          # J=budget/5, heavy=budget/10 as the remote path so every build path is
-          # capped the same way.
-          RAM_GB=$(awk '/MemTotal/{print int($2/1024/1024)}' /proc/meminfo)
-          BUDGET_GB=$(( RAM_GB * FALLBACK_MEM_PCT / 100 ))
-          NINJA_JOBS=$(( BUDGET_GB / 5 ))
-          HEAVY_J=$(( BUDGET_GB / 10 ))
-          [ "$NINJA_JOBS" -lt 1 ] && NINJA_JOBS=1
-          [ "$HEAVY_J" -lt 1 ] && HEAVY_J=1
-          [ "$NINJA_JOBS" -gt "$(nproc)" ] && NINJA_JOBS=$(nproc)
-          echo "Fallback build: RAM=${RAM_GB}GB budget=${BUDGET_GB}GB -j${NINJA_JOBS} heavy=${HEAVY_J}"
-          mkdir -p build && cd build
-          cmake .. -G Ninja \
-            -DCUTLASS_ENABLE_SYCL=ON \
-            -DDPCPP_SYCL_TARGET=${{ matrix.sycl_target }} \
-            -DCUTLASS_ENABLE_BENCHMARKS=ON \
-            -DCUTLASS_SYCL_PROFILING_ENABLED=ON \
-            -DCUTLASS_SYCL_RUNNING_CI=ON \
-            -DCUTLASS_HEAVY_BUILD_JOBS=${HEAVY_J}
-          ninja -j${NINJA_JOBS} test/all
-          ninja -j${NINJA_JOBS} examples/all
-          ninja -j${NINJA_JOBS} benchmarks/all
-          echo "BUILD_DIR=$(pwd)" >> $GITHUB_ENV
-
-      # ---- Common: Setup environment ----
-      - name: Setup Virtual Environment
-        shell: bash
-        run: |
-          source /opt/intel/oneapi/setvars.sh --force
-          export ONEAPI_DEVICE_SELECTOR=level_zero:gpu
-          export CMAKE_BUILD_TYPE=Release
-          export IGC_VISAOptions="-perfmodel"
-          export IGC_VectorAliasBBThreshold=100000000000
-          export IGC_ExtraOCLOptions="-cl-intel-256-GRF-per-thread"
-          export CC=icx
-          export CXX=icpx
-          export CUTLASS_SYCL_PROFILING_ENABLED=ON
-          # Runtime libs needed by benchmarks (FA shared libs + oneMKL).
-          # Safe to set unconditionally — paths that don't exist are harmlessly ignored.
-          export LD_LIBRARY_PATH=${BUILD_DIR:-build}/benchmarks/02_flash_attention:${BUILD_DIR:-build}/benchmarks/02_flash_attention/legacy/flash_attention_decode:${BUILD_DIR:-build}/deps/oneMKL/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-          # Persist environment variables to following steps 
-          env >> $GITHUB_ENV
-          which $CXX
-          $CXX --version
-          sycl-ls
+        run: bash .github/scripts/pr_ci.sh fallback-notice
 
       # ---- Local build (for runners with enough cores) ----
-      - name: Configure Cmake Options
-        if: steps.build-strategy.outputs.use_remote != 'true'
+      - name: Local Build
+        if: steps.build-strategy.outputs.use_remote != 'true' || (steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outcome != 'success' && steps.remote-build.outputs.failure_type != 'compile')
         shell: bash
-        run: |
-          # Temporarily disable 06_bmg_flash_attention for BMG target:
-          # - Build time is too long and frequently causes OOM
-          # - These cases are already tested on PVC and in CRI pipeline
-          if [ "${{ matrix.sycl_target }}" = "intel_gpu_bmg_g21" ]; then
-            cat /dev/null > examples/06_bmg_flash_attention/CMakeLists.txt
-          fi
-          # Cap the local build by a memory budget too (was naked -j$(nproc)).
-          # Budget = RAM * LOCAL_BUILD_MEM_PCT%; J=budget/5, heavy=budget/10.
-          # Hyperion (1003G) -> budget ~500 -> -j100, heavy 50, leaving room for
-          # its own GPU tests and for serving as a fallback delegate.
-          RAM_GB=$(awk '/MemTotal/{print int($2/1024/1024)}' /proc/meminfo)
-          BUDGET_GB=$(( RAM_GB * LOCAL_BUILD_MEM_PCT / 100 ))
-          NINJA_J=$(( BUDGET_GB / 5 ))
-          HEAVY_J=$(( BUDGET_GB / 10 ))
-          [ "$NINJA_J" -lt 1 ] && NINJA_J=1
-          [ "$HEAVY_J" -lt 1 ] && HEAVY_J=1
-          [ "$NINJA_J" -gt "$(nproc)" ] && NINJA_J=$(nproc)
-          echo "Local build: RAM=${RAM_GB}GB budget=${BUDGET_GB}GB -j${NINJA_J} heavy=${HEAVY_J}"
-          echo "NINJA_J=${NINJA_J}" >> $GITHUB_ENV
-          mkdir build && cd build
-          cmake .. -G Ninja \
-            -DCUTLASS_ENABLE_SYCL=ON \
-            -DDPCPP_SYCL_TARGET=${{ matrix.sycl_target }} \
-            -DCUTLASS_ENABLE_BENCHMARKS=ON \
-            -DCUTLASS_SYCL_PROFILING_ENABLED=ON \
-            -DCUTLASS_SYCL_RUNNING_CI=ON \
-            -DCUTLASS_HEAVY_BUILD_JOBS=${HEAVY_J}
-      - name: Build Unit Tests
-        if: steps.build-strategy.outputs.use_remote != 'true'
-        working-directory: build
-        shell: bash
-        run: |
-          ninja -j${NINJA_J} test/all
-      - name: Build Examples
-        if: steps.build-strategy.outputs.use_remote != 'true'
-        working-directory: build
-        shell: bash
-        run: |
-          ninja -j${NINJA_J} examples/all
+        run: bash .github/scripts/pr_ci.sh local-build
 
       # ---- Verify remote build output ----
       - name: Verify Build Output
         if: steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outcome == 'success'
         shell: bash
-        run: |
-          set +o pipefail
-          echo "BUILD_DIR: ${BUILD_DIR}"
-          echo "=== Test executables ==="
-          find ${BUILD_DIR}/test -maxdepth 5 -name 'cutlass_test_unit_*' -type f 2>/dev/null | head -5
-          SAMPLE=$(find ${BUILD_DIR}/test -maxdepth 5 -name 'cutlass_test_unit_*' -type f 2>/dev/null | head -1)
-          set -o pipefail
-          if [ -z "$SAMPLE" ]; then
-            echo "::error::No test executables found in build output!"
-            exit 1
-          fi
-          echo "=== Sample executable: $SAMPLE ==="
-          file "$SAMPLE"
-          ldd "$SAMPLE" 2>&1 | head -20 || true
+        run: bash .github/scripts/pr_ci.sh verify-build
 
       # ---- Common: Run tests ----
-      - name: Run Unit Tests
-        shell: bash
-        run: |
-          cd ${BUILD_DIR:-build}
-          ctest -R test_unit --output-on-failure
       - name: Run Examples
         shell: bash
-        run: |
-          cd ${BUILD_DIR:-build}
-          ctest -R test_example --output-on-failure
-
-      # ---- Local: Build benchmarks ----
-      - name: Build Benchmarks
-        if: steps.build-strategy.outputs.use_remote != 'true'
-        working-directory: build
+        run: bash .github/scripts/pr_ci.sh run-example
+      - name: Run Unit Tests
         shell: bash
-        run: |
-          ninja -j${NINJA_J} benchmarks/all
+        run: bash .github/scripts/pr_ci.sh run-ut
 
       # ---- Common: Run benchmarks ----
       - name: Run Benchmarks
         shell: bash
-        run: |
-          cd ${BUILD_DIR:-build}
-          if [ "${{ matrix.gpu }}" = "BMG" ]; then
-            ctest -R cbenchmarks --output-on-failure
-          elif [ "${{ matrix.gpu }}" = "PVC" ]; then
-            ctest -R cbenchmarks -E "fp8|config_file_bmg_prefill_bf16|prefill_legacy_xe_config_file_pvc" --output-on-failure
-          else
-            # CRI uses MACRO to control build process so we don't need to specifically exclude benchmarks here.
-            ctest -R cbenchmarks --output-on-failure
-          fi
+        run: bash .github/scripts/pr_ci.sh run-bm
 
       # ---- Cleanup remote build artifacts ----
       # Only runs for remote builds (gated on use_remote == 'true').
@@ -575,11 +141,4 @@ jobs:
       - name: Cleanup Build Artifacts
         if: always() && steps.build-strategy.outputs.use_remote == 'true'
         shell: bash
-        run: |
-          if [ -n "${BUILD_ID}" ] && [[ "${BUILD_ID}" =~ ^[0-9]+-(common|small)- ]]; then
-            rm -rf /tmp/cutlass-build-${BUILD_ID} || true
-            ssh ${SSH_OPTS} ${BUILD_SERVER_USER}@${BUILD_SERVER} \
-              "docker rm -f cutlass-build-${BUILD_ID} >/dev/null 2>&1; sudo -n rm -rf /home/${BUILD_SERVER_USER}/ci-builds/${BUILD_ID} /shared/builds/${BUILD_ID}" || true
-          else
-            echo "Skipping cleanup: BUILD_ID '${BUILD_ID}' is empty or does not match expected pattern"
-          fi
+        run: bash .github/scripts/pr_ci.sh cleanup
