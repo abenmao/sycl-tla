@@ -219,8 +219,10 @@ struct XeFHMAIndividualPersistentTileScheduler {
   {
     using namespace cute;
 
+    int head_group_q = shape.num_heads_q / shape.num_heads_kv;
+    int packed_q_rows = int(shape.seq_len_qo) * head_group_q;
     dim3 grid(size(ceil_div(shape.head_size_vo, get<1>(tile_shape))),     // V
-              size(ceil_div(shape.seq_len_qo,   get<0>(tile_shape))),     // Q
+              size(ceil_div(packed_q_rows,      get<0>(tile_shape))),     // packed Q
               size(shape.batch * shape.num_heads_q));                     // (h,b) -- split later
     int num_heads = shape.num_heads_q;
     grid.z = fmha_split_saturation_cores(saturation_cores_hint);

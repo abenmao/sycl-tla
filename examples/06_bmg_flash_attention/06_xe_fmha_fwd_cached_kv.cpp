@@ -48,6 +48,8 @@
 
 #include "xe_fmha_fwd_runner.hpp"
 
+#include <cassert>
+
 int main(int argc, const char **argv) {
   //
   // Parse options
@@ -196,6 +198,11 @@ int main(int argc, const char **argv) {
   using ShapeOut16 = Shape<_16, HeadDimSize>;
   using SubgroupLayoutQK16 = Layout<Shape<_2, SubgroupsK, _1>>;
 
+  using ShapeQK24  = Shape<_24, KVTileSize, QKTileK>;
+  using ShapePV24  = Shape<_24, PVTileN, KVTileSize>;
+  using ShapeOut24 = Shape<_24, HeadDimSize>;
+  using SubgroupLayoutQK24 = Layout<Shape<_3, SubgroupsK, _1>>;
+
   using ShapeQK32  = Shape<_32, KVTileSize, QKTileK>;
   using ShapePV32  = Shape<_32, PVTileN, KVTileSize>;
   using ShapeOut32 = Shape<_32, HeadDimSize>;
@@ -233,6 +240,11 @@ int main(int argc, const char **argv) {
 #endif
 
 #if defined(DECODE)
+  if (options.num_kv_splits != -1) {
+    std::cerr << "Warning: --num_kv_splits is ignored by cached-KV decode."
+              << std::endl;
+  }
+
   const int gqa_group  = options.num_heads_q / options.num_heads_kv;
   const int q_len      = options.seq_len_qo;
   const int total_rows = gqa_group * q_len;
@@ -243,67 +255,25 @@ int main(int argc, const char **argv) {
   const int base_units = options.batch * options.num_heads_kv;
   const int saturation_cores_default = estimate_saturation_cores(base_units, kv_blocks);
   const int saturation_cores = cutlass::fmha::kernel::fmha_split_saturation_cores(saturation_cores_default);
-  bool auto_two_kernel = false;
-  // TODO: The current selection strategy is rule-based and needs to be refined in the future.
-  const bool causal_cached_kv =
-      !options.varlen && options.is_causal && options.use_paged_kv &&
-      options.seq_len_qo == 4 && options.seq_len_kv == options.seq_len_qo &&
-      options.seq_len_kv_cache > 0;
-  if (causal_cached_kv) {
-    const int cache_len = options.seq_len_kv_cache;
-    if (cache_len <= 1024) {
-      auto_two_kernel = total_rows > 16 || base_units >= 4;
-    }
-  }
-  const bool use_two_kernel = options.num_kv_splits > 0 || auto_two_kernel;
-  const bool use_dynamic_split = !use_two_kernel
-                              && !options.varlen
-                              && total_rows <= 64
-                              && base_units < saturation_cores
-                              && base_units * kv_blocks > saturation_cores;
+  const bool short_cache_q8_candidate = options.seq_len_qo <= 8 &&
+                                        options.seq_len_kv_cache > 0 &&
+                                        options.seq_len_kv_cache <= 1024;
+  const bool can_use_dynamic_split = !options.varlen
+                                  && total_rows <= 64
+                                  && base_units < saturation_cores;
+  const bool split_short_cache_q_rows = can_use_dynamic_split
+                                     && short_cache_q8_candidate;
+  const bool split_large_kv_work = can_use_dynamic_split
+                                && base_units * kv_blocks > saturation_cores;
+  const bool use_dynamic_split = split_short_cache_q_rows || split_large_kv_work;
 
-  auto select_num_kv_splits = [&](int q_tile) {
-    if (options.num_kv_splits > 0) {
-      return options.num_kv_splits;
-    }
-
-    const int q_tiles = cute::ceil_div(total_rows, q_tile);
-    const int base_work_groups = options.batch * options.num_heads_kv * q_tiles;
-    const int xe_cores = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
-#if defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
-    const int target_parallel_rows = cute::max(8, xe_cores * 5);
-#else
-    const int target_parallel_rows = cute::max(8, xe_cores * 8);
-#endif
-    const int parallel_splits = cute::max(
-        1, cute::ceil_div(target_parallel_rows, base_work_groups * q_tile));
-    const int latency_splits = cute::max(1, cute::ceil_div(kv_blocks, 128));
-    const int max_useful_splits = cute::max(1, kv_blocks / 16);
-    return cute::min(cute::max(parallel_splits, latency_splits), max_useful_splits);
-  };
-
-  #define FMHA_RUN_TWO_KERNEL(CAUSAL, QK, PV, OUT, SGL, Q_TILE)                              \
-    [&]() {                                                                                  \
-      Options tuned_options = options;                                                       \
-      tuned_options.num_kv_splits = select_num_kv_splits(Q_TILE);                            \
-      return FMHAConfig<CAUSAL, false, QK, PV, OUT, SGL, void, PipelineStages,              \
-                        ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::         \
-          template run<false, true,                                                          \
-                       cutlass::fmha::kernel::XeFHMASplitKVTileScheduler, true>(tuned_options); \
-    }()
-
-  #define FMHA_RUN_DYNAMIC(CAUSAL, QK, PV, OUT, SGL)                                           \
+  #define FMHA_RUN_DYNAMIC(CAUSAL, QK, PV, OUT, SGL)                                    \
     FMHAConfig<CAUSAL, false, QK, PV, OUT, SGL, void, PipelineStages,                           \
                ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::                    \
                template run<false, true,                                                       \
                cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options)
 
-  #define FMHA_RUN_TWO_KERNEL_Q(QK, PV, OUT, SGL, Q_TILE)                                      \
-    (options.is_causal                                                                         \
-       ? FMHA_RUN_TWO_KERNEL(true, QK, PV, OUT, SGL, Q_TILE)                                  \
-       : FMHA_RUN_TWO_KERNEL(false, QK, PV, OUT, SGL, Q_TILE))
-
-  #define FMHA_RUN_Q(QK, PV, OUT, SGL)                                                        \
+  #define FMHA_RUN_Q(QK, PV, OUT, SGL)                                                 \
     (use_dynamic_split                                                                        \
        ? (options.is_causal                                                                           \
            ? FMHA_RUN_DYNAMIC(true, QK, PV, OUT, SGL)                                           \
@@ -316,28 +286,13 @@ int main(int argc, const char **argv) {
                         ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/true>::template run<      \
                         false, true, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options)))
 
-  if (use_two_kernel) {
-#if defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
-    if (total_rows <= 8)
-      return FMHA_RUN_TWO_KERNEL_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, 8);
-    else if (total_rows <= 31)
-      return FMHA_RUN_TWO_KERNEL_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16, 16);
-    else
-      return FMHA_RUN_TWO_KERNEL_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32, 32);
-#else
-    if (total_rows <= 8)
-      return FMHA_RUN_TWO_KERNEL_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, 8);
-    else if (total_rows <= 16)
-      return FMHA_RUN_TWO_KERNEL_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16, 16);
-    else
-      return FMHA_RUN_TWO_KERNEL_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32, 32);
-#endif
-  }
-
-  if (total_rows <= 8)
+  // QK8 creates more packed-Q work-groups only on the Dynamic path.
+  if (total_rows <= 8 || split_short_cache_q_rows)
     return FMHA_RUN_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8);
   else if (total_rows <= 16)
     return FMHA_RUN_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16);
+  else if (total_rows <= 24)
+    return FMHA_RUN_Q(ShapeQK24, ShapePV24, ShapeOut24, SubgroupLayoutQK24);
   else if (total_rows <= 32)
     return FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32);
   else if (total_rows <= 40)
@@ -348,9 +303,7 @@ int main(int argc, const char **argv) {
     return FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64);
 
 #undef FMHA_RUN_Q
-  #undef FMHA_RUN_TWO_KERNEL_Q
   #undef FMHA_RUN_DYNAMIC
-  #undef FMHA_RUN_TWO_KERNEL
 #else
   // Directly instantiate only CachedKV=true kernels.
   // Causal and VarLen are dispatched at runtime.

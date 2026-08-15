@@ -65,9 +65,14 @@ inline int estimate_saturation_cores(int base_units, int kv_blocks) {
 
 // TODO: Need to refine new saturation core estimation strategy for split-K, currently using a simple heuristic based on total.
 inline int estimate_saturation_cores_for_shape(
-    int batch, int num_heads_kv, int seq_len_kv, int seq_len_kv_cache,
-    int kv_tile_size = 256) {
+    int batch, int num_heads_kv, int seq_len_qo, int seq_len_kv,
+    int seq_len_kv_cache, int kv_tile_size = 256) {
   int base_units = batch * num_heads_kv;
+  // For small kv length, we will split workgroup across q rows
+  if (seq_len_qo <= 8 && seq_len_kv == seq_len_qo &&
+      seq_len_kv_cache > 0 && seq_len_kv_cache <= 1024) {
+    return base_units;
+  }
   int kv_blocks  = cute::ceil_div(seq_len_kv, kv_tile_size)
                  + cute::ceil_div(seq_len_kv_cache, kv_tile_size);
   return estimate_saturation_cores(base_units, kv_blocks);
@@ -1198,10 +1203,12 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
       auto compute_params = params;
       compute_params.phase = 0;
       launch_kernel<FMHAKernel>(compute_params);
-      compat::wait();
-      auto reduce_params = params;
-      reduce_params.phase = 1;
-      launch_kernel<FMHAKernel>(reduce_params);
+      if (FMHAKernel::requires_separate_reduction(params)) {
+        compat::wait();
+        auto reduce_params = params;
+        reduce_params.phase = 1;
+        launch_kernel<FMHAKernel>(reduce_params);
+      }
     } else {
       launch_kernel<FMHAKernel>(params);
     }
@@ -1225,8 +1232,8 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     int saturation_cores_hint = 0;
     if constexpr (IsPersistent) {
       saturation_cores_hint = estimate_saturation_cores_for_shape(
-          shape.batch, shape.num_heads_kv, shape.seq_len_kv,
-          shape.seq_len_kv_cache);
+          shape.batch, shape.num_heads_kv, shape.seq_len_qo,
+          shape.seq_len_kv, shape.seq_len_kv_cache);
     }
 
     typename FMHAKernel::Arguments arguments = [&]() {

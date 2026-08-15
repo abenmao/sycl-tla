@@ -32,6 +32,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 
 #include "cutlass/cutlass.h"
 #include "cutlass/fast_math.h"
@@ -777,13 +778,24 @@ public:
         && CollectiveEpilogue::can_implement(args.epilogue);
   }
 
-  static int get_workspace_size(Arguments const &args) {
+  static size_t get_workspace_size(Arguments const &args) {
     int num_batch_heads = args.kernel.shape.batch * args.kernel.shape.num_heads_kv;
+    auto scheduler = TileScheduler::to_underlying_arguments(
+      args.kernel.shape, args.hw_info, TileShapeO{},
+      args.saturation_cores_hint);
+    if (int(scheduler.grid.z) == num_batch_heads) {
+      return 0;
+    }
+
     int max_parts = compute_max_num_partitions(
         fmha_split_saturation_cores(args.saturation_cores_hint), num_batch_heads);
+    size_t num_output_tiles =
+        size_t(scheduler.grid.x) * scheduler.grid.y;
     const int wg_size = SGPerWG::value * intel::sg_size;
-    // one partial blob (attn out + per-row max/sum) per (batch_head, partition)
-    return (max_parts * num_batch_heads) * wg_size * num_elem_per_thread * sizeof(ElementA);
+    // One partial blob (attn out + per-row max/sum) per
+    // (Q tile, V tile, batch_head, partition).
+    return num_output_tiles * num_batch_heads * max_parts * wg_size *
+        num_elem_per_thread * sizeof(ElementA);
   }
 
   static cutlass::Status initialize_workspace(Arguments const &args, void *workspace = nullptr,
@@ -794,9 +806,14 @@ public:
   static dim3 get_grid_shape(Params const &params) {
     if (params.phase == 1) {
       int num_batch_heads = params.kernel.shape.batch * params.kernel.shape.num_heads_kv;
-      return dim3(1, 1, num_batch_heads);
+      return dim3(params.scheduler.grid.x, params.scheduler.grid.y, num_batch_heads);
     }
     return TileScheduler::template get_grid_shape<SGPerWG::value>(params.scheduler);
+  }
+
+  static bool requires_separate_reduction(Params const &params) {
+    int num_batch_heads = params.kernel.shape.batch * params.kernel.shape.num_heads_kv;
+    return int(params.scheduler.grid.z) != num_batch_heads;
   }
 
   static dim3 get_block_shape() { return dim3(SGPerWG::value * intel::sg_size, 1, 1); }
@@ -899,11 +916,11 @@ public:
       epilogue.template operator()<true>(o_view, out, mx, sm, bqv, thr_id, p.scale_v);
     };
 
-    auto load_partition = [&](int bh, int part, FragA &out, FragARow &mx, FragARow &sm) {
-      int offset = bh * params.max_num_partitions * SGPerWG::value * intel::sg_size * num_elem_per_thread
-                 + part * SGPerWG::value * intel::sg_size * num_elem_per_thread
-                 + sg_id * intel::sg_size * num_elem_per_thread
-                 + tid_in_sg * num_elem_per_thread;
+    auto load_partition = [&](int blk_q, int blk_v, int bh, int part,
+                              FragA &out, FragARow &mx, FragARow &sm) {
+      size_t output_tile = size_t(blk_q) * params.scheduler.grid.x + blk_v;
+      size_t partial_slot = (output_tile * num_batch_heads + bh) * params.max_num_partitions + part;
+      size_t offset = (partial_slot * SGPerWG::value * intel::sg_size + thr_id) * num_elem_per_thread;
       Tensor tPartial = make_tensor(params.partial_results_ptr + offset, make_shape(Int<num_elem_per_thread>{}));
       Tensor merged_res = make_tensor<ElementA>(Int<num_elem_per_thread>{});
       copy(tPartial, merged_res);
@@ -922,6 +939,8 @@ public:
     if (params.phase == 1) {
       int bh = int(BlockIdxZ());
       if (bh >= num_batch_heads) return;
+      int blk_q = int(BlockIdxY());
+      int blk_v = int(BlockIdxX());
       // Partition count is derived from the compute grid (params.scheduler.grid.z).
       int compute_grid_z = int(params.scheduler.grid.z);
       int num_blocks_per_wg = cute::ceil_div(total_k_blocks, compute_grid_z);
@@ -930,15 +949,15 @@ public:
 
       FragA acc;
       FragARow accMax, accSum;
-      load_partition(bh, 0, acc, accMax, accSum);
+      load_partition(blk_q, blk_v, bh, 0, acc, accMax, accSum);
       CUTLASS_PRAGMA_NO_UNROLL
       for (int i = 1; i < num_partitions; ++i) {
         FragA pOut;
         FragARow pMax, pSum;
-        load_partition(bh, i, pOut, pMax, pSum);
+        load_partition(blk_q, blk_v, bh, i, pOut, pMax, pSum);
         reduce_split2(params, acc, accMax, accSum, pOut, pMax, pSum);
       }
-      do_epilogue(bh, acc, accMax, accSum, make_coord(0, 0));
+      do_epilogue(bh, acc, accMax, accSum, make_coord(blk_q, blk_v));
       return;
     }
 
@@ -946,11 +965,12 @@ public:
     int wg_id = int(BlockIdxZ());
     int num_blocks_per_wg = cute::ceil_div(total_k_blocks, GridDimZ());
 
-    auto store_partition = [&](int bh, int part, FragA const &out, FragARow const &mx, FragARow const &sm) {
-      int offset = bh * params.max_num_partitions * SGPerWG::value * intel::sg_size * num_elem_per_thread
-                 + part * SGPerWG::value * intel::sg_size * num_elem_per_thread
-                 + sg_id * intel::sg_size * num_elem_per_thread
-                 + tid_in_sg * num_elem_per_thread;
+    auto store_partition = [&](int blk_q, int blk_v, int bh, int part,
+                               FragA const &out, FragARow const &mx,
+                               FragARow const &sm) {
+      size_t output_tile = size_t(blk_q) * params.scheduler.grid.x + blk_v;
+      size_t partial_slot = (output_tile * num_batch_heads + bh) * params.max_num_partitions + part;
+      size_t offset = (partial_slot * SGPerWG::value * intel::sg_size + thr_id) * num_elem_per_thread;
       Tensor tPartial = make_tensor(params.partial_results_ptr + offset, make_shape(Int<num_elem_per_thread>{}));
       Tensor merged_res = make_tensor<ElementA>(Int<num_elem_per_thread>{});
       CUTLASS_PRAGMA_UNROLL
@@ -1096,7 +1116,8 @@ public:
           do_epilogue(batch_head_id, tArA, tA_max, tA_sum, blk_qv);
         } else {
           // Store this partition's partial; the reduce phase will merge them.
-          store_partition(batch_head_id, partition_id, tArA, tA_max, tA_sum);
+          store_partition(blk_q, blk_v, batch_head_id, partition_id,
+                          tArA, tA_max, tA_sum);
         }
 
         if (is_update_batch_head_id) {
