@@ -471,6 +471,11 @@ struct MoEBenchmarkRunner {
     // frees the right type (and releases the device memory) on return.
     std::shared_ptr<void> inputs;
 
+    // Global-memory traffic for this grouped GEMM, in MB. Filled by build_inputs
+    // (where the Config's element sizes are known) and consumed by
+    // finalize_counters to report GB/s (MB/ms == GB/s), mirroring 00_gemm's model.
+    double mega_bytes_transferred = 0.0;
+
     // Allocates + fills every input the kernel reads and returns a vendor_tm
     // wired to it. Config passed as a type tag to stay valid C++17.
     auto build_inputs = [&](auto config_tag) {
@@ -547,6 +552,31 @@ struct MoEBenchmarkRunner {
       vendor_tm.y              = buf->D.get();
       vendor_tm.experts_token_count_device = buf->experts_token_count.get();
 
+      // Global-memory traffic for this grouped GEMM, mirroring 00_gemm's model:
+      // read A once over all routed tokens, read every expert's weights B, and
+      // write D once. Scaled configs
+      // add the logical per-token and per-expert scale grids. Sub-byte types
+      // (e.g. e2m1) are handled by sizeof_bits_v / bits_per_byte.
+      {
+        constexpr double bits_per_byte = static_cast<double>(cute::sizeof_bits_v<char>);
+        constexpr double sizeof_a = cute::sizeof_bits_v<ElementInput>  / bits_per_byte;
+        constexpr double sizeof_o = cute::sizeof_bits_v<ElementOutput> / bits_per_byte;
+        double scale_bytes = 0.0;
+        if constexpr (kScaleKind != cutlass::moe::ScaleKind::Plain) {
+          constexpr double sizeof_scale =
+              cute::sizeof_bits_v<ElementScaleStore> / bits_per_byte;
+          scale_bytes = static_cast<double>(buf->per_token_scale.size() +
+                                            buf->experts_scale.size()) *
+                        sizeof_scale;
+        }
+        mega_bytes_transferred =
+            (static_cast<double>(int64_t(num_tokens) * K) * sizeof_a +
+             static_cast<double>(int64_t(num_experts) * N * K) * sizeof_a +
+             static_cast<double>(int64_t(num_tokens) * N) * sizeof_o) *
+                1e-6 +
+            scale_bytes * 1e-6;
+      }
+
       // Check the completed mapping here, on the side that filled it. Throws;
       // run() reports it as a skip.
       moe_validate_mapping<Config>(vendor_tm);
@@ -615,7 +645,7 @@ struct MoEBenchmarkRunner {
       update_counters(state, ms_elapsed);
       state.SetIterationTime(ms_elapsed / 1000);
     }
-    finalize_counters(state, gflop);
+    finalize_counters(state, gflop, mega_bytes_transferred);
   }
 
 private:
@@ -637,7 +667,8 @@ private:
     state.ResumeTiming();
   }
 
-  static void finalize_counters(::benchmark::State &state, double gflop) {
+  static void finalize_counters(::benchmark::State &state, double gflop,
+                                double mega_bytes_transferred) {
     auto iters = static_cast<double>(state.iterations());
     if (iters > 2) {
       state.counters["avg_runtime_ms"] =
@@ -651,6 +682,11 @@ private:
     }
     state.counters["avg_tflops"] = gflop / state.counters["avg_runtime_ms"];
     state.counters["best_tflop"] = gflop / state.counters["best_runtime_ms"];
+    // MB / ms == GB/s. Drives the MBU (memory-bandwidth-utilization) calc.
+    state.counters["avg_bandwidth_gbs"] =
+        mega_bytes_transferred / state.counters["avg_runtime_ms"];
+    state.counters["best_bandwidth_gbs"] =
+        mega_bytes_transferred / state.counters["best_runtime_ms"];
   }
 };
 
