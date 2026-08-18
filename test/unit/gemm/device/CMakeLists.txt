@@ -69,7 +69,7 @@ if(CUTLASS_ENABLE_SYCL)
 
   # Group Gemm test
   cutlass_test_unit_add_executable(
-    cutlass_test_unit_gemm_device_tensorop_xe_group_gemm
+    cutlass_test_unit_gemm_device_tensorop_group_gemm_xe
     xe_gemm_bf16_bf16_fp32_tensor_op_fp32_group_gemm.cpp
     xe_gemm_bf16_bf16_bf16_tensor_op_fp32_group_gemm.cpp
     xe_gemm_fp16_fp16_fp32_tensor_op_fp32_group_gemm.cpp
@@ -77,7 +77,7 @@ if(CUTLASS_ENABLE_SYCL)
   )
 
   cutlass_test_unit_add_executable(
-    cutlass_test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
+    cutlass_test_unit_gemm_device_mixed_dtype_tensorop_group_gemm_xe
     xe_gemm_bf16_s8_fp32_tensor_op_fp32_group_gemm.cpp
     xe_gemm_fp16_s8_fp32_tensor_op_fp32_group_gemm.cpp
     xe_gemm_bf16_u4_fp32_tensor_op_fp32_group_gemm.cpp
@@ -86,57 +86,57 @@ if(CUTLASS_ENABLE_SYCL)
   )
 
     cutlass_test_unit_add_executable(
-      cutlass_test_unit_gemm_device_xe_lincomb_per_rowbias_eltact_configs
+      cutlass_test_unit_gemm_device_lincomb_per_rowbias_eltact_configs_xe
       xe_gemm_universal_lincomb_per_rowbias_eltact_configs.cpp
     )
 
     cutlass_test_unit_add_executable(
-      cutlass_test_unit_gemm_device_xe_lincomb_per_rowbias_eltact_basic
+      cutlass_test_unit_gemm_device_lincomb_per_rowbias_eltact_basic_xe
       xe_gemm_universal_lincomb_per_rowbias_eltact_basic.cpp
     )
 
     cutlass_test_unit_add_executable(
-      cutlass_test_unit_gemm_device_xe_mainloop_group_llm
+      cutlass_test_unit_gemm_device_mainloop_group_llm_xe
       xe_gemm_universal_mainloop_group_llm.cpp
     )
 
     cutlass_test_unit_add_executable(
-      cutlass_test_unit_gemm_device_xe_mainloop_group_nonparam_1
+      cutlass_test_unit_gemm_device_mainloop_group_nonparam_1_xe
       xe_gemm_universal_mainloop_group_nonparam_1.cpp
     )
 
     cutlass_test_unit_add_executable(
-      cutlass_test_unit_gemm_device_xe_mainloop_group_nonparam_2
+      cutlass_test_unit_gemm_device_mainloop_group_nonparam_2_xe
       xe_gemm_universal_mainloop_group_nonparam_2.cpp
     )
 
     cutlass_test_unit_add_executable(
-      cutlass_test_unit_gemm_device_mainloopintelxexmx16_group_fp8
+      cutlass_test_unit_gemm_device_mainloop_group_fp8_xe
       xe_gemm_universal_mainloop_group_fp8.cpp
     )
 
     cutlass_test_unit_add_executable(
-      cutlass_test_unit_gemm_device_xe_mainloop_group_precision_large
+      cutlass_test_unit_gemm_device_mainloop_group_precision_large_xe
       xe_gemm_universal_mainloop_group_precision_large.cpp
     )
 
     cutlass_test_unit_add_executable(
-      cutlass_test_unit_gemm_device_xe_mainloop_group_precision_tensor_parallel
+      cutlass_test_unit_gemm_device_mainloop_group_precision_tensor_parallel_xe
       xe_gemm_universal_mainloop_group_precision_tensor_parallel.cpp
     )
 
     cutlass_test_unit_add_executable(
-      cutlass_test_unit_gemm_device_xe_mainloop_group_precision_model_parallel
+      cutlass_test_unit_gemm_device_mainloop_group_precision_model_parallel_xe
       xe_gemm_universal_mainloop_group_precision_model_parallel.cpp
     )
 
     cutlass_test_unit_add_executable(
-      cutlass_test_unit_gemm_device_xe_mainloop_group_precision_batch_variants
+      cutlass_test_unit_gemm_device_mainloop_group_precision_batch_variants_xe
       xe_gemm_universal_mainloop_group_precision_batch_variants.cpp
     )
 
     cutlass_test_unit_add_executable(
-      cutlass_test_unit_gemm_device_xe_fp_scaling
+      cutlass_test_unit_gemm_device_fp_scaling_xe
       xe_gemm_universal_fp_scaling.cpp
     )
 
@@ -147,20 +147,20 @@ if(CUTLASS_ENABLE_SYCL)
       cutlass_test_unit_gemm_device_tensorop_cooperative_xe
       cutlass_test_unit_gemm_device_tensorop_epilogue_fusion_xe
       cutlass_test_unit_gemm_device_mixed_input_tensorop_xe
-      cutlass_test_unit_gemm_device_tensorop_xe_group_gemm
-      cutlass_test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
+      cutlass_test_unit_gemm_device_tensorop_group_gemm_xe
+      cutlass_test_unit_gemm_device_mixed_dtype_tensorop_group_gemm_xe
       cutlass_test_unit_gemm_device_tensorop_xe
-      cutlass_test_unit_gemm_device_lincomb_per_rowbias_eltact_configs
-      cutlass_test_unit_gemm_device_lincomb_per_rowbias_eltact_basic
-      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_llm
-      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_nonparam_1
-      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_nonparam_2
-      cutlass_test_unit_gemm_device_mainloopintelxexmx16_group_fp8
-      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_precision_large
-      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_precision_tensor_parallel
-      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_precision_model_parallel
-      cutlass_test_unit_gemm_device_mainloopintelxexmx16group_precision_batch_variants
-      cutlass_test_unit_gemm_device_fp_scaling
+      cutlass_test_unit_gemm_device_lincomb_per_rowbias_eltact_configs_xe
+      cutlass_test_unit_gemm_device_lincomb_per_rowbias_eltact_basic_xe
+      cutlass_test_unit_gemm_device_mainloop_group_llm_xe
+      cutlass_test_unit_gemm_device_mainloop_group_nonparam_1_xe
+      cutlass_test_unit_gemm_device_mainloop_group_nonparam_2_xe
+      cutlass_test_unit_gemm_device_mainloop_group_fp8_xe
+      cutlass_test_unit_gemm_device_mainloop_group_precision_large_xe
+      cutlass_test_unit_gemm_device_mainloop_group_precision_tensor_parallel_xe
+      cutlass_test_unit_gemm_device_mainloop_group_precision_model_parallel_xe
+      cutlass_test_unit_gemm_device_mainloop_group_precision_batch_variants_xe
+      cutlass_test_unit_gemm_device_fp_scaling_xe
     )
 
   add_custom_target(
@@ -170,8 +170,8 @@ if(CUTLASS_ENABLE_SYCL)
     test_unit_gemm_device_tensorop_cooperative_xe
     test_unit_gemm_device_tensorop_epilogue_fusion_xe
     test_unit_gemm_device_mixed_input_tensorop_xe
-    test_unit_gemm_device_tensorop_xe_group_gemm
-    test_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
+    test_unit_gemm_device_tensorop_group_gemm_xe
+    test_unit_gemm_device_mixed_dtype_tensorop_group_gemm_xe
   )
 
   add_subdirectory(legacy)

@@ -36,8 +36,8 @@ UT_CTESTS=(
     ctest_unit_gemm_device_tensorop_cooperative_xe
     ctest_unit_gemm_device_tensorop_epilogue_fusion_xe
     ctest_unit_gemm_device_mixed_input_tensorop_xe
-    ctest_unit_gemm_device_tensorop_xe_group_gemm
-    ctest_unit_gemm_device_mixed_dtype_tensorop_xe_group_gemm
+    ctest_unit_gemm_device_tensorop_group_gemm_xe
+    ctest_unit_gemm_device_mixed_dtype_tensorop_group_gemm_xe
     ctest_unit_gdn_attention_chunkwise
 )
 
