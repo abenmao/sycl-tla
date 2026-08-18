@@ -669,24 +669,30 @@ private:
 
   static void finalize_counters(::benchmark::State &state, double gflop,
                                 double mega_bytes_transferred) {
+    auto safe_div = [](double num, double den) {
+      return den > 0.0 ? num / den : 0.0;
+    };
+
     auto iters = static_cast<double>(state.iterations());
     if (iters > 2) {
       state.counters["avg_runtime_ms"] =
-          (state.counters["total_runtime_ms"] -
-           state.counters["best_runtime_ms"] -
-           state.counters["worst_runtime_ms"]) /
-          (iters - 2);
+          safe_div(state.counters["total_runtime_ms"] -
+                       state.counters["best_runtime_ms"] -
+                       state.counters["worst_runtime_ms"],
+                   iters - 2);
     } else {
       state.counters["avg_runtime_ms"] =
-          state.counters["total_runtime_ms"] / iters;
+          safe_div(state.counters["total_runtime_ms"], iters);
     }
-    state.counters["avg_tflops"] = gflop / state.counters["avg_runtime_ms"];
-    state.counters["best_tflop"] = gflop / state.counters["best_runtime_ms"];
+    state.counters["avg_tflops"] =
+        safe_div(gflop, state.counters["avg_runtime_ms"]);
+    state.counters["best_tflop"] =
+        safe_div(gflop, state.counters["best_runtime_ms"]);
     // MB / ms == GB/s. Drives the MBU (memory-bandwidth-utilization) calc.
     state.counters["avg_bandwidth_gbs"] =
-        mega_bytes_transferred / state.counters["avg_runtime_ms"];
+        safe_div(mega_bytes_transferred, state.counters["avg_runtime_ms"]);
     state.counters["best_bandwidth_gbs"] =
-        mega_bytes_transferred / state.counters["best_runtime_ms"];
+        safe_div(mega_bytes_transferred, state.counters["best_runtime_ms"]);
   }
 };
 
