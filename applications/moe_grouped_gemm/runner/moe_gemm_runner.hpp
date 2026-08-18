@@ -131,10 +131,6 @@ struct VerificationHelper {
                 is_any_of_v<ElementD, cute::bfloat16_t, cute::half_t>>>
   bool verify(const ElementA *activations, const ElementB *weights,
               ElementD *outputs) {
-    using LayoutA = cutlass::layout::RowMajor;
-    using LayoutB = cutlass::layout::RowMajor;
-    using LayoutD = cutlass::layout::RowMajor;
-
     sycl::queue Q = compat::get_default_queue();
 
     const int64_t A_elems = int64_t(m) * k;
@@ -147,14 +143,34 @@ struct VerificationHelper {
     Q.memcpy(h_B.data(), weights, B_elems * sizeof(ElementB)).wait();
     Q.memcpy(h_D.data(), outputs, D_elems * sizeof(ElementD)).wait();
 
+    // Native operands, RowMajor B; the shared loop runs the reference GEMM and
+    // compare (tolerance from the input dtype's bit width).
     const auto tol = tolerance_for(k, cute::sizeof_bits_v<ElementA>);
-    const float rtol = tol.rtol;
-    const float atol = tol.atol;
+    return host_reference_compare<cutlass::layout::RowMajor>(
+        h_A.data(), h_B.data(), h_D.data(), tol.rtol, tol.atol);
+  }
 
-    // Reference mirrors the device numerics: native input type, FP32
-    // accumulation (like DPAS), round-to-ElementD on store like the epilogue.
-    // Only accumulation ORDER differs, which tolerance_for() covers.
-    std::vector<ElementD> h_C(D_elems, ElementD(0.f)); // beta=0, unused C
+  static void print_summary(bool passed) {
+    std::cerr << "\n=== Verification Summary ===" << std::endl
+              << "  Result: " << (passed ? "PASSED" : "FAILED") << std::endl
+              << "============================" << std::endl;
+  }
+
+  // Per-expert host reference GEMM + relative-tol compare, shared by verify()
+  // (native BF16/FP16 operands) and verify_scaled() (dequantized FP32 operands),
+  // the host analog of device_reference_compare(). A/B are already host-side in
+  // the GEMM's element type and the given B layout; h_D is the device output
+  // copied to host. Reference mirrors the device numerics (FP32 accumulation like
+  // DPAS, round-to-ElementD on store like the epilogue); only accumulation ORDER
+  // differs, which the caller's tolerance covers. Prints elementwise mismatches
+  // plus expert 0's first 10 elements. A is always RowMajor (M x K).
+  template <class LayoutB, class GemmElemA, class GemmElemB, class ElementD>
+  bool host_reference_compare(GemmElemA *h_A, GemmElemB *h_B, const ElementD *h_D,
+                              float rtol, float atol) {
+    using LayoutA = cutlass::layout::RowMajor;
+    using LayoutD = cutlass::layout::RowMajor;
+
+    std::vector<ElementD> h_C(int64_t(m) * n, ElementD(0.f)); // beta=0, unused C
     std::vector<ElementD> h_ref_D;
     bool passed = true;
     int cumM = 0;
@@ -165,13 +181,13 @@ struct VerificationHelper {
       const int64_t d_off = int64_t(cumM) * n;
       h_ref_D.assign(int64_t(Mg) * n, ElementD(0.f));
 
-      cutlass::TensorRef<ElementA, LayoutA> ref_A(h_A.data() + a_off, LayoutA::packed({Mg, k}));
-      cutlass::TensorRef<ElementB, LayoutB> ref_B(h_B.data() + b_off, LayoutB::packed({k, n}));
+      cutlass::TensorRef<GemmElemA, LayoutA> ref_A(h_A + a_off, LayoutA::packed({Mg, k}));
+      cutlass::TensorRef<GemmElemB, LayoutB> ref_B(h_B + b_off, LayoutB::packed({k, n}));
       cutlass::TensorRef<ElementD, LayoutD> ref_C(h_C.data() + d_off, LayoutD::packed({Mg, n}));
       cutlass::TensorRef<ElementD, LayoutD> ref_Dt(h_ref_D.data(),    LayoutD::packed({Mg, n}));
 
       cutlass::reference::host::compute_gemm<
-          ElementA, LayoutA, ElementB, LayoutB, ElementD, LayoutD,
+          GemmElemA, LayoutA, GemmElemB, LayoutB, ElementD, LayoutD,
           ElementAccumulator, ElementAccumulator>(
           {Mg, n, k}, ElementAccumulator(1.f), ref_A, ref_B,
           ElementAccumulator(0.f), ref_C, ref_Dt, ElementAccumulator(0.f));
@@ -202,24 +218,104 @@ struct VerificationHelper {
       }
       cumM += Mg;
     }
-    std::cerr << "\n=== Verification Summary ===" << std::endl
-              << "  Result: " << (passed ? "PASSED" : "FAILED") << std::endl
-              << "============================" << std::endl;
+    print_summary(passed);
     return passed;
   }
 
-  // Verify block/tensor scaled low-precision: dequant A/B to FP32 on host,
-  // per-expert host reference GEMM, relative-tol compare.
-  //
-  // Scales read from the UNPADDED host grids (not the packed surface), keeping
-  // verify independent of pack_moe_scales.
-    template <bool IsTensor, bool BColMajor, class ScaleQ, class ElementA,
-            class ElementScaleIn, class ElementD>
-  bool verify_scaled(sycl::queue &Q, const ElementA *d_A, const ElementA *d_B,
-                     const ElementD *d_D,
-                     const ElementScaleIn *h_per_token_scale,
-                     const ElementScaleIn *h_experts_scale,
-                     int GroupN, int GroupK) {
+  // Per-expert reference GEMM on the GPU + relative-tolerance compare, shared by
+  // verify_device() and verify_scaled_device(). A and B must already be in the
+  // reference's element type and layout. input_bits is the width of the ORIGINAL
+  // operand, so a dequantized FP32 copy still gets its own dtype's tolerance.
+  // Diagnostics are per-expert pass/fail; use the host path for element detail.
+  template <class LayoutB, class ElementA, class ElementB, class ElementD>
+  bool device_reference_compare(const ElementA *A, const ElementB *B,
+                                const ElementD *D, int input_bits) {
+    using LayoutA = cutlass::layout::RowMajor;
+    using LayoutD = cutlass::layout::RowMajor;
+
+    const auto tol = tolerance_for(k, input_bits);
+    const int64_t D_elems = int64_t(m) * n;
+
+    cutlass::DeviceAllocation<ElementD> output_ref(D_elems);
+    // Zeroed, and kept separate from output_ref: the reference epilogue evaluates
+    // beta * C unconditionally, so a NaN (or an inf output, if it aliased D)
+    // would poison every reference value via 0 * NaN.
+    cutlass::DeviceAllocation<ElementD> unused_c_matrix(D_elems);
+    sycl::queue Q = compat::get_default_queue();
+    Q.memset(unused_c_matrix.get(), 0, size_t(D_elems) * sizeof(ElementD)).wait();
+
+    bool passed = true;
+    int cumM = 0;
+    for (int g = 0; g < groups; g++) {
+      const int Mg = cute::get<0>(problem_sizes_host[g]);
+      if (Mg == 0)
+        continue; // no tokens routed to this expert
+      const int64_t a_off = int64_t(cumM) * k;
+      const int64_t b_off = int64_t(g) * n * k;
+      const int64_t d_off = int64_t(cumM) * n;
+
+      cutlass::TensorRef<const ElementA, LayoutA> ref_A(A + a_off,
+                                                        LayoutA::packed({Mg, k}));
+      cutlass::TensorRef<const ElementB, LayoutB> ref_B(B + b_off,
+                                                        LayoutB::packed({k, n}));
+      cutlass::TensorRef<ElementD, LayoutD> ref_C(unused_c_matrix.get() + d_off,
+                                                  LayoutD::packed({Mg, n}));
+      cutlass::TensorRef<ElementD, LayoutD> ref_D(output_ref.get() + d_off,
+                                                  LayoutD::packed({Mg, n}));
+
+      // alpha = 1, beta = 0, FP32 accumulation: matches the epilogue. Only the
+      // accumulation ORDER differs, which the tolerance covers.
+      cutlass::reference::device::GemmComplex(
+          {Mg, n, k}, ElementAccumulator(1.f), ref_A,
+          cutlass::ComplexTransform::kNone, ref_B,
+          cutlass::ComplexTransform::kNone, ElementAccumulator(0.f), ref_C,
+          ref_D, ElementAccumulator(0.f), 1 /*batch_count*/,
+          int64_t(Mg) * k, int64_t(k) * n, int64_t(Mg) * n, int64_t(Mg) * n);
+      compat::wait();
+
+      if (!cutlass::reference::device::BlockCompareRelativelyEqual(
+              output_ref.get() + d_off, D + d_off, int64_t(Mg) * n,
+              ElementD(tol.rtol), ElementD(tol.atol))) {
+        passed = false;
+        std::cerr << "  mismatch expert=" << g << " (M=" << Mg << ", N=" << n
+                  << ", K=" << k << ", rtol=" << tol.rtol
+                  << ", atol=" << tol.atol << ")\n";
+      }
+      cumM += Mg;
+    }
+    print_summary(passed);
+    return passed;
+  }
+
+  // Same contract and tolerances as verify(), but the reference GEMM runs on the
+  // GPU — use it when the host's O(m*n*k) scalar loop is impractical.
+  template <class ElementA, class ElementB, class ElementD,
+            class = std::enable_if_t<
+                is_any_of_v<ElementA, cute::bfloat16_t, cute::half_t> &&
+                is_any_of_v<ElementB, cute::bfloat16_t, cute::half_t> &&
+                is_any_of_v<ElementD, cute::bfloat16_t, cute::half_t>>>
+  bool verify_device(const ElementA *activations, const ElementB *weights,
+                     const ElementD *outputs) {
+    return device_reference_compare<cutlass::layout::RowMajor>(
+        activations, weights, outputs, cute::sizeof_bits_v<ElementA>);
+  }
+
+  struct DequantizedOperands {
+    std::vector<float> A; // m x k, RowMajor
+    std::vector<float> B; // groups x (k x n), in the config's B layout
+  };
+
+  // Dequantize A and B into FP32 host buffers, in the same element order as the
+  // quantized device operands (so B keeps its config's layout). Shared by the
+  // host and device scaled references so the two cannot disagree about the
+  // dequant itself. Scales are read from the UNPADDED host grids, keeping verify
+  // independent of pack_moe_scales.
+  template <bool IsTensor, bool BColMajor, class ScaleQ, class ElementA,
+            class ElementScaleIn>
+  DequantizedOperands
+  dequantize_operands(sycl::queue &Q, const ElementA *d_A, const ElementA *d_B,
+                      const ElementScaleIn *h_per_token_scale,
+                      const ElementScaleIn *h_experts_scale, int GroupK) {
     const int scale_k_logical = IsTensor ? 1 : (k + GroupK - 1) / GroupK;
 
     constexpr int kBitsPerA = cute::sizeof_bits_v<ElementA>;
@@ -305,75 +401,63 @@ struct VerificationHelper {
       }
       cumM += Mg;
     }
+    return {std::move(h_A_dq), std::move(h_B_dq)};
+  }
 
-    using LayoutA = cutlass::layout::RowMajor;
-    // B reference layout mirrors the dequant fill above.
-    using LayoutB = cute::conditional_t<BColMajor, cutlass::layout::ColumnMajor,
-                                        cutlass::layout::RowMajor>;
-    using LayoutD = cutlass::layout::RowMajor;
+  // Verify block/tensor scaled low-precision: dequant A/B to FP32 on host,
+  // per-expert host reference GEMM, relative-tol compare. O(m*n*k) scalar work —
+  // prefer verify_scaled_device() at any realistic MoE shape.
+  template <bool IsTensor, bool BColMajor, class ScaleQ, class ElementA,
+            class ElementScaleIn, class ElementD>
+  bool verify_scaled(sycl::queue &Q, const ElementA *d_A, const ElementA *d_B,
+                     const ElementD *d_D,
+                     const ElementScaleIn *h_per_token_scale,
+                     const ElementScaleIn *h_experts_scale, int GroupK) {
+    constexpr int kBitsPerA = cute::sizeof_bits_v<ElementA>;
+
+    auto dq = dequantize_operands<IsTensor, BColMajor, ScaleQ>(
+        Q, d_A, d_B, h_per_token_scale, h_experts_scale, GroupK);
 
     std::vector<ElementD> h_D_raw(int64_t(m) * n);
     Q.memcpy(h_D_raw.data(), d_D, int64_t(m) * n * sizeof(ElementD)).wait();
 
-    const auto tol = tolerance_for(k, kBitsPerA);
-    const float rtol = tol.rtol;
-    const float atol = tol.atol;
-
     // A/B stay FP32: the dequantized value (quant*scale) isn't representable in
-    // ElementA, and BDPAS applies the scale in FP32 too. D is ElementD to model
-    // the epilogue's round-to-output.
-    std::vector<ElementD> h_C(int64_t(m) * n, ElementD(0.f)); // beta=0, unused C
-    std::vector<ElementD> h_ref_D;
-    bool passed = true;
-    cumM = 0;
-    for (int g = 0; g < groups; g++) {
-      int Mg = cute::get<0>(problem_sizes_host[g]);
-      const int64_t dq_off = int64_t(cumM) * k;
-      const int64_t b_off  = int64_t(g) * n * k;
-      const int64_t d_off  = int64_t(cumM) * n;
-      h_ref_D.assign(int64_t(Mg) * n, ElementD(0.f));
+    // ElementA, and BDPAS applies the scale in FP32 too. B's reference layout
+    // mirrors the dequant fill above; the tolerance is the quantized dtype's.
+    using LayoutB = cute::conditional_t<BColMajor, cutlass::layout::ColumnMajor,
+                                        cutlass::layout::RowMajor>;
+    const auto tol = tolerance_for(k, kBitsPerA);
+    return host_reference_compare<LayoutB>(dq.A.data(), dq.B.data(),
+                                           h_D_raw.data(), tol.rtol, tol.atol);
+  }
 
-      cutlass::TensorRef<float, LayoutA> ref_A(h_A_dq.data() + dq_off, LayoutA::packed({Mg, k}));
-      cutlass::TensorRef<float, LayoutB> ref_B(h_B_dq.data() + b_off,  LayoutB::packed({k, n}));
-      cutlass::TensorRef<ElementD, LayoutD> ref_C(h_C.data() + d_off,  LayoutD::packed({Mg, n}));
-      cutlass::TensorRef<ElementD, LayoutD> ref_Dt(h_ref_D.data(),     LayoutD::packed({Mg, n}));
+  // Same contract as verify_scaled(), but only the dequant stays on the host: the
+  // reference GEMM runs on the GPU over FP32 copies of the dequantized operands,
+  // dropping the CPU cost from O(m*n*k) to O(m*k + groups*n*k) — which is what
+  // makes --verify usable on a scaled config at a realistic MoE shape. It costs
+  // two FP32 operand copies in device memory (4x the quantized A, up to 8x for
+  // mxfp4), so only reach it when Device verification was actually requested.
+  template <bool IsTensor, bool BColMajor, class ScaleQ, class ElementA,
+            class ElementScaleIn, class ElementD>
+  bool verify_scaled_device(sycl::queue &Q, const ElementA *d_A,
+                            const ElementA *d_B, const ElementD *d_D,
+                            const ElementScaleIn *h_per_token_scale,
+                            const ElementScaleIn *h_experts_scale, int GroupK) {
+    const auto dq = dequantize_operands<IsTensor, BColMajor, ScaleQ>(
+        Q, d_A, d_B, h_per_token_scale, h_experts_scale, GroupK);
 
-      cutlass::reference::host::compute_gemm<
-          float, LayoutA, float, LayoutB, ElementD, LayoutD,
-          ElementAccumulator, ElementAccumulator>(
-          {Mg, n, k}, ElementAccumulator(1.f), ref_A, ref_B,
-          ElementAccumulator(0.f), ref_C, ref_Dt, ElementAccumulator(0.f));
+    cutlass::DeviceAllocation<float> dq_A(dq.A.size());
+    cutlass::DeviceAllocation<float> dq_B(dq.B.size());
+    dq_A.copy_from_host(dq.A.data());
+    dq_B.copy_from_host(dq.B.data());
 
-      int mismatch_count = 0;
-      for (int64_t idx = 0; idx < int64_t(Mg) * n; idx++) {
-        float got = float(h_D_raw[d_off + idx]);
-        float ref = float(h_ref_D[idx]);
-        if (!cutlass::relatively_equal(ref, got, rtol, atol)) {
-          passed = false;
-          if (mismatch_count < 10)
-            std::cerr << "  mismatch expert=" << g << " idx=" << idx
-                      << " got=" << got << " ref=" << ref
-                      << " abs_error=" << std::abs(got - ref)
-                      << " (rtol=" << rtol
-                      << ", atol=" << atol << ")\n";
-          if (++mismatch_count >= 100) {
-            std::cerr << "  Stopping after 100 mismatches..." << std::endl;
-            break;
-          }
-        }
-      }
-      if (g == 0) {
-        std::cerr << "  [expert 0 first 10 elements]  got vs ref:" << std::endl;
-        for (int64_t i = 0; i < std::min<int64_t>(10, int64_t(Mg) * n); i++)
-          std::cerr << "    [" << i << "]  got=" << float(h_D_raw[d_off + i])
-                    << "  ref=" << float(h_ref_D[i]) << std::endl;
-      }
-      cumM += Mg;
-    }
-    std::cerr << "\n=== Verification Summary ===" << std::endl
-              << "  Result: " << (passed ? "PASSED" : "FAILED") << std::endl
-              << "============================" << std::endl;
-    return passed;
+    // B's reference layout mirrors the dequant fill order. Operands stay FP32
+    // (quant*scale isn't representable in ElementA, and BDPAS applies the scale in
+    // FP32 too), but the tolerance is the quantized dtype's.
+    using LayoutB = cute::conditional_t<BColMajor, cutlass::layout::ColumnMajor,
+                                        cutlass::layout::RowMajor>;
+    return device_reference_compare<LayoutB>(dq_A.get(), dq_B.get(), d_D,
+                                             cute::sizeof_bits_v<ElementA>);
   }
 };
 
@@ -578,6 +662,54 @@ double moe_launch_timed_greedy_scaled(
   EventManager::getInstance().addEvent(event);
   Q.wait_and_throw();
   return double(timer.seconds() * 1000);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Reference verification entry point, for any Config.
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Which reference to check the kernel output against. Host gives elementwise
+// mismatch diagnostics but is O(m*n*k) scalar work, so small shapes only; Device
+// reports per-expert pass/fail and works for every Config, scaled ones included.
+enum class MoeVerify { None, Host, Device };
+
+// Reference check for one finished MoE launch, for any Config and either kernel.
+// Which reference fits follows from Config alone, so it is decided here once
+// rather than at each call site. `counts` is the per-expert token count on the
+// HOST — for a uniform-M kernel, the same M repeated.
+template <class Config>
+bool moe_verify_output(
+    const VendorTensorMapping<typename Config::Element, ScaleStoreFor<Config>,
+                              typename Config::ElementOutput> &tm,
+    const int *counts, int num_experts, int N, int K, MoeVerify verify) {
+  VerificationHelper helper;
+  helper.parse(num_experts, counts, N, K);
+  if constexpr (Config::scale_kind == ScaleKind::Plain) {
+    // The plain references build B as RowMajor (K x N), so a ColumnMajor-B config
+    // would be checked against a transposed reference. Fail the build instead of
+    // silently comparing against the wrong layout.
+    static_assert(cute::is_same_v<typename Config::LayoutB,
+                                  cutlass::layout::RowMajor>,
+                  "the plain reference GEMMs assume RowMajor B");
+    return (verify == MoeVerify::Device)
+               ? helper.verify_device(tm.scatter_tokens, tm.experts_weight, tm.y)
+               : helper.verify(tm.scatter_tokens, tm.experts_weight, tm.y);
+  } else {
+    constexpr bool kIsTensor = (Config::scale_kind == ScaleKind::Tensor);
+    constexpr bool kBColMajor =
+        cute::is_same_v<typename Config::LayoutB, cutlass::layout::ColumnMajor>;
+    const int group_k = kIsTensor ? K : Config::group_k;
+    sycl::queue Q = compat::get_default_queue();
+    if (verify == MoeVerify::Device)
+      return helper.template verify_scaled_device<kIsTensor, kBColMajor,
+                                                  typename Config::ElementScale>(
+          Q, tm.scatter_tokens, tm.experts_weight, tm.y, tm.per_token_scale,
+          tm.experts_scale, group_k);
+    return helper.template verify_scaled<kIsTensor, kBColMajor,
+                                         typename Config::ElementScale>(
+        Q, tm.scatter_tokens, tm.experts_weight, tm.y, tm.per_token_scale,
+        tm.experts_scale, group_k);
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

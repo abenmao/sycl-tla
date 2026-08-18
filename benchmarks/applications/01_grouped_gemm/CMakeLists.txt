@@ -61,12 +61,12 @@ else()
 endif()
 
 # The MoE application's full-run diagnostics: per-launch GPU timing (the
-# double-buffer launchers return real ms instead of 0.0) plus the
-# reference-verify PASSED/FAILED prints and the tile-selection dumps. On by
-# default; set -DFULL_RUN_TIMING_AND_VERIFY=OFF for a launch-only build with no
-# timing, no reference GEMM and no prints.
+# double-buffer launchers return real ms instead of 0.0), the tile-selection
+# dumps, and the --verify=host|device reference GEMMs. On by default; set
+# -DFULL_RUN_TIMING_AND_VERIFY=OFF for a launch-only build with no timing, no
+# prints, and no reference paths compiled in.
 option(FULL_RUN_TIMING_AND_VERIFY
-       "Enable MoE full-run timing, verification and tile-select prints" ON)
+       "Enable MoE full-run timing, tile-select prints, and reference verify" ON)
 if(FULL_RUN_TIMING_AND_VERIFY)
   set(MOE_FULL_RUN_DEF FULL_RUN_TIMING_AND_VERIFY)
 else()

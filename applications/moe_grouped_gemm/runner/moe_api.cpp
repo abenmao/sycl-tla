@@ -63,14 +63,56 @@ using VendorTM = cutlass::moe::VendorTensorMapping<
     typename Config::Element, cutlass::moe::ScaleStoreFor<Config>,
     typename Config::ElementOutput>;
 
-// Double-buffer uniform-M run (plain BF16 and all scaled paths). if constexpr on
-// scale_kind selects the verify branch.
+// The VerifyKind int from the harness -> the runner's MoeVerify. Anything
+// unrecognized is treated as None rather than silently verifying.
+inline cutlass::moe::MoeVerify to_moe_verify(int verify) {
+  switch (verify) {
+  case kVerifyDevice: return cutlass::moe::MoeVerify::Device;
+  case kVerifyHost:   return cutlass::moe::MoeVerify::Host;
+  default:            return cutlass::moe::MoeVerify::None;
+  }
+}
+
+// Run the reference for one finished launch and print PASSED/FAILED. Shared by
+// both kernel impls so the two can't drift apart; `label` names the kernel in the
+// print. Diagnostic only: a mismatch is reported but does not fail the benchmark
+// line -- the launch already produced a valid timing, matching the pre-existing
+// behavior.
+template <class Config>
+void run_verification(const VendorTM<Config> &host_tm, const int *counts,
+                      int num_experts, int N, int K, int verify,
+                      const char *label) {
+#ifdef FULL_RUN_TIMING_AND_VERIFY
+  const auto mode = to_moe_verify(verify);
+  if (mode == cutlass::moe::MoeVerify::None)
+    return;
+  const char *ref = mode == cutlass::moe::MoeVerify::Device ? "device" : "host";
+  bool ok = false;
+  try {
+    ok = cutlass::moe::moe_verify_output<Config>(host_tm, counts, num_experts, N,
+                                                 K, mode);
+  } catch (std::exception const &e) {
+    // Device verify allocates FP32 reference buffers and launches a reference
+    // GEMM; contain an OOM/SYCL error here so it can't escape launch_moe.
+    std::cerr << "[MoE bench " << label << " verify, " << ref
+              << " reference] \033[31mFAILED\033[0m (" << e.what() << ")\n";
+    return;
+  }
+  std::cerr << "[MoE bench " << label << " verify, " << ref << " reference] "
+            << (ok ? "\033[32mPASSED\033[0m" : "\033[31mFAILED\033[0m")
+            << std::endl;
+#else
+  // Verify compiled out with the timing/verify build. The .in config selects the
+  // mode, so a build without it just runs the kernel -- no print, no overhead.
+  (void)host_tm; (void)counts; (void)num_experts; (void)N; (void)K; (void)verify;
+  (void)label;
+#endif
+}
+
+// Double-buffer uniform-M run (plain BF16 and all scaled paths).
 template <class Config>
 double moe_run_impl_double_buffer(const void *vendor_tm, int verify,
                                   std::string *error) {
-  using ElementInput  = typename Config::Element;
-  using ElementOutput = typename Config::ElementOutput;
-
   auto const &host_tm = *static_cast<VendorTM<Config> const *>(vendor_tm);
   const int N = host_tm.N, K = host_tm.K, num_experts = host_tm.num_experts;
   const int *M_per_expert = host_tm.experts_token_count;
@@ -83,13 +125,7 @@ double moe_run_impl_double_buffer(const void *vendor_tm, int verify,
     }
   }
 
-  sycl::queue Q = compat::get_default_queue();
-
-  const ElementInput *ptr_A = host_tm.scatter_tokens;
-  const ElementInput *ptr_B = host_tm.experts_weight;
-  ElementOutput      *ptr_D = host_tm.y;
-
-  // One timed launch; verify below reads ptr_D.
+  // One timed launch; the reference below reads host_tm.y.
   double ms;
   try {
     ms = cutlass::moe::moe_run_double_buffer<Config>(host_tm);
@@ -97,40 +133,17 @@ double moe_run_impl_double_buffer(const void *vendor_tm, int verify,
     if (error) *error = e.what();
     return -1.0;
   }
-#ifdef FULL_RUN_TIMING_AND_VERIFY
-  if (verify == kVerifyHost || verify == kVerifyDevice) {
-    VerificationHelper helper;
-    std::vector<int> rows(num_experts, uniform_m);
-    helper.parse(num_experts, rows.data(), N, K);
-    bool ok = false;
-    if constexpr (Config::scale_kind == ScaleKind::Plain) {
-      ok = helper.verify(ptr_A, ptr_B, ptr_D);
-    } else {
-      constexpr bool kIsTensor  = (Config::scale_kind == ScaleKind::Tensor);
-      constexpr bool kBColMajor =
-          cute::is_same_v<typename Config::LayoutB, cutlass::layout::ColumnMajor>;
-      const int verify_group_n = kIsTensor ? N : Config::group_n;
-      const int verify_group_k = kIsTensor ? K : Config::group_k;
-      // Verify against the unpadded host grids, not the kernel's packed surface —
-      // keeps verify independent of pack_moe_scales.
-      ok = helper.template verify_scaled<kIsTensor, kBColMajor,
-                                         typename Config::ElementScale>(
-          Q, ptr_A, ptr_B, ptr_D,
-          host_tm.per_token_scale, host_tm.experts_scale,
-          verify_group_n, verify_group_k);
-    }
-    std::cerr << "[MoE bench double buffer verify] "
-              << (ok ? "\033[32mPASSED\033[0m" : "\033[31mFAILED\033[0m")
-              << std::endl;
-  }
-#endif
 
+  // This kernel took M as a scalar, so hand the reference the same M repeated.
+  std::vector<int> rows(num_experts, uniform_m);
+  run_verification<Config>(host_tm, rows.data(), num_experts, N, K, verify,
+                           "double buffer");
   return ms;
 }
 
 // GREEDY run (plain BF16 + all scaled paths). Handles both uniform and dynamic M
-// (Config::is_dynamic_m selects the kernel instantiation). if constexpr on
-// scale_kind selects the launch and verify branch.
+// (Config::is_dynamic_m selects the kernel instantiation); if constexpr on
+// scale_kind selects the launch.
 template <class Config>
 double moe_run_impl_greedy(const void *vendor_tm, int verify,
                            std::string *error) {
@@ -145,12 +158,6 @@ double moe_run_impl_greedy(const void *vendor_tm, int verify,
   // path needn't read it back from the device counts array.
   const int32_t uniform_m = num_experts > 0 ? M_per_expert[0] : 0;
 
-  sycl::queue Q = compat::get_default_queue();
-
-  const ElementInput *ptr_A = host_tm.scatter_tokens;
-  const ElementInput *ptr_B = host_tm.experts_weight;
-  ElementOutput      *ptr_D = host_tm.y;
-
   double ms;
   try {
     if constexpr (Config::scale_kind == ScaleKind::Plain) {
@@ -158,37 +165,16 @@ double moe_run_impl_greedy(const void *vendor_tm, int verify,
     } else {
       ms = cutlass::moe::moe_launch_timed_greedy_scaled<
           Config, ElementInput, ElementInput, ElementScaleStore, ElementOutput>(
-          ptr_A, ptr_B, host_tm.packed_scale_a, host_tm.packed_scale_b, ptr_D,
-          N, K, host_tm.experts_token_count_device, num_experts, uniform_m);
+          host_tm.scatter_tokens, host_tm.experts_weight,
+          host_tm.packed_scale_a, host_tm.packed_scale_b, host_tm.y, N, K,
+          host_tm.experts_token_count_device, num_experts, uniform_m);
     }
   } catch (std::exception const &e) {
     if (error) *error = e.what();
     return -1.0;
   }
-  #ifdef FULL_RUN_TIMING_AND_VERIFY
-  if (verify == kVerifyHost || verify == kVerifyDevice) {
-    VerificationHelper helper;
-    helper.parse(num_experts, M_per_expert, N, K);
-    bool ok = true;
-    if constexpr (Config::scale_kind == ScaleKind::Plain) {
-      ok = helper.verify(ptr_A, ptr_B, ptr_D);
-    } else {
-      constexpr bool kIsTensor  = (Config::scale_kind == ScaleKind::Tensor);
-      constexpr bool kBColMajor =
-          cute::is_same_v<typename Config::LayoutB, cutlass::layout::ColumnMajor>;
-      const int verify_group_n = kIsTensor ? N : Config::group_n;
-      const int verify_group_k = kIsTensor ? K : Config::group_k;
-      ok = helper.template verify_scaled<kIsTensor, kBColMajor,
-                                         typename Config::ElementScale>(
-          Q, ptr_A, ptr_B, ptr_D,
-          host_tm.per_token_scale, host_tm.experts_scale,
-          verify_group_n, verify_group_k);
-    }
-    std::cerr << "[MoE bench greedy verify] "
-              << (ok ? "\033[32mPASSED\033[0m" : "\033[31mFAILED\033[0m")
-              << std::endl;
-  }
-  #endif
+  run_verification<Config>(host_tm, M_per_expert, num_experts, N, K, verify,
+                           "greedy");
   return ms;
 }
 

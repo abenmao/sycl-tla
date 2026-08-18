@@ -49,8 +49,9 @@ enum VerifyKind { kVerifyNone = 0, kVerifyDevice = 1, kVerifyHost = 2 };
 // VendorTensorMapping<ElementA, float, ElementD> type-erased, with every device
 // buffer (A/B/D, packed scale surfaces, device copy of the per-expert counts)
 // already allocated and filled. Selects the best tile, optionally verifies, runs
-// one timed kernel, returns elapsed ms (-1.0 on failure, *error set). Allocates no
-// device memory itself.
+// one timed kernel, returns elapsed ms (-1.0 on failure, *error set). The launch
+// path allocates no device memory itself; --verify=device transiently allocates a
+// reference buffer (and FP32 A/B copies for scaled dtypes).
 //   dtype        : the .in line's first token (selects the tile candidate list)
 //   force_greedy : from the .in override_use_greedy_always flag; when true always
 //                  picks greedy (ignores the hardcoded DB set).

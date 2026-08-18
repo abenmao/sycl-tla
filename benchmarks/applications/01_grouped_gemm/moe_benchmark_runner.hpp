@@ -164,7 +164,9 @@ struct MoEBenchmarkOptions {
   // Benchmark iteration count (per .in line: --iterations=N). Defaults to the
   // ITERATIONS macro (1 for CRI, 100 otherwise).
   int iterations;
-  bool verify;
+  // Which reference to check the first iteration's output against, as a
+  // moe_bench::VerifyKind. Set from --verify=none|host|device (see parse()).
+  int verify_kind;
   std::string m_per_expert; // comma-separated per-expert M list
   std::string bm_name;
 /*
@@ -199,7 +201,8 @@ struct MoEBenchmarkOptions {
   MoEBenchmarkOptions()
       : error(false), n(2880), k(2880), num_experts(8),
         m(4096), topk(1), ep_size(1), iterations(ITERATIONS),
-        verify(false), m_per_expert(""), bm_name("MoEGEMM"),
+        verify_kind(moe_bench::kVerifyNone), m_per_expert(""),
+        bm_name("MoEGEMM"),
         hidden_size(0), new_hidden_size(0), num_experts_per_rank(0),
         override_number_experts(0), override_use_greedy_always(false), proj(""),
         experts_token_offset("") {
@@ -314,9 +317,25 @@ struct MoEBenchmarkOptions {
     cmd.get_cmd_line_argument("experts_token_offset", experts_token_offset,
                               std::string(""));
 
+    // --verify=none|host|device selects the reference. The legacy boolean/numeric
+    // spellings keep the reference they meant before this tri-state existed
+    // (0/false = none, 1/true = host); `device` is opt-in by name, because on the
+    // AubLoad simulator a naive reference GEMM is far slower than the host loop.
+    // An unrecognized value warns and falls back to none rather than guessing.
     std::string verify_str;
-    cmd.get_cmd_line_argument("verify", verify_str, std::string("false"));
-    verify = (verify_str == "true" || verify_str == "1");
+    cmd.get_cmd_line_argument("verify", verify_str, std::string("none"));
+    if (verify_str == "none" || verify_str == "false" || verify_str == "0") {
+      verify_kind = moe_bench::kVerifyNone;
+    } else if (verify_str == "device") {
+      verify_kind = moe_bench::kVerifyDevice;
+    } else if (verify_str == "host" || verify_str == "true" ||
+               verify_str == "1") {
+      verify_kind = moe_bench::kVerifyHost;
+    } else {
+      std::cerr << "Warning: unrecognized --verify=" << verify_str
+                << " (expected none|host|device); verification disabled.\n";
+      verify_kind = moe_bench::kVerifyNone;
+    }
 
     // Routing counts must be >= 1 so build_rows()'s divisions are defined.
     // Checked after num_experts_per_rank may have replaced num_experts. Note
@@ -578,9 +597,10 @@ struct MoEBenchmarkRunner {
     }
     const void *vtm_ptr = vtm_storage.data();
 
-    // verify only on the first iteration; all subsequent runs are timing-only.
-    int current_verify = options.verify ? moe_bench::kVerifyDevice : moe_bench::kVerifyNone;
-    
+    // verify only on the first iteration; all subsequent runs are timing-only,
+    // so the reference never enters the reported timings.
+    int current_verify = options.verify_kind;
+
     initialize_counters(state);
     for (auto _ : state) {
       std::string error;
