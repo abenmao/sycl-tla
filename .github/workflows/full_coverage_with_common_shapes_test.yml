@@ -20,10 +20,7 @@ env:
   SSH_OPTS: "-o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
   REMOTE_CPU_THRESHOLD: "32"
   REMOTE_RAM_THRESHOLD: "128"
-  # Remote build step timeout (min) + orphan-reap grace margin. Both the
-  # build-step timeout and the orphan-reap age derive from these, staying in
-  # sync. A clean compile takes ~30 min; 90 is ~3x headroom for contention.
-  # Reap age = timeout + grace = 105 min.
+
   BUILD_STEP_TIMEOUT_MIN: "120"
   ORPHAN_REAP_GRACE_MIN: "15"
 
@@ -38,14 +35,14 @@ jobs:
             platform: bmg
             intel_graphics: ROLLING
             sycl_target: intel_gpu_bmg_g21
-            remote_build_servers: "Hermes shliclel4165.sh.intel.com gta 224 224;Atlas a4bf018cf32e.jf.intel.com gta 1024 256;Atlas a4bf018cf32e.jf.intel.com gta 196 196"
+            remote_build_servers: "Atlas a4bf018cf32e.jf.intel.com gta 240 240;Hermes shliclel4165.sh.intel.com gta 240 240;Hyperion pvc125074.jf.intel.com gta 240 240"
             runner: [self-hosted, shanghai-bmg, Linux, X64]
           - compiler: RELEASE
             gpu: PVC
             platform: pvc
             intel_graphics: ROLLING
             sycl_target: intel_gpu_pvc
-            remote_build_servers: "Atlas a4bf018cf32e.jf.intel.com gta 450 450;Hyperion pvc125074.jf.intel.com gta 350 350"
+            remote_build_servers: "Hyperion pvc125074.jf.intel.com gta 240 240;Atlas a4bf018cf32e.jf.intel.com gta 240 240;Hermes shliclel4165.sh.intel.com gta 240 240"
             runner: [self-hosted, shanghai-pvc, Linux, X64]
 
     name: Full Coverage with Common Shapes Test on ${{ matrix.gpu }}
@@ -106,6 +103,8 @@ jobs:
       # ---- Local build (for runners with enough cores) ----
       - name: Local Build
         if: steps.build-strategy.outputs.use_remote != 'true' || (steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outcome != 'success' && steps.remote-build.outputs.failure_type != 'compile')
+        env:
+          BUILD_DISABLE_FLASH_ATTENTION: "1"
         shell: bash
         run: bash .github/scripts/pr_ci.sh local-build
 

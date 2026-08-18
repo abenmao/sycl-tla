@@ -15,7 +15,8 @@ concurrency:
 env:
   CI_BUILD_ID_TAG: "small"
   CI_CMAKE_EXTRA_FLAGS: ""
-  REMOTE_BUILD_SERVERS: "Atlas a4bf018cf32e.jf.intel.com gta 256 256"
+  # shliclel4165.sh.intel.com 500G   a4bf018cf32e.jf.intel.com  1.5t pvc125074.jf.intel.com 1t
+  REMOTE_BUILD_SERVERS: "Atlas a4bf018cf32e.jf.intel.com gta 240 240;Hermes shliclel4165.sh.intel.com gta 240 240;Hyperion pvc125074.jf.intel.com gta 240 240"
   LOCAL_BUILD_MEM_PCT: "100"
   REMOTE_NINJA_GB_PER_JOB: "10"
   REMOTE_HEAVY_GB_PER_JOB: "20"
@@ -88,6 +89,8 @@ jobs:
 
       - name: Local Build
         if: steps.build-strategy.outputs.use_remote != 'true' || (steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outcome != 'success' && steps.remote-build.outputs.failure_type != 'compile')
+        env:
+          BUILD_DISABLE_FLASH_ATTENTION: "1"
         shell: bash
         run: bash .github/scripts/pr_ci.sh local-build
 
