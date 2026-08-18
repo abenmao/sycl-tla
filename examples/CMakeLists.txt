@@ -125,7 +125,7 @@ if (CUTLASS_ENABLE_SYCL)
       09_bmg_grouped_gemm_f8/legacy
       10_bmg_grouped_gemm_mixed_dtype
       11_xe20_cutlass_library
-      12_xe20_moe_gemm_cute_interface
+      12_bmg_moe_gemm_cute_interface
       13_bmg_gemm_bias
       50_xe35_block_scaled_gemm
       51_xe35_block_scaled_grouped_gemm
@@ -135,7 +135,7 @@ if (CUTLASS_ENABLE_SYCL)
     # so build by default and gate PVC out rather than opting BMG in.
     if(NOT SYCL_TARGET_INTEL_GPU_PVC)
       list(APPEND XE_EXAMPLES
-        14_xe35_gdn_attention
+        52_xe35_gdn_attention
       )
     endif()
     foreach(EXAMPLE ${XE_EXAMPLES})

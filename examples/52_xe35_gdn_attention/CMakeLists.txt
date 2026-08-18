@@ -60,16 +60,16 @@ set(CUTLASS_APPLICATIONS_DIR ${CUTLASS_DIR}/applications)
 # instantiation, so changing the activation dtype requires a rebuild.
 #
 # Targets:
-#   14_xe35_gdn_attention_bfloat16   bf16 activations, fp32 state  (production default)
+#   52_xe35_gdn_attention_bfloat16   bf16 activations, fp32 state  (production default)
 # ---------------------------------------------------------------------------
 
 if(NOT "${DPCPP_HOST_COMPILER}" MATCHES "g\\+\\+")
   cutlass_example_add_executable(
-    14_xe35_gdn_attention_bfloat16
+    52_xe35_gdn_attention_bfloat16
     xe35_gdn_attention.cpp
     TEST_COMMAND_OPTIONS GDN_ARGS
   )
-  target_compile_definitions(14_xe35_gdn_attention_bfloat16 PRIVATE
+  target_compile_definitions(52_xe35_gdn_attention_bfloat16 PRIVATE
     HEAD_K_DIM=128
     HEAD_V_DIM=128
     ACT_TYPE=cutlass::bfloat16_t

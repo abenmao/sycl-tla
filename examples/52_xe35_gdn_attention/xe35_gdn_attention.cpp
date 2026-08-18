@@ -29,12 +29,12 @@
     across long sequences.  The activation dtype T (Q/K/V/O and dt_bias)
     is bfloat16_t.  One executable is produced:
 
-      14_xe35_gdn_attention_bfloat16 -- bf16 activations, fp32 SSM state
+      52_xe35_gdn_attention_bfloat16 -- bf16 activations, fp32 SSM state
 
     Build & run (from your build dir):
 
-      $ ninja 14_xe35_gdn_attention_bfloat16
-      $ ./examples/14_xe35_gdn_attention/14_xe35_gdn_attention_bfloat16 --help
+      $ ninja 52_xe35_gdn_attention_bfloat16
+      $ ./examples/52_xe35_gdn_attention/52_xe35_gdn_attention_bfloat16 --help
 */
 
 #include "xe35_gdn_attention_runner.hpp"

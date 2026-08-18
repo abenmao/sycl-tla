@@ -19,10 +19,13 @@ examples/
 ├── 00_bmg_gemm/                     # Intel GPU examples
 ├── 01_bmg_gemm_with_collective_builder/
 ├── ...
-├── 11_xe20_cutlass_library/
-├── 12_xe20_moe_gemm_cute_interface/
+├── 12_bmg_moe_gemm_cute_interface/
 ├── 13_bmg_gemm_bias/
-├── 14_xe35_gdn_attention/           # Chunkwise Gated DeltaNet attention
+├── ...
+├── 50_xe35_block_scaled_gemm/
+├── 51_xe35_block_scaled_grouped_gemm/
+├── 52_xe35_gdn_attention/           # Chunkwise Gated DeltaNet attention
+├── ...
 ├── cute/                            # CuTe tutorial examples
 │   └── tutorial/                    
 └── generics/                        # Device-agnostic SYCL examples
@@ -82,7 +85,7 @@ The following examples are optimized for Intel GPU architectures using SYCL:
 
     Builds a shared library exporting a BF16 GEMM on Intel Xe2 (BMG) for use from Python via ctypes
 
-* [12_xe20_moe_gemm_cute_interface](12_xe20_moe_gemm_cute_interface/)
+* [12_bmg_moe_gemm_cute_interface](12_bmg_moe_gemm_cute_interface/)
 
     Mixture-of-Experts (MoE) GEMM on Intel Xe2 (BMG) built on the CuTe Group GEMM interface
 
@@ -90,9 +93,17 @@ The following examples are optimized for Intel GPU architectures using SYCL:
 
     Examples for testing simple GEMM with bias addition on Intel PVC/BMG
 
-* [14_xe35_gdn_attention](14_xe35_gdn_attention/)
+* [50_xe35_block_scaled_gemm](50_xe35_block_scaled_gemm/)
 
-    Baseline Chunkwise Gated DeltaNet (GDN) attention forward pass on Intel Xe (CRI/BMG)
+    Block scaled GEMM on Intel CRI
+
+* [51_xe35_block_scaled_grouped_gemm](51_xe35_block_scaled_grouped_gemm/)
+
+    Block scaled groupped GEMM on Intel CRI
+
+* [52_xe35_gdn_attention](52_xe35_gdn_attention/)
+
+    Baseline Chunkwise Gated DeltaNet (GDN) attention forward pass on Intel CRI
 
 ## Device-Agnostic SYCL Examples
 
@@ -115,7 +126,7 @@ Examples leveraging CUTLASS's [Python interface](../python/README.md) are locate
 # Copyright
 
 Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved. \
-Copyright (C) 2025 Intel Corporation, All rights reserved.
+Copyright (C) 2025 - 2026 Intel Corporation, All rights reserved.
 SPDX-License-Identifier: BSD-3-Clause
 
 ```

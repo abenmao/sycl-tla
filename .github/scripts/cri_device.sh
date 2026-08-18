@@ -14,19 +14,19 @@ SIM_STARTUP_WAIT="${CRI_SIM_STARTUP_WAIT:-30}"
 SIM_MAX_RETRIES="${CRI_SIM_MAX_RETRIES:-2}"
 
 EXAMPLES_CTESTS=(
+    ctest_examples_cute_tutorial_tiled_copy
+    ctest_examples_cute_tutorial_bmg
     ctest_examples_03_bmg_gemm_streamk
     ctest_examples_04_bmg_grouped_gemm_test_groups_2
     ctest_examples_04_bmg_grouped_gemm_test_groups_4
     ctest_examples_05_bmg_gemm_with_epilogue_relu
     ctest_examples_06_xe_fmha_fwd_prefill_cached_kv_bfloat16_t_hdim64
-    ctest_examples_08_bmg_gemm_f8
-    ctest_examples_cute_tutorial_tiled_copy
-    ctest_examples_cute_tutorial_bmg
-    ctest_examples_50_xe35_block_scaled_gemm_e2m1
-    ctest_examples_51_xe35_block_scaled_grouped_gemm_e5m2
     ctest_examples_06_xe_fmha_fwd_decode_mx_float_e4m3_t_hdim64
     ctest_examples_06_xe_fmha_fwd_decode_mx_float_e2m1_t_hdim64
-    ctest_examples_14_xe35_gdn_attention_bfloat16
+    ctest_examples_08_bmg_gemm_f8
+    ctest_examples_50_xe35_block_scaled_gemm_e2m1
+    ctest_examples_51_xe35_block_scaled_grouped_gemm_e5m2
+    ctest_examples_52_xe35_gdn_attention_bfloat16
 )
 UT_CTESTS=(
     ctest_unit_flash_attention_decode_h128_xe
