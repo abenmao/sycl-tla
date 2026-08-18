@@ -385,16 +385,32 @@ prefetch_with_payloads(TiledCopy const& tiled_copy,
       const_cast<Xe2DPreparedPayloads<N>&>(prepared), idx);
 }
 
-template <int N>
+template <class TiledCopy, int N, class Coord>
 CUTE_DEVICE void
-update_payloads(Xe2DPreparedPayloads<N>& prepared, int32_t y_delta)
+update_payloads(TiledCopy const& tiled_copy, Xe2DPreparedPayloads<N>& prepared, Coord const& delta)
 {
+  auto const& base = detail::as_xe2d_base(tiled_copy);
+  (void) base;
+  using BaseT = remove_cvref_t<decltype(base)>;
+  using Op = typename BaseT::CopyOp;
+  static_assert(!BaseT::nontrivial_tiled_strides,
+                "Payload updates are only supported for modes handled by block 2D messages.");
 #ifdef __SYCL_DEVICE_ONLY__
+  auto dx = get<decltype(BaseT::get_x_mode())::value>(delta);
+  auto dy = get<decltype(BaseT::get_y_mode())::value>(delta);
   CUTE_UNROLL
   for (int i = 0; i < N; ++i) {
-    __builtin_IB_subgroup_addBlock2DAddressPayloadBlockY(prepared.payloads[i], y_delta);
+    if constexpr (!is_constant_v<0, decltype(dx)>) {
+      __builtin_IB_subgroup_addBlock2DAddressPayloadBlockX(
+          prepared.payloads[i], int32_t(dx) * BaseT::ValBits / Op::CopyBits);
+    }
+    if constexpr (!is_constant_v<0, decltype(dy)>) {
+      __builtin_IB_subgroup_addBlock2DAddressPayloadBlockY(prepared.payloads[i], int32_t(dy));
+    }
   }
 #else
+  (void) prepared;
+  (void) delta;
   CUTE_INVALID_CONTROL_PATH("Xe 2D multi-payload copies are only available on SYCL device.");
 #endif
 }

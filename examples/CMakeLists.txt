@@ -127,6 +127,7 @@ if (CUTLASS_ENABLE_SYCL)
       11_xe20_cutlass_library
       12_bmg_moe_gemm_cute_interface
       13_bmg_gemm_bias
+      14_bmg_gemm_multi_payloads
       50_xe35_block_scaled_gemm
       51_xe35_block_scaled_grouped_gemm
       )

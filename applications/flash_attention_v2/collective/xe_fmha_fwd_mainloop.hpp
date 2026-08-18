@@ -489,6 +489,9 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     std::array<PreparedK_t, DTiles> prepared_k;
     std::array<PreparedV_t, VTiles> prepared_v;
 
+    auto k_seq_delta = [](auto n) { return make_coord(n, _0{}); };
+    auto v_seq_delta = [](auto n) { return make_coord(_0{}, n); };
+
     int kblocks_cache = ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{}));
 
     /* Preload + reorder Q once; reused across all K iterations. */
@@ -540,15 +543,15 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       const int k_start_delta = k_start * kv_stride;
       CUTLASS_PRAGMA_UNROLL
       for (int d = 0; d < DTiles; d++) {
-        update_payloads(prepared_k[d], k_start_delta);
+        update_payloads(copy_k, prepared_k[d], k_seq_delta(k_start_delta));
       }
       CUTLASS_PRAGMA_UNROLL
       for (int VV = 0; VV < VTiles; VV++) {
-        update_payloads(prepared_v[VV], k_start_delta);
+        update_payloads(copy_v, prepared_v[VV], v_seq_delta(k_start_delta));
       }
       if (subgroup_id < RegularKVPrefetchSGs) {
-        update_payloads(prepared_pk, k_start_delta);
-        update_payloads(prepared_pv, k_start_delta);
+        update_payloads(prefetch_k, prepared_pk, k_seq_delta(k_start_delta));
+        update_payloads(prefetch_v, prepared_pv, v_seq_delta(k_start_delta));
       }
     }
     if constexpr (!DisableKVPrefetch) {
@@ -556,13 +559,13 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         CUTLASS_PRAGMA_UNROLL
         for (int K = 0; K < Stages; K++) {
           prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
-          update_payloads(prepared_pk, kv_stride);
+          update_payloads(prefetch_k, prepared_pk, k_seq_delta(kv_stride));
         }
         if constexpr (!DisableVPrefetch) {
           CUTLASS_PRAGMA_UNROLL
           for (int K = 0; K < Stages; K++) {
             prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
-            update_payloads(prepared_pv, kv_stride);
+            update_payloads(prefetch_v, prepared_pv, v_seq_delta(kv_stride));
           }
         }
       }
@@ -693,7 +696,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       if constexpr (!is_cache && !DisableKVPrefetch && !DisableVPrefetch) {
         if (subgroup_id < RegularKVPrefetchSGs) {
           prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
-          update_payloads(prepared_pv, kv_stride);
+          update_payloads(prefetch_v, prepared_pv, v_seq_delta(kv_stride));
         }
       }
       /* GEMM 1: S = K * Q */
@@ -704,7 +707,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
         } else {
           copy_with_multi_payloads(copy_k, prepared_k[D], tKrK);
-          update_payloads(prepared_k[D], kv_stride);
+          update_payloads(copy_k, prepared_k[D], k_seq_delta(kv_stride));
         }
 
         reorder(tKrK, tSrK);
@@ -827,7 +830,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       } else if constexpr (!DisableKVPrefetch) {
         if (subgroup_id < RegularKVPrefetchSGs) {
           prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
-          update_payloads(prepared_pk, kv_stride);
+          update_payloads(prefetch_k, prepared_pk, k_seq_delta(kv_stride));
         }
       }
       // Prefetch V scale
@@ -920,7 +923,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
         } else {
           copy_with_multi_payloads(copy_v, prepared_v[VV], tVrV);
-          update_payloads(prepared_v[VV], kv_stride);
+          update_payloads(copy_v, prepared_v[VV], v_seq_delta(kv_stride));
         }
         reorder(tVrV, tArV);
 
@@ -1035,10 +1038,10 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 #endif
         if (subgroup_id < RegularKVPrefetchSGs) {
           prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
-          update_payloads(prepared_pk, kv_stride);
+          update_payloads(prefetch_k, prepared_pk, k_seq_delta(kv_stride));
           if constexpr (!DisableVPrefetch) {
             prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
-            update_payloads(prepared_pv, kv_stride);
+            update_payloads(prefetch_v, prepared_pv, v_seq_delta(kv_stride));
           }
         }
 #if not defined(CUTLASS_TEST_FOR_CRI)        
