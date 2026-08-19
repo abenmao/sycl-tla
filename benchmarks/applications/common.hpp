@@ -122,7 +122,9 @@ namespace benchmark {
       auto& benchs = get_instance().benchmarks;
       auto it = benchs.find(name);
       if (it == benchs.end()) {
-        throw std::runtime_error("Benchmark not found");
+        std::stringstream message;
+        message << "Benchmark not found: " << name;
+        throw std::runtime_error(message.str());
       }
       return it->second;
     }
