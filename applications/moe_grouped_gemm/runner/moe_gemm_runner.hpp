@@ -489,8 +489,7 @@ auto choose_tiled_mma(TA *A, TB *B) {
   using TB_non_CV = cutlass::platform::remove_cv_t<TB>;
 
   // Subgroup tiling, n-major, per hardware target. Per-SG N (BLK_N/SG_N) must
-  // stay >= the GroupN scale-broadcast width in the block-scale mainloop, else
-  // the broadcast breaks (e.g. 4x8 layout -> per-SG N=16).
+  // stay >= the GroupN scale-broadcast width, else the broadcast breaks.
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
   using DefaultSGLayout = Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>;
 #else
@@ -515,16 +514,15 @@ auto choose_tiled_mma(TA *A, TB *B) {
 }
 
 // Unique sycl kernel name. Trailing Config is required: A/B/D + layouts +
-// TileShape aren't unique alone — configs can share them yet differ in scaling
-// (fp8-tensor vs mxfp8-e4m3 are both e4m3->bf16 at 256x256x64), and one binary
-// compiles more than one config.
+// TileShape aren't unique alone (e.g. fp8-tensor and mxfp8-e4m3 share them but
+// differ in scaling), and one binary compiles more than one config.
 template <typename, typename, typename, typename, typename, typename, typename>
 class GemmCuteName;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // GREEDY launch (plain bf16). Per-expert tile size chosen ON-DEVICE by the
-// greedy split; LARGE/SMALL/TINY variants share one WG thread count so a single
-// nd_range hosts all three. Grid = sm_count persistent workgroups.
+// greedy split; all tile variants share one WG thread count so a single nd_range
+// hosts them. Grid = sm_count persistent workgroups.
 // Config::is_dynamic_m selects uniform-M vs dynamic-M instantiation.
 template <class Config, typename ElementA, typename ElementScaleIn, typename ElementD>
 double moe_launch_timed_greedy(
@@ -533,20 +531,32 @@ double moe_launch_timed_greedy(
   using LayoutB = typename Config::LayoutB;
   using LayoutD = typename Config::LayoutD;
   using SubgroupLayout = typename Config::SGLayout;
-  using LargeTile = typename Config::LargeTile;
-  using SmallTile = typename Config::SmallTile;
-  using TinyTile  = typename Config::TinyTile;
+  using LargeBucketTile = typename Config::LargeBucketTile;
+  using SmallBucketTile = typename Config::SmallBucketTile;
+  using TinyExpertLargeBucketTile  = typename Config::TinyExpertLargeBucketTile;
+  using TinyExpertMediumBucketTile = typename Config::TinyExpertMediumBucketTile;
+  using TinyExpertSmallBucketTile  = typename Config::TinyExpertSmallBucketTile;
+  using TinyExpertTinyBucketTile   = typename Config::TinyExpertTinyBucketTile;
   using TinySGLayout = typename Config::TinySGLayout;
 
   using DpasOp = XE_DPAS_TT<8, float, ElementA, ElementA>;
   using MmaLarge = typename TiledMMAHelper<
-      MMA_Atom<DpasOp>, Layout<LargeTile>, SubgroupLayout>::TiledMMA;
+      MMA_Atom<DpasOp>, Layout<LargeBucketTile>, SubgroupLayout>::TiledMMA;
   using MmaSmall = typename TiledMMAHelper<
-      MMA_Atom<DpasOp>, Layout<SmallTile>, SubgroupLayout>::TiledMMA;
-  using MmaTiny = typename TiledMMAHelper<
-      MMA_Atom<DpasOp>, Layout<TinyTile>, TinySGLayout>::TiledMMA;
+      MMA_Atom<DpasOp>, Layout<SmallBucketTile>, SubgroupLayout>::TiledMMA;
+  using MmaTinyExpertLarge = typename TiledMMAHelper<
+      MMA_Atom<DpasOp>, Layout<TinyExpertLargeBucketTile>, TinySGLayout>::TiledMMA;
+  using MmaTinyExpertMedium = typename TiledMMAHelper<
+      MMA_Atom<DpasOp>, Layout<TinyExpertMediumBucketTile>, TinySGLayout>::TiledMMA;
+  using MmaTinyExpertSmall = typename TiledMMAHelper<
+      MMA_Atom<DpasOp>, Layout<TinyExpertSmallBucketTile>, TinySGLayout>::TiledMMA;
+  using MmaTinyExpertTiny = typename TiledMMAHelper<
+      MMA_Atom<DpasOp>, Layout<TinyExpertTinyBucketTile>, TinySGLayout>::TiledMMA;
   static_assert(size(MmaLarge{}) == size(MmaSmall{}) &&
-                size(MmaLarge{}) == size(MmaTiny{}),
+                size(MmaLarge{}) == size(MmaTinyExpertLarge{}) &&
+                size(MmaLarge{}) == size(MmaTinyExpertMedium{}) &&
+                size(MmaLarge{}) == size(MmaTinyExpertSmall{}) &&
+                size(MmaLarge{}) == size(MmaTinyExpertTiny{}),
                 "greedy tile variants must share one workgroup thread count");
 
   const ElementA *activations = tm.scatter_tokens;
@@ -554,8 +564,8 @@ double moe_launch_timed_greedy(
   ElementD       *outputs     = tm.y;
   const int32_t *num_rows_per_expert_device = tm.experts_token_count_device;
   const int gemm_n = tm.N, gemm_k = tm.K, num_experts = tm.num_experts;
-  // Uniform per-expert M, computed host-side and passed as a scalar so the
-  // uniform-M kernel path needn't read it back from the device counts array.
+  // Uniform per-expert M as a host-computed scalar, so the uniform-M path
+  // needn't read it back from the device counts array.
   const int32_t uniform_m =
       (num_experts > 0 && tm.experts_token_count) ? tm.experts_token_count[0] : 0;
 
@@ -581,11 +591,13 @@ double moe_launch_timed_greedy(
   GPU_Clock timer;
   timer.start();
   auto event = Q.parallel_for<
-      GemmCuteName<ElementA, ElementA, ElementD, LayoutA, LayoutB, LargeTile, Config>>(
+      GemmCuteName<ElementA, ElementA, ElementD, LayoutA, LayoutB, LargeBucketTile, Config>>(
       sycl::nd_range<3>(global_range, local_range), kernel_props, [=](auto) {
         MoE::MoEGEMMGreedy<Config::is_dynamic_m, void, void, void,
                            LayoutA, LayoutB, LayoutD,
-                           MmaLarge, MmaSmall, MmaTiny>(
+                           MmaLarge, MmaSmall,
+                           MmaTinyExpertLarge, MmaTinyExpertMedium,
+                           MmaTinyExpertSmall, MmaTinyExpertTiny>(
             activations, weights, outputs, num_rows_per_expert_device,
             num_experts, gemm_n, gemm_k, uniform_m);
       });
@@ -610,20 +622,32 @@ double moe_launch_timed_greedy_scaled(
   using LayoutB = typename Config::LayoutB;
   using LayoutD = typename Config::LayoutD;
   using SubgroupLayout = typename Config::SGLayout;
-  using LargeTile = typename Config::LargeTile;
-  using SmallTile = typename Config::SmallTile;
-  using TinyTile  = typename Config::TinyTile;
+  using LargeBucketTile = typename Config::LargeBucketTile;
+  using SmallBucketTile = typename Config::SmallBucketTile;
+  using TinyExpertLargeBucketTile  = typename Config::TinyExpertLargeBucketTile;
+  using TinyExpertMediumBucketTile = typename Config::TinyExpertMediumBucketTile;
+  using TinyExpertSmallBucketTile  = typename Config::TinyExpertSmallBucketTile;
+  using TinyExpertTinyBucketTile   = typename Config::TinyExpertTinyBucketTile;
   using TinySGLayout = typename Config::TinySGLayout;
 
   using DpasOp = XE_BDPAS_TT<8, float, cutlass::platform::remove_cv_t<ElementA>>;
   using MmaLarge = typename TiledMMAHelper<
-      MMA_Atom<DpasOp>, Layout<LargeTile>, SubgroupLayout>::TiledMMA;
+      MMA_Atom<DpasOp>, Layout<LargeBucketTile>, SubgroupLayout>::TiledMMA;
   using MmaSmall = typename TiledMMAHelper<
-      MMA_Atom<DpasOp>, Layout<SmallTile>, SubgroupLayout>::TiledMMA;
-  using MmaTiny = typename TiledMMAHelper<
-      MMA_Atom<DpasOp>, Layout<TinyTile>, TinySGLayout>::TiledMMA;
+      MMA_Atom<DpasOp>, Layout<SmallBucketTile>, SubgroupLayout>::TiledMMA;
+  using MmaTinyExpertLarge = typename TiledMMAHelper<
+      MMA_Atom<DpasOp>, Layout<TinyExpertLargeBucketTile>, TinySGLayout>::TiledMMA;
+  using MmaTinyExpertMedium = typename TiledMMAHelper<
+      MMA_Atom<DpasOp>, Layout<TinyExpertMediumBucketTile>, TinySGLayout>::TiledMMA;
+  using MmaTinyExpertSmall = typename TiledMMAHelper<
+      MMA_Atom<DpasOp>, Layout<TinyExpertSmallBucketTile>, TinySGLayout>::TiledMMA;
+  using MmaTinyExpertTiny = typename TiledMMAHelper<
+      MMA_Atom<DpasOp>, Layout<TinyExpertTinyBucketTile>, TinySGLayout>::TiledMMA;
   static_assert(size(MmaLarge{}) == size(MmaSmall{}) &&
-                size(MmaLarge{}) == size(MmaTiny{}),
+                size(MmaLarge{}) == size(MmaTinyExpertLarge{}) &&
+                size(MmaLarge{}) == size(MmaTinyExpertMedium{}) &&
+                size(MmaLarge{}) == size(MmaTinyExpertSmall{}) &&
+                size(MmaLarge{}) == size(MmaTinyExpertTiny{}),
                 "greedy tile variants must share one workgroup thread count");
 
   int sm_count =
@@ -648,12 +672,14 @@ double moe_launch_timed_greedy_scaled(
   GPU_Clock timer;
   timer.start();
   auto event = Q.parallel_for<
-      GemmCuteName<ElementA, ElementB, ElementD, LayoutA, LayoutB, LargeTile, Config>>(
+      GemmCuteName<ElementA, ElementB, ElementD, LayoutA, LayoutB, LargeBucketTile, Config>>(
       sycl::nd_range<3>(global_range, local_range), kernel_props, [=](auto) {
         MoE::MoEGEMMGreedyScaled<Config::is_dynamic_m, void, void, void,
                                  LayoutA, LayoutB, LayoutD,
                                  Config::group_n, Config::group_k,
-                                 MmaLarge, MmaSmall, MmaTiny,
+                                 MmaLarge, MmaSmall,
+                                 MmaTinyExpertLarge, MmaTinyExpertMedium,
+                                 MmaTinyExpertSmall, MmaTinyExpertTiny,
                                  ElementA, ElementB, ElementS, ElementD>(
             activations, weights, scalesA, scalesB, outputs,
             num_rows_per_expert_device, num_experts, gemm_n, gemm_k,
@@ -720,9 +746,6 @@ bool moe_verify_output(
 using SG_8x4 = Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>;
 using SG_8x2 = Layout<Shape<_8, _2, _1>, Stride<_2, _1, _0>>;
 // SG_4x8 comes from moe_types.hpp (greedy configs); do not redefine here.
-// (Single-buffer LowpConfigSG / Bf16ConfigSG / MxFp4ConfigSG removed: greedy
-//  replaced that path. The double-buffer *DoubleBufferConfigSG templates below
-//  are still used.)
 
 using MoeTile_256_256_32 = Shape<_256, _256, _32>;
 using MoeTile_256_256_64 = Shape<_256, _256, _64>;
@@ -738,8 +761,6 @@ using MoeTile_224_256_64  = Shape<cute::Int<224>, _256, _64>;
 using MoeTile_224_256_128 = Shape<cute::Int<224>, _256, _128>;
 using MoeTile_288_256_64  = Shape<cute::Int<288>, _256, _64>;
 using MoeTile_288_256_128 = Shape<cute::Int<288>, _256, _128>;
-
-// (Single-buffer SG-sweep configs removed: greedy replaced that path.)
 
 using MoeTile_192_256_32 = Shape<cute::Int<192>, cute::Int<256>, cute::Int<32>>;
 using MoeTile_192_384_32 = Shape<cute::Int<192>, cute::Int<384>, cute::Int<32>>;
@@ -768,9 +789,8 @@ struct Bf16DoubleBufferConfigSG {
   static constexpr bool uniform_m = true;
 };
 
-// Uniform-M launch from the client's mapping. uniform_m is the one argument not
-// taken from it: the mapping holds per-expert counts, and collapsing them to a
-// single M is the client's call (see MoEBenchmarkRunner::run).
+// Uniform-M launch from the client's mapping. uniform_m is passed separately:
+// collapsing the mapping's per-expert counts to one M is the client's call.
 template <class Config, typename ElementA, typename ElementScaleIn,
           typename ElementD>
 double moe_launch_timed_double_buffer(
@@ -858,9 +878,8 @@ using Bf16DoubleBuffer_224_256_32 = Bf16DoubleBufferConfigSG<MoeTile_224_256_32,
 using Bf16DoubleBuffer_256_256_32 = Bf16DoubleBufferConfigSG<MoeTile_256_256_32, SG_8x4>;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-// Scaled uniform-M double-buffer configs + launcher.
-// Mirrors LowpConfigSG but adds uniform_m = true so benchmark wiring can
-// distinguish it from the variable-M path.
+// Scaled uniform-M double-buffer configs + launcher. uniform_m = true lets the
+// benchmark wiring distinguish it from the variable-M path.
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <class TElement, class TScale, int GroupK, int GroupN, ScaleKind Kind,
@@ -897,8 +916,8 @@ struct MxFp4ScaledDoubleBufferConfigSG
 };
 
 // Scaled uniform-M launch from the client's mapping; uniform_m as above. Scale
-// block sizes come from the Config, so runtime values can't disagree with the
-// template arguments the kernel is instantiated with.
+// block sizes come from the Config, so they can't disagree with the kernel's
+// template arguments.
 template <class Config, typename ElementA, typename ElementScaleIn,
           typename ElementD>
 double moe_launch_timed_double_buffer_scaled(
@@ -1004,7 +1023,6 @@ using MoeTile_224_512_32 = Shape<cute::Int<224>, cute::Int<512>, cute::Int<32>>;
 using MoeTile_320_384_32 = Shape<cute::Int<320>, cute::Int<384>, cute::Int<32>>;
 using MoeTile_384_256_32 = Shape<cute::Int<384>, cute::Int<256>, cute::Int<32>>;
 using MoeTile_384_320_32 = Shape<cute::Int<384>, cute::Int<320>, cute::Int<32>>;
-// (Single-buffer SG-sweep configs removed: greedy replaced that path.)
 using Fp8TensorDoubleBuffer_192_256_64 = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_192_256_64, SG_4x8>;
 using MxFp8DoubleBuffer_192_256_64 = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_192_256_64, SG_4x8>;
 using Fp8TensorDoubleBuffer_192_384_64 = ScaledDoubleBufferConfigSG<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_192_384_64, SG_4x8>;

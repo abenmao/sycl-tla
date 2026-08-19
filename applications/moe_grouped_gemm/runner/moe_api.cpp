@@ -181,7 +181,7 @@ double moe_run_impl_greedy(const void *vendor_tm, int verify,
 // Tile registration. Each X() entry generates a per-tile run function bound to
 // its exact Config, registered with its geometry + KernelKind; launch_moe() calls
 // it via chosen.run() (the Config can't be named from the dtype string alone).
-// GREEDY tile — geometry from LargeTile (the greedy peel tile).
+// GREEDY tile — geometry from the large_bucket tile (the greedy peel tile).
 #define MOE_REGISTER_TILE_GREEDY(DTYPE, NAME, CONFIG)                          \
   static double moe_run_##NAME(const void *vendor_tm, int v,                   \
                                std::string *e) {                               \
@@ -190,9 +190,9 @@ double moe_run_impl_greedy(const void *vendor_tm, int verify,
   static const bool moe_reg_##NAME = (cutlass::moe::moe_register_tile(          \
       #DTYPE,                                                                  \
       cutlass::moe::TileGeom{                                                   \
-          static_cast<int>(cute::get<0>(CONFIG::LargeTile{})),                 \
-          static_cast<int>(cute::get<1>(CONFIG::LargeTile{})),                 \
-          static_cast<int>(cute::get<2>(CONFIG::LargeTile{})), #NAME,          \
+          static_cast<int>(cute::get<0>(CONFIG::LargeBucketTile{})),           \
+          static_cast<int>(cute::get<1>(CONFIG::LargeBucketTile{})),           \
+          static_cast<int>(cute::get<2>(CONFIG::LargeBucketTile{})), #NAME,    \
           /*is_db=*/false, /*is_dynamic_m=*/CONFIG::is_dynamic_m},             \
       cutlass::moe::KernelKind::Greedy,                                         \
       &moe_run_##NAME), true);

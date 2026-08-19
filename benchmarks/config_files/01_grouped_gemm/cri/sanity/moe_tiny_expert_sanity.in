@@ -1,0 +1,36 @@
+# MoE greedy TINY-EXPERT sanity. Exercises the greedy tiny-expert schedule
+# (M <= kTinyExpertMax=128), which moe_sanity.in does NOT cover (all its M >= 200).
+#
+# Tiny-expert split (see kernel/xe_moe_gemm_greedy.hpp, greedy_m_tiles):
+#   n_tiny = floor(M/32) TINY(32) tiles, then ceil((M%32)/8) TINY_TINY(8) tiles.
+# Every line: iterations=1, verify=true.
+#
+#   M=8   -> 0xTINY + 1xTT(8)              (exact TT bucket, 0 pad)
+#   M=12  -> 0xTINY + 2xTT(8)  -> pad 16   (TT-only, with padding)
+#   M=32  -> 1xTINY(32)                    (exact TINY boundary)
+#   M=40  -> 1xTINY + 1xTT(8)              (TINY + TT mix)
+#   M=100 -> 3xTINY + 1xTT(8)  -> pad 104  (multi-TINY + TT tail)
+#   M=128 -> 4xTINY(32)                    (exact tiny/normal boundary, still tiny)
+
+# --- (A) UNIFORM tiny M, one value per config (4 experts each) ---
+fp8_tensor_moe --bm_name=moe_fp8_tensor_tiny_uniform8   --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=8,8,8,8         --iterations=1 --verify=true
+bf16_moe       --bm_name=moe_bf16_tiny_uniform8         --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=8,8,8,8         --iterations=1 --verify=true
+mxfp8_e4m3_moe --bm_name=moe_mxfp8_tiny_uniform8        --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=8,8,8,8         --iterations=1 --verify=true
+mxfp4_moe      --bm_name=moe_mxfp4_tiny_uniform8        --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=8,8,8,8         --iterations=1 --verify=true
+
+fp8_tensor_moe --bm_name=moe_fp8_tensor_tiny_uniform12  --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=12,12,12,12     --iterations=1 --verify=true
+bf16_moe       --bm_name=moe_bf16_tiny_uniform12        --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=12,12,12,12     --iterations=1 --verify=true
+mxfp8_e4m3_moe --bm_name=moe_mxfp8_tiny_uniform12       --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=12,12,12,12     --iterations=1 --verify=true
+mxfp4_moe      --bm_name=moe_mxfp4_tiny_uniform12       --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=12,12,12,12     --iterations=1 --verify=true
+
+fp8_tensor_moe --bm_name=moe_fp8_tensor_tiny_uniform128 --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=128,128,128,128 --iterations=1 --verify=true
+bf16_moe       --bm_name=moe_bf16_tiny_uniform128       --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=128,128,128,128 --iterations=1 --verify=true
+mxfp8_e4m3_moe --bm_name=moe_mxfp8_tiny_uniform128      --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=128,128,128,128 --iterations=1 --verify=true
+mxfp4_moe      --bm_name=moe_mxfp4_tiny_uniform128      --n=1536 --k=512 --num_experts=4 --m=0 --m_per_expert=128,128,128,128 --iterations=1 --verify=true
+
+# --- (B) DYNAMIC M, mixed tiny sizes (forward-scan path, incl. M=1 min) ---
+#         Covers 8/32/40/100/128 + the M=1 single-TT edge in one scan.
+fp8_tensor_moe --bm_name=moe_fp8_tensor_tiny_dynamic --n=1536 --k=512 --num_experts=6 --m=0 --m_per_expert=1,8,32,40,100,128 --iterations=1 --verify=true
+bf16_moe       --bm_name=moe_bf16_tiny_dynamic       --n=1536 --k=512 --num_experts=6 --m=0 --m_per_expert=1,8,32,40,100,128 --iterations=1 --verify=true
+mxfp8_e4m3_moe --bm_name=moe_mxfp8_tiny_dynamic      --n=1536 --k=512 --num_experts=6 --m=0 --m_per_expert=1,8,32,40,100,128 --iterations=1 --verify=true
+mxfp4_moe      --bm_name=moe_mxfp4_tiny_dynamic      --n=1536 --k=512 --num_experts=6 --m=0 --m_per_expert=1,8,32,40,100,128 --iterations=1 --verify=true

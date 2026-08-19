@@ -1,0 +1,8 @@
+# mxfp8_e4m3 grouped-GEMM, 3 shapes copied verbatim from all_src.in (bm_src2).
+# Matches the Excel result rows: experts_per_device=8, m_per_expert=24/48/32.
+#   experts_per_device = num_experts / ep_size
+#   m_per_expert       = num_of_tokens * topk / num_experts   (floored, >= 1)
+#   greedy_waves       = ceil(total_greedy_tiles / 32)        (32 XeCores)
+mxfp8_e4m3_moe --bm_name=bm_src2 --ep_size=16 --num_experts=128 --topk=8 --hidden_size=2048 --new_hidden_size=4096 --num_of_tokens=512 --verify=true --iterations=1  # -> experts_per_device=8, m_per_expert=32, greedy_waves=2 best tflops 56, we measured 68 on xesim with fix, 67 with one tile per
+mxfp8_e4m3_moe --bm_name=bm_src2 --ep_size=16 --num_experts=128 --topk=8 --hidden_size=2048 --new_hidden_size=4096 --num_of_tokens=384 --verify=true --iterations=1  # -> experts_per_device=8, m_per_expert=24, greedy_waves=6 best tflops 43,  best tflops 15 measured on xesim with fix, best tflops 51 using 32 tile, i guess same with 1 tile per
+mxfp8_e4m3_moe --bm_name=bm_src2 --ep_size=16 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=2048 --num_of_tokens=768 --verify=true --iterations=1  # -> experts_per_device=8, m_per_expert=48, greedy_waves=3 best tflops 75, best tflops 31 measured, got 98 with only 32 bucket, got 100 with 1 tile per

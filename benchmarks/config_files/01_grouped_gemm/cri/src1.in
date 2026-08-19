@@ -1,208 +1,211 @@
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=host
-bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=host
-fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=host
-mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=host
-mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=host
+# Derived quantities in the per-line "# ->" comments:
+#   experts_per_device = num_experts / ep_size
+#   m_per_expert       = num_of_tokens * topk / num_experts   (floored, >= 1)
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=4
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=12
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=24
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=56
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=64
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=112
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=256
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=320
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=640
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=2048
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=4
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=12
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=24
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=56
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=64
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=112
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=256
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=320
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=640
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=2048
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=4
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=12
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=24
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=56
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=64
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=112
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=256
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=320
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=640
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=2048
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=4
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=12
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=24
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=56
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=64
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=112
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=256
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=320
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=640
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=2048
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=4
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=12
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=24
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=56
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=64
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=112
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=256
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=320
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=640
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=2048
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=4
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=12
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=24
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=56
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=64
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=112
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=256
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=320
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=640
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=2048
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=4
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=12
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=24
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=56
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=64
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=112
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=256
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=320
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=640
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=2048
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=4
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=12
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=24
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=56
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=64
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=112
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=256
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=320
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=640
+bf16_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=2048
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=4
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=12
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=24
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=56
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=64
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=112
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=256
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=320
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=640
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=2048
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=4
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=12
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=24
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=56
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=64
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=112
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=256
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=320
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=640
+bf16_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=2048
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=4
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=12
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=24
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=56
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=64
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=112
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=256
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=320
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=640
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=2048
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=4
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=12
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=24
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=56
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=64
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=112
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=256
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=320
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=640
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=2048
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+fp8_tensor_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=4
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=12
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=24
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=56
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=64
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=112
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=256
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=320
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=640
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=2048
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=4
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=12
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=24
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=56
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=64
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=112
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=256
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=320
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=640
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=2048
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+mxfp8_e4m3_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=4
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=12
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=24
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=56
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=64
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=112
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=256
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=320
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=640
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=2048
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+mxfp4_moe --bm_name=bm_src1 --ep_size=4 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=32, m_per_expert=1
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=16 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=64 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=4
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=192 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=12
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=384 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=24
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=896 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=56
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1024 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=64
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=1792 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=112
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=4096 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=256
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=5120 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=320
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=10240 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=640
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=4096 --new_hidden_size=3072 --num_of_tokens=32768 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=2048
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=1 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
+mxfp4_moe --bm_name=bm_src1 --ep_size=8 --num_experts=128 --topk=8 --hidden_size=1536 --new_hidden_size=4096 --num_of_tokens=4 --verify=false --iterations=5  # -> experts_per_device=16, m_per_expert=1
