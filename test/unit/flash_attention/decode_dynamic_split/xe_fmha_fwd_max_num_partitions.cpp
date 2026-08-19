@@ -30,86 +30,53 @@
  **************************************************************************************************/
 
 /*! \file
-    \brief Host-side regression tests for compute_max_num_partitions().
-
-    The persistent decode split-K kernel (XeFMHAFwdDynamicSplitKernel) reserves
-    `max_num_partitions` partial-result slots per batch_head in its workspace.
-    This value used to be a hardcoded `static const int = 8`, which overflows on
-    large GPUs (e.g. PVC) when num_batch_heads is small, causing out-of-bounds
-    workspace writes. It is now computed dynamically from sm_count and
-    num_batch_heads. These tests guard that computation so the dynamic-partition
-    path cannot silently regress back to a too-small constant.
+    \brief Host-side regression tests for uniform Dynamic FMHA partitioning.
 */
 
 #include "cutlass_unit_test.h"
 
-#include "cutlass/util/packed_stride.hpp"
-#include "flash_attention_v2/kernel/xe_fmha_fwd_kernel.hpp"
+#include "flash_attention_v2/kernel/xe_tile_scheduler.hpp"
 
-using cutlass::fmha::kernel::compute_max_num_partitions;
+using cutlass::fmha::kernel::fmha_dynamic_num_partitions;
 
-// The old, buggy hardcoded value this change replaced.
-static constexpr int kOldStaticMaxNumPartitions = 8;
+TEST(XE_FMHA_Fwd_DynamicPartitions, RepresentativeShapes) {
+  EXPECT_EQ(fmha_dynamic_num_partitions(56, 4, 64, 128), 13);
+  EXPECT_EQ(fmha_dynamic_num_partitions(64, 4, 64, 128), 16);
+  EXPECT_EQ(fmha_dynamic_num_partitions(20, 4, 64, 128), 5);
 
-// Formula under test: ceil_div(sm_count, max(1, num_batch_heads)) + 1.
-// The +1 accounts for WG split boundaries not aligning to batch_head
-// boundaries (a batch_head's KV blocks can span two WG allocation regions).
-
-TEST(XE_FMHA_Fwd_MaxNumPartitions, PvcMax1550_OverflowsOldStaticBound) {
-  // PVC Max 1550, single stack. CUTLASS sm_count comes from
-  // gpu_slices * gpu_subslices_per_slice (an Xe-core / "subslice" count),
-  // NOT max_compute_units (the EU count). A fully-enabled stack exposes 64
-  // subslices; fused parts expose 56 (the value measured on our test card:
-  // slices=1, subslices_per_slice=56). Both overflow the old static bound.
-  // Using the measured 56 here with batch=1, num_heads_q=4:
-  // ceil_div(56, 4) + 1 = 14 + 1 = 15.
-  int const sm_count = 56;
-  int const num_batch_heads = 1 * 4;
-  int const max_parts = compute_max_num_partitions(sm_count, num_batch_heads);
-
-  EXPECT_EQ(max_parts, 15);
-  // This is exactly the bug: the old static bound of 8 is too small.
-  EXPECT_GT(max_parts, kOldStaticMaxNumPartitions);
-
-  // A fully-enabled (non-fused) PVC stack exposes 64 subslices:
-  // ceil_div(64, 4) + 1 = 16 + 1 = 17. Still overflows the old static 8.
-  EXPECT_EQ(compute_max_num_partitions(64, 4), 17);
-  EXPECT_GT(compute_max_num_partitions(64, 4), kOldStaticMaxNumPartitions);
+  EXPECT_EQ(fmha_dynamic_num_partitions(128, 1, 1024, 32), 32);
+  EXPECT_EQ(fmha_dynamic_num_partitions(128, 1, 7, 128), 7);
+  EXPECT_EQ(fmha_dynamic_num_partitions(8, 16, 64, 128), 1);
 }
 
-TEST(XE_FMHA_Fwd_MaxNumPartitions, BmgB580_SmallerThanPvc) {
-  // BMG Arc B580: 20 XeCores, batch=1, num_heads_q=4.
-  // ceil_div(20, 4) + 1 = 5 + 1 = 6. Demonstrates why a single static
-  // constant cannot fit all hardware: it would overflow PVC or waste memory
-  // here.
-  EXPECT_EQ(compute_max_num_partitions(20, 4), 6);
+TEST(XE_FMHA_Fwd_DynamicPartitions, EmptyWorkUsesOnePartition) {
+  EXPECT_EQ(fmha_dynamic_num_partitions(56, 0, 64, 128), 1);
+  EXPECT_EQ(fmha_dynamic_num_partitions(56, 4, 0, 128), 1);
 }
 
-TEST(XE_FMHA_Fwd_MaxNumPartitions, BoundaryCases) {
-  // num_batch_heads == sm_count: every WG handles a distinct batch_head,
-  // plus the +1 boundary slack => 2.
-  EXPECT_EQ(compute_max_num_partitions(56, 56), 2);
+TEST(XE_FMHA_Fwd_DynamicPartitions, ProducesUniformNonEmptySlices) {
+  for (int saturation_cores : {1, 8, 20, 56, 128}) {
+    for (int num_batch_heads : {1, 2, 4, 16}) {
+      for (int local_k_blocks : {1, 2, 7, 64, 257}) {
+        for (int max_num_partitions : {1, 8, 128}) {
+          int target_partitions = cute::max(1, saturation_cores / num_batch_heads);
+          target_partitions = cute::min(target_partitions, max_num_partitions);
+          target_partitions = cute::min(target_partitions, local_k_blocks);
+          int expected_blocks_per_partition = cute::ceil_div(local_k_blocks, target_partitions);
+          int expected_partitions = cute::ceil_div(local_k_blocks, expected_blocks_per_partition);
 
-  // num_batch_heads > sm_count (rejected by can_implement, but the math must
-  // still be well-defined): ceil_div(56, 112) + 1 = 1 + 1 = 2.
-  EXPECT_EQ(compute_max_num_partitions(56, 112), 2);
+          int num_partitions = fmha_dynamic_num_partitions(
+              saturation_cores, num_batch_heads, local_k_blocks, max_num_partitions);
+          EXPECT_EQ(num_partitions, expected_partitions);
 
-  // num_batch_heads == 0 is guarded by max(1, .): ceil_div(56, 1) + 1 = 57.
-  EXPECT_EQ(compute_max_num_partitions(56, 0), 57);
-}
-
-TEST(XE_FMHA_Fwd_MaxNumPartitions, GeneralProperties) {
-  for (int sm_count : {10, 20, 56, 64, 128}) {
-    int prev = compute_max_num_partitions(sm_count, 1);
-    // Must always reserve at least 2 slots (>=1 partition + boundary slack).
-    EXPECT_GE(compute_max_num_partitions(sm_count, sm_count), 2);
-    for (int nbh = 1; nbh <= sm_count; ++nbh) {
-      int cur = compute_max_num_partitions(sm_count, nbh);
-      // Always strictly positive and at least 2 (because of the +1).
-      EXPECT_GE(cur, 2);
-      // Non-increasing as the work is spread over more batch_heads.
-      EXPECT_LE(cur, prev);
-      prev = cur;
+          int blocks_per_partition = cute::ceil_div(local_k_blocks, num_partitions);
+          EXPECT_GE(num_partitions, 1);
+          EXPECT_LE(num_partitions, max_num_partitions);
+          EXPECT_LE(num_partitions, local_k_blocks);
+          EXPECT_GE(num_partitions * blocks_per_partition, local_k_blocks);
+          EXPECT_LT((num_partitions - 1) * blocks_per_partition, local_k_blocks);
+        }
+      }
     }
   }
 }

@@ -240,11 +240,6 @@ int main(int argc, const char **argv) {
 #endif
 
 #if defined(DECODE)
-  if (options.num_kv_splits != -1) {
-    std::cerr << "Warning: --num_kv_splits is ignored by cached-KV decode."
-              << std::endl;
-  }
-
   const int gqa_group  = options.num_heads_q / options.num_heads_kv;
   const int q_len      = options.seq_len_qo;
   const int total_rows = gqa_group * q_len;

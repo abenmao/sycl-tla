@@ -112,6 +112,9 @@ struct FMHAConfig {
   using TiledMMAPV = typename TiledMMAHelper<MMA_Atom<MMAOperationPV>, Layout<TileShapePV>, SubgroupLayoutPV>::TiledMMA;
   static_assert(get<0>(TileShapeOutput{}) == get<0>(TileShapePV{}),
       "Output tile and P*V tile have different sizes in Q dimension");    
+  static constexpr int HeadDim = decltype(get<1>(TileShapeOutput{}))::value;
+    static_assert(HeadDim % decltype(get<1>(TileShapePV{}))::value == 0,
+      "Output head dimension must be divisible by the P*V N tile");
   static constexpr int VTiles = get<1>(TileShapeOutput{}) / get<1>(TileShapePV{});
 
   template <typename ElementType, typename Stride>
@@ -124,6 +127,7 @@ struct FMHAConfig {
   using TensorK = decltype(make_dummy_tensor(ElementK{}, StrideK{}));
   using TensorV = decltype(make_dummy_tensor(ElementV{}, StrideV{}));
   using TensorO = decltype(make_dummy_tensor(ElementO{}, StrideO{}));
+  using TensorLSE = decltype(make_dummy_tensor(float{}, StrideO{}));
   using TensorScaleQ = decltype(make_dummy_tensor(ElementScale{}, StrideScaleQ{}));
   using TensorScaleK = decltype(make_dummy_tensor(ElementScale{}, StrideScaleK{}));
   using TensorScaleV = decltype(make_dummy_tensor(ElementScale{}, StrideScaleV{}));
@@ -153,6 +157,13 @@ struct FMHAConfig {
     TensorO,
     GmemTiledCopyO
   >;
+  using CollectiveEpilogueSplit = cutlass::fmha::collective::FMHAFwdEpilogue<
+    CollectiveMainloop,
+    TileShapeOutput,
+    TensorO,
+    void,
+    TensorLSE
+  >;
 
   // GqaFusion transparently forwards to the tile scheduler.  When false the type
   // XeFHMAIndividualTileScheduler<false, false, Causal, false> is identical to the
@@ -165,10 +176,12 @@ struct FMHAConfig {
   >;
   using FMHAKernel = cute::conditional_t<Persistent,
       cutlass::fmha::kernel::XeFMHAFwdDynamicSplitKernel<
-        ProblemShapeType, CollectiveMainloop, CollectiveEpilogue, Scheduler>,
+        ProblemShapeType, CollectiveMainloop, CollectiveEpilogueSplit, Scheduler>,
       cutlass::fmha::kernel::XeFMHAFwdKernel<
         ProblemShapeType, CollectiveMainloop, CollectiveEpilogue, Scheduler>
   >;
+  using ReductionKernel = cute::conditional_t<Persistent,
+      cutlass::reduction::kernel::ReduceDynamicSplitK<FMHAKernel>, void>;
 };
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -295,23 +308,24 @@ template<FMHAMode Mode,
          class ElementQ, class ElementK, class ElementV, class ElementO,
          class LayoutQ, class LayoutK, class LayoutV, class LayoutO,
          class ElementScale, bool Causal, bool VarLen, bool PagedKV, bool Persistent, bool BlockScale,
-         int WgTileQ, int WgTileK, int WgTileV,
+         int WgTileQ, int QKTileN, int PVTileN,
          int SgTileQ, int SgTileK,
-         int HeadDimQK, int HeadDimV, bool GqaFusion = false>
+         int QKTileK, int HeadDim, bool GqaFusion = false>
 struct FMHAConfigGenWithTileShape{
-  using ShapeQK = Shape<Int<WgTileQ>, Int<WgTileK>, Int<HeadDimQK>>;
-  using ShapePV = Shape<Int<WgTileQ>, Int<WgTileV>, Int<WgTileK>>;  // Third dimension = WgTileK (K sequence tile, shared with ShapeQK[1])
-  using ShapeOutput = Shape<Int<WgTileQ>, Int<HeadDimV>>;
+  static constexpr int PVTileK = QKTileN;
+  using ShapeQK = Shape<Int<WgTileQ>, Int<QKTileN>, Int<QKTileK>>;
+  using ShapePV = Shape<Int<WgTileQ>, Int<PVTileN>, Int<PVTileK>>;
+  using ShapeOutput = Shape<Int<WgTileQ>, Int<HeadDim>>;
 
   // Derive subgroup counts from tile ratios for QK matmul
   static_assert(WgTileQ % SgTileQ == 0, "WgTileQ must be divisible by SgTileQ");
-  static_assert(WgTileK % SgTileK == 0, "WgTileK must be divisible by SgTileK");
+  static_assert(QKTileN % SgTileK == 0, "QKTileN must be divisible by SgTileK");
 
   // SubgroupLayoutQK: (num_sg_q, num_sg_k, 1)
   // Head dimension is never split across subgroups (always _1)
   using SubgroupLayoutQK = Layout<Shape<
     Int<WgTileQ / SgTileQ>,
-    Int<WgTileK / SgTileK>,
+    Int<QKTileN / SgTileK>,
     _1
   >>;
 

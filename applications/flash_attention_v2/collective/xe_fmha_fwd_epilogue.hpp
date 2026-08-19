@@ -70,18 +70,16 @@ public:
   using ElementO = typename TensorO_::value_type;
 
   using TensorLSE = TensorLSE_;
-  // Lazily derive the 2D slice / element type: conditional_t eagerly instantiates
+  // Lazily derive the element type: conditional_t eagerly instantiates
   // both branches, so `typename void::value_type` (non-split path, TensorLSE_ = void)
   // would be a hard error. Wrap the non-void case in a helper that is only
   // instantiated when TensorLSE_ is an actual tensor type.
   template <class T, bool = is_void_v<T>>
-  struct LSETraits { using Tensor2D = void; using Element = void; };
+  struct LSETraits { using Element = void; };
   template <class T>
   struct LSETraits<T, false> {
-    using Tensor2D = decltype(T{}(append<rank_v<T>>(make_coord(_,_),0)));
     using Element  = typename T::value_type;
   };
-  using TensorLSE2D = typename LSETraits<TensorLSE_>::Tensor2D;
   using ElementLSE  = typename LSETraits<TensorLSE_>::Element;
 
   using FragA = typename CollectiveMainloop::FragA;
@@ -171,7 +169,7 @@ public:
     }
   }
 
-  template <bool SumIsReduced = false, typename QVCoord, typename FragSPRow>
+  template <typename QVCoord, typename FragSPRow>
   CUTLASS_DEVICE
   void
   operator()(TensorO2D const& O,        // Global O tensor: (q,v)
@@ -184,12 +182,7 @@ public:
 
     using namespace cute;
     using ElementA = typename FragA::element_type;
-    auto tA_sum_full = [&]() -> decltype(auto) {
-      if constexpr (SumIsReduced)
-        return (tA_sum);
-      else
-        return reduce<0, ReduceMode::Horizontal>(tA_sum, sycl::plus<void>{});
-    }();
+    auto tA_sum_full = reduce<0, ReduceMode::Horizontal>(tA_sum, sycl::plus<void>{});
 
     // Reduce k-blocks of A and A_sum across WG, if needed.
     auto [rA, rA_max, rA_sum, active] = reduce_A(tArA, tA_max, tA_sum_full, thr_id);
@@ -227,7 +220,7 @@ public:
   // splits, a subsequent reduction kernel merges these partial outputs with a
   // numerically stable log-sum-exp rescale. Assumes decode with GQA query heads
   // (and, when seq_len_qo > 1, query positions) packed into the Q tile.
-  template <bool SumIsReduced = false, typename QVCoord, typename FragSPRow, typename TensorLSE2DIn>
+  template <typename QVCoord, typename FragSPRow, typename StatsTensor>
   CUTLASS_DEVICE
   void
   operator()(TensorO2D const& O,               // Global partial O tensor: (q,v)
@@ -236,20 +229,15 @@ public:
              FragSPRow      & tA_sum,          // Softmax row-wise partial sum
              QVCoord          blk_qv,          // WG tile indices: (q,v)
              int              thr_id,          // Work-item ID
-             TensorLSE2DIn const& exp_sums,    // Global exp sum tensor:   (q,kv_split)
-             TensorLSE2DIn const& max_logits,  // Global max logits tensor:(q,kv_split)
-             int              idx_kv_split,     // Which KV split this WG computed
+             StatsTensor     const& exp_sums,    // Global exp sum tensor:   (q,partition)
+             StatsTensor     const& max_logits,  // Global max logits tensor:(q,partition)
+             int              partition_id,      // Partition computed by this WG
              int              num_packed_rows,  // Total packed Q rows (seq_len_qo * head_group_q)
              float            v_scale = 1.0f) { // Per-tensor V dequant scale (fp8 path)
 
     using namespace cute;
     using ElementA = typename FragA::element_type;
-    auto tA_sum_full = [&]() -> decltype(auto) {
-      if constexpr (SumIsReduced)
-        return (tA_sum);
-      else
-        return reduce<0, ReduceMode::Horizontal>(tA_sum, sycl::plus<void>{});
-    }();
+    auto tA_sum_full = reduce<0, ReduceMode::Horizontal>(tA_sum, sycl::plus<void>{});
 
     // Reduce k-blocks of A, A_max and A_sum across WG, if needed.
     auto [rA, rA_max, rA_sum, active] = reduce_A(tArA, tA_max, tA_sum_full, thr_id);
@@ -267,19 +255,39 @@ public:
     auto tOrO = thr_copy_o.partition_sg_fragment_S(gO);
     auto tOgO = thr_copy_o.partition_D(gO);
 
-    // Store one copy of the softmax statistics per packed Q row. For Q tiles
-    // larger than 8, rows are distributed across multiple subgroups and do not
-    // map directly to `thr_id`. Use the same fragment-to-coordinate mapping as
-    // the output store, selecting the unique fragment at V coordinate zero.
+    // Match the output fragment ordering before using output coordinates. rA
+    // and tOrO do not necessarily enumerate their values in the same order.
+    auto rA_sum_expanded = make_subgroup_tensor(
+      make_fragment_like<ElementLSE>(rA.tensor()), rA.tv_layout());
+    auto rA_max_expanded = make_subgroup_tensor(
+      make_fragment_like<ElementLSE>(rA.tensor()), rA.tv_layout());
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < rA.size(); i++) {
+      rA_sum_expanded(i) = static_cast<ElementLSE>(broadcast<0>(rA_sum, rA, i));
+      rA_max_expanded(i) = static_cast<ElementLSE>(broadcast<0>(rA_max, rA, i));
+    }
+
+    auto tOrSum = make_subgroup_tensor(
+      make_fragment_like<ElementLSE>(tOrO.tensor()), tOrO.tv_layout());
+    auto tOrMax = make_subgroup_tensor(
+      make_fragment_like<ElementLSE>(tOrO.tensor()), tOrO.tv_layout());
+    if constexpr (ReduceK{} == _1{} || get<0>(SGTileShapeO{}) == _1{}) {
+      copy(rA_sum_expanded, tOrSum);
+      copy(rA_max_expanded, tOrMax);
+    } else {
+      cute::reorder(rA_sum_expanded, tOrSum);
+      cute::reorder(rA_max_expanded, tOrMax);
+    }
+
+    // Store one copy of the softmax statistics per packed Q row, selecting the
+    // unique output fragment at V coordinate zero.
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < tOrSum.size(); i++) {
       auto coord = tOgO(i);
       int stats_row = int(get<0>(coord));
       if (int(get<1>(coord)) == 0 && stats_row < num_packed_rows) {
-        exp_sums(stats_row, idx_kv_split) =
-            static_cast<ElementLSE>(broadcast<0>(rA_sum, rA, i));
-        max_logits(stats_row, idx_kv_split) =
-            static_cast<ElementLSE>(broadcast<0>(rA_max, rA, i));
+        exp_sums(stats_row, partition_id) = tOrSum(i);
+        max_logits(stats_row, partition_id) = tOrMax(i);
       }
     }
 

@@ -174,6 +174,7 @@ template <typename InT> inline auto in_memory(cutlass::DeviceAllocation<InT>& in
 template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
 
   using FMHAKernel = typename FMHAConfiguration::FMHAKernel;
+  using ReductionKernel = typename FMHAConfiguration::ReductionKernel;
   static constexpr int GROUP_SIZE = 32;
 
   using StrideQ = typename FMHAKernel::StrideQ;
@@ -1050,16 +1051,15 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
     return shape;
   }
 
-  static void run(typename FMHAKernel::Params params) {
-   
+  template <class Kernel>
+  static void launch_kernel(typename Kernel::Params params) {
     namespace syclex = sycl::ext::oneapi::experimental;
     namespace intelex = sycl::ext::intel::experimental;
-   
-    dim3 const block = FMHAKernel::get_block_shape();
-    dim3 const grid = FMHAKernel::get_grid_shape(params);
+    dim3 const block = Kernel::get_block_shape();
+    dim3 const grid = Kernel::get_grid_shape(params);
 
     // configure smem size and carveout
-    int smem_size = FMHAKernel::SharedStorageSize;
+    int smem_size = Kernel::SharedStorageSize;
 
     const auto sycl_block = compat::dim3(block.x, block.y, block.z);
     const auto sycl_grid = compat::dim3(grid.x, grid.y, grid.z);
@@ -1078,17 +1078,34 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
     };
     compat::experimental::launch_policy policy{sycl_grid, sycl_block, launch_props, kernel_props};
 #if defined(CUTLASS_SYCL_PROFILING_ENABLED)
-    auto event = compat::experimental::launch<cutlass::device_kernel<FMHAKernel>, FMHAKernel>(policy, params);
+    auto event = compat::experimental::launch<cutlass::device_kernel<Kernel>, Kernel>(policy, params);
     EventManager::getInstance().addEvent(event);
 #else
-    compat::experimental::launch<cutlass::device_kernel<FMHAKernel>, FMHAKernel, false>(policy, params);
+    compat::experimental::launch<cutlass::device_kernel<Kernel>, Kernel, false>(policy, params);
 #endif
+  }
+
+  static void run(typename FMHAKernel::Params params) {
+    launch_kernel<FMHAKernel>(params);
+    if constexpr (!is_same_v<ReductionKernel, void>) {
+      if (ReductionKernel::requires_reduction(params)) {
+        compat::wait();
+        auto reduce_params = ReductionKernel::to_underlying_arguments(params);
+        launch_kernel<ReductionKernel>(reduce_params);
+      }
+    }
   }
 
   void run(::benchmark::State& state, const FMHAOptions &options, const cutlass::KernelHardwareInfo &hw_info) {
 
     if (options.page_size < 0) {
       state.SkipWithError("Invalid config: page_size must be non-negative");
+      return;
+    }
+
+    if (options.head_size_qk != FMHAConfiguration::HeadDim ||
+        options.head_size_vo != FMHAConfiguration::HeadDim) {
+      state.SkipWithError("Invalid config: head_size_qk and head_size_vo must match ShapeOutput head dimension");
       return;
     }
 

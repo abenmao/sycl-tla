@@ -36,7 +36,6 @@
 #include "cutlass/util/packed_stride.hpp"
 #include "flash_attention_v2/collective/fmha_fusion.hpp"
 #include "flash_attention_v2/kernel/xe_fmha_fwd_kernel.hpp"
-#include "flash_attention_v2/kernel/xe_reduce_split_k.h"
 #include "flash_attention_v2/kernel/xe_tile_scheduler.hpp"
 #include "cutlass/util/GPU_Clock.hpp"
 #include "cutlass/util/sycl_event_manager.hpp"
@@ -91,12 +90,11 @@ struct Options {
   std::string scheduler;
 
   int batch, num_heads_q, num_heads_kv, seq_len_qo, seq_len_kv, seq_len_kv_cache, page_size, head_size_qk, head_size_vo, iterations, warmup, verify;
-  int num_kv_splits;
   float softmax_scale;
 
   Options()
       : help(false), error(false), is_causal(false), varlen(false), use_paged_kv(false), batch(32), num_heads_q(16), num_heads_kv(16), seq_len_qo(512), head_size_qk(128),
-        seq_len_kv(0), seq_len_kv_cache(0), page_size(128), head_size_vo(128), iterations(100), warmup(100), verify(1), num_kv_splits(-1), softmax_scale(1.f), scheduler("Individual") {}
+        seq_len_kv(0), seq_len_kv_cache(0), page_size(128), head_size_vo(128), iterations(100), warmup(100), verify(1), softmax_scale(1.f), scheduler("Individual") {}
 
   // Parses the command line
   void parse(int argc, char const **args) {
@@ -138,7 +136,6 @@ struct Options {
     cmd.get_cmd_line_argument("iterations", iterations, 100);
     cmd.get_cmd_line_argument("warmup", warmup, 1);
     cmd.get_cmd_line_argument("verify", verify, 1);
-    cmd.get_cmd_line_argument("num_kv_splits", num_kv_splits, -1);
 
     if (cmd.check_cmd_line_flag("use_paged_kv")) {
         use_paged_kv = true;
@@ -179,8 +176,7 @@ struct Options {
         << "  --warmup=<int>              Warmup iterations before timing. --warmup=0 is supported: verification\n"
         << "                              (if enabled) then reuses the timed iterations' result instead, at the\n"
         << "                              cost of the reported perf numbers possibly being skewed by cold-start overhead\n"
-        << "  --verify=<int>              Specify whether to verify.\n"
-        << "  --num_kv_splits=<int>       Number of KV splits for split-KV (flash-decoding). Default -1 (auto).\n\n";
+        << "  --verify=<int>              Specify whether to verify.\n\n";
     return out;
   }
 };
@@ -221,7 +217,7 @@ using LayoutO = cutlass::layout::RowMajor;
 
 static constexpr int GROUP_SIZE = 32;
 
-template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = void, bool isSplitKV = false> struct ExampleRunner {
+template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void> struct ExampleRunner {
 
   using StrideQ = typename FMHAKernel::StrideQ;
   using StrideK = typename FMHAKernel::StrideK;
@@ -303,16 +299,6 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
   cutlass::DeviceAllocation<ElementV> block_V_cache;
   cutlass::DeviceAllocation<ElementO> block_O;
   cutlass::DeviceAllocation<ElementO> block_ref_O;
-
-  // Split-KV (flash-decoding) intermediate buffers. ElementLSE is float.
-  using ElementLSE = cute::conditional_t<isSplitKV, float, ElementO>;
-  cutlass::DeviceAllocation<ElementO> block_Oaccum;    // partial output per KV split
-  cutlass::DeviceAllocation<ElementLSE> block_exp_sums;
-  cutlass::DeviceAllocation<ElementLSE> block_max_logits;
-  StrideO stride_Oaccum;
-  StrideO stride_exp_sums;
-  StrideO stride_max_logits;
-  int num_kv_splits = 1;
 
   std::vector<int> cumulative_seqlen_q;
   std::vector<int> cumulative_seqlen_kv;
@@ -963,26 +949,6 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     // block_ref_O is fully written in verify() before being read, so no initialization needed
     compat::memset(block_O.get(), 0, block_O.size() * sizeof_bits_v<ElementO> / 8);
 
-    if constexpr (isSplitKV) {
-      // Positive requests are capped at the kernel maximum; -1 selects that
-      // maximum when the caller did not supply a tuned positive count.
-      num_kv_splits = options.num_kv_splits > 0
-                        ? cute::min(options.num_kv_splits, int(FMHAKernel::max_num_kv_splits))
-                        : int(FMHAKernel::max_num_kv_splits);
-
-      // Partial outputs and per-split statistics for all query/head rows.
-      auto shape_Oaccum = cute::make_shape(seq_len_qo, head_size_vo, num_heads_q * num_kv_splits, batch);
-      auto shape_stats  = cute::make_shape(seq_len_qo, num_kv_splits, num_heads_q, batch);
-      stride_Oaccum     = cutlass::make_cute_packed_stride(StrideO{}, shape_Oaccum);
-      stride_exp_sums   = cutlass::make_cute_packed_stride(StrideO{}, shape_stats);
-      stride_max_logits = cutlass::make_cute_packed_stride(StrideO{}, shape_stats);
-
-      block_Oaccum.reset(static_cast<std::size_t>(batch) * num_heads_q * num_kv_splits * seq_len_qo * head_size_vo);
-      block_exp_sums.reset(static_cast<std::size_t>(batch) * num_heads_q * num_kv_splits * seq_len_qo);
-      block_max_logits.reset(static_cast<std::size_t>(batch) * num_heads_q * num_kv_splits * seq_len_qo);
-      compat::memset(block_Oaccum.get(), 0, block_Oaccum.size() * sizeof_bits_v<ElementO> / 8);
-    }
-
     if (paged_kv_cache.page_size > 0) {
       int num_pages = num_pages_per_seq.back();
       paged_kv_cache.page_table.reset(num_pages);
@@ -1199,28 +1165,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
 
   static void run(typename FMHAKernel::Params params)
   {
-    if constexpr (FMHAKernel::kReducePhaseSeparate) {
-      auto compute_params = params;
-      compute_params.phase = 0;
-      launch_kernel<FMHAKernel>(compute_params);
-      if (FMHAKernel::requires_separate_reduction(params)) {
-        compat::wait();
-        auto reduce_params = params;
-        reduce_params.phase = 1;
-        launch_kernel<FMHAKernel>(reduce_params);
-      }
-    } else {
-      launch_kernel<FMHAKernel>(params);
-    }
-  }
-
-  // Two-stage split-KV launch: partial attention, then log-sum-exp reduction.
-  template <class ReduceParams>
-  static void run(typename FMHAKernel::Params fa_params, ReduceParams reduce_params)
-  {
-    run(fa_params);
-    compat::wait();
-    launch_kernel<ReductionSplitKernel>(reduce_params);
+    launch_kernel<FMHAKernel>(params);
   }
 
   cutlass::Status run(const Options &options, const cutlass::KernelHardwareInfo &hw_info) {
@@ -1237,31 +1182,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     }
 
     typename FMHAKernel::Arguments arguments = [&]() {
-      if constexpr (isSplitKV) {
-        return typename FMHAKernel::Arguments{
-          {
-            shape,
-            block_Q.get(), stride_Q,
-            block_K.get(), stride_K,
-            block_V.get(), stride_V,
-            num_kv_splits == 1 ? block_O.get() : block_Oaccum.get(), stride_Oaccum,
-            block_K_cache.get(), stride_K_cache,
-            block_V_cache.get(), stride_V_cache,
-            block_exp_sums.get(), stride_exp_sums,
-            block_max_logits.get(), stride_max_logits,
-            float(scale_k), float(scale_v), float(scale_q),
-          },
-          {
-            options.softmax_scale,
-            paged_kv_cache.page_table.get(),
-            paged_kv_cache.page_size,
-            paged_kv_cache.num_pages_per_seq.get()
-          },
-          {},
-          hw_info,
-          num_kv_splits
-        };
-      } else if constexpr (IsPersistent) {
+      if constexpr (IsPersistent) {
         return typename FMHAKernel::Arguments{
           {
             shape,
@@ -1338,29 +1259,16 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionSplitKernel = 
     // Convert host-side arguments to device-side arguments to be passed to the kernel
     auto params = FMHAKernel::to_underlying_arguments(arguments, workspace.get());
 
-    // Launch helper: one kernel for the standard and one-split paths; multi-split
-    // split-KV launches partial attention followed by reduction.
+    // Launch Dynamic attention followed by reduction when multiple partitions
+    // are active; standard attention remains a single-kernel launch.
     auto launch = [&]() {
-      if constexpr (isSplitKV) {
-        if (num_kv_splits == 1) {
-          // With one partition, phase 0 already produces the globally
-          // normalized output and writes it directly to block_O.
-          run(params);
-          return;
+      if constexpr (!is_same_v<ReductionKernel, void>) {
+        run(params);
+        if (ReductionKernel::requires_reduction(params)) {
+          compat::wait();
+          auto reduce_params = ReductionKernel::to_underlying_arguments(params);
+          launch_kernel<ReductionKernel>(reduce_params);
         }
-        typename ReductionSplitKernel::Arguments reduce_arguments{
-          {
-            shape,
-            block_O.get(), stride_O,
-            block_Oaccum.get(), stride_Oaccum,
-            block_exp_sums.get(), stride_exp_sums,
-            block_max_logits.get(), stride_max_logits,
-          },
-          hw_info,
-          num_kv_splits
-        };
-        auto reduce_params = ReductionSplitKernel::to_underlying_arguments(reduce_arguments, nullptr);
-        run(params, reduce_params);
       } else {
         run(params);
       }
@@ -1546,7 +1454,7 @@ struct FMHAConfig {
                                                decltype(cutlass::fmha::collective::get_sg_layout_pv(SubgroupLayoutQK{})),
                                                SubgroupLayoutPV_>;
 
-  template <bool isVarLen, bool PagedKV, class Scheduler, bool isSplitKV = false>
+  template <bool isVarLen, bool PagedKV, class Scheduler>
   static int run(const Options &options) {
     //
     // Run examples
@@ -1619,18 +1527,11 @@ struct FMHAConfig {
     >;
 
     cutlass::Status status;
-    if constexpr (isSplitKV) {
-      using SplitKVScheduler = cutlass::fmha::kernel::XeFHMASplitKVTileScheduler;
-      using FMHAKernel = cutlass::fmha::kernel::XeFMHAFwdSplitKVKernel<
-          ProblemShapeType, CollectiveMainloop, CollectiveEpilogueSplit, SplitKVScheduler>;
-      using ReduceKernel = cutlass::reduction::kernel::ReduceSplitK<
-          ProblemShapeType, cutlass::fmha::kernel::XeReduceSplitKTileScheduler, FMHAKernel>;
-      ExampleRunner<FMHAKernel, isVarLen, ReduceKernel, true> runner;
-      status = runner.run(options, hw_info);
-    } else if constexpr (is_same_v<Scheduler, cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>) {
+    if constexpr (is_same_v<Scheduler, cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>) {
       using FMHAKernel = cutlass::fmha::kernel::XeFMHAFwdDynamicSplitKernel<
-          ProblemShapeType, CollectiveMainloop, CollectiveEpilogue, Scheduler>;
-      ExampleRunner<FMHAKernel, isVarLen> runner;
+          ProblemShapeType, CollectiveMainloop, CollectiveEpilogueSplit, Scheduler>;
+      using ReduceKernel = cutlass::reduction::kernel::ReduceDynamicSplitK<FMHAKernel>;
+      ExampleRunner<FMHAKernel, isVarLen, ReduceKernel> runner;
       status = runner.run(options, hw_info);
     } else {
       auto run_with = [&](auto bo_t, auto hgo_t) -> cutlass::Status {
