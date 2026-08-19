@@ -559,8 +559,8 @@ struct MoEBenchmarkRunner {
       // (e.g. e2m1) are handled by sizeof_bits_v / bits_per_byte.
       {
         constexpr double bits_per_byte = static_cast<double>(cute::sizeof_bits_v<char>);
-        constexpr double sizeof_a = cute::sizeof_bits_v<ElementInput>  / bits_per_byte;
-        constexpr double sizeof_o = cute::sizeof_bits_v<ElementOutput> / bits_per_byte;
+        constexpr double sizeof_inputs = cute::sizeof_bits_v<ElementInput>  / bits_per_byte;
+        constexpr double sizeof_output = cute::sizeof_bits_v<ElementOutput> / bits_per_byte;
         double scale_bytes = 0.0;
         if constexpr (kScaleKind != cutlass::moe::ScaleKind::Plain) {
           constexpr double sizeof_scale =
@@ -570,9 +570,9 @@ struct MoEBenchmarkRunner {
                         sizeof_scale;
         }
         mega_bytes_transferred =
-            (static_cast<double>(int64_t(num_tokens) * K) * sizeof_a +
-             static_cast<double>(int64_t(num_experts) * N * K) * sizeof_a +
-             static_cast<double>(int64_t(num_tokens) * N) * sizeof_o) *
+            (static_cast<double>(int64_t(num_tokens) * K) * sizeof_inputs +
+             static_cast<double>(int64_t(num_experts) * N * K) * sizeof_inputs +
+             static_cast<double>(int64_t(num_tokens) * N) * sizeof_output) *
                 1e-6 +
             scale_bytes * 1e-6;
       }
