@@ -300,6 +300,37 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
   cutlass::DeviceAllocation<ElementO> block_O;
   cutlass::DeviceAllocation<ElementO> block_ref_O;
 
+  // Cache busting: for small problem shapes the whole working set (Q/K/V/caches/O) fits in
+  // the GPU caches, so every benchmark iteration after the first one reads from L1/L2 and the
+  // reported bandwidth/TFlops are far too optimistic. When the working set is below
+  // kMinWorkingSetBytes we allocate several independently initialized samples and rotate through
+  // them, so each iteration touches different data in a different (cold) memory region. Verification
+  // uses the inputs belonging to the sample that produced the checked output.
+  // kMaxReplicas bounds the number of samples. The allocation is also capped by the number of
+  // warmup and timed launches, since samples beyond that count cannot be used.
+  // TODO: Align with the customer's 1 GiB working set once the current hardware is stable enough.
+  static constexpr std::size_t kMinWorkingSetBytes = 128ull * 1024 * 1024;
+  static constexpr int kMaxReplicas = 100;
+  int num_of_samples = 1;
+  int verify_replica = 0;  // replica whose output buffer holds the most recent kernel result
+  std::size_t count_Q = 0;
+  std::size_t count_K = 0;
+  std::size_t count_V = 0;
+  std::size_t count_K_cache = 0;
+  std::size_t count_V_cache = 0;
+  std::size_t count_O = 0;
+  std::size_t count_scaleK = 0;
+  std::size_t count_scaleV = 0;
+  std::size_t count_scaleK_cache = 0;
+  std::size_t count_scaleV_cache = 0;
+
+  /// Pointer to replica `r` of a buffer holding `num_of_samples` copies of `count` elements.
+  template <class Element>
+  static Element* replica_ptr(cutlass::DeviceAllocation<Element>& block, std::size_t count, int r) {
+    auto* base = reinterpret_cast<char*>(block.get());
+    return reinterpret_cast<Element*>(base + std::size_t(r) * cutlass::DeviceAllocation<Element>::bytes(count));
+  }
+
   std::vector<int> cumulative_seqlen_q;
   std::vector<int> cumulative_seqlen_kv;
   std::vector<int> cumulative_seqlen_kv_cache;
@@ -450,6 +481,15 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
     using ElementK_ = std::remove_pointer_t<decltype(block_K_.get())>;
     // For host usage only, host needs a staging buffer and host__Q head
     using ElementQ_ = std::remove_pointer_t<decltype(block_Q_.get())>;
+    ElementQ_* verify_Q = block_Q_.get() + std::size_t(verify_replica) * count_Q;
+    ElementK_* verify_K = block_K_.get() + std::size_t(verify_replica) * count_K;
+    ElementV_* verify_V = block_V_.get() + std::size_t(verify_replica) * count_V;
+    ElementK_* verify_K_cache = count_K_cache > 0
+      ? block_K_cache_.get() + std::size_t(verify_replica) * count_K_cache
+      : block_K_cache_.get();
+    ElementV_* verify_V_cache = count_V_cache > 0
+      ? block_V_cache_.get() + std::size_t(verify_replica) * count_V_cache
+      : block_V_cache_.get();
     std::vector<ElementO> host_ref_O;
     if (!verify_on_device) {
       host_ref_O.resize(block_ref_O.size());
@@ -515,34 +555,34 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
 
                 compat::memcpy<ElementK_>(
                       k_dst + head_size_qk * i * page_size,
-                      block_K_cache_.get() + offset_k_cache + head_size_qk * physical_page_id * page_size,
+                      verify_K_cache + offset_k_cache + head_size_qk * physical_page_id * page_size,
                       head_size_qk * current_copy_len);
 
                 compat::memcpy<ElementV_>(
                       v_dst + i * page_size * head_size_vo,
-                      block_V_cache_.get() + offset_v_cache + physical_page_id * page_size * head_size_vo,
+                      verify_V_cache + offset_v_cache + physical_page_id * page_size * head_size_vo,
                       current_copy_len * head_size_vo);
               }
             } else {
               compat::memcpy<ElementK_>(
                     k_dst,
-                    block_K_cache_.get() + offset_k_cache,
+                    verify_K_cache + offset_k_cache,
                     head_size_qk * seq_len_kv_cache);
 
               compat::memcpy<ElementV_>(
                     v_dst,
-                    block_V_cache_.get() + offset_v_cache,
+                    verify_V_cache + offset_v_cache,
                     seq_len_kv_cache * head_size_vo);
             }
           }
 
           compat::memcpy<ElementK_>(
                 k_dst + head_size_qk * seq_len_kv_cache,
-                block_K_.get() + offset_k,
+                verify_K + offset_k,
                 head_size_qk * seq_len_kv);
           compat::memcpy<ElementV_>(
                 v_dst + seq_len_kv_cache * head_size_vo,
-                block_V_.get() + offset_v,
+                verify_V + offset_v,
                 seq_len_kv * head_size_vo);
         };
 
@@ -553,7 +593,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
         std::vector<ElementV_> host_V_head;
         if (!verify_on_device) {
           host_Q_head.resize(seq_len_qo * head_size_qk);
-          compat::memcpy<ElementQ_>(host_Q_head.data(), block_Q_.get() + offset_q, host_Q_head.size());
+          compat::memcpy<ElementQ_>(host_Q_head.data(), verify_Q + offset_q, host_Q_head.size());
 
           host_K_head.resize(head_size_qk * seq_len_kv_total);
           host_V_head.resize(seq_len_kv_total * head_size_vo);
@@ -568,8 +608,8 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
             k_ptr = block_K_concat.get();
             v_ptr = block_V_concat.get();
           } else {
-            k_ptr = block_K_.get() + offset_k;
-            v_ptr = block_V_.get() + offset_v;
+            k_ptr = verify_K + offset_k;
+            v_ptr = verify_V + offset_v;
           }
         }
 
@@ -602,7 +642,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
               cutlass::DeviceAllocation<ElementS> block_S;
               block_S.reset(current_q_len * seq_len_kv_total);
 
-              cutlass::TensorRef ref_Q(block_Q_.get() + offset_q + q_start * head_size_qk, LayoutQ::packed({current_q_len, head_size_qk}));
+              cutlass::TensorRef ref_Q(verify_Q + offset_q + q_start * head_size_qk, LayoutQ::packed({current_q_len, head_size_qk}));
               cutlass::TensorRef ref_K(k_ptr, LayoutK::packed({head_size_qk, seq_len_kv_total}));
               cutlass::TensorRef ref_S(block_S.get(), LayoutQ::packed({current_q_len, seq_len_kv_total}));
 
@@ -759,8 +799,10 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
     //   so 0.5 provides reasonable margin for FP4 inputs.
     // - FP8/FP16/BF16: Higher precision formats use tighter 0.05 tolerance.
     ElementO tolerance = FP4Input ? ElementO{0.5} : ElementO{0.05};
-    bool passed = cutlass::reference::device::BlockCompareRelativelyEqual(block_ref_O.get(), block_O.get(),
-                                                                          block_O.size(), tolerance, tolerance);
+    // With cache-busting replicas enabled, compare against the replica the last launch wrote to.
+    bool passed = cutlass::reference::device::BlockCompareRelativelyEqual(block_ref_O.get(),
+                                                                          replica_ptr(block_O, count_O, verify_replica),
+                                                                          count_O, tolerance, tolerance);
 
     return passed;
   }
@@ -938,13 +980,62 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
     stride_K_cache = cutlass::make_cute_packed_stride(StrideK{}, shape_K_cache);
     stride_V_cache = cutlass::make_cute_packed_stride(StrideV{}, shape_V_cache);
 
-    block_Q.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * head_size_qk);
-    block_K.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv * head_size_qk);
-    block_V.reset(static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv * head_size_vo);
-    block_K_cache.reset(static_cast<std::size_t>(batch) * num_heads_kv * kv_cache_rows * head_size_qk);
-    block_V_cache.reset(static_cast<std::size_t>(batch) * num_heads_kv * kv_cache_rows * head_size_vo);
-    block_O.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * head_size_vo);
-    block_ref_O.reset(static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * head_size_vo);
+    count_Q = static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * head_size_qk;
+    count_K = static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv * head_size_qk;
+    count_V = static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv * head_size_vo;
+    count_K_cache = static_cast<std::size_t>(batch) * num_heads_kv * kv_cache_rows * head_size_qk;
+    count_V_cache = static_cast<std::size_t>(batch) * num_heads_kv * kv_cache_rows * head_size_vo;
+    count_O = static_cast<std::size_t>(batch) * num_heads_q * seq_len_qo * head_size_vo;
+
+    if constexpr (BlockScale) {
+      int scale_k = cute::ceil_div(head_size_qk, GROUP_SIZE);
+      int scale_v = isVarLen ? cumulative_scale_kv.back() : cute::ceil_div(seq_len_kv, GROUP_SIZE);
+      int scale_rows_cache = cutlass::round_up(kv_cache_rows, cutlass::fmha::kernel::kBlockScaleRowAlign);
+      int scale_v_cache = isVarLen ? cumulative_scale_kv_cache.back()
+                                   : cute::ceil_div(scale_rows_cache, GROUP_SIZE);
+      count_scaleK = static_cast<std::size_t>(batch) * num_heads_kv * seq_len_kv * scale_k;
+      count_scaleV = static_cast<std::size_t>(batch) * num_heads_kv * head_size_vo * scale_v;
+      if (seq_len_kv_cache > 0) {
+        count_scaleK_cache = static_cast<std::size_t>(batch) * num_heads_kv * scale_rows_cache * scale_k;
+        count_scaleV_cache = static_cast<std::size_t>(batch) * num_heads_kv * head_size_vo * scale_v_cache;
+      }
+    }
+
+    // Size of the memory a single iteration touches. If it is small enough to stay resident in
+    // cache, replicate it so consecutive iterations work on different memory (see kMinWorkingSetBytes).
+    std::size_t const batch_memory_bytes =
+        cutlass::DeviceAllocation<ElementQ>::bytes(count_Q) +
+        cutlass::DeviceAllocation<ElementK>::bytes(count_K) +
+        cutlass::DeviceAllocation<ElementV>::bytes(count_V) +
+        cutlass::DeviceAllocation<ElementK>::bytes(count_K_cache) +
+        cutlass::DeviceAllocation<ElementV>::bytes(count_V_cache) +
+        cutlass::DeviceAllocation<ElementO>::bytes(count_O) +
+        cutlass::DeviceAllocation<ElementScale>::bytes(count_scaleK) +
+        cutlass::DeviceAllocation<ElementScale>::bytes(count_scaleV) +
+        cutlass::DeviceAllocation<ElementScale>::bytes(count_scaleK_cache) +
+        cutlass::DeviceAllocation<ElementScale>::bytes(count_scaleV_cache);
+
+    num_of_samples = 1;
+    verify_replica = 0;
+    if (batch_memory_bytes > 0 && batch_memory_bytes < kMinWorkingSetBytes) {
+      std::size_t replicas = (kMinWorkingSetBytes + batch_memory_bytes - 1) / batch_memory_bytes;
+      int const launch_count = std::max(1, options.warmup + options.iterations);
+      std::size_t const sample_limit = std::min<std::size_t>(kMaxReplicas, launch_count);
+      num_of_samples = static_cast<int>(std::min(replicas, sample_limit));
+      std::cout << "[Info] Per-iteration working set is " << (batch_memory_bytes >> 20)
+            << " MiB (< " << (kMinWorkingSetBytes >> 20) << " MiB): allocating " << num_of_samples
+                << " independent samples (" << ((batch_memory_bytes * num_of_samples) >> 20)
+                << " MiB) and using a different copy per iteration to avoid cache-resident timings."
+                << std::endl;
+    }
+
+    block_Q.reset(count_Q * num_of_samples);
+    block_K.reset(count_K * num_of_samples);
+    block_V.reset(count_V * num_of_samples);
+    block_K_cache.reset(count_K_cache * num_of_samples);
+    block_V_cache.reset(count_V_cache * num_of_samples);
+    block_O.reset(count_O * num_of_samples);
+    block_ref_O.reset(count_O);
     // Zero-initialize output buffer for the kernel result
     // block_ref_O is fully written in verify() before being read, so no initialization needed
     compat::memset(block_O.get(), 0, block_O.size() * sizeof_bits_v<ElementO> / 8);
@@ -976,7 +1067,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
     initialize_block(block_V, seed + 2021);
     initialize_block(block_K_cache, seed + 2024);
     initialize_block(block_V_cache, seed + 2025);
-    
+
     if (!cumulative_seqlen_q.empty()) {
       device_cumulative_seqlen_q.reset(cumulative_seqlen_q.size());
       device_cumulative_seqlen_q.copy_from_host(cumulative_seqlen_q.data(), cumulative_seqlen_q.size());
@@ -1051,8 +1142,8 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
       stride_SK = cutlass::make_cute_packed_stride(StrideScaleK{}, shape_scale_K);
       stride_SV = cutlass::make_cute_packed_stride(StrideScaleV{}, shape_scale_V);
 
-      block_scaleK.reset(cute::size(shape_scale_K));
-      block_scaleV.reset(cute::size(shape_scale_V));
+      block_scaleK.reset(count_scaleK * num_of_samples);
+      block_scaleV.reset(count_scaleV * num_of_samples);
 
       initialize_scale(block_scaleK, options);
       initialize_scale(block_scaleV, options);
@@ -1068,8 +1159,14 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
       auto layout_scale_K = cute::make_layout(shape_scale_K, stride_SK);
       auto layout_scale_V = cute::make_layout(shape_scale_V, stride_SV);
 
-      apply_scale<ElementQKMMAVerify, ElementK>(block_K_dq.get(), block_K.get(), layout_K, block_scaleK.get(), layout_scale_K);
-      apply_scale<ElementPVMMAVerify, ElementV>(block_V_dq.get(), block_V.get(), layout_V, block_scaleV.get(), layout_scale_V);
+      for (int sample = 0; sample < num_of_samples; ++sample) {
+        apply_scale<ElementQKMMAVerify, ElementK>(
+            replica_ptr(block_K_dq, count_K, sample), replica_ptr(block_K, count_K, sample),
+            layout_K, replica_ptr(block_scaleK, count_scaleK, sample), layout_scale_K);
+        apply_scale<ElementPVMMAVerify, ElementV>(
+            replica_ptr(block_V_dq, count_V, sample), replica_ptr(block_V, count_V, sample),
+            layout_V, replica_ptr(block_scaleV, count_scaleV, sample), layout_scale_V);
+      }
 
       const int scale_rows_cache =
           cutlass::round_up(kv_cache_rows, cutlass::fmha::kernel::kBlockScaleRowAlign);
@@ -1083,20 +1180,26 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
       stride_SV_cache = cutlass::make_cute_packed_stride(StrideScaleV{}, shape_scale_V_cache);
 
       if (seq_len_kv_cache > 0) {
-        block_scaleK_cache.reset(cute::size(shape_scale_K_cache));
-        block_scaleV_cache.reset(cute::size(shape_scale_V_cache));
+        block_scaleK_cache.reset(count_scaleK_cache * num_of_samples);
+        block_scaleV_cache.reset(count_scaleV_cache * num_of_samples);
 
         initialize_scale(block_scaleK_cache, options);
         initialize_scale(block_scaleV_cache, options);
 
-        apply_scale<ElementQKMMAVerify, ElementK>(
-            block_K_cache_dq.get(), block_K_cache.get(),
+        for (int sample = 0; sample < num_of_samples; ++sample) {
+          apply_scale<ElementQKMMAVerify, ElementK>(
+            replica_ptr(block_K_cache_dq, count_K_cache, sample),
+            replica_ptr(block_K_cache, count_K_cache, sample),
             cute::make_layout(shape_K_cache, stride_K_cache),
-            block_scaleK_cache.get(), cute::make_layout(shape_scale_K_cache, stride_SK_cache));
-        apply_scale<ElementPVMMAVerify, ElementV>(
-            block_V_cache_dq.get(), block_V_cache.get(),
+            replica_ptr(block_scaleK_cache, count_scaleK_cache, sample),
+            cute::make_layout(shape_scale_K_cache, stride_SK_cache));
+          apply_scale<ElementPVMMAVerify, ElementV>(
+            replica_ptr(block_V_cache_dq, count_V_cache, sample),
+            replica_ptr(block_V_cache, count_V_cache, sample),
             cute::make_layout(shape_V_cache, stride_V_cache),
-            block_scaleV_cache.get(), cute::make_layout(shape_scale_V_cache, stride_SV_cache));
+            replica_ptr(block_scaleV_cache, count_scaleV_cache, sample),
+            cute::make_layout(shape_scale_V_cache, stride_SV_cache));
+        }
       }
 
       const int gqa_group = num_heads_q / num_heads_kv;
@@ -1121,7 +1224,11 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
             cute::make_stride(cute::_1{}, cute::get<1>(stride_SQ),
                               cute::make_stride(q_len, cute::get<2>(stride_SQ)),
                               cute::get<3>(stride_SQ)));
-        apply_scale<ElementQKMMAVerify, ElementQ>(block_Q_dq.get(), block_Q.get(), layout_Q, block_scaleQ.get(), layout_scale_Q);
+        for (int sample = 0; sample < num_of_samples; ++sample) {
+          apply_scale<ElementQKMMAVerify, ElementQ>(
+              replica_ptr(block_Q_dq, count_Q, sample), replica_ptr(block_Q, count_Q, sample),
+              layout_Q, block_scaleQ.get(), layout_scale_Q);
+        }
       }
     }
 #endif
@@ -1260,8 +1367,22 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
     auto params = FMHAKernel::to_underlying_arguments(arguments, workspace.get());
 
     // Launch Dynamic attention followed by reduction when multiple partitions
-    // are active; standard attention remains a single-kernel launch.
-    auto launch = [&]() {
+    // are active; standard attention remains a single-kernel launch. `r` selects
+    // which copy of the working set this iteration operates on.
+    auto launch = [&](int r) {
+      params.kernel.Q = replica_ptr(block_Q, count_Q, r);
+      params.kernel.K = replica_ptr(block_K, count_K, r);
+      params.kernel.V = replica_ptr(block_V, count_V, r);
+      params.kernel.K_cache = replica_ptr(block_K_cache, count_K_cache, r);
+      params.kernel.V_cache = replica_ptr(block_V_cache, count_V_cache, r);
+      params.kernel.O = replica_ptr(block_O, count_O, r);
+      if constexpr (BlockScale) {
+        params.kernel.scaleK = replica_ptr(block_scaleK, count_scaleK, r);
+        params.kernel.scaleV = replica_ptr(block_scaleV, count_scaleV, r);
+        params.kernel.scaleK_cache = replica_ptr(block_scaleK_cache, count_scaleK_cache, r);
+        params.kernel.scaleV_cache = replica_ptr(block_scaleV_cache, count_scaleV_cache, r);
+      }
+
       if constexpr (!is_same_v<ReductionKernel, void>) {
         run(params);
         if (ReductionKernel::requires_reduction(params)) {
@@ -1274,11 +1395,19 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
       }
     };
 
+    // Rotate through the replicated working sets, one per iteration. The timed loop continues
+    // the rotation where warmup left off, so its first iteration does not reuse the (still hot)
+    // replica the last warmup iteration just touched.
+    auto replica_of = [&](int i) { return i % num_of_samples; };
+
     // Warmup runs
     for (int i = 0; i < options.warmup; ++i) {
-      launch();
+      launch(replica_of(i));
     }
     compat::wait();
+    if (options.warmup > 0) {
+      verify_replica = replica_of(options.warmup - 1);
+    }
 
     if (options.verify == 0){
       std::cout << "Disposition is skipped." << std::endl;
@@ -1304,10 +1433,11 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
       GPU_Clock timer;
       timer.start();
       for (int i = 0; i < options.iterations; ++i) {
-        launch();
+        launch(replica_of(options.warmup + i));
       }
       compat::wait();
       cute_time = timer.seconds() / options.iterations;
+      verify_replica = replica_of(options.warmup + options.iterations - 1);
     }
 
     // For CRI TESTs, verify() must be called after the timed iterations loop, also verify on device
