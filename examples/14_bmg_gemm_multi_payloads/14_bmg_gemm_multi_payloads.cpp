@@ -46,16 +46,16 @@
 
     The multi-payload API instead materializes one payload per copy atom, up front:
 
-      prepare_payloads(tiled_copy, src_coord_tensor, dst_fragment)
-          -> Xe2DPreparedPayloads<N>, one payload per atom covering `dst_fragment`
-      copy_with_multi_payloads(tiled_copy, prepared, dst_fragment)
+      prepare_payloads(tiled_copy, src_coord_tensor)
+          -> Xe2DPreparedPayloads<N, BaseT>, one payload per atom
+      copy(tiled_copy, prepared, dst_fragment)
           -> issues all N loads back-to-back, with no address setup in between
-      prefetch_with_payloads(tiled_copy, prepared, src_shape)
+      prefetch(tiled_copy, prepared)
           -> the same, for prefetch messages
-      update_payloads(tiled_copy, prepared, delta)
+      prepared += delta
           -> advances every payload by `delta`, expressed in the copy's tensor coordinate space
 
-    `update_payloads` takes the step as a coordinate rather than a scalar because the mode being
+    The step is expressed as a coordinate because the mode being
     walked is not always the same block 2D dimension. This example is deliberately fixed to
     row-major operands so a single kernel exercises both directions: A is (M,K) with K contiguous,
     so a K step moves the block 2D x offset, while B is viewed as (N,K) with N contiguous, so the
@@ -235,15 +235,15 @@ gemm_multi_payload_device(ATensor  const& A,     // (M,K)
 
   /* One k tile is a (0, BLK_K) step in both A's (M,K) and B's (N,K) coordinate space. Whether that
      lands on the block 2D x or y offset is resolved from each copy's traits. */
-  auto k_tile_delta = make_coord(_0{}, get<2>(wg_tile));
+  static constexpr auto SG_K = get<2>(wg_tile);
 
-  /* Build one payload per copy atom. The destination fragment fixes how many atoms there are. */
-  auto prepared_a  = prepare_payloads(copy_a, tAgA(_,_,_,0), tArA);
-  auto prepared_b  = prepare_payloads(copy_b, tBgB(_,_,_,0), tBrB);
+  /* Build one payload per copy atom. The source coordinate tensor fixes how many atoms there are. */
+  auto prepared_a  = prepare_payloads(copy_a, tAgA(_,_,_,0));
+  auto prepared_b  = prepare_payloads(copy_b, tBgB(_,_,_,0));
 
-  /* Prefetches have no destination, so the coordinate tensor stands in for both operands. */
-  auto prepared_pa = prepare_payloads(prefetch_a, pAgA(_,_,_,0), pAgA(_,_,_,0));
-  auto prepared_pb = prepare_payloads(prefetch_b, pBgB(_,_,_,0), pBgB(_,_,_,0));
+  /* Prefetches have no destination, so only the coordinate tensor is needed. */
+  auto prepared_pa = prepare_payloads(prefetch_a, pAgA(_,_,_,0));
+  auto prepared_pb = prepare_payloads(prefetch_b, pBgB(_,_,_,0));
 
   //
   // Mainloop
@@ -258,33 +258,26 @@ gemm_multi_payload_device(ATensor  const& A,     // (M,K)
 
   /* Warm up loops with prefetch to L1 */
   CUTLASS_PRAGMA_UNROLL
-  for (int i = 0; i < PrefetchDistance; i++) {
-    prefetch_with_payloads(prefetch_a, prepared_pa, shape(pAgA(_,_,_,0)));
-    prefetch_with_payloads(prefetch_b, prepared_pb, shape(pBgB(_,_,_,0)));
-    update_payloads(prefetch_a, prepared_pa, k_tile_delta);
-    update_payloads(prefetch_b, prepared_pb, k_tile_delta);
+  for (int i = 0; i < PrefetchDistance; i++, prepared_pa += SG_K, prepared_pb += SG_K) {
+    prefetch(prefetch_a, prepared_pa);
+    prefetch(prefetch_b, prepared_pb);
   }
 
   /* Main loop */
-  for (int k_tile = 0; k_tile < k_tile_count; k_tile++) {
+  for (int k_tile = 0; k_tile < k_tile_count; k_tile++,
+       prepared_a += SG_K, prepared_b += SG_K,
+       prepared_pa += SG_K, prepared_pb += SG_K) {
     /* Split barrier keeping threads loosely together */
     barrier_arrive(barrier_scope);
 
     /* Copy A/B from global memory (ideally L1 cache) to registers. All loads for an operand issue
        back-to-back: each one owns a payload, so no address setup separates them. */
-    copy_with_multi_payloads(copy_a, prepared_a, tArA);
-    copy_with_multi_payloads(copy_b, prepared_b, tBrB);
-
-    /* Advance after use, so the payloads are already correct when the next iteration starts and the
-       update stays off the critical path of the loads it feeds. */
-    update_payloads(copy_a, prepared_a, k_tile_delta);
-    update_payloads(copy_b, prepared_b, k_tile_delta);
+    copy(copy_a, prepared_a, tArA);
+    copy(copy_b, prepared_b, tBrB);
 
     /* Prefetch A/B tiles to L1 */
-    prefetch_with_payloads(prefetch_a, prepared_pa, shape(pAgA(_,_,_,0)));
-    prefetch_with_payloads(prefetch_b, prepared_pb, shape(pBgB(_,_,_,0)));
-    update_payloads(prefetch_a, prepared_pa, k_tile_delta);
-    update_payloads(prefetch_b, prepared_pb, k_tile_delta);
+    prefetch(prefetch_a, prepared_pa);
+    prefetch(prefetch_b, prepared_pb);
 
     /* Shuffle data from copy fragments to MMA fragments */
     reorder(tArA, tCrA);

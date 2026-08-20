@@ -521,8 +521,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
     /* Initialization steps for first block: Q/K prefetch, O init */
     /* TODO: limit D prefetch for large head size, and reorder K prefetches */
-    using PreparedK_t = decltype(prepare_payloads(copy_k, tKgK(_,_,_,0,0), tKrK));
-    using PreparedV_t = decltype(prepare_payloads(copy_v, tVgV(_,_,_,0,0), tVrV));
+    using PreparedK_t = decltype(prepare_payloads(copy_k, tKgK(_,_,_,0,0)));
+    using PreparedV_t = decltype(prepare_payloads(copy_v, tVgV(_,_,_,0,0)));
     std::array<PreparedK_t, DTiles> prepared_k;
     std::array<PreparedV_t, VTiles> prepared_v;
 
@@ -540,15 +540,15 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
     CUTLASS_PRAGMA_UNROLL
     for (int d = 0; d < DTiles; d++) {
-      prepared_k[d] = prepare_payloads(copy_k, tKgK(_,_,_,0,d), tKrK);
+      prepared_k[d] = prepare_payloads(copy_k, tKgK(_,_,_,0,d));
     }
     CUTLASS_PRAGMA_UNROLL
     for (int VV = 0; VV < VTiles; VV++) {
-      prepared_v[VV] = prepare_payloads(copy_v, tVgV(_,_,_,VV,0), tVrV);
+      prepared_v[VV] = prepare_payloads(copy_v, tVgV(_,_,_,VV,0));
     }
 
-    [[maybe_unused]] auto prepared_pk  = prepare_payloads(prefetch_k, pKgK(_,_,_,0), pKgK(_,_,_,0));
-    [[maybe_unused]] auto prepared_pv  = prepare_payloads(prefetch_v, pVgV(_,_,_,0), pVgV(_,_,_,0));
+    [[maybe_unused]] auto prepared_pk  = prepare_payloads(prefetch_k, pKgK(_,_,_,0));
+    [[maybe_unused]] auto prepared_pv  = prepare_payloads(prefetch_v, pVgV(_,_,_,0));
     constexpr int kv_stride = get<1>(TileShapeQK{});
     [[maybe_unused]] int const tiles_per_page = params.page_size / kv_stride;
     [[maybe_unused]] int const batch_offset = params.num_pages_per_seq
@@ -580,29 +580,29 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       const int k_start_delta = k_start * kv_stride;
       CUTLASS_PRAGMA_UNROLL
       for (int d = 0; d < DTiles; d++) {
-        update_payloads(copy_k, prepared_k[d], k_seq_delta(k_start_delta));
+        prepared_k[d] += k_seq_delta(k_start_delta);
       }
       CUTLASS_PRAGMA_UNROLL
       for (int VV = 0; VV < VTiles; VV++) {
-        update_payloads(copy_v, prepared_v[VV], v_seq_delta(k_start_delta));
+        prepared_v[VV] += v_seq_delta(k_start_delta);
       }
       if (prefetch_sg_active) {
-        update_payloads(prefetch_k, prepared_pk, k_seq_delta(k_start_delta));
-        update_payloads(prefetch_v, prepared_pv, v_seq_delta(k_start_delta));
+        prepared_pk += k_seq_delta(k_start_delta);
+        prepared_pv += v_seq_delta(k_start_delta);
       }
     }
     if constexpr (!DisableKVPrefetch) {
       if (blk_k1 > kblocks_cache && prefetch_sg_active) {
         CUTLASS_PRAGMA_UNROLL
         for (int K = 0; K < Stages; K++) {
-          prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
-          update_payloads(prefetch_k, prepared_pk, k_seq_delta(kv_stride));
+          prefetch(prefetch_k, prepared_pk);
+          prepared_pk += k_seq_delta(kv_stride);
         }
         if constexpr (!DisableVPrefetch) {
           CUTLASS_PRAGMA_UNROLL
           for (int K = 0; K < Stages; K++) {
-            prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
-            update_payloads(prefetch_v, prepared_pv, v_seq_delta(kv_stride));
+            prefetch(prefetch_v, prepared_pv);
+            prepared_pv += v_seq_delta(kv_stride);
           }
         }
       }
@@ -735,8 +735,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         if constexpr (is_cache) {
           copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
         } else {
-          copy_with_multi_payloads(copy_v, prepared_v[VV], tVrV);
-          update_payloads(copy_v, prepared_v[VV], v_seq_delta(kv_stride));
+          copy(copy_v, prepared_v[VV], tVrV);
+          prepared_v[VV] += v_seq_delta(kv_stride);
         }
         reorder(tVrV, tArV);
       };
@@ -744,8 +744,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       // V prefetch for next iteration (non-cache only; cache prefetch lives below).
       if constexpr (!is_cache && !DisableKVPrefetch && !DisableVPrefetch) {
         if (prefetch_sg_active) {
-          prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
-          update_payloads(prefetch_v, prepared_pv, v_seq_delta(kv_stride));
+          prefetch(prefetch_v, prepared_pv);
+          prepared_pv += v_seq_delta(kv_stride);
         }
       }
       /* GEMM 1: S = K * Q */
@@ -755,8 +755,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         if constexpr (is_cache) {
           copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
         } else {
-          copy_with_multi_payloads(copy_k, prepared_k[D], tKrK);
-          update_payloads(copy_k, prepared_k[D], k_seq_delta(kv_stride));
+          copy(copy_k, prepared_k[D], tKrK);
+          prepared_k[D] += k_seq_delta(kv_stride);
         }
 
         reorder(tKrK, tSrK);
@@ -878,8 +878,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
       } else if constexpr (!DisableKVPrefetch) {
         if (prefetch_sg_active) {
-          prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
-          update_payloads(prefetch_k, prepared_pk, k_seq_delta(kv_stride));
+          prefetch(prefetch_k, prepared_pk);
+          prepared_pk += k_seq_delta(kv_stride);
         }
       }
       // Prefetch V scale
@@ -1126,11 +1126,11 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         barrier_arrive(ScopeWorkgroup);
 #endif
         if (prefetch_sg_active) {
-          prefetch_with_payloads(prefetch_k, prepared_pk, shape(pKgK(_,_,_,0)));
-          update_payloads(prefetch_k, prepared_pk, k_seq_delta(kv_stride));
+          prefetch(prefetch_k, prepared_pk);
+          prepared_pk += k_seq_delta(kv_stride);
           if constexpr (!DisableVPrefetch) {
-            prefetch_with_payloads(prefetch_v, prepared_pv, shape(pVgV(_,_,_,0)));
-            update_payloads(prefetch_v, prepared_pv, v_seq_delta(kv_stride));
+            prefetch(prefetch_v, prepared_pv);
+            prepared_pv += v_seq_delta(kv_stride);
           }
         }
 #if not defined(CUTLASS_TEST_FOR_CRI)        

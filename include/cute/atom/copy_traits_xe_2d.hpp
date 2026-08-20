@@ -231,9 +231,54 @@ struct Xe2DLoadTraitsBase : Xe2DTraitsBase<Op, XMode, YMode, ValType, TiledStrid
 };
 
 // TODO: Add unit tests under test/unit/cute/intel_xe/ covering the multi-payload
-template <int N>
+// Holds N pre-created block 2D address payloads (one per copy atom).
+// Supports in-place coordinate advancement via operator+=.
+template <int N, class BaseT = void>
 struct Xe2DPreparedPayloads {
   int* payloads[N];
+
+  // Advance all N payloads by `delta` in the copy's coordinate space.
+  //
+  // get<> preserves per-element type: static elements (e.g. _0, C<8>) yield
+  // integral_constant types whose arithmetic the compiler folds into immediates.
+  // Zero-valued dimensions are elided entirely via if-constexpr on is_constant_v.
+  template <class Coord>
+  CUTE_DEVICE Xe2DPreparedPayloads& operator+=(Coord const& delta) {
+    using Op = typename BaseT::CopyOp;
+    static_assert(!BaseT::nontrivial_tiled_strides,
+                  "Payload updates are only supported for modes handled by block 2D messages.");
+#ifdef __SYCL_DEVICE_ONLY__
+    auto dx = get<decltype(BaseT::get_x_mode())::value>(delta);
+    auto dy = get<decltype(BaseT::get_y_mode())::value>(delta);
+    CUTE_UNROLL
+    for (int i = 0; i < N; ++i) {
+      if constexpr (!is_constant_v<0, decltype(dx)>) {
+        __builtin_IB_subgroup_addBlock2DAddressPayloadBlockX(
+            payloads[i], int32_t(dx) * BaseT::ValBits / Op::CopyBits);
+      }
+      if constexpr (!is_constant_v<0, decltype(dy)>) {
+        __builtin_IB_subgroup_addBlock2DAddressPayloadBlockY(payloads[i], int32_t(dy));
+      }
+    }
+#else
+    (void) delta;
+    CUTE_INVALID_CONTROL_PATH("Xe 2D multi-payload copies are only available on SYCL device.");
+#endif
+    return *this;
+  }
+
+  // Convenience: treat a compile-time constant as a Y-only step.
+  // Preserves static type so the inner operator+= takes the compile-time path.
+  // Usage: prepared += C<SG_K>{};
+  template <int Step>
+  CUTE_DEVICE Xe2DPreparedPayloads& operator+=(C<Step>) {
+    return *this += make_coord(_0{}, C<Step>{});
+  }
+
+  // Convenience: treat a runtime int as a Y-only step.
+  CUTE_DEVICE Xe2DPreparedPayloads& operator+=(int step) {
+    return *this += make_coord(_0{}, step);
+  }
 };
 
 namespace detail {
@@ -245,81 +290,95 @@ as_xe2d_base(Xe2DTraitsBase<Op, XMode, YMode, ValType, TiledStrides> const& o) {
   return o;
 }
 
-enum class MultiPayloadPhase { Prepare, Load, Prefetch };
-template <MultiPayloadPhase Phase, int NumValDst, int N, class BaseT,
-          class SEngine, class SLayout,
+// Recursively create one payload per copy atom, traversing via nullspace.
+template <int NumValDst, int N, class BaseT,
+          class SEngine, class SLayout>
+CUTE_DEVICE void
+prepare_payloads(BaseT const& base,
+                      Tensor<SEngine, SLayout> const& src,
+                      Xe2DPreparedPayloads<N, BaseT>& payloads,
+                      int& idx)
+{
+  using Op    = typename BaseT::CopyOp;
+  constexpr int ValBits = BaseT::ValBits;
+
+  if constexpr (SLayout::rank == 1 && decltype(size(SLayout{}))::value == NumValDst) {
+#ifdef __SYCL_DEVICE_ONLY__
+    using XMode = decltype(BaseT::get_x_mode());
+    using YMode = decltype(BaseT::get_y_mode());
+    auto coord = src.data().coord_;
+    int32_t x = get<XMode::value>(coord) * ValBits / Op::CopyBits;
+    int32_t y = get<YMode::value>(coord);
+    uint64_t bp = base.base_ptr;
+    if constexpr (BaseT::nontrivial_tiled_strides) {
+      auto off = inner_product(coord, base.tiled_strides);
+      bp += (off * ValBits) >> 3;
+    }
+    payloads.payloads[idx] = __builtin_IB_subgroup_createBlock2DAddressPayload(
+        bp, base.width - 1, base.height - 1, base.pitch - 1, x, y,
+        Op::AtomWidth / Op::BlockCount, Op::AtomHeight, Op::BlockCount);
+#else
+    CUTE_INVALID_CONTROL_PATH("Xe 2D multi-payload copies are only available on SYCL device.");
+#endif
+    ++idx;
+  } else if constexpr (SLayout::rank > 1) {
+    constexpr int R = SLayout::rank;
+    auto src_v = group_modes<1, R>(src);
+    auto src_null = nullspace(layout<1>(src_v));
+    auto src_n = zipped_divide(src_v, make_tile(shape<0>(src_v), src_null));
+    auto src_c = src_n(make_coord(_, Int<0>{}), make_coord(Int<0>{}, _));
+    constexpr int Rest = decltype(size<1>(src_c))::value;
+    CUTE_UNROLL
+    for (int i = 0; i < Rest; ++i) {
+      auto s_i = src_c(_, i);
+      prepare_payloads<NumValDst>(base, s_i, payloads, idx);
+    }
+  } else {
+    static_assert(is_tuple<decltype(shape<0>(SLayout{}))>::value,
+                  "Cannot peel further: V mode is atomic but size does not match NumValDst");
+    auto s_sub = tensor<0>(src);
+    prepare_payloads<NumValDst>(base, s_sub, payloads, idx);
+  }
+}
+
+// Recursively issue one load per copy atom, traversing via nullspace.
+template <int NumValDst, int N, class BaseT,
           class DEngine, class DLayout>
 CUTE_DEVICE void
-walk_payloads(BaseT const& base,
-                   Tensor<SEngine, SLayout> const& src,
+copy(BaseT const& base,
                    Tensor<DEngine, DLayout>& dst,
-                   Xe2DPreparedPayloads<N>& payloads,
+                   Xe2DPreparedPayloads<N, BaseT> const& payloads,
                    int& idx)
 {
   using Op    = typename BaseT::CopyOp;
   constexpr int ValBits = BaseT::ValBits;
 
-  if constexpr (SLayout::rank == 1 && decltype(size(DLayout{}))::value == NumValDst) {
-    // Leaf atom.
-    if constexpr (Phase == MultiPayloadPhase::Prepare) {
+  if constexpr (DLayout::rank == 1 && decltype(size(DLayout{}))::value == NumValDst) {
 #ifdef __SYCL_DEVICE_ONLY__
-      using XMode = decltype(BaseT::get_x_mode());
-      using YMode = decltype(BaseT::get_y_mode());
-      auto coord = src.data().coord_;
-      int32_t x = get<XMode::value>(coord) * ValBits / Op::CopyBits;
-      int32_t y = get<YMode::value>(coord);
-      uint64_t bp = base.base_ptr;
-      if constexpr (BaseT::nontrivial_tiled_strides) {
-        auto off = inner_product(coord, base.tiled_strides);
-        bp += (off * ValBits) >> 3;
-      }
-      payloads.payloads[idx] = __builtin_IB_subgroup_createBlock2DAddressPayload(
-          bp, base.width - 1, base.height - 1, base.pitch - 1, x, y,
-          Op::AtomWidth / Op::BlockCount, Op::AtomHeight, Op::BlockCount);
+    using ValT = int_byte_t<bits_to_bytes(ValBits)>;
+    Op::copy(payloads.payloads[idx],
+             const_cast<ValT*>(recast_ptr<ValT>(&*dst.data())));
 #else
-      CUTE_INVALID_CONTROL_PATH("Xe 2D multi-payload copies are only available on SYCL device.");
+    CUTE_INVALID_CONTROL_PATH("Xe 2D multi-payload copies are only available on SYCL device.");
 #endif
-    } else if constexpr (Phase == MultiPayloadPhase::Prefetch) {
-#ifdef __SYCL_DEVICE_ONLY__
-      Op::copy(payloads.payloads[idx]);
-#else
-      CUTE_INVALID_CONTROL_PATH("Xe 2D multi-payload copies are only available on SYCL device.");
-#endif
-    } else {
-#ifdef __SYCL_DEVICE_ONLY__
-      using ValT = int_byte_t<bits_to_bytes(ValBits)>;
-      Op::copy(payloads.payloads[idx],
-               const_cast<ValT*>(recast_ptr<ValT>(&*dst.data())));
-#else
-      CUTE_INVALID_CONTROL_PATH("Xe 2D multi-payload copies are only available on SYCL device.");
-#endif
-    }
     ++idx;
-  } else if constexpr (SLayout::rank > 1) {
-    // Multi-mode: filter identically to cute::copy (nullspace + zipped_divide),
-    // then recurse into each atom.
-    constexpr int R = SLayout::rank;
-    auto src_v = group_modes<1, R>(src);
+  } else if constexpr (DLayout::rank > 1) {
+    constexpr int R = DLayout::rank;
     auto dst_v = group_modes<1, R>(dst);
     auto dst_null = nullspace(layout<1>(dst_v));
     auto dst_n = zipped_divide(dst_v, make_tile(shape<0>(dst_v), dst_null));
-    auto src_n = zipped_divide(src_v, make_tile(shape<0>(src_v), dst_null));
     auto dst_c = dst_n(make_coord(_, Int<0>{}), make_coord(Int<0>{}, _));
-    auto src_c = src_n(make_coord(_, Int<0>{}), make_coord(Int<0>{}, _));
     constexpr int Rest = decltype(size<1>(dst_c))::value;
     CUTE_UNROLL
     for (int i = 0; i < Rest; ++i) {
-      auto s_i = src_c(_, i);
       auto d_i = dst_c(_, i);
-      walk_payloads<Phase, NumValDst>(base, s_i, d_i, payloads, idx);
+      copy<NumValDst>(base, d_i, payloads, idx);
     }
   } else {
-    // Rank-1 but V mode is still a tuple larger than the atom: peel outer level.
-    static_assert(is_tuple<decltype(shape<0>(SLayout{}))>::value,
+    static_assert(is_tuple<decltype(shape<0>(DLayout{}))>::value,
                   "Cannot peel further: V mode is atomic but size does not match NumValDst");
-    auto s_sub = tensor<0>(src);
     auto d_sub = tensor<0>(dst);
-    walk_payloads<Phase, NumValDst>(base, s_sub, d_sub, payloads, idx);
+    copy<NumValDst>(base, d_sub, payloads, idx);
   }
 }
 
@@ -327,90 +386,55 @@ walk_payloads(BaseT const& base,
 
 // TODO: Fold these multi-payload API into the generic cute::copy / cute::prefetch paths
 template <class TiledCopy,
-          class SEngine, class SLayout,
-          class DEngine, class DLayout>
+          class Engine, class Layout>
 CUTE_DEVICE auto
 prepare_payloads(TiledCopy const& tiled_copy,
-                  Tensor<SEngine, SLayout> const& src,
-                  Tensor<DEngine, DLayout> const& dst)
+                  Tensor<Engine, Layout> const& tensor)
 {
+  static_assert(is_counting_layout_v<Layout>, "tensor must be a coordinate tensor.");
   auto const& base = detail::as_xe2d_base(tiled_copy);
   using BaseT = remove_cvref_t<decltype(base)>;
-
   constexpr int NumValDst = decltype(size<1>(typename BaseT::Traits::DstLayout{}))::value / BaseT::ValBits;
-  constexpr int Total     = decltype(size(DLayout{}))::value;
+  constexpr int Total     = decltype(size(Layout{}))::value;
   static_assert(Total % NumValDst == 0,
-                "dst fragment size is not a multiple of per-atom size");
+                "src tensor size is not a multiple of per-atom size");
   constexpr int N = Total / NumValDst;
 
-  Xe2DPreparedPayloads<N> prepared{};
+  Xe2DPreparedPayloads<N, BaseT> prepared{};
   int idx = 0;
-  auto dst_mut = make_tensor(dst.data(), dst.layout());   // walk signature wants dst&
-  detail::walk_payloads<detail::MultiPayloadPhase::Prepare, NumValDst>(
-      base, src, dst_mut, prepared, idx);
+  detail::prepare_payloads<NumValDst>(base, tensor, prepared, idx);
   return prepared;
 }
 
-template <class TiledCopy, int N, class DEngine, class DLayout>
+template <class TiledCopy, int N, class BaseT, class Engine, class Layout>
 CUTE_DEVICE void
-copy_with_multi_payloads(TiledCopy const& tiled_copy,
-              Xe2DPreparedPayloads<N> const& prepared,
-              Tensor<DEngine, DLayout>& dst)
+copy(TiledCopy const& tiled_copy,
+     Xe2DPreparedPayloads<N, BaseT> const& prepared,
+     Tensor<Engine, Layout>& tensor)
 {
+  static_assert(is_rmem_v<Engine>, "tensor must be in registers.");
   auto const& base = detail::as_xe2d_base(tiled_copy);
-  using BaseT = remove_cvref_t<decltype(base)>;
   constexpr int NumValDst = decltype(size<1>(typename BaseT::Traits::DstLayout{}))::value / BaseT::ValBits;
 
   int idx = 0;
-  auto src = make_identity_tensor(shape(dst));
-  detail::walk_payloads<detail::MultiPayloadPhase::Load, NumValDst>(
-      base, src, dst,
-      const_cast<Xe2DPreparedPayloads<N>&>(prepared), idx);
+  detail::copy<NumValDst>(base, tensor, prepared, idx);
 }
 
-template <class TiledCopy, int N, class Shape>
+template <class TiledCopy, int N, class BaseT>
 CUTE_DEVICE void
-prefetch_with_payloads(TiledCopy const& tiled_copy,
-                       Xe2DPreparedPayloads<N> const& prepared,
-                       Shape const& src_shape)
+prefetch(TiledCopy const& tiled_copy,
+                       Xe2DPreparedPayloads<N, BaseT> const& prepared)
 {
   auto const& base = detail::as_xe2d_base(tiled_copy);
-  using BaseT = remove_cvref_t<decltype(base)>;
-  constexpr int NumValDst = decltype(size<1>(typename BaseT::Traits::DstLayout{}))::value / BaseT::ValBits;
-
-  auto drv = make_identity_tensor(src_shape);
-  int idx = 0;
-  detail::walk_payloads<detail::MultiPayloadPhase::Prefetch, NumValDst>(
-      base, drv, drv,
-      const_cast<Xe2DPreparedPayloads<N>&>(prepared), idx);
-}
-
-template <class TiledCopy, int N, class Coord>
-CUTE_DEVICE void
-update_payloads(TiledCopy const& tiled_copy, Xe2DPreparedPayloads<N>& prepared, Coord const& delta)
-{
-  auto const& base = detail::as_xe2d_base(tiled_copy);
-  (void) base;
-  using BaseT = remove_cvref_t<decltype(base)>;
   using Op = typename BaseT::CopyOp;
-  static_assert(!BaseT::nontrivial_tiled_strides,
-                "Payload updates are only supported for modes handled by block 2D messages.");
 #ifdef __SYCL_DEVICE_ONLY__
-  auto dx = get<decltype(BaseT::get_x_mode())::value>(delta);
-  auto dy = get<decltype(BaseT::get_y_mode())::value>(delta);
   CUTE_UNROLL
   for (int i = 0; i < N; ++i) {
-    if constexpr (!is_constant_v<0, decltype(dx)>) {
-      __builtin_IB_subgroup_addBlock2DAddressPayloadBlockX(
-          prepared.payloads[i], int32_t(dx) * BaseT::ValBits / Op::CopyBits);
-    }
-    if constexpr (!is_constant_v<0, decltype(dy)>) {
-      __builtin_IB_subgroup_addBlock2DAddressPayloadBlockY(prepared.payloads[i], int32_t(dy));
-    }
+    Op::copy(prepared.payloads[i]);
   }
 #else
+  (void) base;
   (void) prepared;
-  (void) delta;
   CUTE_INVALID_CONTROL_PATH("Xe 2D multi-payload copies are only available on SYCL device.");
 #endif
 }
