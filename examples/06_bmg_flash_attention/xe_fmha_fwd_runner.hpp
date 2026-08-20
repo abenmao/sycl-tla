@@ -65,7 +65,7 @@ inline int estimate_saturation_cores(int base_units, int kv_blocks) {
 // TODO: Need to refine new saturation core estimation strategy for split-K, currently using a simple heuristic based on total.
 inline int estimate_saturation_cores_for_shape(
     int batch, int num_heads_kv, int seq_len_qo, int seq_len_kv,
-    int seq_len_kv_cache, int kv_tile_size = 256) {
+  int seq_len_kv_cache, int kv_tile_size) {
   int base_units = batch * num_heads_kv;
   // For small kv length, we will split workgroup across q rows
   if (seq_len_qo <= 8 && seq_len_kv == seq_len_qo &&
@@ -1283,9 +1283,10 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
     // via Arguments::saturation_cores_hint.
     int saturation_cores_hint = 0;
     if constexpr (IsPersistent) {
+      constexpr int kv_tile_size = int(get<1>(typename CollectiveMainloop::TileShapeQK{}));
       saturation_cores_hint = estimate_saturation_cores_for_shape(
           shape.batch, shape.num_heads_kv, shape.seq_len_qo,
-          shape.seq_len_kv, shape.seq_len_kv_cache);
+          shape.seq_len_kv, shape.seq_len_kv_cache, kv_tile_size);
     }
 
     typename FMHAKernel::Arguments arguments = [&]() {
@@ -1531,7 +1532,7 @@ template <bool Causal,
           typename ElementV = bfloat16_t,
           typename ElementScale = float,
           bool kGqaFusion = false,
-          typename ElementO = float,
+          typename ElementO = bfloat16_t,
           typename MMAOperation_ = void,    /* void -> default */
           typename StrideQ = Stride<int, _1, int, int>,
           typename StrideK = Stride<int, _1, int, int>,
@@ -1613,6 +1614,7 @@ struct FMHAConfig {
     using TensorK = decltype(make_dummy_tensor(ElementK{}, StrideK{}));
     using TensorV = decltype(make_dummy_tensor(ElementV{}, StrideV{}));
     using TensorO = decltype(make_dummy_tensor(ElementO{}, StrideO{}));
+    using TensorPartialO = decltype(make_dummy_tensor(float{}, StrideO{}));
     using TensorScaleQ = decltype(make_dummy_tensor(ElementScale{}, StrideScaleQ{}));
     using TensorScaleK = decltype(make_dummy_tensor(ElementScale{}, StrideScaleK{}));
     using TensorScaleV = decltype(make_dummy_tensor(ElementScale{}, StrideScaleV{}));
@@ -1650,7 +1652,7 @@ struct FMHAConfig {
     using CollectiveEpilogueSplit = cutlass::fmha::collective::FMHAFwdEpilogue<
         CollectiveMainloop,
         TileShapeOutput,
-        TensorO,
+        TensorPartialO,
         void,
         TensorLSE,
         StoreCachePolicyO
@@ -1659,7 +1661,8 @@ struct FMHAConfig {
     cutlass::Status status;
     if constexpr (is_same_v<Scheduler, cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>) {
       using FMHAKernel = cutlass::fmha::kernel::XeFMHAFwdDynamicSplitKernel<
-          ProblemShapeType, CollectiveMainloop, CollectiveEpilogueSplit, Scheduler>;
+          ProblemShapeType, CollectiveMainloop, CollectiveEpilogue,
+          CollectiveEpilogueSplit, Scheduler>;
       using ReduceKernel = cutlass::reduction::kernel::ReduceDynamicSplitK<FMHAKernel>;
       ExampleRunner<FMHAKernel, isVarLen, ReduceKernel> runner;
       status = runner.run(options, hw_info);

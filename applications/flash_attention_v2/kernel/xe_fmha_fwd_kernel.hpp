@@ -609,7 +609,8 @@ public:
   }
 };
 
-template <class ProblemShape_, class CollectiveMainloop_, class CollectiveEpilogue_, class TileScheduler_>
+template <class ProblemShape_, class CollectiveMainloop_, class CollectiveEpilogue_,
+          class CollectiveEpilogueSplit_, class TileScheduler_>
 class XeFMHAFwdDynamicSplitKernel {
 
 public:
@@ -658,20 +659,31 @@ public:
   using CollectiveEpilogue = CollectiveEpilogue_;
   using EpilogueArguments = typename CollectiveEpilogue::Arguments;
   using EpilogueParams = typename CollectiveEpilogue::Params;
+  using CollectiveEpilogueSplit = CollectiveEpilogueSplit_;
+  using SplitEpilogueArguments = typename CollectiveEpilogueSplit::Arguments;
+  using SplitEpilogueParams = typename CollectiveEpilogueSplit::Params;
 
   using TileShapeO = typename CollectiveEpilogue::TileShapeO;
   using ElementO = typename CollectiveEpilogue::TensorO::element_type;
   using StrideO = decltype(stride(typename CollectiveEpilogue::TensorO{}));
-  using ElementLSE = typename CollectiveEpilogue::ElementLSE;
+  using ElementPartialO = typename CollectiveEpilogueSplit::TensorO::element_type;
+  using StridePartialO = decltype(stride(typename CollectiveEpilogueSplit::TensorO{}));
+  using ElementLSE = typename CollectiveEpilogueSplit::ElementLSE;
+  static_assert(is_same_v<TileShapeO, typename CollectiveEpilogueSplit::TileShapeO>,
+                "Final and split epilogues require the same output tile shape");
+  static_assert(is_same_v<StrideO, StridePartialO>,
+                "Final and split outputs require the same stride type");
   static_assert(!is_void_v<ElementLSE>,
                 "XeFMHAFwdDynamicSplitKernel requires a split-capable epilogue");
 
   // Kernel level shared memory storage
   using MainloopSharedStorage = typename CollectiveMainloop::SharedStorage;
   using EpilogueSharedStorage = typename CollectiveEpilogue::SharedStorage;
+  using SplitEpilogueSharedStorage = typename CollectiveEpilogueSplit::SharedStorage;
   union SharedStorage {
     MainloopSharedStorage mainloop;
     EpilogueSharedStorage epilogue;
+    SplitEpilogueSharedStorage split_epilogue;
   };
 
   static constexpr bool BlockScale = CollectiveMainloop::BlockScale;
@@ -726,6 +738,7 @@ public:
     KernelHardwareInfo hw_info{};
     // Split-K saturation core count
     int saturation_cores_hint = 0;
+    SplitEpilogueArguments split_epilogue{};
   };
 
   // Kernel entry point API
@@ -733,8 +746,9 @@ public:
     KernelParams kernel;
     MainloopParams mainloop;
     EpilogueParams epilogue;
+    SplitEpilogueParams split_epilogue;
     TileSchedulerParams scheduler;
-    ElementO *partial_output_ptr = nullptr;
+    ElementPartialO *partial_output_ptr = nullptr;
     ElementLSE *exp_sums_ptr = nullptr;
     ElementLSE *max_logits_ptr = nullptr;
     int num_partitions = 1;
@@ -773,21 +787,22 @@ public:
       args.kernel.shape, args.hw_info, TileShapeO{},
       args.saturation_cores_hint, local_k_blocks, max_num_partitions);
     int num_partitions = scheduler.num_partitions;
-    ElementO *partial_output_ptr = nullptr;
+    ElementPartialO *partial_output_ptr = nullptr;
     ElementLSE *exp_sums_ptr = nullptr;
     ElementLSE *max_logits_ptr = nullptr;
     if (workspace != nullptr) {
       auto workspace_ptr = reinterpret_cast<uint8_t *>(workspace);
-      size_t partial_bytes = partial_output_elements(args.kernel.shape, num_partitions) * sizeof(ElementO);
+      size_t partial_bytes = partial_output_elements(args.kernel.shape, num_partitions) * sizeof(ElementPartialO);
       size_t stats_offset = align_up(partial_bytes, alignof(ElementLSE));
       size_t stats_bytes = stats_elements(args.kernel.shape, num_partitions) * sizeof(ElementLSE);
-      partial_output_ptr = reinterpret_cast<ElementO *>(workspace_ptr);
+      partial_output_ptr = reinterpret_cast<ElementPartialO *>(workspace_ptr);
       exp_sums_ptr = reinterpret_cast<ElementLSE *>(workspace_ptr + stats_offset);
       max_logits_ptr = reinterpret_cast<ElementLSE *>(workspace_ptr + stats_offset + stats_bytes);
     }
     return {args.kernel,
             CollectiveMainloop::to_underlying_arguments(args.mainloop, workspace),
             CollectiveEpilogue::to_underlying_arguments(args.epilogue, workspace),
+            CollectiveEpilogueSplit::to_underlying_arguments(args.split_epilogue, workspace),
             scheduler,
             partial_output_ptr, exp_sums_ptr, max_logits_ptr, num_partitions
           };
@@ -795,7 +810,8 @@ public:
 
   static bool can_implement(Arguments const &args) {
     return CollectiveMainloop::can_implement(args.mainloop)
-        && CollectiveEpilogue::can_implement(args.epilogue);
+        && CollectiveEpilogue::can_implement(args.epilogue)
+        && CollectiveEpilogueSplit::can_implement(args.split_epilogue);
   }
 
   static size_t get_workspace_size(Arguments const &args) {
@@ -808,7 +824,7 @@ public:
     }
 
     int num_partitions = scheduler.num_partitions;
-    size_t partial_bytes = partial_output_elements(args.kernel.shape, num_partitions) * sizeof(ElementO);
+    size_t partial_bytes = partial_output_elements(args.kernel.shape, num_partitions) * sizeof(ElementPartialO);
     size_t stats_offset = align_up(partial_bytes, alignof(ElementLSE));
     return stats_offset + 2 * stats_elements(args.kernel.shape, num_partitions) * sizeof(ElementLSE);
   }
@@ -845,7 +861,6 @@ public:
     // Final output tensor and epilogue.
     auto shape_O = make_shape(s.seq_len_qo, s.head_size_vo, s.num_heads_q, s.batch);
     Tensor O = make_tensor(make_gmem_ptr(p.O), make_layout(shape_O, p.dO));    // (q,v,h,b)
-    CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
     const int total_rows_o = head_group_q * s.seq_len_qo;
 
     auto do_epilogue = [&](int bh, FragA &out, FragARow &mx, auto &sm, auto const &bqv) {
@@ -859,12 +874,13 @@ public:
           O.data() + idx_b_o * stride<3>(O.layout()) + o_group_off,
           make_layout(make_shape(total_rows_o, int(s.head_size_vo)),
                       make_stride(int(stride<0>(O.layout())), stride<1>(O.layout()))));
+      CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
       epilogue(o_view, out, mx, sm, bqv, thr_id, p.scale_v);
     };
 
     auto shape_Oaccum = make_shape(total_rows_o, s.head_size_vo, s.num_heads_kv * num_partitions, s.batch);
     auto shape_stats = make_shape(total_rows_o, num_partitions, s.num_heads_kv, s.batch);
-    auto stride_Oaccum = cutlass::make_cute_packed_stride(StrideO{}, shape_Oaccum);
+    auto stride_Oaccum = cutlass::make_cute_packed_stride(StridePartialO{}, shape_Oaccum);
     auto stride_stats = cutlass::make_cute_packed_stride(StrideO{}, shape_stats);
     Tensor Oaccum = make_tensor(
         make_gmem_ptr(params.partial_output_ptr),
@@ -878,12 +894,14 @@ public:
 
     auto store_partition = [&](int bh, int part, FragA &out, FragARow &mx,
                    auto &sm, auto const &bqv) {
-      if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
+      if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<SplitEpilogueSharedStorage>) {
         sycl::group_barrier(get_work_group<3>());
       }
       int hkv = bh % s.num_heads_kv;
       int idx_b_o = bh / s.num_heads_kv;
-      epilogue(
+      CollectiveEpilogueSplit split_epilogue{
+          params.split_epilogue, shared_storage.split_epilogue};
+      split_epilogue(
           Oaccum(_,_,part * s.num_heads_kv + hkv,idx_b_o),
           out, mx, sm, bqv, thr_id,
           exp_sums(_,_,hkv,idx_b_o),
@@ -1001,6 +1019,8 @@ public:
   using ProblemShape = typename FMHAKernel_::ProblemShape;
   using ElementO = typename FMHAKernel_::ElementO;
   using StrideO = typename FMHAKernel_::StrideO;
+  using ElementPartialO = typename FMHAKernel_::ElementPartialO;
+  using StridePartialO = typename FMHAKernel_::StridePartialO;
   using ElementLSE = typename FMHAKernel_::ElementLSE;
   using SGPerWG = typename FMHAKernel_::SGPerWG;
 
@@ -1010,7 +1030,7 @@ public:
     ProblemShape shape;
     ElementO *O;
     StrideO dO;
-    const ElementO *partial_output_ptr;
+    const ElementPartialO *partial_output_ptr;
     const ElementLSE *exp_sums_ptr;
     const ElementLSE *max_logits_ptr;
     int num_partitions;
@@ -1063,12 +1083,12 @@ public:
     auto shape_O = make_shape(s.seq_len_qo, s.head_size_vo, s.num_heads_q, s.batch);
     auto shape_Oaccum = make_shape(s.seq_len_qo, s.head_size_vo, s.num_heads_q * num_partitions, s.batch);
     auto shape_stats = make_shape(s.seq_len_qo, num_partitions, s.num_heads_q, s.batch);
-    auto stride_Oaccum = cutlass::make_cute_packed_stride(StrideO{}, shape_Oaccum);
+    auto stride_Oaccum = cutlass::make_cute_packed_stride(StridePartialO{}, shape_Oaccum);
     auto stride_stats = cutlass::make_cute_packed_stride(StrideO{}, shape_stats);
 
     Tensor O = make_tensor(make_gmem_ptr(params.O), make_layout(shape_O, params.dO));
     Tensor Oaccum = make_tensor(
-        make_gmem_ptr(const_cast<ElementO *>(params.partial_output_ptr)),
+        make_gmem_ptr(const_cast<ElementPartialO *>(params.partial_output_ptr)),
         make_layout(shape_Oaccum, stride_Oaccum));
     Tensor exp_sums = make_tensor(
         make_gmem_ptr(const_cast<ElementLSE *>(params.exp_sums_ptr)),

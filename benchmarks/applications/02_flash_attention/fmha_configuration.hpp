@@ -127,6 +127,7 @@ struct FMHAConfig {
   using TensorK = decltype(make_dummy_tensor(ElementK{}, StrideK{}));
   using TensorV = decltype(make_dummy_tensor(ElementV{}, StrideV{}));
   using TensorO = decltype(make_dummy_tensor(ElementO{}, StrideO{}));
+  using TensorPartialO = decltype(make_dummy_tensor(float{}, StrideO{}));
   using TensorLSE = decltype(make_dummy_tensor(float{}, StrideO{}));
   using TensorScaleQ = decltype(make_dummy_tensor(ElementScale{}, StrideScaleQ{}));
   using TensorScaleK = decltype(make_dummy_tensor(ElementScale{}, StrideScaleK{}));
@@ -160,7 +161,7 @@ struct FMHAConfig {
   using CollectiveEpilogueSplit = cutlass::fmha::collective::FMHAFwdEpilogue<
     CollectiveMainloop,
     TileShapeOutput,
-    TensorO,
+    TensorPartialO,
     void,
     TensorLSE
   >;
@@ -176,7 +177,8 @@ struct FMHAConfig {
   >;
   using FMHAKernel = cute::conditional_t<Persistent,
       cutlass::fmha::kernel::XeFMHAFwdDynamicSplitKernel<
-        ProblemShapeType, CollectiveMainloop, CollectiveEpilogueSplit, Scheduler>,
+        ProblemShapeType, CollectiveMainloop, CollectiveEpilogue,
+        CollectiveEpilogueSplit, Scheduler>,
       cutlass::fmha::kernel::XeFMHAFwdKernel<
         ProblemShapeType, CollectiveMainloop, CollectiveEpilogue, Scheduler>
   >;
