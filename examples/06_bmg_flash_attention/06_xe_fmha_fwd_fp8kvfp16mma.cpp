@@ -71,6 +71,11 @@ int main(int argc, const char **argv) {
     return -1;
   }
 
+  if (options.varlen) {
+    std::cerr << "Error: Variable-length FMHA requested. Use the varlen binary." << std::endl;
+    return -1;
+  }
+
 #if defined(PAGED_KV)
   if (options.seq_len_kv_cache <= 0) {
     std::cerr << "Error: this binary only instantiates CachedKV kernels; pass --seq_len_kv_cache." << std::endl;
@@ -198,8 +203,7 @@ int main(int argc, const char **argv) {
   const int saturation_cores_default = estimate_saturation_cores(base_units, kv_blocks);
   const int saturation_cores =
       cutlass::fmha::kernel::fmha_split_saturation_cores(saturation_cores_default);
-  const bool use_split = !options.varlen
-                      && total_rows <= 64
+  const bool use_split = total_rows <= 64
                       && base_units < saturation_cores
                       && base_units * kv_blocks > saturation_cores;
 
@@ -253,13 +257,9 @@ int main(int argc, const char **argv) {
   using FMHANonCausal = FMHAConfig<false, BlockScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV, ElementScale>;
 
 #if defined(PAGED_KV)
-#define FMHA_RUN_PREFILL(CFG)                                          \
-  (options.varlen ? CFG::template run<true,  true, Scheduler>(options) \
-                  : CFG::template run<false, true, Scheduler>(options))
+#define FMHA_RUN_PREFILL(CFG) CFG::template run<false, true, Scheduler>(options)
 #else
-#define FMHA_RUN_PREFILL(CFG)                                           \
-  (options.varlen ? CFG::template run<true,  false, Scheduler>(options) \
-                  : CFG::template run<false, false, Scheduler>(options))
+#define FMHA_RUN_PREFILL(CFG) CFG::template run<false, false, Scheduler>(options)
 #endif
 
   if (options.is_causal) {

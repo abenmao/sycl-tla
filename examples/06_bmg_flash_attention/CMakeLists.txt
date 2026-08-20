@@ -63,6 +63,11 @@ else()
   set(TEST_CACHED_KV_DECODE "--seq_len_kv_cache=64")
 endif()
 
+set(TEST_VARLEN_PREFILL ${TEST_NO_PAGED_PREFILL} "--varlen")
+set(TEST_VARLEN_CACHED_KV_PREFILL ${TEST_CACHED_KV_PREFILL} "--varlen")
+set(TEST_VARLEN_KVCACHE_PREFILL ${TEST_KVCACHE_PREFILL} "--varlen")
+set(TEST_VARLEN_KVCACHE_PAGED_PREFILL ${TEST_KVCACHE_PAGED_PREFILL} "--varlen")
+
 foreach(HEAD_DIM 64 96 128 192)
   foreach(INPUT_TYPE ${INPUT_TYPES})
     # FP4 (e2m1) DPAS atom has K=64, so head dim must be a multiple of 64.
@@ -132,6 +137,14 @@ foreach(HEAD_DIM 64 96 128 192)
     target_compile_definitions(06_xe_fmha_fwd_prefill_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
     target_compile_definitions(06_xe_fmha_fwd_decode_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
 
+    cutlass_example_add_executable(
+      06_xe_fmha_fwd_prefill_varlen_${INPUT_TYPE}_hdim${HEAD_DIM}
+      06_xe_fmha_fwd_varlen.cpp
+      TEST_COMMAND_OPTIONS
+      TEST_VARLEN_PREFILL
+    )
+    target_compile_definitions(06_xe_fmha_fwd_prefill_varlen_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
+
     # --- Paged KV targets (contiguous cache is represented as one page) ---
     if (INPUT_TYPE STREQUAL "mx_float_e5m2_t" OR INPUT_TYPE STREQUAL "mx_float_e4m3_t" OR INPUT_TYPE STREQUAL "mx_float_e2m1_t")
       cutlass_example_add_executable(
@@ -151,6 +164,16 @@ foreach(HEAD_DIM 64 96 128 192)
         TEST_KVCACHE_PAGED_DECODE
       )
       target_compile_definitions(06_xe_fmha_fwd_decode_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE PAGED_KV SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
+
+      cutlass_example_add_executable(
+        06_xe_fmha_fwd_prefill_varlen_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM}
+        06_xe_fmha_fwd_varlen.cpp
+        TEST_COMMAND_OPTIONS
+        TEST_VARLEN_KVCACHE_PREFILL
+        TEST_VARLEN_KVCACHE_PAGED_PREFILL
+      )
+      target_compile_definitions(06_xe_fmha_fwd_prefill_varlen_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL PAGED_KV SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
+
     else()
       cutlass_example_add_executable(
         06_xe_fmha_fwd_prefill_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM}
@@ -167,6 +190,15 @@ foreach(HEAD_DIM 64 96 128 192)
         TEST_CACHED_KV_DECODE
       )
       target_compile_definitions(06_xe_fmha_fwd_decode_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
+
+      cutlass_example_add_executable(
+        06_xe_fmha_fwd_prefill_varlen_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM}
+        06_xe_fmha_fwd_varlen.cpp
+        TEST_COMMAND_OPTIONS
+        TEST_VARLEN_CACHED_KV_PREFILL
+      )
+      target_compile_definitions(06_xe_fmha_fwd_prefill_varlen_cached_kv_${INPUT_TYPE}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL PAGED_KV SHOW_DIFF=1 INPUT_TYPE=${INPUT_TYPE} ${INPUT_MACRO})
+
     endif()
   endforeach()
 
@@ -213,5 +245,31 @@ foreach(HEAD_DIM 64 96 128 192)
       TEST_KVCACHE_PAGED_DECODE
     )
     target_compile_definitions(06_xe_fmha_fwd_decode_cached_kv_mxfp8kvfp16mma_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} DECODE PAGED_KV MXFP8_KV SHOW_DIFF=1)
+
+    foreach(VARLEN_SUFFIX fp8kvfp16mma mxfp8kvfp16mma)
+      if (VARLEN_SUFFIX STREQUAL "mxfp8kvfp16mma")
+        set(VARLEN_EXTRA_MACRO MXFP8_KV)
+      else()
+        set(VARLEN_EXTRA_MACRO "")
+      endif()
+
+      cutlass_example_add_executable(
+        06_xe_fmha_fwd_prefill_varlen_${VARLEN_SUFFIX}_hdim${HEAD_DIM}
+        06_xe_fmha_fwd_varlen.cpp
+        TEST_COMMAND_OPTIONS
+        TEST_VARLEN_PREFILL
+      )
+      target_compile_definitions(06_xe_fmha_fwd_prefill_varlen_${VARLEN_SUFFIX}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL VARLEN_FP8KVFP16MMA ${VARLEN_EXTRA_MACRO} SHOW_DIFF=1)
+
+      cutlass_example_add_executable(
+        06_xe_fmha_fwd_prefill_varlen_cached_kv_${VARLEN_SUFFIX}_hdim${HEAD_DIM}
+        06_xe_fmha_fwd_varlen.cpp
+        TEST_COMMAND_OPTIONS
+        TEST_VARLEN_KVCACHE_PREFILL
+        TEST_VARLEN_KVCACHE_PAGED_PREFILL
+      )
+      target_compile_definitions(06_xe_fmha_fwd_prefill_varlen_cached_kv_${VARLEN_SUFFIX}_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL PAGED_KV VARLEN_FP8KVFP16MMA ${VARLEN_EXTRA_MACRO} SHOW_DIFF=1)
+
+    endforeach()
   endif()
 endforeach()

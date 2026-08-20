@@ -71,6 +71,11 @@ int main(int argc, const char **argv) {
     return -1;
   }
 
+  if (options.varlen) {
+    std::cerr << "Error: Variable-length FMHA requested. Use the varlen binary." << std::endl;
+    return -1;
+  }
+
 #ifdef IS_FLOAT_E5M2
   using ElementQ = cutlass::float_e5m2_t;
   using ElementK = cutlass::float_e5m2_t;
@@ -136,12 +141,6 @@ int main(int argc, const char **argv) {
   using ShapePV8 = Shape<_64, _64, _32>;
   using ShapeOut8 = Shape<_64, _128>;
   using SubgroupLayoutQK8 = Layout<Shape<_8, _1, _1>>;
-
-  // Keep a separate small-path tile for broader short-sequence coverage.
-  using ShapeQK4 = Shape<_128, _64, _64>;
-  using ShapePV4 = Shape<_128, _64, _64>;
-  using ShapeOut4 = Shape<_128, _128>;
-  using SubgroupLayoutQK4 = Layout<Shape<_8, _1, _1>>;
 #endif
 #elif HEAD_DIM == 192
   using ShapeQK = Shape<_256, _64, _32>;
@@ -221,7 +220,6 @@ int main(int argc, const char **argv) {
   const int total_kv_length = options.seq_len_kv + options.seq_len_kv_cache;
   const int base_units = options.batch * options.num_heads_kv;
 
-
   const int kv_tile = int(KV_TILE_SIZE::value);
   const int kv_blocks = cute::ceil_div(total_kv_length, kv_tile);
   const int saturation_cores_default = estimate_saturation_cores(base_units, kv_blocks);
@@ -270,9 +268,6 @@ int main(int argc, const char **argv) {
   // Causal scheduler with DisablePrefetchV=true, used only for small tiles.
   using CausalSmallScheduler =
     cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false, false, true, false, true>;
-  // Causal scheduler without DisablePrefetchV, used for large tiles.
-  using CausalScheduler =
-    cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false, false, true, false, false>;
   using DefaultScheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
 
   using FMHACausal    = FMHAConfig<true, false, ShapeQK_Causal, ShapePV_Causal, ShapeOut_Causal, SubgroupLayoutQK_Causal, void, PipelineStages, ElementQ, ElementK, ElementV>;
@@ -280,9 +275,6 @@ int main(int argc, const char **argv) {
 
   using FMHACausal8    = FMHAConfig<true, false, ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, void, 1, ElementQ, ElementK, ElementV>;
   using FMHANonCausal8 = FMHAConfig<false, false, ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, void, 1, ElementQ, ElementK, ElementV>;
-
-  using FMHACausal4    = FMHAConfig<true, false, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4, void, 1, ElementQ, ElementK, ElementV>;
-  using FMHANonCausal4 = FMHAConfig<false, false, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4, void, 1, ElementQ, ElementK, ElementV>;
 
   // Adaptive smaller Q tile to ensure >=2 waves: if too few WGs with BLK_Q=256,
   // use BLK_Q=128 for more waves and finer scheduling granularity.
@@ -294,30 +286,14 @@ int main(int argc, const char **argv) {
 
   if (options.is_causal) {
     if (use_small) {
-      if (options.varlen) {
-        return FMHACausal4::template run<true, false, CausalSmallScheduler>(options);
-      } else {
-        return FMHACausal8::template run<false, false, CausalSmallScheduler>(options);
-      }
+      return FMHACausal8::template run<false, false, CausalSmallScheduler>(options);
     }
-    if (options.varlen) {
-      return FMHACausal::template run<true, false, CausalScheduler>(options);
-    } else {
-      return FMHACausal::template run<false, false, DefaultScheduler>(options);
-    }
+    return FMHACausal::template run<false, false, DefaultScheduler>(options);
   } else {
     if (options.seq_len_qo < 512) {
-      if (options.varlen) {
-        return FMHANonCausal8::template run<true, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false,false,false,false,true>>(options);
-      } else {
-        return FMHANonCausal8::template run<false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false,false,false,false,true>>(options);
-      }
+      return FMHANonCausal8::template run<false, false, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false,false,false,false,true>>(options);
     }
-    if (options.varlen) {
-      return FMHANonCausal::template run<true, false, DefaultScheduler>(options);
-    } else {
-      return FMHANonCausal::template run<false, false, DefaultScheduler>(options);
-    }
+    return FMHANonCausal::template run<false, false, DefaultScheduler>(options);
   }
 #else
   if (options.seq_len_kv_cache > 0 || options.use_paged_kv) {
@@ -331,17 +307,9 @@ int main(int argc, const char **argv) {
   using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
 
   if (options.is_causal) {
-    if (options.varlen) {
-      return FMHACausal::template run<true, false, Scheduler>(options);
-    } else {
-      return FMHACausal::template run<false, false, Scheduler>(options);
-    }
+    return FMHACausal::template run<false, false, Scheduler>(options);
   } else {
-    if (options.varlen) {
-      return FMHANonCausal::template run<true, false, Scheduler>(options);
-    } else {
-      return FMHANonCausal::template run<false, false, Scheduler>(options);
-    }
+    return FMHANonCausal::template run<false, false, Scheduler>(options);
   }
 #endif
 #endif

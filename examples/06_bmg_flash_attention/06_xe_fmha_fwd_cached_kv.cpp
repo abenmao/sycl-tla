@@ -34,9 +34,9 @@
     This file instantiates only the CachedKV=true kernel variants,
     split out from the main 06_xe_fmha_fwd.cpp to reduce per-binary compile time.
 
-    Instantiated kernels (4 total):
+    Instantiated kernels (2 total):
       - Causal × {true, false}
-      - VarLen × {true, false}
+      - VarLen = false
       - CachedKV = true
       - PagedKV = true (contiguous cache uses one identity-mapped page)
 
@@ -66,6 +66,11 @@ int main(int argc, const char **argv) {
 
   if (options.error) {
     std::cerr << "Aborting execution." << std::endl;
+    return -1;
+  }
+
+  if (options.varlen) {
+    std::cerr << "Error: Variable-length FMHA requested. Use the varlen binary." << std::endl;
     return -1;
   }
 
@@ -253,8 +258,7 @@ int main(int argc, const char **argv) {
   const bool short_cache_q8_candidate = options.seq_len_qo <= 8 &&
                                         options.seq_len_kv_cache > 0 &&
                                         options.seq_len_kv_cache <= 1024;
-  const bool can_use_dynamic_split = !options.varlen
-                                  && total_rows <= 64
+  const bool can_use_dynamic_split = total_rows <= 64
                                   && base_units < saturation_cores;
   const bool split_short_cache_q_rows = can_use_dynamic_split
                                      && short_cache_q8_candidate;
@@ -301,7 +305,6 @@ int main(int argc, const char **argv) {
   #undef FMHA_RUN_DYNAMIC
 #else
   // Directly instantiate only CachedKV=true kernels.
-  // Causal and VarLen are dispatched at runtime.
   using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
 
 #if HEAD_DIM == 128 && defined(PREFILL) && !(defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)) && (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
@@ -317,35 +320,25 @@ int main(int argc, const char **argv) {
   int total_wgs_256 = num_q_tiles_256 * options.num_heads_q * options.batch;
   bool use_small = options.seq_len_qo < 512 || total_wgs_256 < 2 * num_xe_cores;
 
-#define FMHA_DISPATCH_PAGED(CFG)                                         \
-  (options.varlen                                                       \
-  ? CFG::template run<true, true, Scheduler>(options)                   \
-  : CFG::template run<false, true, Scheduler>(options))
-
   if (options.is_causal) {
     if (use_small) {
-      return FMHA_DISPATCH_PAGED(FMHACausal4);
+      return FMHACausal4::template run<false, true, Scheduler>(options);
     }
-    return FMHA_DISPATCH_PAGED(FMHACausal);
+    return FMHACausal::template run<false, true, Scheduler>(options);
   } else {
     if (options.seq_len_qo < 512) {
-      return FMHA_DISPATCH_PAGED(FMHANonCausal4);
+      return FMHANonCausal4::template run<false, true, Scheduler>(options);
     }
-    return FMHA_DISPATCH_PAGED(FMHANonCausal);
+    return FMHANonCausal::template run<false, true, Scheduler>(options);
   }
-#undef FMHA_DISPATCH_PAGED
 #else
   using FMHACausal    = FMHAConfig<true, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
   using FMHANonCausal = FMHAConfig<false, false, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV>;
 
   if (options.is_causal) {
-    return options.varlen
-      ? FMHACausal::template run<true, true, Scheduler>(options)
-      : FMHACausal::template run<false, true, Scheduler>(options);
+    return FMHACausal::template run<false, true, Scheduler>(options);
   } else {
-    return options.varlen
-      ? FMHANonCausal::template run<true, true, Scheduler>(options)
-      : FMHANonCausal::template run<false, true, Scheduler>(options);
+    return FMHANonCausal::template run<false, true, Scheduler>(options);
   }
 #endif
 #endif
