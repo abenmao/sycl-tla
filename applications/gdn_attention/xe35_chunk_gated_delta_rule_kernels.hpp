@@ -374,7 +374,7 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
 
       clear(tSrA_base);
       clear(tSrO2_base);
-      gemm_TTS_shareB_pergroup(
+      gemm_TTS_shareB_multi_tile(
           local_id, K_tensor, Q_tensor, K_tensor, tSrA_base,
           tSrO2_base, 0, 0, mma);
 
@@ -846,46 +846,37 @@ CUTE_DEVICE void chunk_compute_wu_kernel(
     const int head_v_dim) {
   auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
   int local_id = item.get_local_linear_id();
-  int local_range = item.get_local_range(2);
   int chunk_id = item.get_group(1);
   const int global_chunk_range = item.get_group_range(1);
 
   auto sg = item.get_sub_group();
-  int sg_id = sg.get_group_linear_id();
-  int sg_range = sg.get_group_linear_range();
   int sg_local_id = sg.get_local_linear_id();
-
-  float* slm_mem = static_cast<float*>(
-      slm_mem_const.template get_multi_ptr<sycl::access::decorated::no>()
-          .get());
-  float* A_log_slm_ptr = slm_mem;
-  float* dt_bias_slm_ptr = A_log_slm_ptr + num_v_heads;
-  float* g_slm_ptr = dt_bias_slm_ptr + num_v_heads;
-  float* beta_slm_ptr = g_slm_ptr + chunk_size;
 
   TiledMMA mma{};
   auto wg_tile = mma.tile_mnk();
-  auto thr_mma = mma.get_slice(local_id);
 
-  static constexpr auto tile_m = get<0>(wg_tile);
-  static constexpr auto tile_n = get<1>(wg_tile);
+  /* The work-group is a full Xe core, holding num_tiles independent MMA
+   * tiles (size(mma) work-items each), so each tile drives its own v_head
+   * and all sub-groups issue DPAS. Never add a work-group-scope barrier in
+   * the per-tile region below -- tiles run different numbers of v_heads and
+   * would deadlock. */
+  const int tile_size = size(TiledMMA{});
+  const int num_tiles = item.get_local_range(2) / tile_size;
+  const int tile_id = local_id / tile_size;
+  const int tile_local_id = local_id % tile_size;
 
-  static constexpr auto ATOM_M =
-      get<1>(typename TiledMMA::ThrLayoutVMNK{}.shape());
-  static constexpr auto ATOM_N =
-      get<2>(typename TiledMMA::ThrLayoutVMNK{}.shape());
+  auto thr_mma = mma.get_slice(tile_local_id);
 
-  static constexpr auto SG_M = tile_m / ATOM_M;  // BLK_M / ATOM_M;
-  static constexpr auto SG_N = tile_n / ATOM_N;  // BLK_N / ATOM_N;
-
-  auto sg_local_m_coord = cutlass::get_sub_group_id() / ATOM_N;
-  auto sg_local_n_coord = cutlass::get_sub_group_id() % ATOM_N;
-  int m_tile_start = 0;
-  int n_tile_start = 0;
-  int m_sg_start = sg_local_m_coord * SG_M;
-  int n_sg_start = sg_local_n_coord * SG_N;
-
-  using TileShape = decltype(mma.tile_mnk());
+  /* One beta/g slice per sub-group, not per tile: every sub-group of a tile
+   * reads the full chunk_size diagonal span (via sg_local_id), so a shared
+   * per-tile slice would create a cross-sub-group dependency. Per-sub-group
+   * slices keep the fill lane-private and barrier-free. */
+  const int sg_slot = static_cast<int>(sg.get_group_linear_id());
+  float* slm_mem = static_cast<float*>(
+      slm_mem_const.template get_multi_ptr<sycl::access::decorated::no>()
+          .get());
+  float* g_slm_ptr = slm_mem + sg_slot * chunk_size * 2;
+  float* beta_slm_ptr = g_slm_ptr + chunk_size;
 
   int pre_chunks = 0;
 
@@ -913,28 +904,23 @@ CUTE_DEVICE void chunk_compute_wu_kernel(
     while (chunk_id < cumsum_chunks) {
       const int chunk_start_offset = chunk_id * chunk_size;
 
-      for (int v_head_id = 0; v_head_id < num_v_heads; ++v_head_id) {
+      /* Strided v_head split across the work-group's tiles: tile T starts at
+       * v_head T and strides by num_tiles. A tile past num_v_heads just runs
+       * zero iterations and falls through -- safe since the region is
+       * barrier-free. */
+      for (int v_head_id = tile_id; v_head_id < num_v_heads;
+           v_head_id += num_tiles) {
         /* Precompute per-token scaling factors into SLM:
          *   beta[t]   = b[t]              (delta-rule write scale)
          *   g[t] = exp(a[t]) * b[t]       (decay * beta, used for W)
          * a[t] here is the CUMSUM gate from stage 1; exp(a[m]-a[n]) gives
          * the product of per-token decays from n to m, but using the
          * cumsum directly is cheaper (one exp per token vs. one per pair).
-         *
-         * SIGMOID CONTRACT: `b` is read here verbatim as the delta-rule
-         * strength beta, which the chunkwise math assumes lies in (0,1). The
-         * kernel does NOT apply the sigmoid itself -- matching upstream
-         * vllm-xpu-kernels, where the chunk kernel
-         * (chunk_gated_delta_rule_kernels_xe2.hpp) likewise reads b raw and the
-         * sigmoid is applied one stage earlier by the causal conv1d front-end
-         * (chunk_causal_conv1d_xe2.hpp: `b_value = act_sigmoid(b_value)`).
-         * Callers that bypass that front-end (the runner) must therefore sigmoid
-         * b on the host before the launch (see GdnRunner::initialize ->
-         * apply_sigmoid_b). Feeding raw, un-sigmoided b makes beta O(1)+, so the
-         * chunk transition matrix L overflows in the stage-3 inverse and
-         * propagates NaN; the in-range contract is what keeps L well-conditioned. */
+         * Filled with stride sub_group_size from sg_local_id: lane L writes
+         * exactly the indices it later reads via the GEMM's diagonal lookup,
+         * so no barrier is needed (relies on mma_K == sub_group_size). */
         CUTE_UNROLL
-        for (int e = local_id; e < chunk_size; e += local_range) {
+        for (int e = sg_local_id; e < chunk_size; e += sub_group_size) {
           float beta_value =
               b[(chunk_start_offset + e) + v_head_id * total_virtual_seqlen];
           float a_value =
@@ -942,8 +928,6 @@ CUTE_DEVICE void chunk_compute_wu_kernel(
           beta_slm_ptr[e] = beta_value;
           g_slm_ptr[e] = sycl::exp(a_value) * beta_value;
         }
-
-        item.barrier(sycl::access::fence_space::local_space);
 
         auto A_ptr = A +
                      static_cast<int64_t>(v_head_id) * total_virtual_seqlen *
@@ -974,7 +958,7 @@ CUTE_DEVICE void chunk_compute_wu_kernel(
 
         Tensor cU = make_identity_tensor(U_tensor.shape());
         auto copy_U_c = get_block_2d_copy_D<void>(mma, U_tensor);
-        auto thr_copy_U_c = copy_U_c.get_slice(local_id);
+        auto thr_copy_U_c = copy_U_c.get_slice(tile_local_id);
 
         for (int dv = 0; dv < head_v_dim / chunk_size; ++dv) {
           Tensor gU_C =
@@ -984,8 +968,15 @@ CUTE_DEVICE void chunk_compute_wu_kernel(
           auto tSrU_c = thr_mma.partition_sg_fragment_C(gU_C);
           /* U[m,:] = sum_n  L^-1[m,n] * V[n,:] * b[n]  -- scaled V projection. */
           clear(tSrU_c);
-          gemm_TTS_k_multi(
-              A_tensor, V_tensor_T, tSrU_c, 0, dv, mma, beta_slm_ptr);
+          gemm_TTS_k_multi_tile(
+              A_tensor,
+              V_tensor_T,
+              tSrU_c,
+              0,
+              dv,
+              mma,
+              beta_slm_ptr,
+              tile_local_id);
           reorder(tSrU_c, tCrU_c);
           copy(copy_U_c, tCrU_c, tCgU_c);
         }
@@ -1015,7 +1006,7 @@ CUTE_DEVICE void chunk_compute_wu_kernel(
 
           Tensor cW = make_identity_tensor(W_tensor.shape());
           auto copy_W_c = get_block_2d_copy_D<void>(mma, W_tensor);
-          auto thr_copy_W_c = copy_W_c.get_slice(local_id);
+          auto thr_copy_W_c = copy_W_c.get_slice(tile_local_id);
 
           for (int dk = 0; dk < head_k_dim / chunk_size; ++dk) {
             Tensor gW_C = local_tile(
@@ -1025,8 +1016,15 @@ CUTE_DEVICE void chunk_compute_wu_kernel(
             auto tSrW_c = thr_mma.partition_sg_fragment_C(gW_C);
             /* W[m,:] = sum_n L^-1[m,n] * K[n,:] * g[n]  (g = exp(a)*b). */
             clear(tSrW_c);
-            gemm_TTS_k_multi(
-                A_tensor, K_tensor_T, tSrW_c, 0, dk, mma, g_slm_ptr);
+            gemm_TTS_k_multi_tile(
+                A_tensor,
+                K_tensor_T,
+                tSrW_c,
+                0,
+                dk,
+                mma,
+                g_slm_ptr,
+                tile_local_id);
             reorder(tSrW_c, tCrW_c);
             copy(copy_W_c, tCrW_c, tCgW_c);
           }
@@ -1456,11 +1454,18 @@ sycl::event launch_stage_compute_wu(
   using MMAComputeWU = typename TiledMMAHelper<
       MMA_Atom<decltype(op)>, Layout<WGTileComputeWU>, SGLayoutComputeWU>::TiledMMA;
   auto mmaComputeWU = MMAComputeWU{};
-  int MaxThreadsPerWorkgroupComputeWU = size(mmaComputeWU);
+  /* Local range is a full Xe core; the kernel fans it out across
+   num_tiles_wu = MaxThreadsPerXeCore / size(mma) independent MMA tiles so
+   all 32 sub-groups issue DPAS. Grid mapping (one work-group per chunk_id)
+   is unchanged.
+   */
+  int MaxThreadsPerWorkgroupComputeWU = MaxThreadsPerXeCore;
   sycl::range<3> local_compute_wu(1, 1, MaxThreadsPerWorkgroupComputeWU);
   sycl::range<3> global_compute_wu(
       1, xe_core_count * MaxThreadsPerXeCore / MaxThreadsPerWorkgroupComputeWU, 1);
-  int slm_size_compute_wu = num_v_heads * 2 + chunk_size * 2;
+  // One beta/g pair per sub-group, not per tile (see kernel's SLM comment).
+  int slm_size_compute_wu =
+      (MaxThreadsPerWorkgroupComputeWU / sub_group_size) * chunk_size * 2;
   auto ev = queue.submit([&](sycl::handler& cgh) {
     sycl::local_accessor<float, 1> local_mem(
         sycl::range<1>(slm_size_compute_wu), cgh);

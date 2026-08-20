@@ -48,11 +48,22 @@
     gemm_TTS_k_multi : same as TTS, but each k-slice of A is pre-scaled by
                        a per-lane float from an SLM array (used for diagonal
                        scaling in compute_wu / fwd_o).
-    gemm_TTS_shareB_pergroup : two TTS GEMMs sharing the B operand, fused into
-                       a single k-loop so B is loaded/prefetched/reordered
-                       once per k-tile and consumed by both DPAS calls. Takes a
-                       group-local lane id and has no WG barriers, so WGs that
-                       host multiple co-resident groups can call it per group.
+    gemm_TTS_k_multi_tile
+                     : gemm_TTS_k_multi without prefetch/barriers, sliced by
+                       a caller-supplied tile_local_id (for work-groups that
+                       hold several independent MMA tiles).
+    gemm_TTS_shareB_multi_tile : two TTS GEMMs sharing the B operand, fused
+                       into a single k-loop so B is loaded/prefetched/reordered
+                       once per k-tile and consumed by both DPAS calls. Sliced
+                       by a caller-supplied tile_local_id and has no WG
+                       barriers, so WGs that hold several independent MMA
+                       tiles can call it per tile.
+
+  The _multi_tile suffix marks helpers sliced by a caller-supplied
+  tile_local_id instead of the work-group-global local id, and with no WG
+  barriers in the k-loop -- for work-groups that host several independent
+  MMA tiles which may run different numbers of GEMMs or finish at different
+  times without deadlocking each other.
 
   All helpers accumulate into the caller's register fragment tCrC, so
   multiple calls can be chained (C += A1*B1 + A2*B2 ...) without intermediate
@@ -528,6 +539,86 @@ CUTE_DEVICE void gemm_STS_sg(
   cute::gemm(mma, tCrA, tCrB, tCrC);
 }
 
+/* gemm_TTS_k_multi_tile: same as gemm_TTS_k_multi, but no prefetch pipeline
+ * or k-loop barriers, and
+ * sliced by a caller-supplied tile_local_id instead of the work-group's raw
+ * local_id. Barrier-free, so it's safe to call from independent MMA tiles
+ * sharing one work-group -- tiles may run different numbers of GEMMs or
+ * finish at different times without deadlocking. */
+template <
+    class ATensor,
+    class BTensor,
+    class SGCTensor,
+    class TiledMMA>
+CUTE_DEVICE void gemm_TTS_k_multi_tile(
+    ATensor const& A,  // (M,K)
+    BTensor const& B,  // (N,K)
+    SGCTensor& tCrC,   // (M,N)
+    int wg_m,          // m tile start id
+    int wg_n,          // n tile start id
+    TiledMMA const& mma,
+    float* K_multi,
+    int tile_local_id) {  // local_id % size(mma): position within this MMA tile
+  auto item = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
+  auto sg = item.get_sub_group();
+  int sg_local_id = sg.get_local_linear_id();
+
+  Tensor cA = make_identity_tensor(A.shape());
+  Tensor cB = make_identity_tensor(B.shape());
+
+  auto wg_tile = mma.tile_mnk();
+
+  Tensor gA = local_tile(
+      cA, select<0, 2>(wg_tile), make_coord(wg_m, _));  // (BLK_M,BLK_K,k)
+  Tensor gB = local_tile(
+      cB, select<1, 2>(wg_tile), make_coord(wg_n, _));  // (BLK_N,BLK_K,k)
+
+  auto copy_a = get_block_2d_copy_A<void>(mma, A);
+  auto copy_b = get_block_2d_copy_B<void>(mma, B);
+
+  auto thr_mma = mma.get_slice(tile_local_id);
+  auto thr_copy_a = copy_a.get_slice(tile_local_id);
+  auto thr_copy_b = copy_b.get_slice(tile_local_id);
+
+  auto tCrA = thr_mma.partition_sg_fragment_A(gA(_, _, 0));
+  auto tCrB = thr_mma.partition_sg_fragment_B(gB(_, _, 0));
+
+  auto tArA = thr_copy_a.partition_sg_fragment_D(gA(_, _, 0));
+  auto tBrB = thr_copy_b.partition_sg_fragment_D(gB(_, _, 0));
+
+  Tensor tAgA = thr_copy_a.partition_S(gA);
+  Tensor tBgB = thr_copy_b.partition_S(gB);
+
+  int k_tile_count = ceil_div(shape<1>(A), get<2>(wg_tile));
+
+  using TA = typename ATensor::element_type;
+  Tensor A_frag = make_tensor<TA>(tCrA.layout());
+  static constexpr auto I = decltype(size<0>(A_frag))::value;
+  static constexpr auto J = decltype(size<1>(A_frag))::value;
+  static constexpr auto K = decltype(size<2>(A_frag))::value;
+  static constexpr int mma_K = 16;
+
+  for (int k_tile = 0; k_tile < k_tile_count; k_tile++) {
+    copy(copy_a, tAgA(_, _, _, k_tile), tArA);
+    copy(copy_b, tBgB(_, _, _, k_tile), tBrB);
+
+    reorder(tArA, tCrA);
+    reorder(tBrB, tCrB);
+
+    CUTE_UNROLL
+    for (int k = 0; k < K; ++k) {
+      float scale = K_multi[k_tile * get<2>(wg_tile) + k * mma_K + sg_local_id];
+      CUTE_UNROLL
+      for (int e = 0; e < I * J; ++e) {
+        tCrA[k * I * J + e] =
+            static_cast<TA>(static_cast<float>(tCrA[k * I * J + e]) * scale);
+      }
+    }
+
+    cute::gemm(mma, tCrA, tCrB, tCrC);
+  }
+}
+
 template <
     class A1Tensor,
     class A2Tensor,
@@ -535,18 +626,19 @@ template <
     class C1SGCTensor,
     class C2SGCTensor,
     class TiledMMA>
-/* gemm_TTS_shareB_pergroup: two TTS GEMMs that share the B operand, fused into
- * one k-loop.
+/* gemm_TTS_shareB_multi_tile: two TTS GEMMs that share the B operand, fused
+ * into one k-loop, with no prefetch/barriers -- same tiling contract as
+ * gemm_TTS_k_multi_tile, see note above.
  *   C1 += A1(gmem, M×K) * B(gmem, N×K)^T
  *   C2 += A2(gmem, M×K) * B(gmem, N×K)^T
  * B is loaded, prefetched, and reordered once per k-tile and consumed by both
- * DPAS calls — replaces two back-to-back gemm_TTS calls that share B. Takes the
- * group-local `local_id` (0..size(mma)-1) instead of deriving it from
+ * DPAS calls — replaces two back-to-back gemm_TTS calls that share B. Takes a
+ * caller-supplied tile_local_id (0..size(mma)-1) instead of deriving it from
  * `this_work_item`, and has no internal WG barriers (all work is
- * register-private per lane), so WGs that host multiple co-resident groups can
- * call it per group and idle groups can skip it entirely at the caller. */
-CUTE_DEVICE void gemm_TTS_shareB_pergroup(
-    int local_id,        // group-local, 0..size(mma)-1
+ * register-private per lane), so WGs that hold several independent MMA tiles
+ * can call it per tile and idle tiles can skip it entirely at the caller. */
+CUTE_DEVICE void gemm_TTS_shareB_multi_tile(
+    int tile_local_id,   // caller-supplied, 0..size(mma)-1
     A1Tensor const& A1,  // (M,K)
     A2Tensor const& A2,  // (M,K)
     BTensor const& B,    // (N,K)
@@ -572,10 +664,10 @@ CUTE_DEVICE void gemm_TTS_shareB_pergroup(
   auto copy_a2 = get_block_2d_copy_A<void>(mma, A2);
   auto copy_b = get_block_2d_copy_B<void>(mma, B);
 
-  auto thr_mma = mma.get_slice(local_id);
-  auto thr_copy_a1 = copy_a1.get_slice(local_id);
-  auto thr_copy_a2 = copy_a2.get_slice(local_id);
-  auto thr_copy_b = copy_b.get_slice(local_id);
+  auto thr_mma = mma.get_slice(tile_local_id);
+  auto thr_copy_a1 = copy_a1.get_slice(tile_local_id);
+  auto thr_copy_a2 = copy_a2.get_slice(tile_local_id);
+  auto thr_copy_b = copy_b.get_slice(tile_local_id);
 
   auto tCrA1 = thr_mma.partition_sg_fragment_A(gA1(_, _, 0));
   auto tCrA2 = thr_mma.partition_sg_fragment_A(gA2(_, _, 0));
@@ -593,9 +685,9 @@ CUTE_DEVICE void gemm_TTS_shareB_pergroup(
   auto prefetch_a2 = make_block_2d_prefetch(copy_a2);
   auto prefetch_b = make_block_2d_prefetch(copy_b);
 
-  auto thr_prefetch_A1 = prefetch_a1.get_slice(local_id);
-  auto thr_prefetch_A2 = prefetch_a2.get_slice(local_id);
-  auto thr_prefetch_B = prefetch_b.get_slice(local_id);
+  auto thr_prefetch_A1 = prefetch_a1.get_slice(tile_local_id);
+  auto thr_prefetch_A2 = prefetch_a2.get_slice(tile_local_id);
+  auto thr_prefetch_B = prefetch_b.get_slice(tile_local_id);
 
   auto pA1gA1 = thr_prefetch_A1.partition_S(gA1);
   auto pA2gA2 = thr_prefetch_A2.partition_S(gA2);

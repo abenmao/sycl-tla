@@ -158,7 +158,9 @@ geometry of each stage.
                                                                       GEMM
   2 chunk_inverse     max(xe_core_count·512/16,         16 (1 sub-   1 work-group ↦ (chunk,v_head);
                           ⌈tvs/64⌉·num_v_heads)         group)       4×4 block forward-substitution
-  3 chunk_compute_wu  xe_core_count·512 / wg_size       MMA wg_size  1 work-group ↦ (v_head,chunk)
+  3 chunk_compute_wu  xe_core_count                     512 threads  1 work-group ↦ one chunk; holds
+                                                                      num_tiles MMA tiles, one v_head
+                                                                      per tile
   4 chunk_fwd_o       grid = (batch, num_v_heads,       MMA wg_size  1 work-group ↦ (batch,v_head,dv);
                              head_v_dim / kChunkSize)                 sequential scan over chunks
 ```
@@ -183,7 +185,7 @@ owns its own `kv_ratio · kChunkSize`-float SLM slot
 (`group_slm_ptr = slm_mem + group_id · kv_ratio · kChunkSize`, total SLM
 `GroupsPerWg · kv_ratio · kChunkSize`) so co-resident groups never alias each
 other's gate scratch, and the shared-B GEMM runs through the barrier-free
-`gemm_TTS_shareB_pergroup` (register-private per lane) so idle groups skip it
+`gemm_TTS_shareB_multi_tile` (register-private per lane) so idle groups skip it
 cleanly. The fused cumsum gate runs at the
 top of each chunk iteration: the `kv_ratio` v-heads of the chunk's k-head are
 striped one-per-sub-group so each whole-chunk prefix-sum stays inside a single
@@ -527,6 +529,39 @@ queue.wait_and_throw();
   `(chunk, k_head)` work-list no longer divides by `num_v_heads`, so that floor
   is gone.)
 
+### Constraints of the `compute_wu` intra-work-group tile fan-out
+
+Stage 3 now launches a full-Xe-core work-group (`MaxThreadsPerXeCore == 512`
+work-items) instead of one MMA tile, so it holds `num_tiles =
+MaxThreadsPerXeCore / size(mma)` independent MMA tiles (currently 4), each
+driving a different `v_head`:
+
+```
+  tile_id       = local_id / size(mma)     // which tile
+  tile_local_id = local_id % size(mma)     // position within that tile
+```
+
+Grid mapping is unchanged (one work-group per `chunk_id`); tile `T` starts at
+`v_head = T` and strides by `num_tiles`. The design is barrier-free at
+work-group scope, which is what lets tiles run different numbers of v_heads
+without deadlocking:
+
+- **No work-group-scope barrier in the per-tile region.** Any such barrier
+  would deadlock once one tile runs out of v_heads before another.
+- **Use `gemm_TTS_k_multi_tile`**, which slices by `tile_local_id` and has no
+  k-loop barriers (the pipelined prefetch they served is not worthwhile at
+  `k_tile_count == 2`).
+- **SLM scale arrays are per sub-group, not per tile** — every sub-group of a
+  tile reads the entire `chunk_size` diagonal span, so a per-tile slice would
+  create a cross-sub-group dependency. The fill is lane-private (stride
+  `sub_group_size` from `sg_local_id`), so no barrier is needed. Costs 16 KB
+  of SLM.
+- **An MMA tile must be a whole number of sub-groups, and the core a whole
+  number of tiles** — both enforced by `static_assert` in the launcher.
+- **Launcher SLM size and kernel slicing must stay in sync** — the launcher
+  allocates `(local_range / sub_group_size) * chunk_size * 2`; the kernel
+  derives the same split from `sg.get_group_linear_id()`.
+
 
 - the public `GDNArguments` wrapper (this repo's preferred ABI) and its
   validation gates,
@@ -570,7 +605,7 @@ the public header.
 | [xe35_chunk_gated_delta_rule.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule.hpp) | Lightweight public API: `GDNArguments`, `get_workspace_sizes`, `chunk_gated_delta_rule_launch` declaration |
 | [xe35_chunk_gated_delta_rule_launch.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_launch.hpp) | Header-only launcher: argument validation + `chunk_gated_delta_rule_launch<T, StateT>` definition (inline template, instantiated at each call site) |
 | [xe35_chunk_gated_delta_rule_kernels.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_kernels.hpp) | Four device kernels + `detail::kernel_launcher` (upstream-aligned signature; the Stage-1 `chunk_prepare` gate is fused into `chunk_compute_A_o2`) |
-| [xe35_chunk_gated_delta_rule_gemm.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_gemm.hpp) | CuTe GEMM helpers (`gemm_TTS`, `gemm_STS`, `gemm_TSS`, `gemm_TTS_k_multi`, `gemm_TTS_shareB_pergroup`) |
+| [xe35_chunk_gated_delta_rule_gemm.hpp](../../../applications/gdn_attention/xe35_chunk_gated_delta_rule_gemm.hpp) | CuTe GEMM helpers (`gemm_TTS`, `gemm_STS`, `gemm_TSS`, `gemm_TTS_k_multi`, `gemm_TTS_k_multi_tile`, `gemm_TTS_shareB_multi_tile`) |
 | [gdn_runner.hpp](../../../applications/gdn_attention/gdn_runner.hpp) | Shared host harness: `GdnRunner` (alloc + init + sigmoid(b) + args + launch + oracles), the `parse_gdn_shape`/`validate_gdn_shape` CLI helpers, and the `ExampleOptions`/`BenchmarkOptions` structs. Used by all three consumers |
 | [xe35_gdn_attention_stage_references.hpp](../../../tools/util/include/cutlass/util/reference/host/xe35_gdn_attention_stage_references.hpp) | Per-stage host reference + `apply_sigmoid_b` (in `cutlass/util/reference/host/`), driving the chunkwise oracle |
 | [xe35_gdn_attention_recurrent_reference.hpp](../../../tools/util/include/cutlass/util/reference/host/xe35_gdn_attention_recurrent_reference.hpp) | Token-by-token fp32 recurrent reference oracle + `kTolE2E` tolerance |
