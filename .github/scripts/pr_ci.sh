@@ -46,38 +46,17 @@ write_env() {
     echo "$1" >> "${GITHUB_ENV:?GITHUB_ENV is required}"
 }
 
-resolve_runner_ssh_target() {
-    local runner_host="${RUNNER_SSH_HOST:-}"
-    local runner_user="${RUNNER_SSH_USER:-${USER:-}}"
-    if [ -z "$runner_host" ]; then
-        runner_host=$(hostname -f 2>/dev/null || hostname)
-    fi
-    if [ -z "$runner_user" ]; then
-        runner_user=$(id -un)
-    fi
-    if [ -z "$runner_host" ] || [ -z "$runner_user" ]; then
-        echo "::warning::Reverse SSH self-check requires a resolvable runner host and user. Set RUNNER_SSH_HOST and RUNNER_SSH_USER."
-        return 1
-    fi
-    printf '%s@%s\n' "$runner_user" "$runner_host"
-}
-
 check_ssh_connection() {
     local server_name="$1"
     local server_user="$2"
     local server_host="$3"
-    local runner_target reverse_command
-    if ! runner_target=$(resolve_runner_ssh_target); then
-        return 1
-    fi
 
-    printf -v reverse_command 'ssh %s %q true' "$CI_SSH_OPTIONS" "$runner_target"
-    echo "Checking bidirectional SSH: runner -> ${server_user}@${server_host} -> ${runner_target}."
-    if ! ssh ${CI_SSH_OPTIONS} "${server_user}@${server_host}" "$reverse_command" </dev/null; then
-        echo "::warning::Bidirectional SSH self-check failed for build server ${server_name}: runner -> ${server_user}@${server_host} -> ${runner_target}. Verify SSH keys, sshd/authorized_keys, and network settings on both hosts."
+    echo "Checking passwordless SSH: runner -> ${server_user}@${server_host}."
+    if ! ssh ${CI_SSH_OPTIONS} "${server_user}@${server_host}" true </dev/null; then
+        echo "::warning::SSH self-check failed for build server ${server_name}: runner -> ${server_user}@${server_host}. Verify the runner's SSH key, the server's authorized_keys, sshd, and network settings."
         return 1
     fi
-    echo "Bidirectional SSH self-check passed for build server ${server_name}."
+    echo "Passwordless SSH self-check passed for build server ${server_name}."
 }
 
 find_build_server_oneapi_path() {

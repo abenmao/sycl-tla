@@ -35,14 +35,14 @@ jobs:
             platform: bmg
             intel_graphics: ROLLING
             sycl_target: intel_gpu_bmg_g21
-            remote_build_servers: "Atlas a4bf018cf32e.jf.intel.com gta 250 320;Hermes shliclel4165.sh.intel.com gta 250 320;Hyperion pvc125074.jf.intel.com gta 250 320"
+            remote_build_servers: "Atlas a4bf018cf32e.jf.intel.com support 250 320;Hermes shliclel4165.sh.intel.com support 250 320;Hyperion pvc125074.jf.intel.com support 250 320"
             runner: [self-hosted, shanghai-bmg, Linux, X64]
           - compiler: RELEASE
             gpu: PVC
             platform: pvc
             intel_graphics: ROLLING
             sycl_target: intel_gpu_pvc
-            remote_build_servers: "Hyperion pvc125074.jf.intel.com gta 250 320;Hermes shliclel4165.sh.intel.com gta 250 320;Atlas a4bf018cf32e.jf.intel.com gta 250 320"
+            remote_build_servers: "Hyperion pvc125074.jf.intel.com support 250 320;Hermes shliclel4165.sh.intel.com support 250 320;Atlas a4bf018cf32e.jf.intel.com support 250 320"
             runner: [self-hosted, shanghai-pvc, Linux, X64]
 
     name: Full Coverage with Common Shapes Test on ${{ matrix.gpu }}
