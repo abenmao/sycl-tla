@@ -3,8 +3,8 @@ name: "Full Coverage with Small Shapes Test"
 on:
 #  push:
 #    branches: [ "v0.1.0_next" ]
-  pull_request:
-    branches: [ "v0.1.0_next" ]
+#  pull_request:
+#    branches: [ "v0.1.0_next" ]
 #  merge_group:
 #    branches: [ "v0.1.0_next" ]
 
@@ -14,9 +14,9 @@ concurrency:
 
 env:
   CI_BUILD_ID_TAG: "small"
-  CI_CMAKE_EXTRA_FLAGS: ""
+  CI_CMAKE_EXTRA_FLAGS: "-DCUTLASS_TEST_FOR_CRI=ON"
   # shliclel4165.sh.intel.com 500G   a4bf018cf32e.jf.intel.com  1.5t pvc125074.jf.intel.com 1t
-  REMOTE_BUILD_SERVERS: "Atlas a4bf018cf32e.jf.intel.com gta 240 240;Hermes shliclel4165.sh.intel.com gta 240 240;Hyperion pvc125074.jf.intel.com gta 240 240"
+  REMOTE_BUILD_SERVERS: "Hermes shliclel4165.sh.intel.com gta 250 320;Atlas a4bf018cf32e.jf.intel.com gta 250 320;Hyperion pvc125074.jf.intel.com gta 250 320"
   LOCAL_BUILD_MEM_PCT: "100"
   REMOTE_NINJA_GB_PER_JOB: "10"
   REMOTE_HEAVY_GB_PER_JOB: "20"
