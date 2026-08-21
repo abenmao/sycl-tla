@@ -556,6 +556,10 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       : l_coord * cute::ceil_div(seq_len_kv_cache, params.page_size);
 
     std::array<int, Stages> physical_k_tiles_cache{};
+    #ifdef PREFILL
+    using PreparedK_cache_t = decltype(prepare_payloads(copy_k_cache, tKgK_cache(_,_,_,0,0)));
+    std::array<PreparedK_cache_t, DTiles> prepared_k_cache;
+    #endif
     [[maybe_unused]] int last_prefetched_logical_k = -1;
     [[maybe_unused]] int last_prefetched_physical_k = 0;
 
@@ -574,6 +578,19 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         last_prefetched_physical_k = physical_k_tiles_cache[(Stages - 1) % Stages];
       }
     }
+
+    #ifdef PREFILL
+    if constexpr (PagedKV) {
+      int cache_k_end = cute::min(blk_k1, kblocks_cache);
+      if (blk_k0 < cache_k_end) {
+        int init_k_idx_cache = physical_k_tiles_cache[0];
+        CUTLASS_PRAGMA_UNROLL
+        for (int D = 0; D < DTiles; D++) {
+          prepared_k_cache[D] = prepare_payloads(copy_k_cache, tKgK_cache(_,_,_,init_k_idx_cache,D));
+        }
+      }
+    }
+    #endif
 
     const int k_start = (blk_k0 > kblocks_cache ? blk_k0 : kblocks_cache) - kblocks_cache;
     if (k_start > 0) {
@@ -731,15 +748,6 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         k_idx = K - kblocks_cache;
       }
 
-      auto load_v_tile = [&](int VV) {
-        if constexpr (is_cache) {
-          copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
-        } else {
-          copy(copy_v, prepared_v[VV], tVrV);
-          prepared_v[VV] += v_seq_delta(kv_stride);
-        }
-        reorder(tVrV, tArV);
-      };
 
       // V prefetch for next iteration (non-cache only; cache prefetch lives below).
       if constexpr (!is_cache && !DisableKVPrefetch && !DisableVPrefetch) {
@@ -749,11 +757,17 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
       }
       /* GEMM 1: S = K * Q */
+      #ifdef PREFILL
+      int cache_k_end = cute::min(blk_k1, kblocks_cache);
+      #endif
       CUTLASS_PRAGMA_UNROLL
-
       for (int D = 0; D < DTiles; D++) {
         if constexpr (is_cache) {
+          #ifdef PREFILL
+          copy(copy_k_cur, prepared_k_cache[D], tKrK);
+          #else
           copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
+          #endif
         } else {
           copy(copy_k, prepared_k[D], tKrK);
           prepared_k[D] += k_seq_delta(kv_stride);
@@ -827,6 +841,20 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
       }
 
+      #ifdef PREFILL
+      if constexpr (is_cache) {
+        if (K + 1 < cache_k_end) {
+          constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
+          int slot_next = (stage_mask >= 0) ? ((K + 1 - blk_k0) & stage_mask) : ((K + 1 - blk_k0) % Stages);
+          int k_idx_next = physical_k_tiles_cache[slot_next];
+          CUTLASS_PRAGMA_UNROLL
+          for (int D = 0; D < DTiles; D++) {
+            prepared_k_cache[D] = prepare_payloads(copy_k_cur, tKgK_cur(_,_,_,k_idx_next,D));
+          }
+        }
+      }
+      #endif
+
       /* Prefetch V current and K next after QK to cover K latency with softmax/PV. */
       int K_next = K + Stages;
       [[maybe_unused]] int k_idx_next_cache = K_next;
@@ -882,6 +910,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           prepared_pk += k_seq_delta(kv_stride);
         }
       }
+
       // Prefetch V scale
       if constexpr (HardwareBlockScale && !DisableKVPrefetch) {
         auto& scale_prefetch_V_ctx = get<2>(scale_ctx_pv_cur);
@@ -975,7 +1004,13 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         tSrS(i) = qk_scale * tSrS(i) - broadcast<0>(tA_max, tSrS, i);
 
       if constexpr (preload_v) {
-        load_v_tile(0);
+        if constexpr (is_cache) {
+          copy(copy_v_cur, tVgV_cur(_,_,_,0,k_idx), tVrV);
+        } else {
+          copy(copy_v, prepared_v[0], tVrV);
+          prepared_v[0] += v_seq_delta(kv_stride);
+        }
+        reorder(tVrV, tArV);
       }
 
       CUTLASS_PRAGMA_UNROLL
@@ -1007,7 +1042,13 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       CUTLASS_PRAGMA_UNROLL
       for (int VV = 0; VV < VTiles; VV++) {
         if constexpr (!preload_v) {
-          load_v_tile(VV);
+          if constexpr (is_cache) {
+            copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
+          } else {
+            copy(copy_v, prepared_v[VV], tVrV);
+            prepared_v[VV] += v_seq_delta(kv_stride);
+          }
+          reorder(tVrV, tArV);
         }
 
         if (subgroup_needs_rescale) {
@@ -1074,7 +1115,14 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
         if constexpr (preload_v) {
           if (VV + 1 < VTiles) {
-            load_v_tile(VV + 1);
+            int next_vv = VV + 1;
+            if constexpr (is_cache) {
+              copy(copy_v_cur, tVgV_cur(_,_,_,next_vv,k_idx), tVrV);
+            } else {
+              copy(copy_v, prepared_v[next_vv], tVrV);
+              prepared_v[next_vv] += v_seq_delta(kv_stride);
+            }
+            reorder(tVrV, tArV);
           }
         }
       }
