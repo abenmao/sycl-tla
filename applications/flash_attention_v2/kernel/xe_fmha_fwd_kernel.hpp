@@ -515,7 +515,7 @@ public:
         }
 
         const int idx_b_l = idx_b;
-        const auto q_group_off = head_kv * g * stride<2>(Q.layout()); 
+        const auto q_group_off = head_kv * g * stride<2>(Q.layout());
         const auto o_group_off = head_kv * g * stride<2>(O.layout());
         for (int qb = 0; qb < num_q_blocks; ++qb) {
           const int row_start  = qb * int(QK_BLK_M);

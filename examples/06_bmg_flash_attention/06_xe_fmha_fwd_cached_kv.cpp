@@ -179,6 +179,15 @@ int main(int argc, const char **argv) {
 #endif
   using QKTileK    = _128;
   using HeadDimSize = _128;
+
+  using ShapeQK4  = Shape<_4, _256, _128>;
+  using ShapePV4  = Shape<_4, _64, _256>;
+  using ShapeOut4 = Shape<_4, _128>;
+  using SubgroupLayoutQK4 = Layout<Shape<_1, _8, _1>>;
+
+  using ShapeQK4KV128 = Shape<_4, _128, _128>;
+  using ShapePV4KV128 = Shape<_4, _64, _128>;
+
 #elif HEAD_DIM == 192
   using KVTileSize = _128;
   using SubgroupsK = _8;
@@ -255,9 +264,13 @@ int main(int argc, const char **argv) {
   const int base_units = options.batch * options.num_heads_kv;
   const int saturation_cores_default = estimate_saturation_cores(base_units, kv_blocks);
   const int saturation_cores = cutlass::fmha::kernel::fmha_split_saturation_cores(saturation_cores_default);
+#if HEAD_DIM == 128 && defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
   const bool short_cache_q8_candidate = options.seq_len_qo <= 8 &&
                                         options.seq_len_kv_cache > 0 &&
                                         options.seq_len_kv_cache <= 1024;
+#else
+  const bool short_cache_q8_candidate = false;
+#endif
   const bool can_use_dynamic_split = total_rows <= 64
                                   && base_units < saturation_cores;
   const bool split_short_cache_q_rows = can_use_dynamic_split
@@ -272,6 +285,12 @@ int main(int argc, const char **argv) {
                template run<false, true,                                                       \
                cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler>(options)
 
+  #define FMHA_RUN_INDIVIDUAL_Q(CAUSAL, QK, PV, OUT, SGL)                      \
+    FMHAConfig<CAUSAL, false, QK, PV, OUT, SGL, void, PipelineStages,           \
+               ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/false>::     \
+               template run<false, true,                                       \
+               cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options)
+
   #define FMHA_RUN_Q(QK, PV, OUT, SGL)                                                 \
     (use_dynamic_split                                                                        \
        ? (options.is_causal                                                                           \
@@ -285,8 +304,23 @@ int main(int argc, const char **argv) {
                         ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/true>::template run<      \
                         false, true, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options)))
 
-  // QK8 creates more packed-Q work-groups only on the Dynamic path.
-  if (total_rows <= 8 || split_short_cache_q_rows)
+#if HEAD_DIM == 128 && defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(IS_BFLOAT16)
+  const int q_row_work = options.batch * options.num_heads_q * options.seq_len_qo;
+  if (split_short_cache_q_rows && q_row_work >= 120)
+    return options.is_causal
+      ? FMHA_RUN_INDIVIDUAL_Q(
+          true, ShapeQK4KV128, ShapePV4KV128, ShapeOut4, SubgroupLayoutQK4)
+      : FMHA_RUN_INDIVIDUAL_Q(
+          false, ShapeQK4KV128, ShapePV4KV128, ShapeOut4, SubgroupLayoutQK4);
+#endif
+  if (split_short_cache_q_rows)
+    return options.is_causal
+      ? FMHA_RUN_INDIVIDUAL_Q(true, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4)
+      : FMHA_RUN_INDIVIDUAL_Q(false, ShapeQK4, ShapePV4, ShapeOut4, SubgroupLayoutQK4);
+#endif
+
+  if (total_rows <= 8)
     return FMHA_RUN_Q(ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8);
   else if (total_rows <= 16)
     return FMHA_RUN_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16);
@@ -302,6 +336,7 @@ int main(int argc, const char **argv) {
     return FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64);
 
 #undef FMHA_RUN_Q
+  #undef FMHA_RUN_INDIVIDUAL_Q
   #undef FMHA_RUN_DYNAMIC
 #else
   // Directly instantiate only CachedKV=true kernels.
