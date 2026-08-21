@@ -52,6 +52,7 @@ cutlass_test_unit_add_executable(
   xe_copy_prefetch_2d.cpp
   # xe_vnni_2d.cpp # Disabled it due to driver unavailablility
   xe_transpose_2d.cpp
+  xe_block2d_subbyte.cpp
   quantize_block_wise.cpp
   dequantize.cpp
 )

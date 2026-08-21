@@ -111,7 +111,7 @@ struct Xe2DTraitsBase
   template <typename SEngine, typename SLayout>
   CUTE_DEVICE
   Xe2DTraitsBase(Tensor<SEngine, SLayout> const& src)
-      : base_ptr((uint64_t) &*src.data()),
+      : base_ptr((uint64_t) raw_pointer_cast(src.data())),
         tiled_strides(replace<XMode::value>(replace<YMode::value>(src.stride(), _0{}), _0{}))
   {
     constexpr auto SBits = sizeof_bits_v<typename SEngine::value_type>;
@@ -226,7 +226,7 @@ struct Xe2DLoadTraitsBase : Xe2DTraitsBase<Op, XMode, YMode, ValType, TiledStrid
                   "Destination tensor size does not match copy atom size.");
 
     traits.template update_payload<DBits>(src.data().coord_);
-    Op::copy(traits.payload, recast_ptr<int_byte_t<bits_to_bytes(Super::ValBits)>>(&*dst.data()));
+    Op::copy(traits.payload, recast_ptr<int_byte_t<bits_to_bytes(Super::ValBits)>>(raw_pointer_cast(dst.data())));
   }
 };
 
@@ -357,7 +357,7 @@ copy(BaseT const& base,
 #ifdef __SYCL_DEVICE_ONLY__
     using ValT = int_byte_t<bits_to_bytes(ValBits)>;
     Op::copy(payloads.payloads[idx],
-             const_cast<ValT*>(recast_ptr<ValT>(&*dst.data())));
+             const_cast<ValT*>(recast_ptr<ValT>(raw_pointer_cast(dst.data()))));
 #else
     CUTE_INVALID_CONTROL_PATH("Xe 2D multi-payload copies are only available on SYCL device.");
 #endif
@@ -579,7 +579,7 @@ struct Copy_Traits<XE_STORE_2D<CopyBits, Height, Width, CachePolicy>, XMode, YMo
                   "Destination tensor size does not match copy atom size.");
 
     traits.template update_payload<SBits>(dst.data().coord_);
-    Op::copy(traits.payload, recast_ptr<int_byte_t<bits_to_bytes(Super::ValBits)>>(&*src.data()));
+    Op::copy(traits.payload, recast_ptr<int_byte_t<bits_to_bytes(Super::ValBits)>>(raw_pointer_cast(src.data())));
   }
 };
 

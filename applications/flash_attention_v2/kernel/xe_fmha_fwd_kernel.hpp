@@ -426,11 +426,11 @@ public:
       auto shape_K_cache = make_shape(kv_cache_rows, s.head_size_qk, s.num_heads_kv, batch_dim);
       auto shape_V_cache = make_shape(s.head_size_vo, kv_cache_rows, s.num_heads_kv, batch_dim);
 
-      auto dcQ = const_cast<ElementQ*>(p.Q + offset_q);
-      auto dcK = const_cast<ElementK*>(p.K + offset_k);
-      auto dcV = const_cast<ElementV*>(p.V + offset_v);
-      auto dcK_cache = const_cast<ElementK*>(p.K_cache + offset_k_cache);
-      auto dcV_cache = const_cast<ElementV*>(p.V_cache + offset_v_cache);
+      auto dcQ = make_subbyte_aware_ptr<ElementQ>(p.Q, offset_q);
+      auto dcK = make_subbyte_aware_ptr<ElementK>(p.K, offset_k);
+      auto dcV = make_subbyte_aware_ptr<ElementV>(p.V, offset_v);
+      auto dcK_cache = make_subbyte_aware_ptr<ElementK>(p.K_cache, offset_k_cache);
+      auto dcV_cache = make_subbyte_aware_ptr<ElementV>(p.V_cache, offset_v_cache);
       auto ptrO = p.O + offset_o;
 
       StrideQ stride_q = p.dQ;
@@ -932,9 +932,9 @@ public:
       auto shape_K = make_shape(s.seq_len_kv, s.head_size_qk, s.num_heads_kv, s.batch);
       auto shape_V = make_shape(s.head_size_vo, s.seq_len_kv, s.num_heads_kv, s.batch);
 
-      auto dcQ = const_cast<ElementQ*>(p.Q);  // de-const these for uniformity
-      auto dcK = const_cast<ElementK*>(p.K);
-      auto dcV = const_cast<ElementV*>(p.V);
+      auto dcQ = make_subbyte_aware_ptr<ElementQ>(p.Q);
+      auto dcK = make_subbyte_aware_ptr<ElementK>(p.K);
+      auto dcV = make_subbyte_aware_ptr<ElementV>(p.V);
 
       Tensor Q = make_tensor(make_gmem_ptr(dcQ), make_layout(shape_Q, p.dQ));    // (q,d,h,b)
       Tensor K = make_tensor(make_gmem_ptr(dcK), make_layout(shape_K, p.dK));    // (k,d,h,b)
@@ -946,8 +946,8 @@ public:
       }
       auto shape_K_cache = make_shape(kv_cache_rows, s.head_size_qk, s.num_heads_kv, s.batch);
       auto shape_V_cache = make_shape(s.head_size_vo, kv_cache_rows, s.num_heads_kv, s.batch);
-      auto dcK_cache = const_cast<ElementK*>(p.K_cache);
-      auto dcV_cache = const_cast<ElementV*>(p.V_cache);
+      auto dcK_cache = make_subbyte_aware_ptr<ElementK>(p.K_cache);
+      auto dcV_cache = make_subbyte_aware_ptr<ElementV>(p.V_cache);
       Tensor K_cache = make_tensor(make_gmem_ptr(dcK_cache), make_layout(shape_K_cache, p.dK_cache));
       Tensor V_cache = make_tensor(make_gmem_ptr(dcV_cache), make_layout(shape_V_cache, p.dV_cache));
       

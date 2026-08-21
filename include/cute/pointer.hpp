@@ -79,6 +79,21 @@ recast_ptr(decltype(nullptr)) {   // nullptr_t
   return recast_ptr<NewT>(static_cast<NewT*>(nullptr));
 }
 
+// make_subbyte_aware_ptr<Element>(base, offset) -- typed pointer whose arithmetic advances by
+// the true element bit width. Sub-byte types (e.g. float_e2m1_t) go through a subbyte_iterator
+// so offsets/slicing step by real bits; >=8-bit types keep a plain typed pointer (bit-for-bit
+// identical to `const_cast<Element*>(base) + offset`).
+template <class Element>
+CUTE_HOST_DEVICE constexpr
+auto
+make_subbyte_aware_ptr(Element const* base, int offset = 0) {
+  if constexpr (cute::sizeof_bits_v<Element> < 8) {
+    return recast_ptr<Element>(const_cast<Element*>(base)) + offset;
+  } else {
+    return const_cast<Element*>(base) + offset;
+  }
+}
+
 //
 // gmem_ptr
 //

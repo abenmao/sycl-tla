@@ -119,7 +119,9 @@ struct FMHAConfig {
 
   template <typename ElementType, typename Stride>
   static constexpr auto make_dummy_tensor(ElementType val, Stride stride) {
-    return make_tensor(make_gmem_ptr(&val),
+    // recast_ptr yields a subbyte_iterator for sub-byte element types so the
+    // resulting tensor type matches the kernel's sub-byte correct addressing.
+    return make_tensor(make_gmem_ptr(recast_ptr<ElementType>(&val)),
                         make_layout(repeat<rank_v<decltype(stride)>>(1), stride));
   };
 

@@ -1606,7 +1606,9 @@ struct FMHAConfig {
     constexpr int VTiles = get<1>(TileShapeOutput{}) / get<1>(TileShapePV{});
 
     auto make_dummy_tensor = [&](auto val, auto stride) {
-      return make_tensor(make_gmem_ptr(&val),
+      // recast_ptr yields a subbyte_iterator for sub-byte element types so the
+      // resulting tensor type matches the kernel's sub-byte correct addressing.
+      return make_tensor(make_gmem_ptr(recast_ptr<decltype(val)>(&val)),
                          make_layout(repeat<rank_v<decltype(stride)>>(1), stride));
     };
 
