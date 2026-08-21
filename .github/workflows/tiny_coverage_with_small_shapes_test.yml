@@ -5,13 +5,12 @@ on:
 #    branches: [ "v0.1.0_next" ]
   pull_request:
     branches: [ "v0.1.0_next" ]
-#  merge_group:
-#    branches: [ "v0.1.0_next" ]
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
+  TARGET_BRANCH: "${{ github.base_ref }}"
   CI_BUILD_ID_TAG: "tiny-cri"
   CI_BUILD_PROFILE: "tiny"
   CI_CMAKE_EXTRA_FLAGS: "-DCUTLASS_TEST_FOR_CRI=ON"
@@ -54,33 +53,39 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
 
+      - name: Check Code Changes
+        id: check-changes
+        shell: bash
+        run: bash .github/scripts/pr_ci.sh check-changes
+
       - name: Detect Build Strategy
         id: build-strategy
+        if: steps.check-changes.outputs.source_code_changed == 'true'
         shell: bash
         run: bash .github/scripts/pr_ci.sh detect
 
-      - name: Select & Wait for Build Server Capacity
+      - name: Select Build Server
         id: admission
-        if: steps.build-strategy.outputs.use_remote == 'true'
+        if: steps.check-changes.outputs.source_code_changed == 'true' && steps.build-strategy.outputs.use_remote == 'true'
         timeout-minutes: 40
         shell: bash
         run: bash .github/scripts/pr_ci.sh select-server
 
       - name: Remote Build
         id: remote-build
-        if: steps.build-strategy.outputs.use_remote == 'true' && steps.admission.outputs.admitted == 'true'
+        if: steps.check-changes.outputs.source_code_changed == 'true' && steps.build-strategy.outputs.use_remote == 'true' && steps.admission.outputs.admitted == 'true'
         continue-on-error: true
         timeout-minutes: ${{ fromJSON(env.BUILD_STEP_TIMEOUT_MIN) }}
         shell: bash
         run: bash .github/scripts/pr_ci.sh remote-build
 
       - name: Fail on Remote Compile Error
-        if: steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outputs.failure_type == 'compile'
+        if: steps.check-changes.outputs.source_code_changed == 'true' && steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outputs.failure_type == 'compile'
         shell: bash
         run: bash .github/scripts/pr_ci.sh fail-compile
 
       - name: Fallback Notice
-        if: steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outcome != 'success' && steps.remote-build.outputs.failure_type != 'compile'
+        if: steps.check-changes.outputs.source_code_changed == 'true' && steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outcome != 'success' && steps.remote-build.outputs.failure_type != 'compile'
         env:
           FALLBACK_REASON: >-
             ${{ steps.admission.outputs.admitted != 'true' && 'No build server was admitted after capacity checks.' || steps.remote-build.outputs.failure_type == 'infra' && 'Remote build infrastructure error.' || 'Remote build did not complete with a classified result.' }}
@@ -88,24 +93,27 @@ jobs:
         run: bash .github/scripts/pr_ci.sh fallback-notice
 
       - name: Local Build
-        if: steps.build-strategy.outputs.use_remote != 'true' || (steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outcome != 'success' && steps.remote-build.outputs.failure_type != 'compile')
+        if: steps.check-changes.outputs.source_code_changed == 'true' && steps.build-strategy.outputs.use_remote != 'true' || (steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outcome != 'success' && steps.remote-build.outputs.failure_type != 'compile')
         shell: bash
         run: bash .github/scripts/pr_ci.sh local-build
 
       - name: Verify Build Output
-        if: steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outcome == 'success'
+        if: steps.check-changes.outputs.source_code_changed == 'true' && steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outcome == 'success'
         shell: bash
         run: bash .github/scripts/pr_ci.sh verify-build
 
       - name: Run Examples
+        if: steps.check-changes.outputs.source_code_changed == 'true'
         shell: bash
         run: bash .github/scripts/pr_ci.sh run-example
 
       - name: Run Unit Tests
+        if: steps.check-changes.outputs.source_code_changed == 'true'
         shell: bash
         run: bash .github/scripts/pr_ci.sh run-ut
 
       - name: Run Benchmarks
+        if: steps.check-changes.outputs.source_code_changed == 'true'
         shell: bash
         run: bash .github/scripts/pr_ci.sh run-bm
 

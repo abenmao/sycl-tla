@@ -59,6 +59,21 @@ check_ssh_connection() {
     echo "Passwordless SSH self-check passed for build server ${server_name}."
 }
 
+check_code_changes() {
+    local target_branch="${TARGET_BRANCH:-v0.1.0_next}"
+
+    echo "Target branch: origin/$target_branch"
+    changed_files=`git diff --name-only origin/$target_branch HEAD | awk '/\.(h|hpp|c|cpp|cu|cmake|txt|yml|sh)$/'`
+    
+    if [ -n "$changed_files" ]; then
+        write_output "source_code_changed=true"
+        echo "Detected source code changed, continue CI."
+    else
+        write_output "source_code_changed=false"
+        echo "Detected none source code changed, skip CI."
+    fi
+}
+
 find_build_server_oneapi_path() {
     local server_user="$1"
     local server_host="$2"
@@ -576,6 +591,8 @@ usage() {
 Usage: pr_ci.sh <command> [argument]
 
 Commands:
+  check
+    check-changes      Check code changes.
   detect              Select local or remote build from runner capacity.
     select-server       Select a build server and wait for capacity.
     remote-build        Build on the admitted remote server.
@@ -601,6 +618,7 @@ main() {
 
     case "$mode" in
         detect) detect_strategy ;;
+        check-changes) check_code_changes ;;
         admit|select-server) admit_build_server ;;
         remote|remote-build) remote_build ;;
         configure) configure_local ;;
