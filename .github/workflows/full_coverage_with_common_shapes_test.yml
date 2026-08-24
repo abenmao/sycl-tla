@@ -112,7 +112,7 @@ jobs:
       - name: Local Build
         if: steps.check-changes.outputs.source_code_changed == 'true' && steps.build-strategy.outputs.use_remote != 'true' || (steps.build-strategy.outputs.use_remote == 'true' && steps.remote-build.outcome != 'success' && steps.remote-build.outputs.failure_type != 'compile')
         env:
-          BUILD_DISABLE_FLASH_ATTENTION: "1"
+          BUILD_DISABLE_FLASH_ATTENTION: ${{ steps.build-strategy.outputs.use_remote == 'true' && '1' || '0' }}
         shell: bash
         run: bash .github/scripts/pr_ci.sh local-build
 
