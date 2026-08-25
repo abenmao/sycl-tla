@@ -142,8 +142,8 @@ double moe_run_impl_double_buffer(const void *vendor_tm, int verify,
 }
 
 // GREEDY run (plain BF16 + all scaled paths). Handles both uniform and dynamic M
-// (Config::is_dynamic_m selects the kernel instantiation); if constexpr on
-// scale_kind selects the launch.
+// (a runtime is_dynamic_m arg selects the mode in the ONE greedy kernel); if
+// constexpr on scale_kind selects the launch.
 template <class Config>
 double moe_run_impl_greedy(const void *vendor_tm, int verify,
                            std::string *error) {
@@ -157,6 +157,14 @@ double moe_run_impl_greedy(const void *vendor_tm, int verify,
   // Uniform per-expert M (host-side), passed as a scalar so the uniform-M kernel
   // path needn't read it back from the device counts array.
   const int32_t uniform_m = num_experts > 0 ? M_per_expert[0] : 0;
+  // Runtime uniform-vs-dynamic M for the scaled launcher: M varies iff any
+  // per-expert count differs from counts[0] (same scan as launch_moe). The plain
+  // launcher recomputes this itself from the mapping.
+  bool is_dynamic_m = false;
+  if (M_per_expert) {
+    for (int e = 1; e < num_experts; ++e)
+      if (M_per_expert[e] != M_per_expert[0]) { is_dynamic_m = true; break; }
+  }
 
   double ms;
   try {
@@ -167,7 +175,8 @@ double moe_run_impl_greedy(const void *vendor_tm, int verify,
           Config, ElementInput, ElementInput, ElementScaleStore, ElementOutput>(
           host_tm.scatter_tokens, host_tm.experts_weight,
           host_tm.packed_scale_a, host_tm.packed_scale_b, host_tm.y, N, K,
-          host_tm.experts_token_count_device, num_experts, uniform_m);
+          host_tm.experts_token_count_device, num_experts, uniform_m,
+          is_dynamic_m);
     }
   } catch (std::exception const &e) {
     if (error) *error = e.what();
@@ -193,7 +202,7 @@ double moe_run_impl_greedy(const void *vendor_tm, int verify,
           static_cast<int>(cute::get<0>(CONFIG::LargeBucketTile{})),           \
           static_cast<int>(cute::get<1>(CONFIG::LargeBucketTile{})),           \
           static_cast<int>(cute::get<2>(CONFIG::LargeBucketTile{})), #NAME,    \
-          /*is_db=*/false, /*is_dynamic_m=*/CONFIG::is_dynamic_m},             \
+          /*is_db=*/false},                                                    \
       cutlass::moe::KernelKind::Greedy,                                         \
       &moe_run_##NAME), true);
 
@@ -210,8 +219,7 @@ double moe_run_impl_greedy(const void *vendor_tm, int verify,
           static_cast<int>(cute::get<0>(CONFIG::LargeBucketTile{})),           \
           static_cast<int>(cute::get<1>(CONFIG::LargeBucketTile{})),           \
           static_cast<int>(cute::get<2>(CONFIG::LargeBucketTile{})), #NAME,    \
-          /*is_db=*/false, /*is_dynamic_m=*/CONFIG::is_dynamic_m,              \
-          /*is_bigk=*/true},                                                   \
+          /*is_db=*/false, /*is_bigk=*/true},                                  \
       cutlass::moe::KernelKind::Greedy,                                         \
       &moe_run_##NAME), true);
 
@@ -227,7 +235,7 @@ double moe_run_impl_greedy(const void *vendor_tm, int verify,
           static_cast<int>(cute::get<0>(CONFIG::TileShapeCri{})),              \
           static_cast<int>(cute::get<1>(CONFIG::TileShapeCri{})),              \
           static_cast<int>(cute::get<2>(CONFIG::TileShapeCri{})), #NAME,        \
-          /*is_db=*/true, /*is_dynamic_m=*/false},                             \
+          /*is_db=*/true},                                                     \
       cutlass::moe::KernelKind::DoubleBuffer,                                   \
       &moe_run_##NAME), true);
 

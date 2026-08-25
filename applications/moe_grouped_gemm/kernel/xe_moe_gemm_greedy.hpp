@@ -40,7 +40,7 @@ enum class TileId : int32_t {
 // ---------------------------------------------------------------------------
 // Unified GREEDY MoE GEMM kernel. ONE implementation for both uniform-M and
 // dynamic-M; the ONLY difference is how a flat tile index's owning expert is
-// resolved, gated by `IsDynamicM`:
+// resolved, gated by the runtime `is_dynamic_m` argument:
 //   * UNIFORM M: constant tiles_per_expert -> (expert, within) via FastDivmod.
 //   * DYNAMIC M: M varies -> owning expert found by a FORWARD SCAN (linear_idx
 //     only grows -> monotonic), fusing A/D/scale row prefix sums.
@@ -110,8 +110,7 @@ greedy_m_tiles(int32_t M, int32_t large_m, int32_t tiny_max) {
 
 ///////////////////////////////////////////////////////////////////////////////
 // Plain (bf16) unified greedy kernel.
-template <bool IsDynamicM,
-          class GmemTiledCopyA, class GmemTiledCopyB, class GmemTiledCopyD,
+template <class GmemTiledCopyA, class GmemTiledCopyB, class GmemTiledCopyD,
           class LayoutA, class LayoutB, class LayoutD,
           class MmaLarge, class MmaSmall,
           class MmaTinyExpertLarge, class MmaTinyExpertMedium,
@@ -121,7 +120,7 @@ CUTE_DEVICE void
 MoEGEMMGreedy(const ElementA *Activations, const ElementA *Weights,
               ElementD *Outputs, const int32_t *M_per_expert,
               const int32_t num_experts, const int32_t N, const int32_t K,
-              const int32_t M_uniform_param) {
+              const int32_t M_uniform_param, const bool is_dynamic_m) {
   MmaLarge mma_large{};
   MmaSmall mma_small{};
   MmaTinyExpertLarge  mma_tiny_expert_large{};
@@ -210,7 +209,7 @@ MoEGEMMGreedy(const ElementA *Activations, const ElementA *Weights,
     // ---- Resolve owning expert + within-expert index (mode-dependent) ----
     int32_t expert, within;
     int64_t cumulative_m_rows;
-    if constexpr (IsDynamicM) {
+    if (is_dynamic_m) {
       while (scan_expert < num_experts &&
              linear_idx >= scan_cum + tiles_of(scan_expert)) {
         scan_cum += tiles_of(scan_expert);
@@ -237,7 +236,7 @@ MoEGEMMGreedy(const ElementA *Activations, const ElementA *Weights,
     // ---- EXPERT CHANGED: rebuild per-expert pointers + greedy split ----
     if (expert != prev_expert) {
       prev_expert = expert;
-      expert_m_rows = IsDynamicM ? M_per_expert[expert] : M_uniform;
+      expert_m_rows = is_dynamic_m ? M_per_expert[expert] : M_uniform;
       is_tiny_expert = (expert_m_rows <= kTinyExpertMax);
       num_full = expert_m_rows >> kLargeBucketMLog2;
       const int32_t tail_rem = expert_m_rows - (num_full << kLargeBucketMLog2);
@@ -336,8 +335,7 @@ MoEGEMMGreedy(const ElementA *Activations, const ElementA *Weights,
 // Block-scaled (fp8, mxfp8, mxfp4) unified greedy kernel. Scheduler identical to
 // MoEGEMMGreedy; adds per-expert SCALE base pointers and dispatches to
 // moe_gemm_scaled_greedy. ElementB/LayoutB explicit (mxfp4 = ColumnMajor B).
-template <bool IsDynamicM,
-          class GmemTiledCopyA, class GmemTiledCopyB, class GmemTiledCopyD,
+template <class GmemTiledCopyA, class GmemTiledCopyB, class GmemTiledCopyD,
           class LayoutA, class LayoutB, class LayoutD,
           int CfgGroupN, int CfgGroupK,
           class MmaLarge, class MmaSmall,
@@ -351,7 +349,7 @@ MoEGEMMGreedyScaled(const ElementA *Activations, const ElementB *Weights,
                     ElementD *Outputs, const int32_t *M_per_expert,
                     const int32_t num_experts, const int32_t N, const int32_t K,
                     const int32_t GroupN, const int32_t GroupK,
-                    const int32_t M_uniform_param) {
+                    const int32_t M_uniform_param, const bool is_dynamic_m) {
   static_assert(!cute::is_void_v<ElementS>, "Use MoEGEMMGreedy for plain BF16");
   MmaLarge mma_large{};
   MmaSmall mma_small{};
@@ -463,7 +461,7 @@ MoEGEMMGreedyScaled(const ElementA *Activations, const ElementB *Weights,
     int32_t expert, within;
     int64_t cumulative_m_rows;
     int64_t scaleA_row_base;    // ScaleA row prefix (padded) for this expert
-    if constexpr (IsDynamicM) {
+    if (is_dynamic_m) {
       while (scan_expert < num_experts &&
              linear_idx >= scan_cum + tiles_of(scan_expert)) {
         scan_cum += tiles_of(scan_expert);
@@ -493,7 +491,7 @@ MoEGEMMGreedyScaled(const ElementA *Activations, const ElementB *Weights,
 
     if (expert != prev_expert) {
       prev_expert = expert;
-      expert_m_rows = IsDynamicM ? M_per_expert[expert] : M_uniform;
+      expert_m_rows = is_dynamic_m ? M_per_expert[expert] : M_uniform;
       is_tiny_expert = (expert_m_rows <= kTinyExpertMax);
       num_full = expert_m_rows >> kLargeBucketMLog2;
       const int32_t tail_rem = expert_m_rows - (num_full << kLargeBucketMLog2);

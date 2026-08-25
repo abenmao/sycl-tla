@@ -528,7 +528,8 @@ class GemmCuteName;
 // GREEDY launch (plain bf16). Per-expert tile size chosen ON-DEVICE by the
 // greedy split; all tile variants share one WG thread count so a single nd_range
 // hosts them. Grid = sm_count persistent workgroups.
-// Config::is_dynamic_m selects uniform-M vs dynamic-M instantiation.
+// The runtime is_dynamic_m arg (computed here from the per-expert counts) selects
+// uniform-M vs dynamic-M inside the ONE greedy kernel instantiation.
 template <class Config, typename ElementA, typename ElementScaleIn, typename ElementD>
 double moe_launch_timed_greedy(
     const VendorTensorMapping<ElementA, ElementScaleIn, ElementD> &tm) {
@@ -573,6 +574,17 @@ double moe_launch_timed_greedy(
   // needn't read it back from the device counts array.
   const int32_t uniform_m =
       (num_experts > 0 && tm.experts_token_count) ? tm.experts_token_count[0] : 0;
+  // Runtime uniform-vs-dynamic M: M varies iff any per-expert count differs from
+  // counts[0] (same scan as launch_moe). Selects the mode in the ONE greedy
+  // kernel instantiation. Null counts -> uniform (false).
+  bool is_dynamic_m = false;
+  if (tm.experts_token_count) {
+    for (int e = 1; e < num_experts; ++e)
+      if (tm.experts_token_count[e] != tm.experts_token_count[0]) {
+        is_dynamic_m = true;
+        break;
+      }
+  }
 
   int sm_count =
       cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
@@ -598,13 +610,13 @@ double moe_launch_timed_greedy(
   auto event = Q.parallel_for<
       GemmCuteName<ElementA, ElementA, ElementD, LayoutA, LayoutB, LargeBucketTile, Config>>(
       sycl::nd_range<3>(global_range, local_range), kernel_props, [=](auto) {
-        MoE::MoEGEMMGreedy<Config::is_dynamic_m, void, void, void,
+        MoE::MoEGEMMGreedy<void, void, void,
                            LayoutA, LayoutB, LayoutD,
                            MmaLarge, MmaSmall,
                            MmaTinyExpertLarge, MmaTinyExpertMedium,
                            MmaTinyExpertSmall, MmaTinyExpertTiny>(
             activations, weights, outputs, num_rows_per_expert_device,
-            num_experts, gemm_n, gemm_k, uniform_m);
+            num_experts, gemm_n, gemm_k, uniform_m, is_dynamic_m);
       });
   EventManager::getInstance().addEvent(event);
   Q.wait_and_throw();
@@ -612,7 +624,9 @@ double moe_launch_timed_greedy(
 }
 
 // GREEDY scaled launch (fp8, mxfp8, mxfp4): builds BDPAS MMAs (incl. TINY) and
-// passes scale pointers to MoEGEMMGreedyScaled. Config::is_dynamic_m selects mode.
+// passes scale pointers to MoEGEMMGreedyScaled. The runtime is_dynamic_m arg
+// (computed by the caller from the host per-expert counts) selects uniform-M vs
+// dynamic-M inside the ONE greedy kernel instantiation.
 template <class Config, typename ElementA, typename ElementB, typename ElementS,
           typename ElementD>
 double moe_launch_timed_greedy_scaled(
@@ -620,7 +634,7 @@ double moe_launch_timed_greedy_scaled(
     const ElementS *scalesA, const ElementS *scalesB, ElementD *outputs,
     const int gemm_n, const int gemm_k,
     const int32_t *num_rows_per_expert_device, const int num_experts,
-    const int32_t uniform_m) {
+    const int32_t uniform_m, const bool is_dynamic_m) {
   static_assert(Config::scale_kind != ScaleKind::Plain,
                 "use moe_launch_timed_greedy for plain BF16");
   using LayoutA = typename Config::LayoutA;
@@ -679,7 +693,7 @@ double moe_launch_timed_greedy_scaled(
   auto event = Q.parallel_for<
       GemmCuteName<ElementA, ElementB, ElementD, LayoutA, LayoutB, LargeBucketTile, Config>>(
       sycl::nd_range<3>(global_range, local_range), kernel_props, [=](auto) {
-        MoE::MoEGEMMGreedyScaled<Config::is_dynamic_m, void, void, void,
+        MoE::MoEGEMMGreedyScaled<void, void, void,
                                  LayoutA, LayoutB, LayoutD,
                                  Config::group_n, Config::group_k,
                                  MmaLarge, MmaSmall,
@@ -688,7 +702,7 @@ double moe_launch_timed_greedy_scaled(
                                  ElementA, ElementB, ElementS, ElementD>(
             activations, weights, scalesA, scalesB, outputs,
             num_rows_per_expert_device, num_experts, gemm_n, gemm_k,
-            Config::group_n, Config::group_k, uniform_m);
+            Config::group_n, Config::group_k, uniform_m, is_dynamic_m);
       });
   EventManager::getInstance().addEvent(event);
   Q.wait_and_throw();

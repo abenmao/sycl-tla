@@ -2,16 +2,16 @@
 // The X-macro drives both benchmark registration and the runtime dtype->config
 // dispatch (moe_api.cpp).
 //
-//   X(DTYPE, NAME, CONFIG)                        -- greedy (uniform or dynamic-M)
+//   X(DTYPE, NAME, CONFIG)                        -- greedy (uniform AND dynamic-M)
 //   X_DOUBLE_BUFFER(DTYPE, NAME, CONFIG)          -- double-buffer (plain)
 //   X_DOUBLE_BUFFER_SCALED(DTYPE, NAME, CONFIG)   -- double-buffer (scaled)
 // DTYPE = .in first token, NAME = unique thunk id, CONFIG = the typedef.
 //
-// Per dtype: a greedy binary (uniform + dynamic-M tiles) via -DMOE_DTYPE_<TAG>,
-// plus a DB binary via -DMOE_DTYPE_DOUBLE_BUFFER_<TAG> for dtypes the
-// tile-select routes to double buffer. -DMOE_BENCH_ALL enables every tag so
-// tile-select sees both greedy and DB candidates. No PART slicing --
-// each dtype has <=2 tiles.
+// Per dtype: ONE greedy tile (handles both uniform and dynamic M via a runtime
+// kernel arg) via -DMOE_DTYPE_<TAG> -- mxfp4 has two (base + BigK, differing by
+// tile, not M-mode) -- plus a DB binary via -DMOE_DTYPE_DOUBLE_BUFFER_<TAG> for
+// dtypes the tile-select routes to double buffer. -DMOE_BENCH_ALL enables every
+// tag so tile-select sees both greedy and DB candidates. No PART slicing.
 
 #pragma once
 
@@ -25,38 +25,34 @@
 #define MOE_DTYPE_DOUBLE_BUFFER_MXFP4_E2M1
 #endif
 
-// ---- GREEDY tiles (one uniform + one dynamic-M per dtype) ----
+// ---- GREEDY tiles (ONE per dtype; handles uniform AND dynamic M at runtime.
+//      mxfp4 has two: base + BigK, differing by tile, not M-mode) ----
 
 #ifdef MOE_DTYPE_FP8_TENSOR_E4M3
 #define MOE_TILE_LIST_FP8_TENSOR_E4M3 \
-  X(fp8_tensor_moe, GreedyMoE_Fp8Tensor_256_512_64,      cutlass::moe::Fp8TensorGreedy) \
-  X(fp8_tensor_moe, GreedyMoE_Fp8Tensor_256_512_64_dynm, cutlass::moe::Fp8TensorGreedyDynM)
+  X(fp8_tensor_moe, GreedyMoE_Fp8Tensor_256_512_64, cutlass::moe::Fp8TensorGreedy)
 #else
 #define MOE_TILE_LIST_FP8_TENSOR_E4M3
 #endif
 
 #ifdef MOE_DTYPE_MXFP8_E4M3
 #define MOE_TILE_LIST_MXFP8_E4M3 \
-  X(mxfp8_e4m3_moe, GreedyMoE_MxFp8_256_512_64,      cutlass::moe::MxFp8Greedy) \
-  X(mxfp8_e4m3_moe, GreedyMoE_MxFp8_256_512_64_dynm, cutlass::moe::MxFp8GreedyDynM)
+  X(mxfp8_e4m3_moe, GreedyMoE_MxFp8_256_512_64, cutlass::moe::MxFp8Greedy)
 #else
 #define MOE_TILE_LIST_MXFP8_E4M3
 #endif
 
 #ifdef MOE_DTYPE_MXFP4_E2M1
 #define MOE_TILE_LIST_MXFP4_E2M1 \
-  X(mxfp4_moe, GreedyMoE_MxFp4_256_512_128,      cutlass::moe::MxFp4Greedy) \
-  X(mxfp4_moe, GreedyMoE_MxFp4_256_512_128_dynm, cutlass::moe::MxFp4GreedyDynM) \
-  X_GREEDY_BIGK(mxfp4_moe, GreedyMoE_MxFp4_bigk_tinyK256,      cutlass::moe::MxFp4GreedyBigK) \
-  X_GREEDY_BIGK(mxfp4_moe, GreedyMoE_MxFp4_bigk_tinyK256_dynm, cutlass::moe::MxFp4GreedyBigKDynM)
+  X(mxfp4_moe, GreedyMoE_MxFp4_256_512_128, cutlass::moe::MxFp4Greedy) \
+  X_GREEDY_BIGK(mxfp4_moe, GreedyMoE_MxFp4_bigk_tinyK256, cutlass::moe::MxFp4GreedyBigK)
 #else
 #define MOE_TILE_LIST_MXFP4_E2M1
 #endif
 
 #ifdef MOE_DTYPE_BF16
 #define MOE_TILE_LIST_BF16 \
-  X(bf16_moe, GreedyMoE_Bf16_256_512_32,      cutlass::moe::Bf16Greedy) \
-  X(bf16_moe, GreedyMoE_Bf16_256_512_32_dynm, cutlass::moe::Bf16GreedyDynM)
+  X(bf16_moe, GreedyMoE_Bf16_256_512_32, cutlass::moe::Bf16Greedy)
 #else
 #define MOE_TILE_LIST_BF16
 #endif

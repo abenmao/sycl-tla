@@ -191,7 +191,8 @@ void pack_moe_scales(const ElementScaleIn *per_token_scale,
 // GREEDY configs. Each carries the WG-tile variants the on-device greedy split
 // dispatches to. The tiny tile has its own SG layout (its few rows can't
 // tile under the main one) but the same WG thread count, so all variants share
-// one nd_range. `is_dynamic_m` selects the MoEGEMMGreedy<IsDynamicM> instantiation.
+// one nd_range. Uniform-M vs dynamic-M is a RUNTIME kernel arg, not a config
+// member -- ONE greedy instantiation per dtype handles both.
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 using SG_4x8 = Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>;
@@ -231,7 +232,7 @@ using MoeTile_8_512_256   = Shape<cute::Int<8>, _512, cute::Int<256>>;
 // schedule (tiny_expert_small_bucket is also the low rung of the normal-expert
 // leftover ladder). The tiny_expert buckets use SG_1x32 so all six MMAs share
 // the same workgroup thread count.
-template <bool IsDynamicM, class TLarge, class TSmall, class TSG,
+template <class TLarge, class TSmall, class TSG,
           class TTinyExpertLarge = MoeTile_128_512_32,
           class TTinyExpertMedium = MoeTile_64_512_32,
           class TTinyExpertSmall = MoeTile_32_512_32,
@@ -255,10 +256,9 @@ struct Bf16GreedyConfig {
   static constexpr int group_k = 0;
   static constexpr int group_n = 0;
   static constexpr ScaleKind scale_kind = ScaleKind::Plain;
-  static constexpr bool is_dynamic_m = IsDynamicM;
 };
 
-template <bool IsDynamicM, class TElement, class TScale, int GroupK, int GroupN,
+template <class TElement, class TScale, int GroupK, int GroupN,
           ScaleKind Kind, class TLarge, class TSmall, class TSG,
           class TTinyExpertLarge, class TTinyExpertMedium,
           class TTinyExpertSmall, class TTinyExpertTiny,
@@ -282,41 +282,35 @@ struct LowpGreedyConfig {
   static constexpr int group_k = GroupK;
   static constexpr int group_n = GroupN;
   static constexpr ScaleKind scale_kind = Kind;
-  static constexpr bool is_dynamic_m = IsDynamicM;
 };
 
-template <bool IsDynamicM, class TElement, class TScale, int GroupK, int GroupN,
+template <class TElement, class TScale, int GroupK, int GroupN,
           ScaleKind Kind, class TLarge, class TSmall, class TSG,
           class TTinyExpertLarge, class TTinyExpertMedium,
           class TTinyExpertSmall, class TTinyExpertTiny,
           class TTinySG = SG_1x32,
           class TOut = cutlass::bfloat16_t>
 struct MxFp4GreedyConfig
-    : LowpGreedyConfig<IsDynamicM, TElement, TScale, GroupK, GroupN, Kind, TLarge,
+    : LowpGreedyConfig<TElement, TScale, GroupK, GroupN, Kind, TLarge,
                        TSmall, TSG, TTinyExpertLarge, TTinyExpertMedium,
                        TTinyExpertSmall, TTinyExpertTiny, TTinySG, TOut> {
   using LayoutB = cutlass::layout::ColumnMajor;   // mxfp4 weights are K-contiguous
 };
 
-// Uniform-M and dynamic-M greedy configs per dtype (same tiles; differ only by
-// is_dynamic_m). The benchmark picks the dynamic-M variant when M varies across
-// experts, else the uniform-M variant.
+// ONE greedy config per dtype -- uniform-M vs dynamic-M is a RUNTIME kernel arg,
+// so no paired *DynM aliases. mxfp4 keeps TWO configs that differ by TILE (base
+// tiny-K and BigK doubled tiny-K), not by M-mode.
 // Tile args: large_bucket, small_bucket, SG, tiny_expert_large_bucket,
 // tiny_expert_medium_bucket, tiny_expert_small_bucket, tiny_expert_tiny_bucket,
 // TINY_SG. The tiny_expert buckets use SG_1x32.
-using Bf16Greedy      = Bf16GreedyConfig<false, MoeTile_256_512_32, MoeTile_192_512_32, SG_4x8, MoeTile_128_512_32, MoeTile_64_512_32, MoeTile_32_512_32, MoeTile_8_512_32, SG_1x32>;
-using Bf16GreedyDynM  = Bf16GreedyConfig<true,  MoeTile_256_512_32, MoeTile_192_512_32, SG_4x8, MoeTile_128_512_32, MoeTile_64_512_32, MoeTile_32_512_32, MoeTile_8_512_32, SG_1x32>;
-using MxFp8Greedy     = LowpGreedyConfig<false, cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_64, MoeTile_192_512_64, SG_4x8, MoeTile_128_512_64, MoeTile_64_512_64, MoeTile_32_512_64, MoeTile_8_512_64, SG_1x32>;
-using MxFp8GreedyDynM = LowpGreedyConfig<true,  cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_64, MoeTile_192_512_64, SG_4x8, MoeTile_128_512_64, MoeTile_64_512_64, MoeTile_32_512_64, MoeTile_8_512_64, SG_1x32>;
-using MxFp4Greedy     = MxFp4GreedyConfig<false, cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, MoeTile_192_512_128, SG_4x8, MoeTile_128_512_128, MoeTile_64_512_128, MoeTile_32_512_128, MoeTile_8_512_128, SG_1x32>;
-using MxFp4GreedyDynM = MxFp4GreedyConfig<true,  cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, MoeTile_192_512_128, SG_4x8, MoeTile_128_512_128, MoeTile_64_512_128, MoeTile_32_512_128, MoeTile_8_512_128, SG_1x32>;
+using Bf16Greedy      = Bf16GreedyConfig<MoeTile_256_512_32, MoeTile_192_512_32, SG_4x8, MoeTile_128_512_32, MoeTile_64_512_32, MoeTile_32_512_32, MoeTile_8_512_32, SG_1x32>;
+using MxFp8Greedy     = LowpGreedyConfig<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_64, MoeTile_192_512_64, SG_4x8, MoeTile_128_512_64, MoeTile_64_512_64, MoeTile_32_512_64, MoeTile_8_512_64, SG_1x32>;
+using MxFp4Greedy     = MxFp4GreedyConfig<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, MoeTile_192_512_128, SG_4x8, MoeTile_128_512_128, MoeTile_64_512_128, MoeTile_32_512_128, MoeTile_8_512_128, SG_1x32>;
 // mxfp4 BigK variant: identical to MxFp4Greedy but the 4 tiny-expert tiles have
 // K doubled (256). Host selects this for mxfp4 at large K (K>1536); base above
 // for small K. Only the tiny-expert tiles differ.
-using MxFp4GreedyBigK     = MxFp4GreedyConfig<false, cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, MoeTile_192_512_128, SG_4x8, MoeTile_128_512_256, MoeTile_64_512_256, MoeTile_32_512_256, MoeTile_8_512_256, SG_1x32>;
-using MxFp4GreedyBigKDynM = MxFp4GreedyConfig<true,  cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, MoeTile_192_512_128, SG_4x8, MoeTile_128_512_256, MoeTile_64_512_256, MoeTile_32_512_256, MoeTile_8_512_256, SG_1x32>;
-using Fp8TensorGreedy     = LowpGreedyConfig<false, cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_256_512_64, MoeTile_192_512_64, SG_4x8, MoeTile_128_512_64, MoeTile_64_512_64, MoeTile_32_512_64, MoeTile_8_512_64, SG_1x32>;
-using Fp8TensorGreedyDynM = LowpGreedyConfig<true,  cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_256_512_64, MoeTile_192_512_64, SG_4x8, MoeTile_128_512_64, MoeTile_64_512_64, MoeTile_32_512_64, MoeTile_8_512_64, SG_1x32>;
+using MxFp4GreedyBigK = MxFp4GreedyConfig<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, MoeTile_192_512_128, SG_4x8, MoeTile_128_512_256, MoeTile_64_512_256, MoeTile_32_512_256, MoeTile_8_512_256, SG_1x32>;
+using Fp8TensorGreedy = LowpGreedyConfig<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_256_512_64, MoeTile_192_512_64, SG_4x8, MoeTile_128_512_64, MoeTile_64_512_64, MoeTile_32_512_64, MoeTile_8_512_64, SG_1x32>;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Per-dtype configs. Each is a pure bag of type/constant members (no kernel types):

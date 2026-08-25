@@ -36,7 +36,6 @@ struct TileGeom {
   int blk_k;
   const char *name;
   bool is_db;         // double-buffer tile (vs greedy)
-  bool is_dynamic_m;  // greedy tile compiled for dynamic (varying) M vs uniform M
   bool is_bigk = false;  // mxfp4 greedy variant with doubled tiny-expert K (large-K)
 };
 
@@ -93,14 +92,15 @@ inline int find_kernel(std::vector<Entry> const &kernels, GeomOf geom_of, Match 
 //                    best-solution hash table has an entry for this exact
 //                    (dtype,M,N,K). We then want the DB kernel with that entry's
 //                    tile geometry.
-//   GREEDY        -- every other shape. We want the greedy kernel whose M-mode
-//                    matches the run (dynamic-M kernel when M varies, uniform-M
-//                    kernel otherwise).
+//   GREEDY        -- every other shape. The ONE greedy kernel handles both
+//                    uniform and dynamic M (chosen at runtime), so M-mode does
+//                    not pick a variant; only the mxfp4 BigK tile choice does.
 // In each case we look for the ideal kernel; if it wasn't compiled into this
 // binary we fall back to one of the same family so we still run something.
 // `dynamic_m` (M varies across experts) is decided once upstream, where the M
-// list is built, and passed in -- not re-derived here. `M` is the uniform
-// per-expert M, only meaningful (and only used) when !dynamic_m.
+// list is built, and passed in -- not re-derived here. It still gates DB (DB is
+// uniform-M only). `M` is the uniform per-expert M, only meaningful (and only
+// used) when !dynamic_m.
 template <class Entry, class GeomOf>
 inline int pick_best_solution(std::vector<Entry> const &kernels, GeomOf geom_of,
                               const std::string &dtype, int N, int K, int M,
@@ -127,21 +127,17 @@ inline int pick_best_solution(std::vector<Entry> const &kernels, GeomOf geom_of,
     if (chosen < 0)                                         // fallback: any DB tile
       chosen = find_kernel(kernels, geom_of, [](TileGeom const &k) { return k.is_db; });
   } else {
-    // mxfp4 at large K (K>1536) uses the BigK greedy variant (doubled tiny-expert
-    // K); every other greedy shape uses the base (non-BigK) variant.
+    // The ONE greedy kernel handles both uniform and dynamic M at runtime, so
+    // M-mode no longer selects a variant. mxfp4 at large K (K>1536) uses the BigK
+    // greedy variant (doubled tiny-expert K); every other greedy shape uses the
+    // base (non-BigK) variant.
     const bool want_bigk = (dtype == "mxfp4_moe") && (K > 1536);
-    chosen = find_kernel(kernels, geom_of, [&](TileGeom const &k) {  // greedy, M-mode + BigK
-      return !k.is_db && k.is_dynamic_m == dynamic_m && k.is_bigk == want_bigk;
+    chosen = find_kernel(kernels, geom_of, [&](TileGeom const &k) {  // greedy + BigK
+      return !k.is_db && k.is_bigk == want_bigk;
     });
-    if (chosen < 0)  // fallback: same M-mode, ignore BigK (variant may not be compiled)
-      chosen = find_kernel(kernels, geom_of, [&](TileGeom const &k) {
-        return !k.is_db && k.is_dynamic_m == dynamic_m;
-      });
-    if (chosen < 0)  // fallback: the dynamic-M greedy kernel -- it handles BOTH
-                     // uniform and varying M correctly, so it's always safe (the
-                     // uniform-M kernel would be wrong for varying-M input).
+    if (chosen < 0)  // fallback: any greedy tile, ignore BigK (variant may not be compiled)
       chosen = find_kernel(kernels, geom_of,
-                           [](TileGeom const &k) { return !k.is_db && k.is_dynamic_m; });
+                           [](TileGeom const &k) { return !k.is_db; });
   }
   // Unreachable unless the registry for this dtype is misconfigured (e.g. only DB
   // kernels compiled in but a greedy one is needed, or vice versa) -- both the
@@ -165,8 +161,10 @@ inline int pick_best_solution(std::vector<Entry> const &kernels, GeomOf geom_of,
     std::cerr << "DOUBLE-BUFFER tile " << g.blk_m << "x" << g.blk_n << "x" << g.blk_k;
   } else {
     // Greedy picks its M-tile per expert on-device -- no host-side tile to report.
-    std::cerr << "GREEDY (" << (g.is_dynamic_m ? "dynamic-M" : "uniform-M")
-              << ", per-expert split chosen in kernel)";
+    // The ONE greedy kernel handles both M-modes at runtime.
+    std::cerr << "GREEDY (" << (dynamic_m ? "dynamic-M" : "uniform-M")
+              << ", per-expert split chosen in kernel"
+              << (g.is_bigk ? ", BigK" : "") << ")";
   }
   std::cerr << " (force_greedy=" << (force_greedy ? "1" : "0") << ")\n";
   #endif
