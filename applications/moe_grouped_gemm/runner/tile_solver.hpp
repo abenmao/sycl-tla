@@ -50,6 +50,10 @@ inline constexpr DbShape kHardcodedDbShapes[] = {
     {"mxfp4_moe",    171, 2560, 3584, 192, 256},
     {"mxfp8_e4m3_moe", 427, 2560, 3584, 224, 256},
     {"mxfp4_moe",    427, 2560, 3584, 224, 256},
+    // src0 shapes measured faster on double buffer than greedy (old-solver tile):
+    {"mxfp4_moe",      683, 3584, 1280, 192, 256},  // +9.8%
+    {"fp8_tensor_moe", 427, 2560, 3584, 224, 256},  // +19.9%
+    {"mxfp4_moe",      683, 2560, 3584, 256, 256},  // +40.4%
 };
 
 // (dtype,M,N,K) -> target DB tile. Backed by a function-local static hash table
