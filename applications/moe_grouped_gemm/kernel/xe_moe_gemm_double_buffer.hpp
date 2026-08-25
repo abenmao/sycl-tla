@@ -643,13 +643,11 @@ MoEGEMMDoubleBufferScaled(const ElementA *Activations, const ElementB *Weights,
 
       if constexpr (CfgGroupK == 0) {
         // ── TENSOR scale path: HW BDPAS ───────────────────────────────────
-        // Fixed surface geometry from moe_scale_layout.hpp — the same constants
-        // the host packer uses: height 2 (BDPAS offset scheme) and one
-        // kScaleAlign-wide N stripe per expert. The static_assert enforces that
-        // one stripe covers the whole subgroup N extent; the 2D load walks in
-        // kScaleAlign-wide steps, so a larger SG_N would read past the host
-        // allocation. Scale is fused into each DPAS via make_zip_tensor (same
-        // structure as the BLOCK path, different scale layout).
+        // Fixed surface geometry from moe_scale_layout.hpp (same constants the
+        // host packer uses): BDPAS offset-scheme height and one kScaleAlign-wide
+        // N stripe per expert. The static_assert enforces one stripe covers the
+        // whole subgroup N extent, else the 2D load reads past the host alloc.
+        // Scale is fused into each DPAS via make_zip_tensor.
         static_assert(cute::sizeof_bits_v<ElementA> == 8,
                       "ScaleKind::Tensor scale surface geometry is fp8-only.");
         constexpr int scale_k_tensor = kTensorScaleK;

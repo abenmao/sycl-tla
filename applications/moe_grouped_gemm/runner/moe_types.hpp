@@ -116,9 +116,9 @@ template <class Config>
 ScaleSurfaceGeom scale_surface_geom(int N, int K) {
   constexpr bool kIsTensor = (Config::scale_kind == ScaleKind::Tensor);
   // Tensor geometry is fixed by the BDPAS scale layout: height kTensorScaleK
-  // follows from MMA_K = 256 / sizeof_bits(Element) = 32 against the tensor
-  // tiles' BLK_K = 64 — an 8-bit-only result. A 4-bit tensor config would need
-  // height 4, so fail here rather than silently mis-stride.
+  // follows from the tensor tile's BLK_K / MMA_K — an 8-bit-only result. A 4-bit
+  // tensor config would need a different height, so fail here rather than
+  // silently mis-stride.
   static_assert(!kIsTensor || cute::sizeof_bits_v<typename Config::Element> == 8,
                 "ScaleKind::Tensor scale surface geometry is fp8-only.");
   if constexpr (kIsTensor)
@@ -198,10 +198,8 @@ void pack_moe_scales(const ElementScaleIn *per_token_scale,
 using SG_4x8 = Layout<Shape<_4, _8, _1>, Stride<_8, _1, _0>>;
 using SG_1x32 = Layout<Shape<_1, cute::Int<32>, _1>, Stride<cute::Int<32>, _1, _0>>;
 
-// Named MoeTile_<M>_<N>_<K> tile shapes. Normal-expert buckets are
-// large_bucket / small_bucket; the tiny_expert buckets
-// (tiny_expert_{large,medium,small,tiny}_bucket) serve the tiny-expert
-// single-tile schedule. The config below picks all six of these.
+// Named MoeTile_<M>_<N>_<K> tile shapes. The config below picks all six greedy
+// buckets (large/small + the four tiny_expert buckets) from these.
 using MoeTile_256_512_32  = Shape<_256, _512, _32>;
 using MoeTile_192_512_32  = Shape<cute::Int<192>, _512, _32>;
 using MoeTile_128_512_32  = Shape<cute::Int<128>, _512, _32>;
@@ -220,18 +218,16 @@ using MoeTile_128_512_128 = Shape<cute::Int<128>, _512, _128>;
 using MoeTile_64_512_128  = Shape<cute::Int<64>, _512, _128>;
 using MoeTile_32_512_128  = Shape<cute::Int<32>, _512, _128>;
 using MoeTile_8_512_128   = Shape<cute::Int<8>, _512, _128>;
-// mxfp4 BigK: tiny-expert tiles with K doubled 128->256 (4-bit, so byte-cheap;
-// wins at large K where the extra K amortizes dequant/scale overhead).
+// mxfp4 BigK tiny-expert tiles: 4-bit is byte-cheap, so a wider K amortizes
+// dequant/scale overhead and wins at large K.
 using MoeTile_128_512_256 = Shape<cute::Int<128>, _512, cute::Int<256>>;
 using MoeTile_64_512_256  = Shape<cute::Int<64>, _512, cute::Int<256>>;
 using MoeTile_32_512_256  = Shape<cute::Int<32>, _512, cute::Int<256>>;
 using MoeTile_8_512_256   = Shape<cute::Int<8>, _512, cute::Int<256>>;
 
-// Six greedy M-buckets: large_bucket / small_bucket for normal experts, and
-// tiny_expert_{large,medium,small,tiny}_bucket for the tiny-expert single-tile
-// schedule (tiny_expert_small_bucket is also the low rung of the normal-expert
-// leftover ladder). The tiny_expert buckets use SG_1x32 so all six MMAs share
-// the same workgroup thread count.
+// Six greedy M-buckets: large/small for normal experts, and the four
+// tiny_expert buckets for the tiny-expert single-tile schedule. The tiny_expert
+// buckets use SG_1x32 so all six MMAs share one workgroup thread count.
 template <class TLarge, class TSmall, class TSG,
           class TTinyExpertLarge = MoeTile_128_512_32,
           class TTinyExpertMedium = MoeTile_64_512_32,
@@ -298,17 +294,16 @@ struct MxFp4GreedyConfig
 };
 
 // ONE greedy config per dtype -- uniform-M vs dynamic-M is a RUNTIME kernel arg,
-// so no paired *DynM aliases. mxfp4 keeps TWO configs that differ by TILE (base
-// tiny-K and BigK doubled tiny-K), not by M-mode.
-// Tile args: large_bucket, small_bucket, SG, tiny_expert_large_bucket,
-// tiny_expert_medium_bucket, tiny_expert_small_bucket, tiny_expert_tiny_bucket,
-// TINY_SG. The tiny_expert buckets use SG_1x32.
+// so no paired *DynM aliases. mxfp4 keeps TWO configs that differ by tiny-expert
+// TILE (base + BigK), not by M-mode.
+// Tile args: large_bucket, small_bucket, SG, then the four tiny_expert buckets
+// (large..tiny) and TINY_SG.
 using Bf16Greedy      = Bf16GreedyConfig<MoeTile_256_512_32, MoeTile_192_512_32, SG_4x8, MoeTile_128_512_32, MoeTile_64_512_32, MoeTile_32_512_32, MoeTile_8_512_32, SG_1x32>;
 using MxFp8Greedy     = LowpGreedyConfig<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_64, MoeTile_192_512_64, SG_4x8, MoeTile_128_512_64, MoeTile_64_512_64, MoeTile_32_512_64, MoeTile_8_512_64, SG_1x32>;
 using MxFp4Greedy     = MxFp4GreedyConfig<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, MoeTile_192_512_128, SG_4x8, MoeTile_128_512_128, MoeTile_64_512_128, MoeTile_32_512_128, MoeTile_8_512_128, SG_1x32>;
-// mxfp4 BigK variant: identical to MxFp4Greedy but the 4 tiny-expert tiles have
-// K doubled (256). Host selects this for mxfp4 at large K (K>1536); base above
-// for small K. Only the tiny-expert tiles differ.
+// mxfp4 BigK variant: identical to MxFp4Greedy except the tiny-expert tiles use
+// the wider-K MoeTile_*_512_256 shapes. Host selects this for mxfp4 at large K
+// (K>1536); base above for small K.
 using MxFp4GreedyBigK = MxFp4GreedyConfig<cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, MoeTile_192_512_128, SG_4x8, MoeTile_128_512_256, MoeTile_64_512_256, MoeTile_32_512_256, MoeTile_8_512_256, SG_1x32>;
 using Fp8TensorGreedy = LowpGreedyConfig<cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_256_512_64, MoeTile_192_512_64, SG_4x8, MoeTile_128_512_64, MoeTile_64_512_64, MoeTile_32_512_64, MoeTile_8_512_64, SG_1x32>;
 

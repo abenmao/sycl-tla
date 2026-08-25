@@ -21,13 +21,10 @@
 namespace MoE {
 using namespace cute;
 
-// Which M-bucket a tile uses; selects the mainloop MMA. Six buckets:
-//   large_bucket / small_bucket serve normal experts (LARGE peel + the
-//   {small_bucket, large_bucket} end of the leftover ladder).
-//   tiny_expert_{large,medium,small,tiny}_bucket serve the single-tile
-//   tiny-expert schedule (smallest that covers M); tiny_expert_small_bucket
-//   is also the low rung of the normal-expert leftover ladder.
-// All six tile_m extents come from the MMA types (Config).
+// Which M-bucket a tile uses; selects the mainloop MMA. large_bucket/small_bucket
+// serve normal experts; tiny_expert_{large,medium,small,tiny}_bucket serve the
+// single-tile tiny-expert schedule. tiny_expert_small_bucket is also the low rung
+// of the normal-expert leftover ladder. All tile_m extents come from the MMA types.
 enum class TileId : int32_t {
   Large = 0,
   Small = 1,
@@ -39,29 +36,23 @@ enum class TileId : int32_t {
 
 // ---------------------------------------------------------------------------
 // Unified GREEDY MoE GEMM kernel. ONE implementation for both uniform-M and
-// dynamic-M; the ONLY difference is how a flat tile index's owning expert is
-// resolved, gated by the runtime `is_dynamic_m` argument:
+// dynamic-M, gated by the runtime `is_dynamic_m` arg; the only difference is how
+// a flat tile index's owning expert is resolved:
 //   * UNIFORM M: constant tiles_per_expert -> (expert, within) via FastDivmod.
-//   * DYNAMIC M: M varies -> owning expert found by a FORWARD SCAN (linear_idx
-//     only grows -> monotonic), fusing A/D/scale row prefix sums.
+//   * DYNAMIC M: owning expert found by a FORWARD SCAN (linear_idx only grows),
+//     fusing A/D/scale row prefix sums.
 //
 // GREEDY M split (both modes), two scheduling methods by expert size:
 //   * NORMAL expert (M > kTinyExpertMax): peel large_bucket tiles, then ONE
 //     leftover tile from the RESTRICTED ladder
-//     {tiny_expert_small_bucket, small_bucket, large_bucket} -- the
-//     tiny_expert_{large,medium,tiny}_bucket are NOT used for normal-expert
-//     leftovers. large_bucket tile_m is a power of two so the peel is
-//     shifts/masks. LOOK-2 tail: if the last [large_bucket,leftover] pair fits
-//     in two small_bucket tiles at less padding, use those (SAME tile count,
-//     always small_bucket -- never a tiny_expert bucket).
-//   * TINY expert (M <= kTinyExpertMax): scheduled as ONE tile -- the smallest
-//     tiny_expert bucket that covers M
-//     ({tiny_expert_tiny_bucket, tiny_expert_small_bucket,
-//       tiny_expert_medium_bucket, tiny_expert_large_bucket}); the single tile
-//     is partial/padded.
-// Extents come from the MMA types (Config). The tiny_expert buckets use their
-// own SG layout but the same WG thread count, so all variants share one
-// nd_range; dispatch on TileId to one of six mainloops.
+//     {tiny_expert_small_bucket, small_bucket, large_bucket}. large_bucket
+//     tile_m is a power of two so the peel is shifts/masks. LOOK-2 tail: if the
+//     last [large_bucket,leftover] pair fits in two small_bucket tiles at less
+//     padding, use those (same tile count, always small_bucket).
+//   * TINY expert (M <= kTinyExpertMax): ONE tile -- the smallest tiny_expert
+//     bucket that covers M (partial/padded).
+// The tiny_expert buckets use their own SG layout but the same WG thread count,
+// so all variants share one nd_range; dispatch on TileId to one of six mainloops.
 // ---------------------------------------------------------------------------
 
 // Operand-layout tensor builder. B inverts A/D because it is stored (N,K) with

@@ -36,7 +36,7 @@ struct TileGeom {
   int blk_k;
   const char *name;
   bool is_db;         // double-buffer tile (vs greedy)
-  bool is_bigk = false;  // mxfp4 greedy variant with doubled tiny-expert K (large-K)
+  bool is_bigk = false;  // mxfp4 wider-K tiny-expert greedy variant (large-K)
 };
 
 // A shape that runs DOUBLE BUFFER instead of greedy, with the EXACT DB tile to
@@ -71,11 +71,10 @@ inline const DbShape *lookup_db_shape(const std::string &dtype, int M, int N, in
   return it == table.end() ? nullptr : it->second;
 }
 
-// Index of the first compiled kernel satisfying `match`, or -1. Callers need the
 // Index of the first kernel whose geometry satisfies `match`, or -1. `kernels` is
 // the registry's entry list (read by reference, no copy) and `geom_of` projects an
 // entry to its TileGeom -- the entry type lives in a downstream header, so it's a
-// template. Callers need the INDEX; the scan is a handful of kernels, once/launch.
+// template. The scan is a handful of kernels, once per launch.
 template <class Entry, class GeomOf, class Match>
 inline int find_kernel(std::vector<Entry> const &kernels, GeomOf geom_of, Match match) {
   for (size_t i = 0; i < kernels.size(); ++i)
@@ -129,8 +128,7 @@ inline int pick_best_solution(std::vector<Entry> const &kernels, GeomOf geom_of,
   } else {
     // The ONE greedy kernel handles both uniform and dynamic M at runtime, so
     // M-mode no longer selects a variant. mxfp4 at large K (K>1536) uses the BigK
-    // greedy variant (doubled tiny-expert K); every other greedy shape uses the
-    // base (non-BigK) variant.
+    // greedy variant; every other greedy shape uses the base (non-BigK) variant.
     const bool want_bigk = (dtype == "mxfp4_moe") && (K > 1536);
     chosen = find_kernel(kernels, geom_of, [&](TileGeom const &k) {  // greedy + BigK
       return !k.is_db && k.is_bigk == want_bigk;
