@@ -197,6 +197,24 @@ double moe_run_impl_greedy(const void *vendor_tm, int verify,
       cutlass::moe::KernelKind::Greedy,                                         \
       &moe_run_##NAME), true);
 
+// mxfp4 BigK greedy tile: same as GREEDY but flags is_bigk=true so the host
+// selects it for mxfp4 at large K (see pick_best_solution).
+#define MOE_REGISTER_TILE_GREEDY_BIGK(DTYPE, NAME, CONFIG)                     \
+  static double moe_run_##NAME(const void *vendor_tm, int v,                   \
+                               std::string *e) {                               \
+    return moe_run_impl_greedy<CONFIG>(vendor_tm, v, e);                       \
+  }                                                                            \
+  static const bool moe_reg_##NAME = (cutlass::moe::moe_register_tile(          \
+      #DTYPE,                                                                  \
+      cutlass::moe::TileGeom{                                                   \
+          static_cast<int>(cute::get<0>(CONFIG::LargeBucketTile{})),           \
+          static_cast<int>(cute::get<1>(CONFIG::LargeBucketTile{})),           \
+          static_cast<int>(cute::get<2>(CONFIG::LargeBucketTile{})), #NAME,    \
+          /*is_db=*/false, /*is_dynamic_m=*/CONFIG::is_dynamic_m,              \
+          /*is_bigk=*/true},                                                   \
+      cutlass::moe::KernelKind::Greedy,                                         \
+      &moe_run_##NAME), true);
+
 // Double-buffer tile — geometry flagged is_db so tile-select applies the DB policy.
 #define MOE_REGISTER_TILE_DOUBLE_BUFFER(DTYPE, NAME, CONFIG)                   \
   static double moe_run_##NAME(const void *vendor_tm, int v,                   \
@@ -223,10 +241,12 @@ double moe_run_impl_greedy(const void *vendor_tm, int verify,
 #include "moe_grouped_gemm/runner/moe_tile_list.hpp"
 #ifdef MOE_TILE_X_LIST
 #define X(DTYPE, NAME, CONFIG) MOE_REGISTER_TILE_GREEDY(DTYPE, NAME, CONFIG)
+#define X_GREEDY_BIGK(DTYPE, NAME, CONFIG) MOE_REGISTER_TILE_GREEDY_BIGK(DTYPE, NAME, CONFIG)
 #define X_DOUBLE_BUFFER(DTYPE, NAME, CONFIG) MOE_REGISTER_TILE_DOUBLE_BUFFER(DTYPE, NAME, CONFIG)
 #define X_DOUBLE_BUFFER_SCALED(DTYPE, NAME, CONFIG) MOE_REGISTER_TILE_DOUBLE_BUFFER_SCALED(DTYPE, NAME, CONFIG)
 MOE_TILE_X_LIST
 #undef X
+#undef X_GREEDY_BIGK
 #undef X_DOUBLE_BUFFER
 #undef X_DOUBLE_BUFFER_SCALED
 #endif

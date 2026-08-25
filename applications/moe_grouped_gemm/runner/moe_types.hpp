@@ -219,6 +219,12 @@ using MoeTile_128_512_128 = Shape<cute::Int<128>, _512, _128>;
 using MoeTile_64_512_128  = Shape<cute::Int<64>, _512, _128>;
 using MoeTile_32_512_128  = Shape<cute::Int<32>, _512, _128>;
 using MoeTile_8_512_128   = Shape<cute::Int<8>, _512, _128>;
+// mxfp4 BigK: tiny-expert tiles with K doubled 128->256 (4-bit, so byte-cheap;
+// wins at large K where the extra K amortizes dequant/scale overhead).
+using MoeTile_128_512_256 = Shape<cute::Int<128>, _512, cute::Int<256>>;
+using MoeTile_64_512_256  = Shape<cute::Int<64>, _512, cute::Int<256>>;
+using MoeTile_32_512_256  = Shape<cute::Int<32>, _512, cute::Int<256>>;
+using MoeTile_8_512_256   = Shape<cute::Int<8>, _512, cute::Int<256>>;
 
 // Six greedy M-buckets: large_bucket / small_bucket for normal experts, and
 // tiny_expert_{large,medium,small,tiny}_bucket for the tiny-expert single-tile
@@ -304,6 +310,11 @@ using MxFp8Greedy     = LowpGreedyConfig<false, cutlass::float_e4m3_t, cutlass::
 using MxFp8GreedyDynM = LowpGreedyConfig<true,  cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_64, MoeTile_192_512_64, SG_4x8, MoeTile_128_512_64, MoeTile_64_512_64, MoeTile_32_512_64, MoeTile_8_512_64, SG_1x32>;
 using MxFp4Greedy     = MxFp4GreedyConfig<false, cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, MoeTile_192_512_128, SG_4x8, MoeTile_128_512_128, MoeTile_64_512_128, MoeTile_32_512_128, MoeTile_8_512_128, SG_1x32>;
 using MxFp4GreedyDynM = MxFp4GreedyConfig<true,  cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, MoeTile_192_512_128, SG_4x8, MoeTile_128_512_128, MoeTile_64_512_128, MoeTile_32_512_128, MoeTile_8_512_128, SG_1x32>;
+// mxfp4 BigK variant: identical to MxFp4Greedy but the 4 tiny-expert tiles have
+// K doubled (256). Host selects this for mxfp4 at large K (K>1536); base above
+// for small K. Only the tiny-expert tiles differ.
+using MxFp4GreedyBigK     = MxFp4GreedyConfig<false, cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, MoeTile_192_512_128, SG_4x8, MoeTile_128_512_256, MoeTile_64_512_256, MoeTile_32_512_256, MoeTile_8_512_256, SG_1x32>;
+using MxFp4GreedyBigKDynM = MxFp4GreedyConfig<true,  cutlass::float_e2m1_t, cutlass::float_ue8m0_t, 32, 1, ScaleKind::Block, MoeTile_256_512_128, MoeTile_192_512_128, SG_4x8, MoeTile_128_512_256, MoeTile_64_512_256, MoeTile_32_512_256, MoeTile_8_512_256, SG_1x32>;
 using Fp8TensorGreedy     = LowpGreedyConfig<false, cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_256_512_64, MoeTile_192_512_64, SG_4x8, MoeTile_128_512_64, MoeTile_64_512_64, MoeTile_32_512_64, MoeTile_8_512_64, SG_1x32>;
 using Fp8TensorGreedyDynM = LowpGreedyConfig<true,  cutlass::float_e4m3_t, cutlass::float_ue8m0_t, 0, 0, ScaleKind::Tensor, MoeTile_256_512_64, MoeTile_192_512_64, SG_4x8, MoeTile_128_512_64, MoeTile_64_512_64, MoeTile_32_512_64, MoeTile_8_512_64, SG_1x32>;
 

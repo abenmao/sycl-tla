@@ -37,6 +37,7 @@ struct TileGeom {
   const char *name;
   bool is_db;         // double-buffer tile (vs greedy)
   bool is_dynamic_m;  // greedy tile compiled for dynamic (varying) M vs uniform M
+  bool is_bigk = false;  // mxfp4 greedy variant with doubled tiny-expert K (large-K)
 };
 
 // A shape that runs DOUBLE BUFFER instead of greedy, with the EXACT DB tile to
@@ -126,9 +127,16 @@ inline int pick_best_solution(std::vector<Entry> const &kernels, GeomOf geom_of,
     if (chosen < 0)                                         // fallback: any DB tile
       chosen = find_kernel(kernels, geom_of, [](TileGeom const &k) { return k.is_db; });
   } else {
-    chosen = find_kernel(kernels, geom_of, [&](TileGeom const &k) {  // greedy, M-mode
-      return !k.is_db && k.is_dynamic_m == dynamic_m;
+    // mxfp4 at large K (K>1536) uses the BigK greedy variant (doubled tiny-expert
+    // K); every other greedy shape uses the base (non-BigK) variant.
+    const bool want_bigk = (dtype == "mxfp4_moe") && (K > 1536);
+    chosen = find_kernel(kernels, geom_of, [&](TileGeom const &k) {  // greedy, M-mode + BigK
+      return !k.is_db && k.is_dynamic_m == dynamic_m && k.is_bigk == want_bigk;
     });
+    if (chosen < 0)  // fallback: same M-mode, ignore BigK (variant may not be compiled)
+      chosen = find_kernel(kernels, geom_of, [&](TileGeom const &k) {
+        return !k.is_db && k.is_dynamic_m == dynamic_m;
+      });
     if (chosen < 0)  // fallback: the dynamic-M greedy kernel -- it handles BOTH
                      // uniform and varying M correctly, so it's always safe (the
                      // uniform-M kernel would be wrong for varying-M input).

@@ -159,7 +159,10 @@ MoEGEMMDoubleBuffer(const ElementA *Activations, const ElementB *Weights,
 
   constexpr int prefetch_dist = 2;
   int k_tile_count = ceil_div(K, get<2>(wg_tile));
-  constexpr uint8_t NUM_SUBGROUPS = 32;
+  constexpr uint8_t NUM_SUBGROUPS =
+      get<1>(typename TiledMMA::ThrLayoutVMNK{}.shape()) *
+      get<2>(typename TiledMMA::ThrLayoutVMNK{}.shape()) *
+      get<3>(typename TiledMMA::ThrLayoutVMNK{}.shape());  // single source: MMA sg dims
   uint8_t k_tile_subgroup_store_ratio = k_tile_count >= NUM_SUBGROUPS ? 1 : ceil_div(NUM_SUBGROUPS, k_tile_count);
 
   // ── Strided pair loop ────────────────────────────────────────────────────
@@ -449,7 +452,10 @@ MoEGEMMDoubleBufferScaled(const ElementA *Activations, const ElementB *Weights,
 
   constexpr int prefetch_dist = 2;
   int k_tile_count = ceil_div(K, get<2>(wg_tile));
-  constexpr uint8_t NUM_SUBGROUPS = 32;
+  constexpr uint8_t NUM_SUBGROUPS =
+      get<1>(typename TiledMMA::ThrLayoutVMNK{}.shape()) *
+      get<2>(typename TiledMMA::ThrLayoutVMNK{}.shape()) *
+      get<3>(typename TiledMMA::ThrLayoutVMNK{}.shape());  // single source: MMA sg dims
   uint8_t k_tile_subgroup_store_ratio = k_tile_count >= NUM_SUBGROUPS ? 1 : ceil_div(NUM_SUBGROUPS, k_tile_count);
 
   const int scale_n = ceil_div(int(N), int(GroupN > 0 ? GroupN : 1));

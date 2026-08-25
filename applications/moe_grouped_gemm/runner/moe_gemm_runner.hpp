@@ -82,6 +82,11 @@ using namespace MoE;
 
 using ElementAccumulator = float;
 
+// SG layouts for the double-buffer / default path (single source). SG_4x8 comes
+// from moe_types.hpp via `using namespace MoE`.
+using SG_8x4 = Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>;
+using SG_8x2 = Layout<Shape<_8, _2, _1>, Stride<_2, _1, _0>>;
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 struct VerificationHelper {
@@ -491,9 +496,9 @@ auto choose_tiled_mma(TA *A, TB *B) {
   // Subgroup tiling, n-major, per hardware target. Per-SG N (BLK_N/SG_N) must
   // stay >= the GroupN scale-broadcast width, else the broadcast breaks.
 #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
-  using DefaultSGLayout = Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>;
+  using DefaultSGLayout = SG_8x4;
 #else
-  using DefaultSGLayout = Layout<Shape<_8, _2, _1>, Stride<_2, _1, _0>>;
+  using DefaultSGLayout = SG_8x2;
 #endif
   using SGLayout = detail::ConfigSGLayout<Config, DefaultSGLayout>;
 
@@ -743,9 +748,8 @@ bool moe_verify_output(
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 
-using SG_8x4 = Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>;
-using SG_8x2 = Layout<Shape<_8, _2, _1>, Stride<_2, _1, _0>>;
-// SG_4x8 comes from moe_types.hpp (greedy configs); do not redefine here.
+// SG_8x4 / SG_8x2 defined near the top of this namespace. SG_4x8 comes from
+// moe_types.hpp (greedy configs); do not redefine SG layouts here.
 
 using MoeTile_256_256_32 = Shape<_256, _256, _32>;
 using MoeTile_256_256_64 = Shape<_256, _256, _64>;

@@ -46,7 +46,9 @@
 #ifdef MOE_DTYPE_MXFP4_E2M1
 #define MOE_TILE_LIST_MXFP4_E2M1 \
   X(mxfp4_moe, GreedyMoE_MxFp4_256_512_128,      cutlass::moe::MxFp4Greedy) \
-  X(mxfp4_moe, GreedyMoE_MxFp4_256_512_128_dynm, cutlass::moe::MxFp4GreedyDynM)
+  X(mxfp4_moe, GreedyMoE_MxFp4_256_512_128_dynm, cutlass::moe::MxFp4GreedyDynM) \
+  X_GREEDY_BIGK(mxfp4_moe, GreedyMoE_MxFp4_bigk_tinyK256,      cutlass::moe::MxFp4GreedyBigK) \
+  X_GREEDY_BIGK(mxfp4_moe, GreedyMoE_MxFp4_bigk_tinyK256_dynm, cutlass::moe::MxFp4GreedyBigKDynM)
 #else
 #define MOE_TILE_LIST_MXFP4_E2M1
 #endif

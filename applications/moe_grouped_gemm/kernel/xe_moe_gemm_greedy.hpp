@@ -11,6 +11,8 @@
 #include "cutlass/layout/matrix.h"
 #include "cutlass/platform/platform.h"
 #include "moe_grouped_gemm/collective/xe_moe_gemm_greedy.hpp"
+// Single source of truth for scale-surface alignment; do not redeclare locally.
+#include "moe_grouped_gemm/moe_scale_layout.hpp"
 #include <cute/util/compat.hpp>
 
 #pragma clang diagnostic ignored "-Wpass-failed"
@@ -140,7 +142,7 @@ MoEGEMMGreedy(const ElementA *Activations, const ElementA *Weights,
       get<0>(decltype(mma_tiny_expert_tiny.tile_mnk()){});
   constexpr int32_t kTileN      = get<1>(decltype(mma_large.tile_mnk()){});
   // A tiny expert (M <= this) uses the single-tile tiny_expert schedule.
-  constexpr int32_t kTinyExpertMax = 128;
+  constexpr int32_t kTinyExpertMax = kTinyExpertLargeBucketM;  // single source: largest tiny bucket M
   static_assert((kLargeBucketM & (kLargeBucketM - 1)) == 0,
                 "large_bucket tile_m must be a power of two (greedy split uses shifts)");
   constexpr int32_t kLargeBucketMLog2 = cute::log_2(uint32_t(kLargeBucketM));
@@ -369,12 +371,12 @@ MoEGEMMGreedyScaled(const ElementA *Activations, const ElementB *Weights,
   constexpr int32_t kTinyExpertTinyBucketM =
       get<0>(decltype(mma_tiny_expert_tiny.tile_mnk()){});
   constexpr int32_t kTileN      = get<1>(decltype(mma_large.tile_mnk()){});
-  constexpr int32_t kTinyExpertMax = 128;
+  constexpr int32_t kTinyExpertMax = kTinyExpertLargeBucketM;  // single source: largest tiny bucket M
   static_assert((kLargeBucketM & (kLargeBucketM - 1)) == 0,
                 "large_bucket tile_m must be a power of two (greedy split uses shifts)");
   constexpr int32_t kLargeBucketMLog2 = cute::log_2(uint32_t(kLargeBucketM));
   constexpr int32_t kTailTwoSmallMax = 2 * kSmallBucketM - kLargeBucketM;
-  constexpr int kScaleAlign = 64;   // scale-surface padding (fixed HW alignment)
+  constexpr int kScaleAlign = cutlass::moe::kScaleAlign;   // single source: moe_scale_layout.hpp
   const int32_t n_tiles = (N + kTileN - 1) / kTileN;
   const cutlass::FastDivmod n_divmod(n_tiles);
 
@@ -383,7 +385,9 @@ MoEGEMMGreedyScaled(const ElementA *Activations, const ElementB *Weights,
   //   scale_n / padded_scale_n: BLOCK -> ceil(N/GroupN) padded; TENSOR -> SG_N padded.
   constexpr int32_t kBlkK  = get<2>(decltype(mma_large.tile_mnk()){});
   constexpr int32_t kMmaK  = 256 / int32_t(cute::sizeof_bits_v<ElementA>);
-  constexpr int32_t kScaleTensorK = (kBlkK + kMmaK - 1) / kMmaK;
+  constexpr int32_t kScaleTensorK = cutlass::moe::kTensorScaleK;  // single source
+  static_assert(kScaleTensorK == (kBlkK + kMmaK - 1) / kMmaK,
+                "kTensorScaleK (shared) must equal this tile's BLK_K/MMA_K height");
   constexpr int32_t kBlkN     = get<1>(decltype(mma_large.tile_mnk()){});
   constexpr int32_t kSgNumsN  = get<2>(typename MmaLarge::ThrLayoutVMNK{}.shape());
   constexpr int32_t kSgN      = cute::ceil_div(kBlkN, kSgNumsN);
