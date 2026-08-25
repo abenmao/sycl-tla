@@ -735,7 +735,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
                              auto const& scale_k_cur, auto const& scale_v_cur) {
 #if not defined(CUTLASS_TEST_FOR_CRI)
       /* Split barrier to keep threads together */
-      barrier_arrive(ScopeWorkgroup);
+      constexpr auto barrier_scope = CausalMask ? ScopeSubgroup : ScopeWorkgroup;
+      barrier_arrive(barrier_scope);
 #endif
       constexpr bool is_cache = decltype(cached_k)::value;
 
@@ -1143,7 +1144,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
       }
 #if not defined(CUTLASS_TEST_FOR_CRI)
-      barrier_wait(ScopeWorkgroup);
+      barrier_wait(barrier_scope);
 #endif
     };
 
@@ -1171,7 +1172,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     if constexpr (!DisableKVPrefetch) {
       for (int K = blk_k1; K < prefetch_k1; K++) {
 #if not defined(CUTLASS_TEST_FOR_CRI)
-        barrier_arrive(ScopeWorkgroup);
+        constexpr auto barrier_scope = CausalMask ? ScopeSubgroup : ScopeWorkgroup;
+        barrier_arrive(barrier_scope);
 #endif
         if (prefetch_sg_active) {
           prefetch(prefetch_k, prepared_pk);
@@ -1181,8 +1183,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
             prepared_pv += v_seq_delta(kv_stride);
           }
         }
-#if not defined(CUTLASS_TEST_FOR_CRI)        
-        barrier_wait(ScopeWorkgroup);
+#if not defined(CUTLASS_TEST_FOR_CRI)
+    barrier_wait(barrier_scope);
 #endif
       }
     }

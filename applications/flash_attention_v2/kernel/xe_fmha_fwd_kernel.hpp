@@ -351,12 +351,14 @@ public:
       auto q_offset_wi = get<0>(tScS(0));
       auto q_offset_sg = group_broadcast(
           sycl::ext::oneapi::this_work_item::get_sub_group(), q_offset_wi, 0);
+#if defined(CUTLASS_TEST_FOR_CRI)
       constexpr bool kIndependentSubgroups =
           is_empty_v<MainloopSharedStorage> && is_empty_v<EpilogueSharedStorage>
           && !TileScheduler::kGqaFusion;
       if constexpr (kIndependentSubgroups) {
         if (blk_q * get<0>(TileShapeQK{}) + q_offset_sg >= seq_len_qo) continue;
       }
+#endif
 
       if constexpr (CollectiveMainloop::CausalMask) {
         int q_sg_tile = get<0>(shape_div(TileShapeQK{}, shape(SubgroupLayoutQK{})));
