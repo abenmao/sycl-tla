@@ -724,10 +724,15 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     constexpr int kAtomsPerD = decltype(get<2>(TileShapeQK{}))::value
                              / decltype(get<2>(typename TiledMMAQK::AtomShape_MNK{}))::value;
 
+    /* Remainder-tile detection is loop-invariant; hoist out of the per-K body. */
+    int const seq_len_new = seq_len - seq_len_kv_cache;
+    bool const check_remainder_k = (seq_len_new % get<1>(TileShapeQK{}) != 0);
+    [[maybe_unused]] bool const check_remainder_k_cache = PagedKV && (seq_len_kv_cache % get<1>(TileShapeQK{}) != 0);
+
     constexpr bool preload_v = cute::is_any_of_v<ElementQ, cutlass::float_e4m3_t, cutlass::float_e5m2_t>;
 
     /* Main loop body */
-    auto mainloop_body = [&](auto cached_k, int K,
+    auto mainloop_body = [&](auto cached_k, auto apply_remainder, int K,
                              auto& copy_k_cur, auto& copy_v_cur,
                              auto& prefetch_v_cur, auto& tKgK_cur,
                              auto& tVgV_cur, auto& pVgV_cur,
@@ -739,6 +744,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       barrier_arrive(barrier_scope);
 #endif
       constexpr bool is_cache = decltype(cached_k)::value;
+      constexpr bool ApplyRemainder = decltype(apply_remainder)::value;
 
       int k_idx;
       if constexpr (is_cache) {
@@ -939,9 +945,11 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           Tensor cPgP = make_identity_tensor(make_shape(seq_len, seq_len));
           Tensor gP = local_tile(cPgP, take<0,2>(TileShapeQK{}), make_coord(get<0>(blk_qv), new_k_tile));
           auto cS_thread = thr_mma_qk.partition_C(gP);
-          // Block-style causal mask: build a per-element additive mask
-          // (NaN = keep, -INF = discard) and apply it to the whole score
-          // fragment with a single uniform fmin.
+          // Fold the new-KV k-remainder directly into the causal `masked`
+          // predicate: col_idx is the logical new-KV column position, so an
+          // out-of-bounds column (col_idx >= seq_len_new) is just another way
+          // to be masked. Avoids a separate k_rem_mask fragment + broadcast.
+          [[maybe_unused]] bool const remainder_on = ApplyRemainder && check_remainder_k;
           CUTLASS_PRAGMA_UNROLL
           for (int i = 0; i < tSrS.size(); ++i) {
             int row_idx = get<0>(cS_thread(i));
@@ -950,18 +958,21 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
                           ? ((q_pos_base + row_idx) % gqa_fusion_q_per_head)
                           : row_idx;
             bool masked = (col_idx - full_tile_offset) > (seq_coord - discard_seq_coord);
+            if constexpr (ApplyRemainder) {
+              if (remainder_on) {
+                masked = masked || (col_idx >= seq_len_new);
+              }
+            }
             tSrS(i) = sycl::fmin(tSrS(i), masked ? ElementS(-INFINITY) : ElementS(sycl::nan(0u)));
           }
         }
       }
-      /* k masking for remainder tiles (cache and new) */
-      {
-        int seq_len_new = seq_len - seq_len_kv_cache;
-        bool check_remainder_k = (seq_len_new % get<1>(TileShapeQK{}) != 0);
-        bool check_remainder_k_cache = PagedKV && (seq_len_kv_cache % get<1>(TileShapeQK{}) != 0);
+      /* k masking for remainder tiles; only on peeled last tile. New-KV remainder
+         is folded into the causal pass above when CausalMask is enabled. */
+      if constexpr (ApplyRemainder) {
         bool has_remainder = is_cache
             ? (check_remainder_k_cache && K == kblocks_cache - 1)
-            : (check_remainder_k && K == total_blk - 1);
+            : (!CausalMask && check_remainder_k && K == total_blk - 1);
         if (has_remainder) {
           int seq_bound = is_cache ? seq_len_kv_cache : seq_len_new;
           FragSRow k_rem_mask;
@@ -1148,10 +1159,21 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 #endif
     };
 
-    /* Main loop, blocked in k. */
+    /* Main loop, blocked in k. Peel the last tile so the remainder mask is
+       compiled out of every non-final iteration. */
     if constexpr (PagedKV) {
-      for (int K = blk_k0; K < cute::min(blk_k1, kblocks_cache); K++) {
-        mainloop_body(std::bool_constant<true>{}, K,
+      int const cache_end = cute::min(blk_k1, kblocks_cache);
+      int K = blk_k0;
+      for (; K < cache_end - 1; K++) {
+        mainloop_body(std::bool_constant<true>{}, std::bool_constant<false>{}, K,
+                      copy_k_cache, copy_v_cache,
+                      prefetch_v_cache, tKgK_cache,
+                      tVgV_cache, pVgV_cache,
+                      scale_context_qk_cache, scale_context_pv_cache,
+                      scaleK_cache, scaleV_cache);
+      }
+      if (K < cache_end) {
+        mainloop_body(std::bool_constant<true>{}, std::bool_constant<true>{}, K,
                       copy_k_cache, copy_v_cache,
                       prefetch_v_cache, tKgK_cache,
                       tVgV_cache, pVgV_cache,
@@ -1160,13 +1182,25 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       }
     }
 
-    for (int K = (blk_k0 > kblocks_cache ? blk_k0 : kblocks_cache); K < blk_k1; K++) {
-      mainloop_body(std::bool_constant<false>{}, K,
-                    copy_k, copy_v,
-                    prefetch_v, tKgK,
-                    tVgV, pVgV,
-                    scale_context_qk, scale_context_pv,
-                    scaleK, scaleV);
+    {
+      int const new_start = (blk_k0 > kblocks_cache ? blk_k0 : kblocks_cache);
+      int K = new_start;
+      for (; K < blk_k1 - 1; K++) {
+        mainloop_body(std::bool_constant<false>{}, std::bool_constant<false>{}, K,
+                      copy_k, copy_v,
+                      prefetch_v, tKgK,
+                      tVgV, pVgV,
+                      scale_context_qk, scale_context_pv,
+                      scaleK, scaleV);
+      }
+      if (K < blk_k1) {
+        mainloop_body(std::bool_constant<false>{}, std::bool_constant<true>{}, K,
+                      copy_k, copy_v,
+                      prefetch_v, tKgK,
+                      tVgV, pVgV,
+                      scale_context_qk, scale_context_pv,
+                      scaleK, scaleV);
+      }
     }
 
     if constexpr (!DisableKVPrefetch) {
