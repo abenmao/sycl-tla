@@ -96,6 +96,13 @@ int main(int argc, const char **argv) {
 
  // Define the work-group tile shape depending on the head-size of the second matmul
 #ifdef PREFILL
+
+#if (defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3) || defined(IS_FLOAT_E2M1))
+#define QKTileK _128
+#else
+#define QKTileK _64
+#endif
+
 #if HEAD_DIM == 16
   /* Tiny config for testing */
   using ShapeQK = Shape<_16, _16, _32>;       // (q,k,d)
@@ -122,22 +129,18 @@ int main(int argc, const char **argv) {
   using ShapeOut = Shape<_256, _128>;
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 #else
-#if defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)
-  using ShapeQK = Shape<_512, _64, _128>;
-#else
-  using ShapeQK = Shape<_512, _64, _64>;
-#endif
+  using ShapeQK = Shape<_512, _64, QKTileK>;
   using ShapePV = Shape<_512, _64, _64>;
   using ShapeOut = Shape<_512, _128>;
   using SubgroupLayoutQK = Layout<Shape<_32, _1, _1>>;
 
-  using ShapeQK_Causal = Shape<_256, _64, _64>;
+  using ShapeQK_Causal = Shape<_256, _64, QKTileK>;
   using ShapePV_Causal = Shape<_256, _64, _64>;
   using ShapeOut_Causal = Shape<_256, _128>;
   using SubgroupLayoutQK_Causal = Layout<Shape<_16, _1, _1>>;
 
   // Best-known short-path tile for 64/8 GQA at 128x128 (prefill, TARGET==35).
-  using ShapeQK8 = Shape<_64, _32, _64>;
+  using ShapeQK8 = Shape<_64, _32, QKTileK>;
   using ShapePV8 = Shape<_64, _64, _32>;
   using ShapeOut8 = Shape<_64, _128>;
   using SubgroupLayoutQK8 = Layout<Shape<_8, _1, _1>>;
@@ -149,6 +152,7 @@ int main(int argc, const char **argv) {
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 
 #endif
+#undef QKTileK
 #elif defined(DECODE)
 
 #if (defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3) || defined(IS_FLOAT_E2M1))
