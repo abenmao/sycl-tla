@@ -152,23 +152,6 @@ public:
   CUTLASS_HOST_DEVICE
   FMHAFwdEpilogue(Params const&, SharedStorage& shared_) : shared(shared_) {}
 
-  // The two fragments do not necessarily enumerate their values in the same order.
-  template <typename RFragA, typename RFragARow, typename FragO>
-  CUTLASS_DEVICE
-  static void
-  rescale_and_store(RFragA& rA, RFragARow const& rA_sum, FragO& tOrO) {
-    if constexpr (ReduceK{} == _1{} || get<0>(SGTileShapeO{}) == _1{}) {
-      CUTLASS_PRAGMA_UNROLL
-      for (int i = 0; i < rA.size(); i++)
-        tOrO(i) = static_cast<ElementO>(rA(i) * broadcast<0>(rA_sum, rA, i));
-    } else {
-      CUTLASS_PRAGMA_UNROLL
-      for (int i = 0; i < rA.size(); i++)
-        rA(i) *= broadcast<0>(rA_sum, rA, i);
-      cute::reorder(rA, tOrO);
-    }
-  }
-
   template <typename QVCoord, typename FragSPRow>
   CUTLASS_DEVICE
   void
@@ -211,8 +194,12 @@ public:
     auto tOgO = thr_copy_o.partition_D(gO);
 
     /* Rescale + reorder */
-    rescale_and_store(rA, rA_sum, tOrO);
-    copy(copy_o, tOrO, tOgO);
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < rA.size(); i++)
+      rA(i) *= broadcast<0>(rA_sum, rA, i);
+    cute::reorder(rA, tOrO);
+    auto prepared_o = prepare_payloads(copy_o, tOgO);
+    copy(copy_o, prepared_o, tOrO);
   }
 
   // Split-KV version: computes the locally-normalized output for one KV split
@@ -300,8 +287,12 @@ public:
         rA_sum(i) = ElementA(1) / rA_sum(i);
 
     /* Rescale + reorder */
-    rescale_and_store(rA, rA_sum, tOrO);
-    copy(copy_o, tOrO, tOgO);
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < rA.size(); i++)
+      rA(i) *= broadcast<0>(rA_sum, rA, i);
+    cute::reorder(rA, tOrO);
+    auto prepared_o = prepare_payloads(copy_o, tOgO);
+    copy(copy_o, prepared_o, tOrO);
   }
 
   // Reduce k-blocks of A and A_sum across WG, if needed.

@@ -314,9 +314,13 @@ prepare_payloads(BaseT const& base,
       auto off = inner_product(coord, base.tiled_strides);
       bp += (off * ValBits) >> 3;
     }
-    payloads.payloads[idx] = __builtin_IB_subgroup_createBlock2DAddressPayload(
-        bp, base.width - 1, base.height - 1, base.pitch - 1, x, y,
-        Op::AtomWidth / Op::BlockCount, Op::AtomHeight, Op::BlockCount);
+    payloads.payloads[idx] =
+        __builtin_IB_subgroup_copyBlock2DAddressPayload(base.payload);
+        __builtin_IB_subgroup_setBlock2DAddressPayloadBlockX(payloads.payloads[idx], x);
+        __builtin_IB_subgroup_setBlock2DAddressPayloadBlockY(payloads.payloads[idx], y);
+    if constexpr (BaseT::nontrivial_tiled_strides) {
+      __builtin_IB_subgroup_setBlock2DAddressPayloadBase(payloads.payloads[idx], bp);
+    }
 #else
     CUTE_INVALID_CONTROL_PATH("Xe 2D multi-payload copies are only available on SYCL device.");
 #endif
