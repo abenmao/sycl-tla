@@ -1050,6 +1050,8 @@ public:
 
   static constexpr int max_num_partitions = SGPerWG::value * intel::sg_size;
 
+  static constexpr int reduction_wg_size = 8 * intel::sg_size;
+
   struct Params {
     ProblemShape shape;
     ElementO *O;
@@ -1089,7 +1091,7 @@ public:
   }
 
   static dim3 get_block_shape() {
-    return dim3(SGPerWG::value * intel::sg_size, 1, 1);
+    return dim3(reduction_wg_size, 1, 1);
   }
 
   CUTLASS_DEVICE
@@ -1121,7 +1123,7 @@ public:
         make_gmem_ptr(const_cast<ElementLSE *>(params.max_logits_ptr)),
         make_layout(shape_stats, stride_stats));
 
-    constexpr int wg_size = SGPerWG::value * intel::sg_size;
+    constexpr int wg_size = reduction_wg_size;
     ElementLSE thread_max{cutlass::platform::numeric_limits<ElementLSE>::lowest()};
     if (thr_id < num_partitions) {
       ElementLSE cur_max = max_logits(seq_idx, thr_id, head_q, idx_b);
