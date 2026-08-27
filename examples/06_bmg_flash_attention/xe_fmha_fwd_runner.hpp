@@ -1672,7 +1672,8 @@ struct FMHAConfig {
       auto run_with = [&](auto bo_t, auto hgo_t) -> cutlass::Status {
         constexpr bool BO  = decltype(bo_t)::value;
         constexpr bool HGO = decltype(hgo_t)::value;
-        using SchedulerSpec = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<BO, HGO, Causal, kGqaFusion>;
+        using SchedulerSpec = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<
+            BO, HGO, Causal, kGqaFusion, Scheduler::kDisablePrefetchV>;
         using FMHAKernel = cutlass::fmha::kernel::XeFMHAFwdKernel<
             ProblemShapeType, CollectiveMainloop, CollectiveEpilogue, SchedulerSpec>;
         ExampleRunner<FMHAKernel, isVarLen> runner;

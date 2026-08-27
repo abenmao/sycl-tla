@@ -152,6 +152,15 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
   using TensorQ2D = decltype(TensorQ_{}(append<rank_v<TensorQ_>>(make_coord(_,_),0)));
   using TensorK2D = decltype(TensorK_{}(append<rank_v<TensorK_>>(make_coord(_,_),0)));
   using TensorV2D = decltype(TensorV_{}(append<rank_v<TensorV_>>(make_coord(_,_),0)));
+  static constexpr int kAtomsPerD = decltype(get<2>(TileShapeQK{}))::value
+                                  / decltype(get<2>(typename TiledMMAQK::AtomShape_MNK{}))::value;
+  //TODO: remove these constraints like BlockScale and F8kvF16mma
+  static constexpr bool preload_k = !BlockScale_ && !F8kvF16mma_
+                                  && is_void_v<TiledCopyK_>
+                                  && (!PagedKV_ || is_void_v<TiledCopyK_cache_>)
+                                  && sizeof_bits_v<typename TiledMMAQK::ValTypeB> == 8
+                                  && DTiles == 1 && (kAtomsPerD == 2 || kAtomsPerD == 4);
+
   using TiledCopyQ = conditional_t<is_void_v<TiledCopyQ_>, decltype(make_block_2d_copy_A(TiledMMAQK{}, TensorQ2D{})), TiledCopyQ_>;
   using TiledCopyK = conditional_t<is_void_v<TiledCopyK_>, decltype(make_block_2d_copy_B(TiledMMAQK{}, TensorK2D{})), TiledCopyK_>;
   using TiledCopyV = conditional_t<is_void_v<TiledCopyV_>, decltype(make_block_2d_copy_B(TiledMMAPV{}, TensorV2D{})), TiledCopyV_>;
@@ -285,6 +294,36 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           && args.page_size % kv_tile_size == 0;
     }
     return true;
+  }
+
+  template <bool NoAcc, int KAtom, class ATensor, class BTensor, class CTensor>
+  CUTE_DEVICE static constexpr
+  void
+  gemm_qk_wide_b(ATensor const& A, BTensor const& B, CTensor& C) {
+    using MMAOp = typename TiledMMAQK::MMA_Op;
+    using DVector = typename remove_extent<typename MMAOp::DRegisters>::type;
+    using AVector = typename remove_extent<typename MMAOp::ARegisters>::type;
+    using BVector = typename remove_extent<typename MMAOp::BRegisters>::type;
+    using BWideVector = typename MMAOp::BWideVector;
+    using CVector = typename remove_extent<typename MMAOp::CRegisters>::type;
+
+    constexpr int MAtoms = decltype(size<1>(typename CTensor::layout_type{}))::value;
+    constexpr int NAtoms = decltype(size<2>(typename CTensor::layout_type{}))::value;
+    constexpr int Owner = NAtoms * (KAtom / 2);
+    constexpr int BByteOffset = (KAtom % 2) * sizeof(BVector);
+
+    static_assert(sizeof(BWideVector) == 2 * sizeof(BVector));
+
+    auto rB = recast<BWideVector>(B);
+    for_each(make_seq<NAtoms>{}, [&](auto n) {
+      for_each(make_seq<MAtoms>{}, [&](auto m) {
+        auto rD = recast<DVector>(C(_,m,n));
+        auto rA = recast<AVector>(A(_,m));
+        auto rC = recast<CVector>(C(_,m,n));
+        MMAOp::template fma<NoAcc, BByteOffset>(
+            rD[0], rA[0], rB[Owner + decltype(n)::value], rC[0]);
+      });
+    });
   }
 
   CUTLASS_DEVICE
@@ -529,7 +568,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     auto k_seq_delta = [](auto n) { return make_coord(n, _0{}); };
     auto v_seq_delta = [](auto n) { return make_coord(_0{}, n); };
 
-    int kblocks_cache = ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{}));
+    constexpr int kv_stride = get<1>(TileShapeQK{});
+    int kblocks_cache = ceil_div(seq_len_kv_cache, kv_stride);
 
     /* Preload + reorder Q once; reused across all K iterations. */
     CUTLASS_PRAGMA_UNROLL
@@ -549,7 +589,6 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
     [[maybe_unused]] auto prepared_pk  = prepare_payloads(prefetch_k, pKgK(_,_,_,0));
     [[maybe_unused]] auto prepared_pv  = prepare_payloads(prefetch_v, pVgV(_,_,_,0));
-    constexpr int kv_stride = get<1>(TileShapeQK{});
     [[maybe_unused]] int const tiles_per_page = params.page_size / kv_stride;
     [[maybe_unused]] int const batch_offset = params.num_pages_per_seq
       ? params.num_pages_per_seq[l_coord]
@@ -721,8 +760,27 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     fill(tA_max, cutlass::platform::numeric_limits<ElementA>::lowest());
     clear(tA_sum);
 
-    constexpr int kAtomsPerD = decltype(get<2>(TileShapeQK{}))::value
-                             / decltype(get<2>(typename TiledMMAQK::AtomShape_MNK{}))::value;
+    if constexpr (preload_k) {
+      if constexpr (PagedKV) {
+        int const cache_k_end = cute::min(blk_k1, kblocks_cache);
+        if (blk_k0 < cache_k_end) {
+#ifdef PREFILL
+          copy(copy_k_cache, prepared_k_cache[0], tKrK);
+#else
+          int const init_k_idx_cache = physical_k_tiles_cache[0];
+          auto prepared_k_cache_wide = prepare_payloads(
+              copy_k_cache, tKgK_cache(_,_,_,init_k_idx_cache,0));
+          copy(copy_k_cache, prepared_k_cache_wide, tKrK);
+#endif
+        } else if (blk_k1 > kblocks_cache) {
+          copy(copy_k, prepared_k[0], tKrK);
+          prepared_k[0] += k_seq_delta(kv_stride);
+        }
+      } else if (blk_k1 > kblocks_cache) {
+        copy(copy_k, prepared_k[0], tKrK);
+        prepared_k[0] += k_seq_delta(kv_stride);
+      }
+    }
 
     /* Remainder-tile detection is loop-invariant; hoist out of the per-K body. */
     int const seq_len_new = seq_len - seq_len_kv_cache;
@@ -732,7 +790,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
     constexpr bool preload_v = cute::is_any_of_v<ElementQ, cutlass::float_e4m3_t, cutlass::float_e5m2_t>;
 
     /* Main loop body */
-    auto mainloop_body = [&](auto cached_k, auto apply_remainder, int K,
+    auto mainloop_body = [&](auto cached_k, auto is_last_block, int K,
                              auto& copy_k_cur, auto& copy_v_cur,
                              auto& prefetch_v_cur, auto& tKgK_cur,
                              auto& tVgV_cur, auto& pVgV_cur,
@@ -744,7 +802,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       barrier_arrive(barrier_scope);
 #endif
       constexpr bool is_cache = decltype(cached_k)::value;
-      constexpr bool ApplyRemainder = decltype(apply_remainder)::value;
+      constexpr bool IsLastBlock = decltype(is_last_block)::value;
 
       int k_idx;
       if constexpr (is_cache) {
@@ -769,18 +827,19 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       #endif
       CUTLASS_PRAGMA_UNROLL
       for (int D = 0; D < DTiles; D++) {
-        if constexpr (is_cache) {
-          #ifdef PREFILL
-          copy(copy_k_cur, prepared_k_cache[D], tKrK);
-          #else
-          copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
-          #endif
-        } else {
-          copy(copy_k, prepared_k[D], tKrK);
-          prepared_k[D] += k_seq_delta(kv_stride);
+        if constexpr (!preload_k) {
+          if constexpr (is_cache) {
+            #ifdef PREFILL
+            copy(copy_k_cur, prepared_k_cache[D], tKrK);
+            #else
+            copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
+            #endif
+          } else {
+            copy(copy_k, prepared_k[D], tKrK);
+            prepared_k[D] += k_seq_delta(kv_stride);
+          }
+          reorder(tKrK, tSrK);
         }
-
-        reorder(tKrK, tSrK);
 
         if constexpr (HardwareBlockScale) {
           if constexpr (sizeof_bits_v<ElementQ> <= 8) {
@@ -820,47 +879,41 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
             cute::gemm(mma_qk, zipped_q, zipped_k, tSrS);
           }
         } else {
-          if constexpr (F8kvF16mma) {
-            if constexpr (BlockScale) {
+          if constexpr (preload_k) {
+            auto const& tSrQ_d = tSrQ_arr[0];
+            for_each(make_seq<kAtomsPerD>{}, [&](auto k) {
+              constexpr int KAtom = decltype(k)::value;
+              gemm_qk_wide_b<KAtom == 0, KAtom>(tSrQ_d(_,_,k), tKrK, tSrS);
+            });
+          } else {
+            if constexpr (F8kvF16mma) {
+              if constexpr (BlockScale) {
+                CUTLASS_PRAGMA_UNROLL
+                for (int i = 0; i < tSrK.size(); ++i) {
+                  auto const coord = tScK(i);
+                  int const k_row = k_idx * BLK_K + get<0>(coord);
+                  int const d_group = (D * BLK_QK_D + get<1>(coord)) / GROUP_K;
+                  tSrK(i) = static_cast<typename TiledMMAQK::ValTypeB>(
+                      static_cast<float>(scale_k_cur(k_row, d_group)) *
+                      static_cast<float>(tSrK(i)));
+                }
+              } else {
+                dequantize(tSrK, scale_k);
+              }
+            }
+            auto const& tSrQ_d = tSrQ_arr[D];
+            if (D == 0) {
+              cute::gemm<true>(mma_qk, tSrQ_d(_, _, 0), tSrK(_, _, 0), tSrS);
               CUTLASS_PRAGMA_UNROLL
-              for (int i = 0; i < tSrK.size(); ++i) {
-                auto const coord = tScK(i);
-                int const k_row = k_idx * BLK_K + get<0>(coord);
-                int const d_group = (D * BLK_QK_D + get<1>(coord)) / GROUP_K;
-                tSrK(i) = static_cast<typename TiledMMAQK::ValTypeB>(
-                    static_cast<float>(scale_k_cur(k_row, d_group)) *
-                    static_cast<float>(tSrK(i)));
+              for (int k = 1; k < kAtomsPerD; k++) {
+                cute::gemm(mma_qk, tSrQ_d(_, _, k), tSrK(_, _, k), tSrS);
               }
             } else {
-              dequantize(tSrK, scale_k);
+              cute::gemm(mma_qk, tSrQ_d, tSrK, tSrS);
             }
-          }
-          auto const& tSrQ_d = tSrQ_arr[D];
-          if (D == 0) {
-            cute::gemm<true>(mma_qk, tSrQ_d(_, _, 0), tSrK(_, _, 0), tSrS);
-            CUTLASS_PRAGMA_UNROLL
-            for (int k = 1; k < kAtomsPerD; k++) {
-              cute::gemm(mma_qk, tSrQ_d(_, _, k), tSrK(_, _, k), tSrS);
-            }
-          } else {
-            cute::gemm(mma_qk, tSrQ_d, tSrK, tSrS);
           }
         }
       }
-
-      #ifdef PREFILL
-      if constexpr (is_cache) {
-        if (K + 1 < cache_k_end) {
-          constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
-          int slot_next = (stage_mask >= 0) ? ((K + 1 - blk_k0) & stage_mask) : ((K + 1 - blk_k0) % Stages);
-          int k_idx_next = physical_k_tiles_cache[slot_next];
-          CUTLASS_PRAGMA_UNROLL
-          for (int D = 0; D < DTiles; D++) {
-            prepared_k_cache[D] = prepare_payloads(copy_k_cur, tKgK_cur(_,_,_,k_idx_next,D));
-          }
-        }
-      }
-      #endif
 
       /* Prefetch V current and K next after QK to cover K latency with softmax/PV. */
       int K_next = K + Stages;
@@ -911,6 +964,17 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           }
           k_idx_next_cache = physical_K_next;
         }
+#ifdef PREFILL
+        if (K + 1 < cache_k_end) {
+          constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
+          int slot_next = (stage_mask >= 0) ? ((K + 1 - blk_k0) & stage_mask) : ((K + 1 - blk_k0) % Stages);
+          int k_idx_next = physical_k_tiles_cache[slot_next];
+          CUTLASS_PRAGMA_UNROLL
+          for (int D = 0; D < DTiles; D++) {
+            prepared_k_cache[D] = prepare_payloads(copy_k_cur, tKgK_cur(_,_,_,k_idx_next,D));
+          }
+        }
+#endif
       } else if constexpr (!DisableKVPrefetch) {
         if (prefetch_sg_active) {
           prefetch(prefetch_k, prepared_pk);
@@ -949,7 +1013,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           // predicate: col_idx is the logical new-KV column position, so an
           // out-of-bounds column (col_idx >= seq_len_new) is just another way
           // to be masked. Avoids a separate k_rem_mask fragment + broadcast.
-          [[maybe_unused]] bool const remainder_on = ApplyRemainder && check_remainder_k;
+          [[maybe_unused]] bool const remainder_on = IsLastBlock && check_remainder_k;
           CUTLASS_PRAGMA_UNROLL
           for (int i = 0; i < tSrS.size(); ++i) {
             int row_idx = get<0>(cS_thread(i));
@@ -958,7 +1022,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
                           ? ((q_pos_base + row_idx) % gqa_fusion_q_per_head)
                           : row_idx;
             bool masked = (col_idx - full_tile_offset) > (seq_coord - discard_seq_coord);
-            if constexpr (ApplyRemainder) {
+            if constexpr (IsLastBlock) {
               if (remainder_on) {
                 masked = masked || (col_idx >= seq_len_new);
               }
@@ -969,7 +1033,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       }
       /* k masking for remainder tiles; only on peeled last tile. New-KV remainder
          is folded into the causal pass above when CausalMask is enabled. */
-      if constexpr (ApplyRemainder) {
+      if constexpr (IsLastBlock) {
         bool has_remainder = is_cache
             ? (check_remainder_k_cache && K == kblocks_cache - 1)
             : (!CausalMask && check_remainder_k && K == total_blk - 1);
@@ -997,6 +1061,16 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         qk_scale = params.scale * ElementS(scale_q) * ElementS(scale_k);
       }
 
+      if constexpr (preload_v) {
+        if constexpr (is_cache) {
+          copy(copy_v_cur, tVgV_cur(_,_,_,0,k_idx), tVrV);
+        } else {
+          copy(copy_v, prepared_v[0], tVrV);
+          prepared_v[0] += v_seq_delta(kv_stride);
+        }
+        reorder(tVrV, tArV);
+      }
+
       /* Compute row-wise maxima for this block */
       auto tS_bmax = reduce<1, ReduceMode::Full, /*EnableFast64Rows=*/!CausalMask>(tSrS, sycl::maximum<void>{});
 
@@ -1014,16 +1088,6 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       CUTLASS_PRAGMA_UNROLL
       for (int i = 0; i < tSrS.size(); i++)
         tSrS(i) = qk_scale * tSrS(i) - broadcast<0>(tA_max, tSrS, i);
-
-      if constexpr (preload_v) {
-        if constexpr (is_cache) {
-          copy(copy_v_cur, tVgV_cur(_,_,_,0,k_idx), tVrV);
-        } else {
-          copy(copy_v, prepared_v[0], tVrV);
-          prepared_v[0] += v_seq_delta(kv_stride);
-        }
-        reorder(tVrV, tArV);
-      }
 
       CUTLASS_PRAGMA_UNROLL
       for (int i = 0; i < tSrS.size(); i++)
@@ -1048,6 +1112,33 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
       /* Apply softmax and scaling (tA rescaling fused into GEMM2 VTile loop) */
       reorder(tSrS, tArP);
+
+      if constexpr (preload_k) {
+        if constexpr (is_cache) {
+          int const cache_k_end = cute::min(blk_k1, kblocks_cache);
+          if (K + 1 < cache_k_end) {
+#ifdef PREFILL
+            copy(copy_k_cur, prepared_k_cache[0], tKrK);
+#else
+            constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
+            int const slot_next = (stage_mask >= 0) ? ((K + 1 - blk_k0) & stage_mask)
+                                                    : ((K + 1 - blk_k0) % Stages);
+            int const k_idx_next = physical_k_tiles_cache[slot_next];
+            auto prepared_k_cache_wide = prepare_payloads(
+                copy_k_cur, tKgK_cur(_,_,_,k_idx_next,0));
+            copy(copy_k_cur, prepared_k_cache_wide, tKrK);
+#endif
+          } else if (blk_k1 > kblocks_cache) {
+            copy(copy_k, prepared_k[0], tKrK);
+            prepared_k[0] += k_seq_delta(kv_stride);
+          }
+        } else {
+          if constexpr (!IsLastBlock) {
+            copy(copy_k, prepared_k[0], tKrK);
+            prepared_k[0] += k_seq_delta(kv_stride);
+          }
+        }
+      }
 
       /* GEMM 2: A += P * V, split in v dimension.
         tArA rescaling is fused to per-VTile */

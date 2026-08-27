@@ -57,6 +57,7 @@ struct XE_DPAS_TT_Base
   using DVector = intel::vector_t<TypeD, M>;
   using AVector = intel::vector_t<TypeA, (M * K + 15) / 16>;
   using BVector = intel::vector_t<TypeB, K>;
+  using BWideVector = intel::vector_t<TypeB, 2 * K>;
   using CVector = intel::vector_t<TypeC, M>;
 
   using DRegisters = DVector[1];
@@ -94,42 +95,49 @@ template <int M> struct XE_DPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::T
   using Base = XE_DPAS_TT_Base<M, dpas_type::TD, dpas_type::TA, dpas_type::TB, dpas_type::TC>; \
   using AVector = typename Base::AVector; \
   using BVector = typename Base::BVector; \
+  using BWideVector = typename Base::BWideVector; \
   using CVector = typename Base::CVector; \
   using DVector = typename Base::DVector; \
-  template <bool NoAcc = false, typename CVector_ = CVector> \
+  template <bool NoAcc = false, int BByteOffset = 0, \
+            typename BVector_ = BVector, typename CVector_ = CVector> \
   CUTE_DEVICE static void \
-  fma(DVector& d, AVector const& a, BVector const& b, CVector_ const& c) { \
+  fma(DVector& d, AVector const& a, BVector_ const& b, CVector_ const& c) { \
+    static_assert(BByteOffset % sizeof(BVector) == 0, \
+                  "DPAS B operand offset must select a packed B vector"); \
+    static_assert(BByteOffset + sizeof(BVector) <= sizeof(BVector_), \
+                  "DPAS B operand offset exceeds the packed B vector"); \
+    constexpr int VisaOffset = BByteOffset * intel::sg_size; \
     if constexpr (NoAcc) { \
       asm ( \
         "{\n" \
         ".decl DST     v_type=G type=" #TD " num_elts=%5 alias=<%0,0>\n" \
-        ".decl SRC1_UD v_type=G type=UD num_elts=128 alias=<%2,0>\n" \
+        ".decl SRC1_UD v_type=G type=UD num_elts=128 alias=<%2,%6>\n" \
         ".decl SRC2_UD v_type=G type=UD num_elts=%4 alias=<%1,0>\n" \
         "dpas." #TB "." #TA ".8.%3 (M1, 16) DST.0 %%null.0 SRC1_UD.0 SRC2_UD(0,0)\n" \
         "}\n" \
-        : "=rw"(d) : "rw"(a), "rw"(b), "P"(M), "P"(M*8), "P"(M*16) \
+        : "=rw"(d) : "rw"(a), "rw"(b), "P"(M), "P"(M*8), "P"(M*16), "P"(VisaOffset) \
       ); \
     } else if constexpr (std::is_same_v<CVector_, DVector>) { \
       d = c; \
       asm ( \
         "{\n" \
         ".decl DST     v_type=G type=" #TD " num_elts=%5 alias=<%0,0>\n" \
-        ".decl SRC1_UD v_type=G type=UD num_elts=128 alias=<%2,0>\n" \
+        ".decl SRC1_UD v_type=G type=UD num_elts=128 alias=<%2,%6>\n" \
         ".decl SRC2_UD v_type=G type=UD num_elts=%4 alias=<%1,0>\n" \
         "dpas." #TB "." #TA ".8.%3 (M1, 16) DST.0 DST.0 SRC1_UD.0 SRC2_UD(0,0)\n" \
         "}\n" \
-        : "+rw"(d) : "rw"(a), "rw"(b), "P"(M), "P"(M*8), "P"(M*16) \
+        : "+rw"(d) : "rw"(a), "rw"(b), "P"(M), "P"(M*8), "P"(M*16), "P"(VisaOffset) \
       ); \
     } else { \
       asm ( \
         "{\n" \
         ".decl DST     v_type=G type=" #TD " num_elts=%6 alias=<%0,0>\n" \
         ".decl SRC0    v_type=G type=" #TC " num_elts=%6 alias=<%3,0>\n" \
-        ".decl SRC1_UD v_type=G type=UD num_elts=128 alias=<%2,0>\n" \
+        ".decl SRC1_UD v_type=G type=UD num_elts=128 alias=<%2,%7>\n" \
         ".decl SRC2_UD v_type=G type=UD num_elts=%5 alias=<%1,0>\n" \
         "dpas." #TB "." #TA ".8.%4 (M1, 16) DST.0 SRC0.0 SRC1_UD.0 SRC2_UD(0,0)\n" \
         "}\n" \
-        : "=rw"(d) : "rw"(a), "rw"(b), "rw"(c), "P"(M), "P"(M*8), "P"(M*16) \
+        : "=rw"(d) : "rw"(a), "rw"(b), "rw"(c), "P"(M), "P"(M*8), "P"(M*16), "P"(VisaOffset) \
       ); \
     } \
   } \
@@ -199,11 +207,13 @@ template <int M> struct XE_DPAS_TT<M, dpas_type::TD, dpas_type::TA, dpas_type::T
   using Base = XE_DPAS_TT_Base<M, dpas_type::TD, dpas_type::TA, dpas_type::TB, dpas_type::TC>; \
   using AVector = typename Base::AVector; \
   using BVector = typename Base::BVector; \
+  using BWideVector = typename Base::BWideVector; \
   using CVector = typename Base::CVector; \
   using DVector = typename Base::DVector; \
-  template <bool NoAcc = false, typename CVector_ = CVector> \
+  template <bool NoAcc = false, int BByteOffset = 0, \
+            typename BVector_ = BVector, typename CVector_ = CVector> \
   CUTE_HOST_DEVICE static void \
-  fma(DVector& d, AVector const& a, BVector const& b, CVector_ const& c) { \
+  fma(DVector& d, AVector const& a, BVector_ const& b, CVector_ const& c) { \
     CUTE_INVALID_CONTROL_PATH("Cannot use Xe DPAS MMA atom on non-Xe hardware"); \
   } \
 };

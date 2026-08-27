@@ -311,9 +311,14 @@ public:
   CUTLASS_DEVICE
   Shape<int, int, int> get_sequence_length_shape(ProblemShape const& problem_shape, int const& batch) {
     if constexpr (is_var_len) {
-      return cutlass::fmha::collective::apply_variable_length(Shape<VariableLength, VariableLength, VariableLength>{problem_shape.seq_len_qo, problem_shape.seq_len_kv, problem_shape.seq_len_kv_cache}, batch);
+      auto sequence_lengths = cutlass::fmha::collective::apply_variable_length(
+          Shape<VariableLength, VariableLength, VariableLength>{
+              problem_shape.seq_len_qo, problem_shape.seq_len_kv, problem_shape.seq_len_kv_cache}, batch);
+      return Shape<int, int, int>{get<0>(sequence_lengths), get<1>(sequence_lengths),
+          CollectiveMainloop::PagedKV ? get<2>(sequence_lengths) : 0};
     } else {
-      return Shape<int, int, int>{problem_shape.seq_len_qo, problem_shape.seq_len_kv, problem_shape.seq_len_kv_cache};
+      return Shape<int, int, int>{problem_shape.seq_len_qo, problem_shape.seq_len_kv,
+          CollectiveMainloop::PagedKV ? problem_shape.seq_len_kv_cache : 0};
     }
   }
 
@@ -346,15 +351,22 @@ public:
       int full_tile_offset = 0;
       int seq_len_new = seq_len_kv;
       int seq_len_new_wg = seq_len_kv;
-      auto cS = make_identity_tensor(take<0,2>(TiledMMAQK{}.tile_mnk()));
-      auto tScS = TiledMMAQK{}.get_slice(thr_id).partition_C(cS);
-      auto q_offset_wi = get<0>(tScS(0));
-      auto q_offset_sg = group_broadcast(
-          sycl::ext::oneapi::this_work_item::get_sub_group(), q_offset_wi, 0);
+
 #if defined(CUTLASS_TEST_FOR_CRI)
       constexpr bool kIndependentSubgroups =
           is_empty_v<MainloopSharedStorage> && is_empty_v<EpilogueSharedStorage>
           && !TileScheduler::kGqaFusion;
+#else
+      constexpr bool kIndependentSubgroups = false;
+#endif
+      int q_offset_sg = 0;
+      if constexpr (CollectiveMainloop::CausalMask || kIndependentSubgroups) {
+        auto cS = make_identity_tensor(take<0,2>(TiledMMAQK{}.tile_mnk()));
+        auto tScS = TiledMMAQK{}.get_slice(thr_id).partition_C(cS);
+        auto q_offset_wi = get<0>(tScS(0));
+        q_offset_sg = group_broadcast(sycl::ext::oneapi::this_work_item::get_sub_group(), q_offset_wi, 0);
+      }
+#if defined(CUTLASS_TEST_FOR_CRI)
       if constexpr (kIndependentSubgroups) {
         if (blk_q * get<0>(TileShapeQK{}) + q_offset_sg >= seq_len_qo) continue;
       }
@@ -431,23 +443,33 @@ public:
       auto dcQ = make_subbyte_aware_ptr<ElementQ>(p.Q, offset_q);
       auto dcK = make_subbyte_aware_ptr<ElementK>(p.K, offset_k);
       auto dcV = make_subbyte_aware_ptr<ElementV>(p.V, offset_v);
-      auto dcK_cache = make_subbyte_aware_ptr<ElementK>(p.K_cache, offset_k_cache);
-      auto dcV_cache = make_subbyte_aware_ptr<ElementV>(p.V_cache, offset_v_cache);
+      decltype(make_subbyte_aware_ptr<ElementK>(p.K_cache, offset_k_cache)) dcK_cache{};
+      decltype(make_subbyte_aware_ptr<ElementV>(p.V_cache, offset_v_cache)) dcV_cache{};
+      if constexpr (CollectiveMainloop::PagedKV) {
+        dcK_cache = make_subbyte_aware_ptr<ElementK>(p.K_cache, offset_k_cache);
+        dcV_cache = make_subbyte_aware_ptr<ElementV>(p.V_cache, offset_v_cache);
+      }
       auto ptrO = p.O + offset_o;
 
       StrideQ stride_q = p.dQ;
       StrideK stride_k = p.dK;
       StrideV stride_v = p.dV;
       StrideO stride_o = p.dO;
-      StrideK stride_k_cache = p.dK_cache;
-      StrideV stride_v_cache = p.dV_cache;
+      StrideK stride_k_cache{};
+      StrideV stride_v_cache{};
+      if constexpr (CollectiveMainloop::PagedKV) {
+        stride_k_cache = p.dK_cache;
+        stride_v_cache = p.dV_cache;
+      }
       if constexpr (is_var_len) {
         stride_q = cutlass::make_cute_packed_stride(StrideQ{}, shape_Q);
         stride_k = cutlass::make_cute_packed_stride(StrideK{}, shape_K);
         stride_v = cutlass::make_cute_packed_stride(StrideV{}, shape_V);
         stride_o = cutlass::make_cute_packed_stride(StrideO{}, shape_O);
-        stride_k_cache = cutlass::make_cute_packed_stride(StrideK{}, shape_K_cache);
-        stride_v_cache = cutlass::make_cute_packed_stride(StrideV{}, shape_V_cache);
+        if constexpr (CollectiveMainloop::PagedKV) {
+          stride_k_cache = cutlass::make_cute_packed_stride(StrideK{}, shape_K_cache);
+          stride_v_cache = cutlass::make_cute_packed_stride(StrideV{}, shape_V_cache);
+        }
       }
 
       Tensor Q = make_tensor(make_gmem_ptr(dcQ), make_layout(shape_Q, stride_q));
