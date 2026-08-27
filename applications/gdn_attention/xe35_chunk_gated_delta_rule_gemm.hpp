@@ -32,42 +32,31 @@
 
 /*!
   \file xe35_chunk_gated_delta_rule_gemm.hpp
-  \brief CuTe GEMM helpers for the five GDN attention kernels (namespace cutlass::gdn::detail).
+  \brief CuTe GEMM helpers for the GDN attention kernels (cutlass::gdn::detail).
 
-  Each helper computes  C += op(A) * op(B)  using Intel Xe 2D-block loads and DPAS,
-  with a software prefetch pipeline (3 tiles ahead) to hide global-memory latency.
+  Each helper computes C += op(A) * op(B) on Xe 2D-block loads and DPAS,
+  accumulating into the caller's register fragment so calls chain (C += A1*B1 +
+  A2*B2 ...) with no round trip through memory.
 
-  Naming convention -- each letter describes one operand's storage:
-    T = Tensor  : lives in global memory, loaded tile-by-tile each call
-    S = Sub-group fragment : already in registers from a prior GEMM result
+  One name letter per operand, in A B C order -- T = tensor in gmem, loaded tile
+  by tile; S = sub-group fragment already in registers:
+    gemm_TTS   A(gmem) * B(gmem) -> C(regs)
+    gemm_STS   A(regs) * B(gmem) -> C(regs)
+    gemm_TSS   A(gmem) * B(regs) -> C(regs)
 
-  Variants:
-    gemm_TTS         : A(gmem) * B(gmem)          -> accumulate into C(regs)
-    gemm_STS         : A(regs, kept from prior)   * B(gmem) -> C(regs)
-    gemm_TSS         : A(gmem) * B(regs, kept)    -> C(regs)
-    gemm_TTS_k_multi : same as TTS, but each k-slice of A is pre-scaled by
-                       a per-lane float from an SLM array (used for diagonal
-                       scaling in compute_wu / fwd_o).
-    gemm_TTS_k_multi_tile
-                     : gemm_TTS_k_multi without prefetch/barriers, sliced by
-                       a caller-supplied tile_local_id (for work-groups that
-                       hold several independent MMA tiles).
-    gemm_TTS_shareB_multi_tile : two TTS GEMMs sharing the B operand, fused
-                       into a single k-loop so B is loaded/prefetched/reordered
-                       once per k-tile and consumed by both DPAS calls. Sliced
-                       by a caller-supplied tile_local_id and has no WG
-                       barriers, so WGs that hold several independent MMA
-                       tiles can call it per tile.
+  Suffixes compose onto those:
+    _k_multi     pre-scales each k-slice of A by a per-lane float from SLM
+                 (diagonal scaling in compute_wu / fwd_o).
+    _shareB      two GEMMs share one B operand in one k-loop, so B is loaded
+                 and reordered once per k-tile.
+    _multi_tile  sliced by a caller-supplied tile_local_id rather than the
+                 WG-local id -- for WGs hosting several independent MMA tiles,
+                 which may run different numbers of GEMMs.
+    _sg          one DPAS tile per call, sub-group-scoped end to end.
 
-  The _multi_tile suffix marks helpers sliced by a caller-supplied
-  tile_local_id instead of the work-group-global local id, and with no WG
-  barriers in the k-loop -- for work-groups that host several independent
-  MMA tiles which may run different numbers of GEMMs or finish at different
-  times without deadlocking each other.
-
-  All helpers accumulate into the caller's register fragment tCrC, so
-  multiple calls can be chained (C += A1*B1 + A2*B2 ...) without intermediate
-  global-memory stores.
+  Only the unsuffixed helpers carry the 3-tiles-ahead prefetch pipeline and the
+  k-loop WG barriers; _multi_tile and _sg have neither, by design -- a WG whose
+  tiles are independent must not synchronize them.
 */
 
 #pragma once
@@ -422,93 +411,122 @@ CUTE_DEVICE void gemm_TTS_k_multi(
     barrier_wait(barrier_scope);
   }
 }
-/* ---- Sub-group-scoped GEMM (16x16x16 WG layout, single k-tile) variants ----
- * MMA/copy slicing uses the *sub-group-local* lane id (0..15), not
- *      the work-group-global id (0..WIs - 1) -- the subgroup's
- *      16-thread layout, so get_slice() expects an index in [0,16).
- *   2. No barrier at all:  a work-group barrier would deadlock on the divergent arrival counts,
- *      and there is nothing left to fence within a sub-group (see below).
- *
- * A 16x16x16 tile is a single k-tile, so there is no k-loop and no
- * prefetch pipeline to hide, and the copy->MMA `reorder()` is a no-op:
- * `make_block_2d_copy_{A,B}` derive their TV-layout from this same MMA's
- * `atom_partition_{A,B}`, so both fragments map value v of lane t to the same
- * (M,K)/(N,K) coordinate -- the coalesced TV-layouts are identical
- * ((_16,_16):(_1@1,_1@0) for A, (_2,_16,_8):(_1@1,_1@0,_2@1) for B). Only the
- * mode *nesting* differs (the MMA fragment splits K into per-DPAS-atom modes,
- * the copy fragment keeps one flat 2D-load mode), and `copy()` dispatches on
- * that nesting, so the load cannot target the MMA fragment directly.
- *
- * These helpers therefore alias the MMA fragment's registers with the copy
- * fragment's layout and load straight into them. That drops the second set of
- * GRFs (a 16-value A tile and a 16-value B tile per DPAS operand), the identity
- * reorder, the prefetches and the split barrier. */
-template <
-    class ATensor,
-    class BTensor,
-    class SGCTensor,
-    class TiledMMA>
-/* gemm_TTS_sg: sub-group-local C += A(gmem) * B(gmem)^T. See note above. */
-CUTE_DEVICE void gemm_TTS_sg(
-    ATensor const& A,  // (M,K)
-    BTensor const& B,  // (N,K)
-    SGCTensor& tCrC,   // (M,N)
-    int wg_m,          // m tile start id
-    int wg_n,          // n tile start id
-    TiledMMA const& mma) {
-  auto sg = sycl::ext::oneapi::this_work_item::get_nd_item<3>().get_sub_group();
-  int sg_local_id = sg.get_local_linear_id();
 
-  Tensor cA = make_identity_tensor(A.shape());
-  Tensor cB = make_identity_tensor(B.shape());
-
-  auto wg_tile = mma.tile_mnk();
-
-  Tensor gA = local_tile(
-      cA, select<0, 2>(wg_tile), make_coord(wg_m, _));  // (BLK_M,BLK_K,k)
-  Tensor gB = local_tile(
-      cB, select<1, 2>(wg_tile), make_coord(wg_n, _));  // (BLK_N,BLK_K,k)
-
-  auto copy_a = get_block_2d_copy_A<void>(mma, A);
-  auto copy_b = get_block_2d_copy_B<void>(mma, B);
-
-  auto thr_mma = mma.get_slice(sg_local_id);
-  auto thr_copy_a = copy_a.get_slice(sg_local_id);
-  auto thr_copy_b = copy_b.get_slice(sg_local_id);
-
-  auto tCrA = thr_mma.partition_sg_fragment_A(gA(_, _, 0));
-  auto tCrB = thr_mma.partition_sg_fragment_B(gB(_, _, 0));
-
-  /* Alias the MMA fragments with the copy fragments' layout: same registers,
-   * the nesting `copy()` dispatches on. See the note above for why this is
-   * layout-safe and replaces reorder() here. */
-  Tensor tArA = make_tensor(
-      tCrA.data(), thr_copy_a.partition_sg_fragment_D(gA(_, _, 0)).layout());
-  Tensor tBrB = make_tensor(
-      tCrB.data(), thr_copy_b.partition_sg_fragment_D(gB(_, _, 0)).layout());
-
-  Tensor tAgA = thr_copy_a.partition_S(gA);
-  Tensor tBgB = thr_copy_b.partition_S(gB);
-
-  // Only k-tile 0 is consumed.
-  copy(copy_a, tAgA(_, _, _, 0), tArA);
-  copy(copy_b, tBgB(_, _, _, 0), tBrB);
-
-  cute::gemm(mma, tCrA, tCrB, tCrC);
+/* Aliasing a 2D-copy fragment onto an MMA fragment's registers is only valid
+ * while the two TV-layouts agree once mode nesting is flattened away. That is
+ * true by construction while the copy comes from the same MMA, but a different
+ * atom choice would break it silently and the DPAS would read garbage. */
+template <class MMAFrag, class CopyFrag>
+CUTE_DEVICE void assert_aliasable_frag(MMAFrag const& mma_frag,
+                                       CopyFrag const& copy_frag) {
+  static_assert(
+      is_same_v<decltype(coalesce(project_strides(mma_frag.tv_layout()))),
+                decltype(coalesce(project_strides(copy_frag.tv_layout())))>,
+      "MMA and 2D-copy fragments disagree on their coalesced TV-layout: "
+      "cannot alias their registers, use reorder() instead");
+  static_assert(cosize_v<decltype(copy_frag.layout())> <=
+                    cosize_v<decltype(mma_frag.layout())>,
+                "2D-copy fragment is larger than the MMA fragment it aliases: "
+                "the load would write past the MMA fragment's registers");
 }
 
+/* In-place C = -C on a register fragment: block forward substitution ends
+ * every block with a sign flip. */
+template <class SGCTensor>
+CUTE_DEVICE void negate_frag(SGCTensor& tCrC) {
+  CUTE_UNROLL
+  for (int i = 0; i < tCrC.size(); ++i) {
+    tCrC(i) *= -1.0f;
+  }
+}
+
+/* A fragment is sub-viewable only while it is one compact run in row order; a
+ * gap would make sub_frag() below a copy rather than a view. */
+template <class Frag>
+CUTE_DEVICE void assert_compact_frag(Frag const&) {
+  using Layout_t = decltype(declval<Frag>().layout());
+  static_assert(
+      is_same_v<decltype(coalesce(declval<Layout_t>())),
+                Layout<Int<cosize_v<Layout_t>>, _1>>,
+      "fragment is not one compact run: a sub-block of it is not contiguous, "
+      "so it cannot be viewed without a copy");
+}
+
+/* Sub-block (m,k) of a larger A fragment: a view aliasing `outer`'s registers
+ * with `blk`'s TV-layout (shape only), so gemm()/reorder() see a fragment. */
+template <class OuterFrag, class BlockFrag, class M, class K>
+CUTE_DEVICE auto sub_frag(OuterFrag& outer, BlockFrag const& blk, M m, K k) {
+  assert_compact_frag(outer);
+  assert_compact_frag(blk);
+  auto outer_layout = outer.layout();
+  auto blk_layout = blk.layout();
+  /* Both are (atom row, m iteration, k iteration), so the sub-block starts
+   * where its first iteration does and runs contiguously from there. */
+  auto offset =
+      outer_layout(_0{}, m * size<1>(blk_layout), k * size<2>(blk_layout));
+  return make_subgroup_tensor(make_tensor(outer.data() + offset, blk_layout),
+                              blk.tv_layout());
+}
+
+/* Store C fragment `src` to tile (i,j) of `cL`'s coordinate space, staging the
+ * reorder through `stg`. `mn_tile` is the (M,N) tile, i.e. select<0,1>(mnk). */
+template <class Atom, class ThrCopy, class CTensor, class Tile, class SrcFrag,
+          class StgFrag, class I, class J>
+CUTE_DEVICE void store_sg_tile(Atom const& atom, ThrCopy const& thr_copy,
+                               CTensor const& cL, Tile const& mn_tile,
+                               SrcFrag const& src, StgFrag& stg, I i, J j) {
+  Tensor gD = local_tile(cL, mn_tile, make_coord(i, j));
+  reorder(src, stg);
+  copy(atom, stg, thr_copy.partition_D(gD));
+}
+
+/* Load (M,K) tile (m,k) of `cL` into A fragment `frag`, aliasing the copy layout
+ * onto its registers. Payload prepared, else CSE folds two loads into one. */
+template <class Atom, class ThrCopy, class CTensor, class Tile, class Frag,
+          class M, class K>
+CUTE_DEVICE void load_sg_tile_A(Atom const& atom, ThrCopy const& thr_copy,
+                                CTensor const& cL, Tile const& mk_tile,
+                                Frag& frag, M m, K k) {
+  Tensor gA = local_tile(cL, mk_tile, make_coord(m, k));
+  auto cpr = thr_copy.partition_sg_fragment_D(gA);
+  assert_aliasable_frag(frag, cpr);
+  Tensor alias = make_tensor(frag.data(), cpr.layout());
+  auto payload = prepare_payloads(atom, thr_copy.partition_S(gA));
+  copy(atom, payload, alias);
+}
+
+/* ---- Sub-group-scoped GEMM: one DPAS tile per call ------------------------
+ * One sub-group drives one (blk_m, blk_n, blk_k) tile of its own matrix, so
+ * there is no k-loop to pipeline and nothing to prefetch. Two consequences:
+ *   - MMA and copies slice by the sub-group-local lane id (0..15); the
+ *     work-group-global id would index the 16-thread layout out of range.
+ *   - No barrier of any kind: one tile is a single k-tile, so there is nothing
+ *     to fence, and a work-group barrier can deadlock when the sub-groups walk
+ *     grid-stride streams of different length.
+ *
+ * The copy fragment loads straight into the MMA fragment's registers. Both
+ * fragments come from this MMA, so they agree on which (M,K)/(N,K) coordinate
+ * each lane's value holds and differ only in mode nesting; the copy->MMA
+ * reorder() is therefore an identity, and aliasing skips it along with a second
+ * set of GRFs. assert_aliasable_frag enforces the precondition.
+ *
+ * Tile ids are generic integers: a cute::Int<> folds the block offset into the
+ * 2D-copy descriptor, a plain int leaves it as runtime address arithmetic. */
+
+/* C += A(regs) * B(gmem)^T on one tile. */
 template <
     class ASGCTensor,
     class BTensor,
     class CSGCTensor,
+    class BlkN,
+    class BlkK,
     class TiledMMA>
-/* gemm_STS_sg: sub-group-local C += A(regs) * B(gmem)^T. See note above. */
 CUTE_DEVICE void gemm_STS_sg(
     ASGCTensor const& tCrA,  // (M,K)
     BTensor const& B,        // (N,K)
     CSGCTensor& tCrC,        // (M,N)
-    int wg_m,                // m tile start id
-    int wg_n,                // n tile start id
+    BlkN blk_n,              // n tile id
+    BlkK blk_k,              // k tile id
     TiledMMA const& mma) {
   auto sg = sycl::ext::oneapi::this_work_item::get_nd_item<3>().get_sub_group();
   int sg_local_id = sg.get_local_linear_id();
@@ -518,23 +536,23 @@ CUTE_DEVICE void gemm_STS_sg(
   auto wg_tile = mma.tile_mnk();
 
   Tensor gB = local_tile(
-      cB, select<1, 2>(wg_tile), make_coord(wg_n, _));  // (BLK_N,BLK_K,k)
+      cB, select<1, 2>(wg_tile), make_coord(blk_n, blk_k));  // (BLK_N,BLK_K)
 
   auto copy_b = get_block_2d_copy_B<void>(mma, B);
 
   auto thr_mma = mma.get_slice(sg_local_id);
   auto thr_copy_b = copy_b.get_slice(sg_local_id);
 
-  auto tCrB = thr_mma.partition_sg_fragment_B(gB(_, _, 0));
+  auto tCrB = thr_mma.partition_sg_fragment_B(gB);
 
-  /* Alias the MMA fragment with the copy fragment's layout -- see gemm_TTS_sg. */
-  Tensor tBrB = make_tensor(
-      tCrB.data(), thr_copy_b.partition_sg_fragment_D(gB(_, _, 0)).layout());
+  /* Alias the MMA fragment with the copy fragment's layout: same registers,
+   * the nesting `copy()` dispatches on. */
+  auto cprB = thr_copy_b.partition_sg_fragment_D(gB);
+  assert_aliasable_frag(tCrB, cprB);
 
-  Tensor tBgB = thr_copy_b.partition_S(gB);
+  Tensor tBrB = make_tensor(tCrB.data(), cprB.layout());
 
-  /* Only k-tile 0 is consumed -- see gemm_TTS_sg. */
-  copy(copy_b, tBgB(_, _, _, 0), tBrB);
+  copy(copy_b, thr_copy_b.partition_S(gB), tBrB);
 
   cute::gemm(mma, tCrA, tCrB, tCrC);
 }

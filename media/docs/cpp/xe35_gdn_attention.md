@@ -78,7 +78,7 @@ stages.
 | # | Stage | What it computes |
 |---|---|---|
 | 1 | `chunk_compute_A_o2` | **(a) Cumulative gate (fused, was `chunk_prepare`):** compute `a[t] = cumsum(softplus(a + dt_bias) * -exp(A_log))` in place — hoisted ahead of the norm, the `kv_ratio` v-heads of this k-head striped one-per-sub-group so each whole-chunk scan stays inside one sub-group. **(b) L2-normalize** Q (scaled by `1/sqrt(D)`) and K in place — per k-head, on the rows this work item is about to consume. **(c) Fused dual GEMM** sharing the `K` operand: build the lower-triangular transition matrix `L[m,n] = (K_m·K_n) * exp(a[m] - a[n]) * b[m]` into `A_workspace`, **and** the decay-gated intra-chunk score `O2[m,n] = (Q_m·K_n) * exp(a[m] - a[n])` (causal, `m>=n`) into `o2_workspace`. |
-| 2 | `chunk_inverse` | Invert `L` in place, one 64×64 chunk matrix per sub-group: a 4×4 grid of 16×16 blocks, diagonal blocks inverted in registers, off-diagonal blocks filled by 16×16×16 DPAS (block forward substitution). |
+| 2 | `chunk_inverse_opt` | Invert `L` in place, one 64×64 chunk matrix per sub-group: a 2×2 grid of 32×32 quadrants over a 4×4 grid of 16×16 blocks. Diagonal blocks are inverted in registers, the diagonal quadrants' off-diagonal blocks by 16×16×16 DPAS, and the whole bottom-left quadrant by two 32×32×32 DPAS GEMMs. See [§ Stage 2: the block inversion](#stage-2-the-block-inversion). |
 | 3 | `chunk_compute_wu` | `U = L^-1 * V * diag(b)` and `W = L^-1 * K * diag(exp(a) * b)`. |
 | 4 | `chunk_fwd_o` | `O = Q * S^T * exp(g) + O2 * U` (reads the precomputed `O2`); update SSM state `S_out = exp(g_last) * S_prev + U^T * K_scaled`. |
 
@@ -116,6 +116,84 @@ are mutated **in place** (see [mutability contract](#mutability-contract)); the
   Legend:  in place = mutates a caller tensor   ·   workspace = A/o2/w/u scratch (per launch)
 ```
 
+### Stage 2: the block inversion
+
+`L` is unit lower triangular, so its inverse is computed by block forward
+substitution rather than by a solve. One sub-group owns one 64×64 matrix and
+sees it as a 4×4 grid of 16×16 blocks, grouped into a 2×2 grid of 32×32
+quadrants:
+
+```
+  [ L(0,0)    0    |    0       0    ]
+  [ L(1,0)  L(1,1) |    0       0    ]
+  [ ---------------+---------------- ]
+  [ L(2,0)  L(2,1) |  L(2,2)    0    ]
+  [ L(3,0)  L(3,1) |  L(3,2)  L(3,3) ]
+```
+
+The same 2×2 closed form applies at both levels:
+
+```
+  L = [ P   0 ]        Inv = [  P^-1           0    ]
+      [ C   Q ]              [ -Q^-1 C P^-1   Q^-1  ]
+```
+
+**Step 1 — diagonal blocks, in registers.** DPAS multiplies; it cannot invert,
+so the recursion has to bottom out in substitution. It stops at 16×16 because
+a DPAS A fragment hands lane `l` column `l` of the block indexed by row, which
+is exactly what column-wise forward substitution wants — the substitution is
+then pure `sycl::group_broadcast` arithmetic with no SLM and no barriers. The
+fragment also arrives with its identity elements already in place: stage 1
+writes `L`'s diagonal as an exact `1.0f` and its upper part as an exact `0.0f`,
+both exact in bf16, so nothing needs seeding. Masking the fragment to its
+strictly-lower part instead would cost a 16-way divergent branch per block,
+because the mask is monotone in the lane id.
+
+**Step 2 — the two diagonal quadrants.** Quadrant `(q,q)` spans blocks
+`b0 = 2q` and `b1 = b0 + 1`, and the closed form leaves one block to compute:
+
+```
+  Inv(b1,b0) = -Inv(b1,b1) * L(b1,b0) * Inv(b0,b0)
+```
+
+Both diagonal inverses are in registers, but a DPAS **B** operand has to come
+from gmem — its VNNI layout is a cross-lane shuffle away from any register
+form. The product is therefore split at the one point where an operand is
+already there:
+
+```
+  M          = -Inv(b1,b1) * L(b1,b0)     B is untouched input
+  Inv(b1,b0) =  M * Inv(b0,b0)            B was stored just above
+```
+
+Reassociating like this is what keeps the intermediate off gmem. Taken in the
+written order, the product of the last two factors would be the B operand and
+would have to be stored and read straight back.
+
+**Step 3 — the bottom-left quadrant.** The same reassociation one level up, at
+32×32, with both B operands already in gmem (`C` is untouched input and `P^-1`
+was stored by step 2), so the intermediate never leaves registers:
+
+```
+  U = -Q^-1 * C     B is quadrant (1,0) of the input
+  R =  U * P^-1     B is quadrant (0,0) of the output
+```
+
+**Why the bottom-left quadrant is taken whole.** Against four separate 16×16
+blocks, one 32×32 quadrant costs 8 more DPAS — 2 GEMMs of 16 against 10 of 2 —
+and pays for it in B loads, which drop from 16 to 6: a 32×32 B tile is a single
+message, and the ten-term 16×16 recurrence it replaces needed ten. The trade is
+worth making because this kernel is bound by memory messages, not by DPAS. One
+32×32 quadrant is also the widest 2D load message the atom can issue (32 rows ×
+64 bytes; see `max_h` / `load_width` in
+[`copy_traits_xe_2d.hpp`](../../../include/cute/atom/copy_traits_xe_2d.hpp)),
+so the two quadrants on the diagonal carry all four diagonal blocks in two
+messages where one block at a time would cost four.
+
+The store side does not move: a store message is capped at 8 rows and — unlike
+a load — at 16 bf16 of width, so the lower triangle costs 20 messages under any
+block tiling.
+
 ## Work hierarchy & GPU mapping
 
 GDN decomposes the problem along three nested axes, and the kernels map them
@@ -134,7 +212,7 @@ geometry of each stage.
                                                  │       └─ sub-group (16 lanes, 1 DPAS row)
                                                  │           └─ work-item (SIMD lane)
   Tile math per chunk: kChunkSize×kChunkSize (64x64) transition matrix,
-  inverted by ONE sub-group as a 4×4 grid of 16×16 DPAS blocks.
+  inverted by one sub-group as a 4×4 grid of 16×16 DPAS blocks.
 ```
 
 > ¹ **Stage 1 only.** Its Xe-core work-group is subdivided into
@@ -144,7 +222,7 @@ geometry of each stage.
 > tile with no intermediate group level.
 
 **How each stage is launched.** All four stages share one in-order queue.
-`xe_core_count` is the device Xe-core count (floored — see [Constraints](#constraints));
+`xe_core_count` is the device Xe-core count;
 `MaxThreadsPerXeCore == 512`, `sub_group_size == 16`.
 
 ```
@@ -156,8 +234,8 @@ geometry of each stage.
                                                                       iteration; fused cumsum gate +
                                                                       per-k_head L2-norm + L + O2 dual
                                                                       GEMM
-  2 chunk_inverse     max(xe_core_count·512/16,         16 (1 sub-   1 work-group ↦ (chunk,v_head);
-                          ⌈tvs/64⌉·num_v_heads)         group)       4×4 block forward-substitution
+  2 chunk_inverse_opt max(xe_core_count,                512 (32      1 sub-group ↦ (chunk,v_head);
+                          ⌈num_v_heads/32⌉)             sub-groups)  4×4 block forward-substitution
   3 chunk_compute_wu  xe_core_count                     512 threads  1 work-group ↦ one chunk; holds
                                                                       num_tiles MMA tiles, one v_head
                                                                       per tile
@@ -196,7 +274,6 @@ recurrence carries `S` across chunks), but the `head_v_dim` tiling axis (`dv`,
 one 64-wide `head_v_dim` slice per tile) is independent across tiles because the
 recurrence only touches `S[dv, :]`, so it is mapped to the third grid dimension
 (`head_v_dim / kChunkSize` tiles) instead of an in-kernel loop.
-
 
 ## Public API
 
@@ -519,15 +596,20 @@ queue.wait_and_throw();
 - **No framework dependency.** Inputs are raw `void*` device pointers; this
   kernel does NOT plug into the CUTLASS collective/kernel `GemmUniversal`
   scaffolding. It is intentionally a direct CuTe-on-SYCL kernel.
-- **Inverse-stage grid is a multiple of `num_v_heads`.** Stage 2
-  (`chunk_inverse`) derives its `(chunk, v_head)` assignment from
-  `group(1) % num_v_heads` and `group(1) / num_v_heads`, so the launcher rounds 
-  its machine-sized grid **up** to a multiple of `num_v_heads`
-  (`⌈machine_groups / num_v_heads⌉ · num_v_heads`) so the head id and the
-  persistent chunk stride divide exactly. (The former Stage-1 `chunk_prepare`
-  also constrained the grid this way; with prepare fused into Stage 1 the flat
-  `(chunk, k_head)` work-list no longer divides by `num_v_heads`, so that floor
-  is gone.)
+- **Inverse-stage grid needs one sub-group per `v_head`, but no multiple of
+  it.** Stage 2 (`chunk_inverse_opt`) is launched one whole-Xe-core work-group
+  per Xe-core, and each sub-group derives `(chunk, v_head)` from
+  `total_sg_id % chunk_range` and `total_sg_id / chunk_range`, where
+  `chunk_range = max(1, total_sg_range / num_v_heads)`. The `v_head` is then
+  held fixed and only `chunk` is grid-strided, so a head with no sub-group would
+  never be inverted — and nothing would fault, the stale `L` would just flow
+  into stage 3. The launcher therefore floors its grid at
+  `⌈num_v_heads / (MaxThreadsPerXeCore / sub_group_size)⌉` work-groups
+  (`= ⌈num_v_heads / 32⌉`), which binds only on a single-Xe-core device or an
+  unusually wide head count. `total_sg_range` is still not required to be a
+  *multiple* of `num_v_heads`: any tail sub-group landing on
+  `v_head_id >= num_v_heads` returns before touching `A`, and the heads below it
+  are each covered by `chunk_range` sub-groups.
 
 ### Constraints of the `compute_wu` intra-work-group tile fan-out
 
@@ -562,10 +644,8 @@ without deadlocking:
   allocates `(local_range / sub_group_size) * chunk_size * 2`; the kernel
   derives the same split from `sg.get_group_linear_id()`.
 
-
 - the public `GDNArguments` wrapper (this repo's preferred ABI) and its
-  validation gates,
-- the `xe_core_count` floor described above.
+  validation gates.
 
 ## File map
 

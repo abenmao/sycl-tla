@@ -481,6 +481,71 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
   }
 }
 
+/* Block extent of the inversion, pinned to the sub-group size: step 1 gives
+ * each of the 16 lanes one row of a diagonal block. */
+static constexpr int inv_block = sub_group_size;
+static constexpr int inv_blocks = chunk_size / inv_block;
+static_assert(chunk_size % inv_block == 0,
+              "inverse kernel needs a whole number of blocks per chunk");
+
+/* Quadrant = 2x2 blocks: the widest 2D load message (32 rows x 64 bytes, see
+ * max_h/load_width in copy_traits_xe_2d.hpp) and the off-diagonal GEMM tile. */
+static constexpr int inv_quad = 2 * inv_block;
+static_assert(inv_blocks % 2 == 0,
+              "inverse kernel needs a whole number of 2x2 block quadrants");
+static constexpr int inv_quads = inv_blocks / 2;
+/* Step 3 is the closed form for a 2x2 quadrant grid; more would need a
+ * recurrence. */
+static_assert(inv_quads == 2,
+              "inverse kernel is written for a 2x2 grid of quadrants");
+
+/* L(i,i) as a 16x16 view of whichever 32x32 diagonal quadrant carries it:
+ * blocks 0,1 sit in the top-left quadrant, blocks 2,3 in the bottom-right. */
+template <class FragTL, class FragBR, class BlockFrag, class I>
+CUTE_DEVICE auto inv_diag_sub(FragTL& q_tl, FragBR& q_br,
+                              BlockFrag const& a_frag, I i) {
+  if constexpr (i < _2{}) {
+    return sub_frag(q_tl, a_frag, i, i);
+  } else {
+    return sub_frag(q_br, a_frag, i - _2{}, i - _2{});
+  }
+}
+
+/* Invert one diagonal 16x16 block into `tCrC`, in registers, no DPAS. An A
+ * fragment hands lane l column l indexed by row, so A_col[r] is element (r,l). */
+template <class SubGroup, class DiagFrag, class CFrag>
+CUTE_DEVICE void invert_diag_block(SubGroup const& sg, int sg_local_id,
+                                   DiagFrag const& L_ii, CFrag& tCrC) {
+  float A_col[inv_block];
+  for_each(make_seq<inv_block>{},
+           [&](auto r) { A_col[r] = static_cast<float>(L_ii(r)); });
+
+  /* Forward substitution: row r is minus the dot product of rows 0..r-1
+   * against row r of L, broadcast from lane e before lane e writes it. */
+  CUTE_UNROLL
+  for (int r = 1; r < inv_block; ++r) {
+    float L_row_r[inv_block];
+    CUTE_UNROLL
+    for (int e = 0; e < r; ++e) {
+      L_row_r[e] = sycl::group_broadcast(sg, A_col[r], e);
+    }
+
+    float dot = 0.0f;
+    CUTE_UNROLL
+    for (int e = 0; e < r; ++e) {
+      dot -= A_col[e] * L_row_r[e];
+    }
+
+    if (r != sg_local_id) {
+      A_col[r] = dot;
+    }
+  }
+
+  /* The inverse is unit lower triangular too, so A_col holds the whole column
+   * and the block stores in 2 messages, not inv_block - 1. */
+  for_each(make_seq<inv_block>{}, [&](auto r) { tCrC(r) = A_col[r]; });
+}
+
 template <typename T, class TiledMMA>
 CUTE_DEVICE void chunk_inverse_opt_kernel(
     T* A,
@@ -498,28 +563,19 @@ CUTE_DEVICE void chunk_inverse_opt_kernel(
   int group_id = item.get_group(1);
   int group_range = item.get_group_range(1);
 
-  /* Each sub-group inverts one independent matrix (chunk, v_head).
-   * Work is mapped at sub-group granularity:
-   * a sub-group owns a fixed v_head and strides across chunks by chunk_range.
-   * (The previous version used one 16-thread work-group per (chunk, v_head)
-   * and sliced the MMA/copies by the work-group-global local_id, which only
-   * worked because wg_size == size(MMA) == 16.) */
+  /* One sub-group inverts one (chunk, v_head) matrix: fixed v_head, striding
+   * across chunks by chunk_range. */
   int total_sg_range = group_range * sg_range;
   int total_sg_id = group_id * sg_range + sg_id;
 
-  /* Grid is sized off xe_core_count alone (see launch_stage_inverse()), so
-   * total_sg_range is not guaranteed to be a multiple of -- or even >= --
-   * num_v_heads. Clamp chunk_range to >= 1 to keep the divide/modulo below
-   * well-defined. */
+  /* launch_stage_inverse() floors the grid at total_sg_range >= num_v_heads, so
+   * the max() only guards a caller that sizes its own grid. */
   const int chunk_range = cute::max(1, total_sg_range / num_v_heads);
   int chunk_id = total_sg_id % chunk_range;
   const int v_head_id = total_sg_id / chunk_range;
 
-  /* Tail sub-groups (total_sg_range not a multiple of num_v_heads, or fewer
-   * sub-groups than v_heads) can map to v_head_id >= num_v_heads; drop them
-   * before any A access. v_head_id is derived from sg_id, not the lane id, so
-   * this return is uniform across the 16 lanes -- safe w.r.t. the sub-group
-   * broadcasts below. */
+  /* Drop the tail (total_sg_range need not be a multiple of num_v_heads) before
+   * any A access. Uniform across the lanes, so the broadcasts stay safe. */
   if (v_head_id >= num_v_heads) {
     return;
   }
@@ -551,271 +607,168 @@ CUTE_DEVICE void chunk_inverse_opt_kernel(
           static_cast<int64_t>(v_head_id) * total_virtual_seqlen * chunk_size +
           chunk_start_offset * chunk_size;
 
-      /* The 64×64 matrix is partitioned into a 4×4 grid of 16×16 sub-blocks:
-       *   [ A11  0   0   0  ]
-       *   [ A21  A22  0   0  ]
-       *   [ A31  A32  A33  0  ]
-       *   [ A41  A42  A43  A44 ]
-       *
-       * Step 1 (loop below): invert each 16×16 diagonal block A_ii in-place
-       *   using sub-group broadcasts -- no DPAS, pure register arithmetic.
-       * Step 2 (GEMM section): compute the off-diagonal blocks of the full
-       *   inverse using the block formula:
-       *   (L^-1)_ij = -A_ii^-1 * ( sum_{k=j}^{i-1} A_ik * (L^-1)_kj )
-       *   for i > j, leveraging the already-inverted diagonal blocks. */
-      /* ---- Step 1: invert each 16×16 diagonal block via sub-group broadcast ---- */
-      CUTE_UNROLL
-      for (int i = 0; i < 4; ++i) {
-        int offset = i * 16;
-        T* A_ptr_xx = A_ptr + offset * chunk_size + offset;
-        float A_local[16];
-        float A_other[16];
-        float A_sum;
-        CUTE_UNROLL
-        for (int e = 0; e < sg_local_id + 1; ++e) {
-          A_local[e] = 0.0f;
+      /* Block forward substitution over a 4x4 grid of 16x16 blocks, in a 2x2
+       * grid of 32x32 quadrants. See xe35_gdn_attention.md, "Stage 2". */
+
+      /* Two views of the same in-place matrix: L feeds the DPAS A operand
+       * (row-major), L_T the B operand. L_T block (n,k) is L block (k,n). */
+      auto L_shape = make_shape(Int<chunk_size>{}, Int<chunk_size>{});
+      auto L = make_tensor(make_gmem_ptr(A_ptr),
+                           make_layout(L_shape, make_stride(chunk_size, _1{})));
+      auto L_T =
+          make_tensor(make_gmem_ptr(A_ptr),
+                      make_layout(L_shape, make_stride(_1{}, chunk_size)));
+
+      /* gemm_STS_sg runs one block per call, so the MMA tile is one block. */
+      CUTE_STATIC_ASSERT_V(get<0>(wg_tile) == Int<inv_block>{});
+      CUTE_STATIC_ASSERT_V(get<1>(wg_tile) == Int<inv_block>{});
+      CUTE_STATIC_ASSERT_V(get<2>(wg_tile) == Int<inv_block>{});
+
+      /* Every block GEMM has the same MxNxK extent, so the fragments and store
+       * atom are built once. */
+      Tensor cL = make_identity_tensor(L_shape);
+      Tensor c_blk = local_tile(cL, wg_tile, make_coord(_0{}, _0{}, _0{}),
+                                Step<_1, _1, X>{});
+      auto tCrC = thr_mma.partition_sg_fragment_C(c_blk);
+
+      auto copy_D = get_block_2d_copy_D<void>(mma, L);
+      auto thr_copy_D = copy_D.get_slice(sg_local_id);
+      auto tCrD = thr_copy_D.partition_sg_fragment_S(c_blk);
+
+      /* Block coordinates are cute::Int<> so each offset folds into the 2D-copy
+       * descriptor as an immediate, not per-GEMM address math. */
+      auto blk_tile = select<0, 1>(wg_tile);
+
+      /* One TiledMMA shapes both the 32x32 quadrant loads and step 3's two
+       * 32x32x32 GEMMs, so the loaded fragment is the operand they consume. */
+      using MMAQuad = typename TiledMMAHelper<
+          MMA_Atom<XE_DPAS_TT<8, float, cutlass::platform::remove_cv_t<T>>>,
+          Layout<Shape<Int<inv_quad>, Int<inv_quad>, Int<inv_quad>>>,
+          Layout<Shape<_1, _1, _1>, Stride<_1, _1, _0>>>::TiledMMA;
+      MMAQuad mma_quad{};
+      auto quad_mnk = mma_quad.tile_mnk();
+      CUTE_STATIC_ASSERT_V(get<0>(quad_mnk) == Int<inv_quad>{});
+      CUTE_STATIC_ASSERT_V(get<1>(quad_mnk) == Int<inv_quad>{});
+      CUTE_STATIC_ASSERT_V(get<2>(quad_mnk) == Int<inv_quad>{});
+      auto quad_tile = select<0, 2>(quad_mnk);
+      auto thr_mma_quad = mma_quad.get_slice(sg_local_id);
+      auto copy_A_quad = get_block_2d_copy_A<void>(mma_quad, L);
+      auto thr_copy_A_quad = copy_A_quad.get_slice(sg_local_id);
+
+      /* Step 3 accumulates a whole quadrant: quadrant-sized C fragment and
+       * store atom, alongside the 16x16 pair above. */
+      Tensor c_quad_mn = local_tile(cL, select<0, 1>(quad_mnk),
+                                    make_coord(_0{}, _0{}));
+      auto tQrC = thr_mma_quad.partition_sg_fragment_C(c_quad_mn);
+      auto copy_Dq = get_block_2d_copy_D<void>(mma_quad, L);
+      auto thr_copy_Dq = copy_Dq.get_slice(sg_local_id);
+      auto tQrD = thr_copy_Dq.partition_sg_fragment_S(c_quad_mn);
+      auto quad_mn = select<0, 1>(quad_mnk);
+
+      /* tQrC += tQrA * L_T quadrant (blk_n, blk_k). B cannot alias the MMA
+       * fragment at 32-wide N, so gemm_STS_sg will not do: load and reorder. */
+      Tensor cB_quad = local_tile(make_identity_tensor(L_T.shape()),
+                                  select<1, 2>(quad_mnk),
+                                  make_coord(_0{}, _0{}));
+      auto copy_Bq = get_block_2d_copy_B<void>(mma_quad, L_T);
+      auto thr_copy_Bq = copy_Bq.get_slice(sg_local_id);
+      auto tQrB = thr_mma_quad.partition_sg_fragment_B(cB_quad);
+      auto cprBq = thr_copy_Bq.partition_sg_fragment_D(cB_quad);
+      auto gemm_quad = [&](auto const& tQrA, auto blk_n, auto blk_k) {
+        Tensor gB = local_tile(make_identity_tensor(L_T.shape()),
+                               select<1, 2>(quad_mnk),
+                               make_coord(blk_n, blk_k));
+        copy(copy_Bq, thr_copy_Bq.partition_S(gB), cprBq);
+        reorder(cprBq, tQrB);
+        cute::gemm(mma_quad, tQrA, tQrB, tQrC);
+      };
+
+      Tensor c_quad = local_tile(cL, quad_tile, make_coord(_0{}, _0{}));
+      auto q_tl = thr_mma_quad.partition_sg_fragment_A(c_quad);  // L(0:2, 0:2)
+      auto q_br = thr_mma_quad.partition_sg_fragment_A(c_quad);  // L(2:4, 2:4)
+      /* Step 3's two operands in the same 32x32 A form: Q^-1, assembled block
+       * by block as step 2 produces it, and the intermediate -Q^-1 C. */
+      auto rQinv = thr_mma_quad.partition_sg_fragment_A(c_quad);
+      auto rU = thr_mma_quad.partition_sg_fragment_A(c_quad);
+      load_sg_tile_A(copy_A_quad, thr_copy_A_quad, cL, quad_tile, q_tl, _0{},
+                     _0{});
+      load_sg_tile_A(copy_A_quad, thr_copy_A_quad, cL, quad_tile, q_br, _1{},
+                     _1{});
+
+      /* Shape template for sub_frag(): a 16x16 block of a 32x32 A fragment. */
+      auto a_frag = thr_mma.partition_sg_fragment_A(c_blk);
+      /* Step 1 indexes tCrC by row, which needs it compact in row order. */
+      static_assert(
+          is_same_v<decltype(coalesce(tCrC.layout())),
+                    Layout<Int<inv_block>, _1>>,
+          "block C fragment is not one compact run of inv_block elements");
+
+      /* Step 1's two 16x16 register operands: the inverted diagonal block and
+       * the intermediate M = -Inv(b1,b1) L(b1,b0). */
+      auto rInv_bb = thr_mma.partition_sg_fragment_A(c_blk);
+      auto rM = thr_mma.partition_sg_fragment_A(c_blk);
+
+      // Step 1 on block (i,i), reading it from whichever quadrant holds it.
+      auto invert_diag = [&](auto i) {
+        invert_diag_block(sg, sg_local_id, inv_diag_sub(q_tl, q_br, a_frag, i),
+                          tCrC);
+      };
+      // tCrC -> block (i,j); tQrC -> quadrant (qi,qj).
+      auto store_block = [&](auto i, auto j) {
+        store_sg_tile(copy_D, thr_copy_D, cL, blk_tile, tCrC, tCrD, i, j);
+      };
+      auto store_quad = [&](auto qi, auto qj) {
+        store_sg_tile(copy_Dq, thr_copy_Dq, cL, quad_mn, tQrC, tQrD, qi, qj);
+      };
+
+      /* Step 2: invert the two diagonal quadrants. Quadrant (1,1) is Q^-1,
+       * which step 3 needs as a 32x32 A operand, so it is banked into rQinv. */
+      for_each(make_seq<inv_quads>{}, [&](auto q) {
+        constexpr bool keep = decltype(q)::value == inv_quads - 1;
+        auto b0 = q * _2{};
+        auto b1 = b0 + _1{};
+
+        invert_diag(b0);
+        if constexpr (keep) {
+          reorder(tCrC, sub_frag(rQinv, a_frag, _0{}, _0{}));
         }
+        store_block(b0, b0);
 
-        T A_load[16];
-        CUTE_UNROLL
-        for (int e = 0; e < sg_local_id; ++e) {
-          A_load[e] = A_ptr_xx[sg_local_id * chunk_size + e];
+        invert_diag(b1);
+        reorder(tCrC, rInv_bb);
+        if constexpr (keep) {
+          reorder(tCrC, sub_frag(rQinv, a_frag, _1{}, _1{}));
         }
+        store_block(b1, b1);
 
-        CUTE_UNROLL
-        for (int mm_idx = 1; mm_idx < 16; ++mm_idx) {
-          CUTE_UNROLL
-          for (int nn_idx = 0; nn_idx < mm_idx; ++nn_idx) {
-            float send_value = static_cast<float>(A_load[nn_idx]);
-            float receive_value = sycl::group_broadcast(sg, send_value, mm_idx);
-            if (sg_local_id == nn_idx) {
-              A_local[mm_idx] = receive_value;
-            }
-          }
+        /* B operands index the transposed view: L(p,r) is at (n,k) = (r,p). */
+        clear(tCrC);
+        gemm_STS_sg(rInv_bb, L_T, tCrC, b0, b1, mma);
+        negate_frag(tCrC);
+        reorder(tCrC, rM);
+
+        clear(tCrC);
+        gemm_STS_sg(rM, L_T, tCrC, b0, b0, mma);
+        store_block(b1, b0);
+        if constexpr (keep) {
+          reorder(tCrC, sub_frag(rQinv, a_frag, _1{}, _0{}));
+          /* Q^-1's strictly-upper block is never written above, so zero it
+           * before step 3's GEMM reads it. */
+          auto z = sub_frag(rQinv, a_frag, _0{}, _1{});
+          clear(z);
         }
+      });
 
-        CUTE_UNROLL
-        for (int mm_idx = 1; mm_idx < 16; ++mm_idx) {
-          A_sum = 0.0f;
-          CUTE_UNROLL
-          for (int e = 1; e < mm_idx + 1; ++e) {
-            A_other[e] = sycl::group_broadcast(sg, A_local[mm_idx], e);
-          }
+      /* Step 3: the bottom-left quadrant, -Q^-1 C P^-1. U = -Q^-1 * C, then
+       * R = U * P^-1; both B operands are already in gmem. */
+      clear(tQrC);
+      gemm_quad(rQinv, _0{}, _1{});
+      negate_frag(tQrC);
+      reorder(tQrC, rU);
 
-          CUTE_UNROLL
-          for (int e = 1; e < mm_idx + 1; ++e) {
-            A_sum += A_local[e] * A_other[e];
-          }
-
-          A_local[mm_idx] = -A_local[mm_idx] - A_sum;
-        }
-
-        CUTE_UNROLL
-        for (int e = sg_local_id + 1; e < 16; ++e) {
-          A_ptr_xx[e * chunk_size + sg_local_id] = static_cast<T>(A_local[e]);
-        }
-      }
-
-      /* ---- Step 2: compute off-diagonal blocks of the full inverse ----
-       * Naming: A_ij is the (i,j) 16×16 sub-block of the INPUT matrix L;
-       * A_ij_tensor_T is the same block with transposed layout for use as
-       * the right-hand operand in DPAS (B must be column-major). */
-      auto A_ptr_11 = A_ptr;
-
-      auto A_ptr_21 = A_ptr + 16 * chunk_size;
-      auto A_ptr_22 = A_ptr + 16 * chunk_size + 16;
-
-      auto A_ptr_31 = A_ptr + 32 * chunk_size;
-      auto A_ptr_32 = A_ptr + 32 * chunk_size + 16;
-      auto A_ptr_33 = A_ptr + 32 * chunk_size + 32;
-
-      auto A_ptr_41 = A_ptr + 48 * chunk_size;
-      auto A_ptr_42 = A_ptr + 48 * chunk_size + 16;
-      auto A_ptr_43 = A_ptr + 48 * chunk_size + 32;
-      auto A_ptr_44 = A_ptr + 48 * chunk_size + 48;
-
-      auto A_XX_tensor_shape = make_shape(16, 16);
-
-      auto A_11_tensor_T = make_tensor(
-          make_gmem_ptr(A_ptr_11),
-          make_layout(A_XX_tensor_shape, make_stride(_1{}, chunk_size)));
-
-      auto A_21_tensor = make_tensor(
-          make_gmem_ptr(A_ptr_21),
-          make_layout(A_XX_tensor_shape, make_stride(chunk_size, _1{})));
-      auto A_21_tensor_T = make_tensor(
-          make_gmem_ptr(A_ptr_21),
-          make_layout(A_XX_tensor_shape, make_stride(_1{}, chunk_size)));
-      auto A_22_tensor = make_tensor(
-          make_gmem_ptr(A_ptr_22),
-          make_layout(A_XX_tensor_shape, make_stride(chunk_size, _1{})));
-      auto A_22_tensor_T = make_tensor(
-          make_gmem_ptr(A_ptr_22),
-          make_layout(A_XX_tensor_shape, make_stride(_1{}, chunk_size)));
-
-      auto A_31_tensor = make_tensor(
-          make_gmem_ptr(A_ptr_31),
-          make_layout(A_XX_tensor_shape, make_stride(chunk_size, _1{})));
-      auto A_31_tensor_T = make_tensor(
-          make_gmem_ptr(A_ptr_31),
-          make_layout(A_XX_tensor_shape, make_stride(_1{}, chunk_size)));
-      auto A_32_tensor = make_tensor(
-          make_gmem_ptr(A_ptr_32),
-          make_layout(A_XX_tensor_shape, make_stride(chunk_size, _1{})));
-      auto A_32_tensor_T = make_tensor(
-          make_gmem_ptr(A_ptr_32),
-          make_layout(A_XX_tensor_shape, make_stride(_1{}, chunk_size)));
-      auto A_33_tensor = make_tensor(
-          make_gmem_ptr(A_ptr_33),
-          make_layout(A_XX_tensor_shape, make_stride(chunk_size, _1{})));
-      auto A_33_tensor_T = make_tensor(
-          make_gmem_ptr(A_ptr_33),
-          make_layout(A_XX_tensor_shape, make_stride(_1{}, chunk_size)));
-
-      auto A_41_tensor = make_tensor(
-          make_gmem_ptr(A_ptr_41),
-          make_layout(A_XX_tensor_shape, make_stride(chunk_size, _1{})));
-      auto A_41_tensor_T = make_tensor(
-          make_gmem_ptr(A_ptr_41),
-          make_layout(A_XX_tensor_shape, make_stride(_1{}, chunk_size)));
-      auto A_42_tensor = make_tensor(
-          make_gmem_ptr(A_ptr_42),
-          make_layout(A_XX_tensor_shape, make_stride(chunk_size, _1{})));
-      auto A_42_tensor_T = make_tensor(
-          make_gmem_ptr(A_ptr_42),
-          make_layout(A_XX_tensor_shape, make_stride(_1{}, chunk_size)));
-      auto A_43_tensor = make_tensor(
-          make_gmem_ptr(A_ptr_43),
-          make_layout(A_XX_tensor_shape, make_stride(chunk_size, _1{})));
-      auto A_43_tensor_T = make_tensor(
-          make_gmem_ptr(A_ptr_43),
-          make_layout(A_XX_tensor_shape, make_stride(_1{}, chunk_size)));
-      auto A_44_tensor = make_tensor(
-          make_gmem_ptr(A_ptr_44),
-          make_layout(A_XX_tensor_shape, make_stride(chunk_size, _1{})));
-
-      Tensor cA = make_identity_tensor(A_XX_tensor_shape);
-      Tensor cB = make_identity_tensor(A_XX_tensor_shape);
-      Tensor cC = make_identity_tensor(A_XX_tensor_shape);
-      Tensor gA = local_tile(cA, select<0, 2>(wg_tile), make_coord(0, _));
-      Tensor gB = local_tile(cB, select<1, 2>(wg_tile), make_coord(0, _));
-      Tensor gC =
-          local_tile(cC, wg_tile, make_coord(0, 0, 0), Step<_1, _1, X>{});
-      auto tCrA = thr_mma.partition_sg_fragment_A(gA(_, _, 0));
-      auto tCrB = thr_mma.partition_sg_fragment_B(gB(_, _, 0));
-      auto tCrC = thr_mma.partition_sg_fragment_C(gC);
-
-      /* Off-diagonal blocks use the sub-group-scoped GEMM/copy path: each of
-       * the 32 sub-groups drives its own 16x16x16 DPAS on its own chunk, so the
-       * MMA and copies are sliced by sg_local_id (0..15) -- slicing by the
-       * work-group-global id would index the 16-thread MMA layout out of range.
-       * The gemm_*_sg helpers carry no barrier of any kind: the 16x16x16 tile is
-       * a single k-tile, so there is no k-loop to fence, and the 16 lanes of one
-       * sub-group already advance in lockstep. A work-group barrier would in
-       * fact deadlock here, because the 32 sub-groups walk independent
-       * grid-stride chunk streams of differing length. */
-      auto copy_D_21 = get_block_2d_copy_D<void>(mma, A_21_tensor);
-      auto thr_copy_D_21 = copy_D_21.get_slice(sg_local_id);
-      auto tCrD_21 = thr_copy_D_21.partition_sg_fragment_S(gC);
-      auto tCgD_21 = thr_copy_D_21.partition_D(gC);
-      clear(tCrC);
-      gemm_TTS_sg(A_22_tensor, A_21_tensor_T, tCrC, 0, 0, mma);
-      reorder(tCrC, tCrA);
-      clear(tCrC);
-      gemm_STS_sg(tCrA, A_11_tensor_T, tCrC, 0, 0, mma);
-      CUTE_UNROLL
-      for (int i = 0; i < tCrC.size(); ++i) {
-        tCrC(i) *= -1.0f;
-      }
-      reorder(tCrC, tCrD_21);
-      copy(copy_D_21, tCrD_21, tCgD_21);
-
-      auto copy_D_31 = get_block_2d_copy_D<void>(mma, A_31_tensor);
-      auto thr_copy_D_31 = copy_D_31.get_slice(sg_local_id);
-      auto tCrD_31 = thr_copy_D_31.partition_sg_fragment_S(gC);
-      auto tCgD_31 = thr_copy_D_31.partition_D(gC);
-      clear(tCrC);
-      gemm_TTS_sg(A_31_tensor, A_11_tensor_T, tCrC, 0, 0, mma);
-      gemm_TTS_sg(A_32_tensor, A_21_tensor_T, tCrC, 0, 0, mma);
-      reorder(tCrC, tCrD_31);
-      copy(copy_D_31, tCrD_31, tCgD_31);
-      clear(tCrC);
-      gemm_TTS_sg(A_33_tensor, A_31_tensor_T, tCrC, 0, 0, mma);
-      CUTE_UNROLL
-      for (int i = 0; i < tCrC.size(); ++i) {
-        tCrC(i) *= -1.0f;
-      }
-      reorder(tCrC, tCrD_31);
-      copy(copy_D_31, tCrD_31, tCgD_31);
-
-      auto copy_D_41 = get_block_2d_copy_D<void>(mma, A_41_tensor);
-      auto thr_copy_D_41 = copy_D_41.get_slice(sg_local_id);
-      auto tCrD_41 = thr_copy_D_41.partition_sg_fragment_S(gC);
-      auto tCgD_41 = thr_copy_D_41.partition_D(gC);
-      clear(tCrC);
-      gemm_TTS_sg(A_41_tensor, A_11_tensor_T, tCrC, 0, 0, mma);
-      gemm_TTS_sg(A_42_tensor, A_21_tensor_T, tCrC, 0, 0, mma);
-      gemm_TTS_sg(A_43_tensor, A_31_tensor_T, tCrC, 0, 0, mma);
-      reorder(tCrC, tCrD_41);
-      copy(copy_D_41, tCrD_41, tCgD_41);
-      clear(tCrC);
-      gemm_TTS_sg(A_44_tensor, A_41_tensor_T, tCrC, 0, 0, mma);
-      CUTE_UNROLL
-      for (int i = 0; i < tCrC.size(); ++i) {
-        tCrC(i) *= -1.0f;
-      }
-      reorder(tCrC, tCrD_41);
-      copy(copy_D_41, tCrD_41, tCgD_41);
-
-      auto copy_D_32 = get_block_2d_copy_D<void>(mma, A_32_tensor);
-      auto thr_copy_D_32 = copy_D_32.get_slice(sg_local_id);
-      auto tCrD_32 = thr_copy_D_32.partition_sg_fragment_S(gC);
-      auto tCgD_32 = thr_copy_D_32.partition_D(gC);
-      clear(tCrC);
-      gemm_TTS_sg(A_33_tensor, A_32_tensor_T, tCrC, 0, 0, mma);
-      reorder(tCrC, tCrA);
-      clear(tCrC);
-      gemm_STS_sg(tCrA, A_22_tensor_T, tCrC, 0, 0, mma);
-      CUTE_UNROLL
-      for (int i = 0; i < tCrC.size(); ++i) {
-        tCrC(i) *= -1.0f;
-      }
-      reorder(tCrC, tCrD_32);
-      copy(copy_D_32, tCrD_32, tCgD_32);
-
-      auto copy_D_42 = get_block_2d_copy_D<void>(mma, A_42_tensor);
-      auto thr_copy_D_42 = copy_D_42.get_slice(sg_local_id);
-      auto tCrD_42 = thr_copy_D_42.partition_sg_fragment_S(gC);
-      auto tCgD_42 = thr_copy_D_42.partition_D(gC);
-      clear(tCrC);
-      gemm_TTS_sg(A_42_tensor, A_22_tensor_T, tCrC, 0, 0, mma);
-      gemm_TTS_sg(A_43_tensor, A_32_tensor_T, tCrC, 0, 0, mma);
-      reorder(tCrC, tCrD_42);
-      copy(copy_D_42, tCrD_42, tCgD_42);
-      clear(tCrC);
-      gemm_TTS_sg(A_44_tensor, A_42_tensor_T, tCrC, 0, 0, mma);
-      CUTE_UNROLL
-      for (int i = 0; i < tCrC.size(); ++i) {
-        tCrC(i) *= -1.0f;
-      }
-      reorder(tCrC, tCrD_42);
-      copy(copy_D_42, tCrD_42, tCgD_42);
-
-      auto copy_D_43 = get_block_2d_copy_D<void>(mma, A_43_tensor);
-      auto thr_copy_D_43 = copy_D_43.get_slice(sg_local_id);
-      auto tCrD_43 = thr_copy_D_43.partition_sg_fragment_S(gC);
-      auto tCgD_43 = thr_copy_D_43.partition_D(gC);
-      clear(tCrC);
-      gemm_TTS_sg(A_44_tensor, A_43_tensor_T, tCrC, 0, 0, mma);
-      reorder(tCrC, tCrA);
-      clear(tCrC);
-      gemm_STS_sg(tCrA, A_33_tensor_T, tCrC, 0, 0, mma);
-      CUTE_UNROLL
-      for (int i = 0; i < tCrC.size(); ++i) {
-        tCrC(i) *= -1.0f;
-      }
-      reorder(tCrC, tCrD_43);
-      copy(copy_D_43, tCrD_43, tCgD_43);
+      clear(tQrC);
+      gemm_quad(rU, _0{}, _0{});
+      store_quad(_1{}, _0{});
 
       chunk_id += chunk_range;
     }
@@ -1404,15 +1357,9 @@ sycl::event launch_stage_compute_A_o2(
   EventManager::getInstance().addEvent(ev);
   return ev;
 }
-/* Inverse stage partitions the 64x64 chunk inverse into a 4x4 grid of 16x16
- * sub-blocks: each sub-group inverts the diagonal blocks in registers via
- * `sycl::group_broadcast` (no SLM, no barriers), and the six off-diagonal
- * blocks are filled with 16x16x16 DPAS via cute MMA.
- *
- * Full work-group resolution: the work-group is the whole Xe-core (512 threads
- * == 32 sub-groups), and each sub-group inverts one independent (chunk, v_head)
- * 64x64 matrix. The grid is one work-group per Xe-core; the kernel's internal
- * grid-stride loop (`chunk_id += chunk_range`) sweeps all chunks. */
+
+/* One work-group per Xe-core, floored at one sub-group per v_head. Each
+ * sub-group inverts one (chunk, v_head) 64x64 matrix, grid-striding chunks. */
 template <typename T, typename StateT, typename Props>
 sycl::event launch_stage_inverse(
     sycl::queue& queue, Props const& props, int xe_core_count,
@@ -1425,7 +1372,12 @@ sycl::event launch_stage_inverse(
   using MMAInverse      = typename TiledMMAHelper<
       MMA_Atom<decltype(op)>, Layout<WGTileInverse>, SGLayoutInverse>::TiledMMA;
   sycl::range<3> local_inverse(1, 1, MaxThreadsPerXeCore);
-  sycl::range<3> global_inverse(1, xe_core_count, 1);
+  /* A fixed v_head per sub-group means the grid must supply one sub-group per
+   * v_head or the tail heads go silently uninverted. Never binds in practice. */
+  constexpr int sgs_per_wg = MaxThreadsPerXeCore / sub_group_size;
+  const int wg_count = cute::max(
+      xe_core_count, (num_v_heads + sgs_per_wg - 1) / sgs_per_wg);
+  sycl::range<3> global_inverse(1, wg_count, 1);
   auto ev = queue.submit([&](sycl::handler& cgh) {
     cgh.parallel_for<ChunkInverseOptKernel<T, StateT>>(
         sycl::nd_range<3>{global_inverse * local_inverse, local_inverse},
