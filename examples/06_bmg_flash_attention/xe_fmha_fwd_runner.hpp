@@ -1673,7 +1673,8 @@ struct FMHAConfig {
         constexpr bool BO  = decltype(bo_t)::value;
         constexpr bool HGO = decltype(hgo_t)::value;
         using SchedulerSpec = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<
-            BO, HGO, Causal, kGqaFusion, Scheduler::kDisablePrefetchV>;
+            BO, HGO, Causal, kGqaFusion, Scheduler::kDisablePrefetchV,
+            cutlass::fmha::kernel::fmha_gqa_disable_kv_prefetch<TileShapeQK>()>;
         using FMHAKernel = cutlass::fmha::kernel::XeFMHAFwdKernel<
             ProblemShapeType, CollectiveMainloop, CollectiveEpilogue, SchedulerSpec>;
         ExampleRunner<FMHAKernel, isVarLen> runner;

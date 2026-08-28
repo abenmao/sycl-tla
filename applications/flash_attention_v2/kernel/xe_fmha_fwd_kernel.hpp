@@ -490,6 +490,7 @@ public:
       static constexpr int QK_BLK_M = decltype(get<0>(TileShapeQK{}))::value;
       constexpr bool kGqaFusion = TileScheduler::kGqaFusion;
       constexpr bool kDisablePrefetchV = TileScheduler::kDisablePrefetchV;
+      constexpr bool kDisableKVPrefetch = TileScheduler::kDisableKVPrefetch;
 
       [[maybe_unused]] ScaleTensors scales = ScaleTensors::make_null();
       if constexpr (BlockScale) {
@@ -572,7 +573,7 @@ public:
           FragARow tA_max;
           FragSPartialRow tA_sum;
 
-          mainloop.template operator()<true, kDisablePrefetchV>(
+          mainloop.template operator()<kDisableKVPrefetch, kDisablePrefetchV>(
                   make_gqa_view_q(),
                   K(_,_,head_kv,idx_b),
                   V(_,_,head_kv,idx_b),

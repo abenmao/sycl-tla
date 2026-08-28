@@ -175,7 +175,9 @@ struct FMHAConfig {
   // GqaFusion=true), matching the example's decode path (batch>1 case: BO=false,HGO=true).
   using Scheduler = cute::conditional_t<Persistent,
       cutlass::fmha::kernel::XeFHMAIndividualPersistentTileScheduler,
-      cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false, GqaFusion, Causal, GqaFusion>
+      cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<
+          false, GqaFusion, Causal, GqaFusion, /*DisablePrefetchV=*/false,
+          cutlass::fmha::kernel::fmha_gqa_disable_kv_prefetch<TileShapeQK>()>
   >;
   using FMHAKernel = cute::conditional_t<Persistent,
       cutlass::fmha::kernel::XeFMHAFwdDynamicSplitKernel<

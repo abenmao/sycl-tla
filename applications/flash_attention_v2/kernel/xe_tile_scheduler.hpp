@@ -77,10 +77,24 @@ inline int fmha_dynamic_num_partitions(
   return cute::ceil_div(local_k_blocks, blocks_per_partition);
 }
 
-template <bool OneBatch = false, bool NoGQA = false, bool CausalMask = false, bool GqaFusion = false, bool DisablePrefetchV = false>
+// Minimum packed-Q rows (head_group_q * seq_len_qo) for KV prefetch to pay off on
+// the GQA-fusion path. Measured on CRI/32 XeCore: 8 rows -17%, 16 rows -4%,
+// 24 rows +15%, 32 rows +18%, >32 rows (halved BLK_K) +55..85%.
+inline constexpr int kFmhaGqaKVPrefetchMinRows = 24;
+
+// The host picks the packed-Q tile from a ladder keyed on the same row count, so
+// BLK_Q is an exact compile-time proxy for it.
+template <class TileShapeQK>
+CUTLASS_HOST_DEVICE constexpr bool fmha_gqa_disable_kv_prefetch() {
+  return int(cute::get<0>(TileShapeQK{})) < kFmhaGqaKVPrefetchMinRows;
+}
+
+template <bool OneBatch = false, bool NoGQA = false, bool CausalMask = false, bool GqaFusion = false,
+          bool DisablePrefetchV = false, bool DisableKVPrefetch = true>
 struct XeFHMAIndividualTileScheduler {
   static constexpr bool kGqaFusion = GqaFusion;
   static constexpr bool kDisablePrefetchV = DisablePrefetchV;
+  static constexpr bool kDisableKVPrefetch = DisableKVPrefetch;
   using NumHeadsDivmod   = cute::conditional_t<OneBatch, detail::EmptyDivmod, FastDivmod>;
   using HeadGroupDivmod  = cute::conditional_t<NoGQA || GqaFusion, detail::EmptyDivmod, FastDivmod>;
 
