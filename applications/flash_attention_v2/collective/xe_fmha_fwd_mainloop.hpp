@@ -897,8 +897,6 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
                       static_cast<float>(scale_k_cur(k_row, d_group)) *
                       static_cast<float>(tSrK(i)));
                 }
-              } else {
-                dequantize(tSrK, scale_k);
               }
             }
             auto const& tSrQ_d = tSrQ_arr[D];
@@ -1059,6 +1057,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       ElementS qk_scale = params.scale;
       if constexpr (PerTensorScale) {
         qk_scale = params.scale * ElementS(scale_q) * ElementS(scale_k);
+      } else if constexpr (F8kvF16mma && !BlockScale) {
+        qk_scale = params.scale * ElementS(scale_k);
       }
 
       if constexpr (preload_v) {
@@ -1209,8 +1209,6 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
                     static_cast<float>(scale_v_cur(v_coord, kv_group)) *
                     static_cast<float>(tArV(i)));
               }
-            } else {
-              dequantize(tArV, scale_v);
             }
           }
           cute::gemm(mma_pv, tArP, tArV, tArA(_,_,_,VV));

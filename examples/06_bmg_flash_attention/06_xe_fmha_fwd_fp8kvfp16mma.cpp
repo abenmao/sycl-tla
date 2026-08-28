@@ -122,10 +122,29 @@ int main(int argc, const char **argv) {
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 
 #elif HEAD_DIM == 128
+#if defined(MXFP8_KV) || !defined(SYCL_INTEL_TARGET) || (SYCL_INTEL_TARGET != 35)
+  // Non-CRI and MXFP8 configuration.
   using ShapeQK = Shape<_128, _32, _32>;
   using ShapePV = Shape<_128, _32, _32>;
   using ShapeOut = Shape<_128, _128>;
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
+#else
+  using ShapeQK = Shape<_512, _64, _64>;
+  using ShapePV = Shape<_512, _64, _64>;
+  using ShapeOut = Shape<_512, _128>;
+  using SubgroupLayoutQK = Layout<Shape<_32, _1, _1>>;
+
+  // CRI causal configurations.
+  using ShapeQK_Causal = Shape<_256, _64, _64>;
+  using ShapePV_Causal = Shape<_256, _64, _64>;
+  using ShapeOut_Causal = Shape<_256, _128>;
+  using SubgroupLayoutQK_Causal = Layout<Shape<_16, _1, _1>>;
+
+  using ShapeQK8 = Shape<_64, _64, _64>;
+  using ShapePV8 = Shape<_64, _64, _64>;
+  using ShapeOut8 = Shape<_64, _128>;
+  using SubgroupLayoutQK8 = Layout<Shape<_8, _1, _1>>;
+#endif
 
 #elif HEAD_DIM == 192
   using ShapeQK = Shape<_128, _32, _32>;
@@ -253,7 +272,6 @@ int main(int argc, const char **argv) {
 #undef FMHA_RUN_ONE
 #else
   using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
-  using FMHACausal    = FMHAConfig<true,  BlockScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV, ElementScale>;
   using FMHANonCausal = FMHAConfig<false, BlockScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV, ElementScale>;
 
 #if defined(PAGED_KV)
@@ -262,11 +280,34 @@ int main(int argc, const char **argv) {
 #define FMHA_RUN_PREFILL(CFG) CFG::template run<false, false, Scheduler>(options)
 #endif
 
+#if HEAD_DIM == 128 && !defined(MXFP8_KV) && \
+  defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+  using FMHACausal = FMHAConfig<true, BlockScale, ShapeQK_Causal, ShapePV_Causal, ShapeOut_Causal, SubgroupLayoutQK_Causal, void, PipelineStages, ElementQ, ElementK, ElementV, ElementScale>;
+  using FMHACausal8 = FMHAConfig<true, BlockScale, ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, void, PipelineStages, ElementQ, ElementK, ElementV, ElementScale>;
+
+  const int num_xe_cores = cutlass::KernelHardwareInfo::query_device_multiprocessor_count();
+  int num_q_tiles_256 = (options.seq_len_qo + 255) / 256;
+  int total_wgs_256 = num_q_tiles_256 * options.num_heads_q * options.batch;
+  bool use_small = options.seq_len_qo < 512 || total_wgs_256 < num_xe_cores;
+
+  if (options.is_causal) {
+    if (use_small) {
+      return FMHA_RUN_PREFILL(FMHACausal8);
+    }
+    return FMHA_RUN_PREFILL(FMHACausal);
+  }
+  else {
+    return FMHA_RUN_PREFILL(FMHANonCausal);
+  }
+#else
+  using FMHACausal = FMHAConfig<true, BlockScale, ShapeQK, ShapePV, ShapeOut, SubgroupLayoutQK, void, PipelineStages, ElementQ, ElementK, ElementV, ElementScale>;
+
   if (options.is_causal) {
     return FMHA_RUN_PREFILL(FMHACausal);
   } else {
     return FMHA_RUN_PREFILL(FMHANonCausal);
   }
+#endif
 #undef FMHA_RUN_PREFILL
 #endif
 }

@@ -177,7 +177,8 @@ public:
     /* Complete softmax, dividing out sums. */
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < rA_sum.size(); i++)
-      if constexpr (CollectiveMainloop::PerTensorScale)
+      if constexpr (CollectiveMainloop::PerTensorScale ||
+                    (CollectiveMainloop::F8kvF16mma && !CollectiveMainloop::BlockScale))
         rA_sum(i) = ElementA(v_scale) / rA_sum(i);
       else
         rA_sum(i) = ElementA(1) / rA_sum(i);
@@ -281,7 +282,8 @@ public:
     /* Complete local softmax normalization; the reduce kernel multiplies the sum back. */
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < rA_sum.size(); i++)
-      if constexpr (CollectiveMainloop::PerTensorScale)
+      if constexpr (CollectiveMainloop::PerTensorScale ||
+                    (CollectiveMainloop::F8kvF16mma && !CollectiveMainloop::BlockScale))
         rA_sum(i) = ElementA(v_scale) / rA_sum(i);
       else
         rA_sum(i) = ElementA(1) / rA_sum(i);
