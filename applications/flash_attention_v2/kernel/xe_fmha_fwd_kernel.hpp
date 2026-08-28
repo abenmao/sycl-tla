@@ -366,9 +366,10 @@ public:
         auto q_offset_wi = get<0>(tScS(0));
         q_offset_sg = group_broadcast(sycl::ext::oneapi::this_work_item::get_sub_group(), q_offset_wi, 0);
       }
+      bool compute_sg_active = true;
 #if defined(CUTLASS_TEST_FOR_CRI)
       if constexpr (kIndependentSubgroups) {
-        if (blk_q * get<0>(TileShapeQK{}) + q_offset_sg >= seq_len_qo) continue;
+        compute_sg_active = blk_q * get<0>(TileShapeQK{}) + q_offset_sg < seq_len_qo;
       }
 #endif
 
@@ -620,7 +621,12 @@ public:
                scales.V(_,_,head,l_coord),
                scales.P(_,_,head,l_coord),
                scales.K_cache(_,_,head,l_coord),
-               scales.V_cache(_,_,head,l_coord));
+               scales.V_cache(_,_,head,l_coord),
+               compute_sg_active);
+
+      if constexpr (kIndependentSubgroups) {
+        if (!compute_sg_active) continue;
+      }
 
       if constexpr (!is_empty_v<MainloopSharedStorage> && !is_empty_v<EpilogueSharedStorage>) {
         sycl::group_barrier(get_work_group<3>());

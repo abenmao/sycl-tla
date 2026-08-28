@@ -377,7 +377,8 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
              TensorScaleV2D    const& scaleV = TensorScaleV2D{},
              TensorScaleP2D    const& scaleP = TensorScaleP2D{},
              TensorScaleK2D    const& scaleK_cache = TensorScaleK2D{},
-             TensorScaleV2D    const& scaleV_cache = TensorScaleV2D{}) {
+             TensorScaleV2D    const& scaleV_cache = TensorScaleV2D{},
+             bool              compute_sg_active = true) {
     using namespace sycl::ext::oneapi::this_work_item;
 
     // Short dimension names:
@@ -648,7 +649,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       }
     }
     if constexpr (!DisableKVPrefetch) {
-      if (blk_k1 > kblocks_cache && prefetch_sg_active) {
+      if (prefetch_k1 > kblocks_cache && prefetch_sg_active) {
         CUTLASS_PRAGMA_UNROLL
         for (int K = 0; K < Stages; K++) {
           prefetch(prefetch_k, prepared_pk);
@@ -678,6 +679,90 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         }
       }
     }
+
+    auto prefetch_next_regular_kv = [&]() {
+      if constexpr (!DisableVPrefetch) {
+        prefetch(prefetch_v, prepared_pv);
+        prepared_pv += v_seq_delta(kv_stride);
+      }
+      prefetch(prefetch_k, prepared_pk);
+      prepared_pk += k_seq_delta(kv_stride);
+    };
+
+    auto prefetch_next_k_cache = [&](int K) {
+      int K_next = K + Stages;
+      if (K_next >= kblocks_cache) {
+        return K_next;
+      }
+
+      constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
+      int slot_next = (stage_mask >= 0) ? ((K_next - blk_k0) & stage_mask)
+                                        : ((K_next - blk_k0) % Stages);
+      bool const is_continuous_next = (K_next == last_prefetched_logical_k + 1);
+      int physical_next;
+      if (is_continuous_next) {
+        if (tiles_per_page > 0 && (tiles_per_page & (tiles_per_page - 1)) == 0) {
+          int const page_mask = tiles_per_page - 1;
+          int const tile_in_page = K_next & page_mask;
+          physical_next = (tile_in_page != 0)
+            ? (last_prefetched_physical_k + 1)
+            : get_physical_k_tile(K_next, batch_offset, tiles_per_page);
+        } else {
+          int const tile_in_page = K_next % tiles_per_page;
+          physical_next = (tile_in_page != 0)
+            ? (last_prefetched_physical_k + 1)
+            : get_physical_k_tile(K_next, batch_offset, tiles_per_page);
+        }
+      } else {
+        physical_next = get_physical_k_tile(K_next, batch_offset, tiles_per_page);
+      }
+
+      physical_k_tiles_cache[slot_next] = physical_next;
+      last_prefetched_logical_k = K_next;
+      last_prefetched_physical_k = physical_next;
+      if constexpr (!DisableKVPrefetch) {
+        if (prefetch_sg_active) {
+          for (int D = 0; D < size<4>(pKgK_cache); D++) {
+            prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_next,D));
+          }
+        }
+      }
+      return physical_next;
+    };
+
+    if (!compute_sg_active) {
+      // No Q rows are valid for this subgroup, so its compute range is empty
+      if constexpr (!DisableKVPrefetch) {
+        for (int K = blk_k0; K < prefetch_k1; K++) {
+#if not defined(CUTLASS_TEST_FOR_CRI)
+          barrier_arrive(ScopeWorkgroup);
+#endif
+          if constexpr (PagedKV) {
+            if (K < kblocks_cache) {
+              constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
+              int slot = (stage_mask >= 0) ? ((K - blk_k0) & stage_mask) : ((K - blk_k0) % Stages);
+              int physical_k = physical_k_tiles_cache[slot];
+              if (prefetch_sg_active) {
+                CUTLASS_PRAGMA_UNROLL
+                for (int VV = 0; VV < VTiles; VV++) {
+                  prefetch(prefetch_v_cache, pVgV_cache(_,_,_,VV,physical_k));
+                }
+              }
+              prefetch_next_k_cache(K);
+            } else if (prefetch_sg_active) {
+              prefetch_next_regular_kv();
+            }
+          } else if (prefetch_sg_active) {
+            prefetch_next_regular_kv();
+          }
+#if not defined(CUTLASS_TEST_FOR_CRI)
+          barrier_wait(ScopeWorkgroup);
+#endif
+        }
+      }
+      return;
+    }
+
     if constexpr (HardwareBlockScale) {
       const int q_coord = q_pos_base + get<0>(blk_qv) * BLK_Q + (subgroup_id / ATOM_K)  * SG_Q;
       auto& tiled_prefetch_scaleQ = get<0>(get<2>(scale_context_qk));
@@ -925,43 +1010,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
             }
           }
         }
-        if (K_next < kblocks_cache) {
-          int physical_K_next = K_next;
-          constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
-          int slot_next = (stage_mask >= 0) ? ((K_next - blk_k0) & stage_mask) : ((K_next - blk_k0) % Stages);
-          bool const is_continuous_next = (K_next == last_prefetched_logical_k + 1);
-          int physical_next;
-
-          if (is_continuous_next) {
-            if (tiles_per_page > 0 && (tiles_per_page & (tiles_per_page - 1)) == 0) {
-              int const page_mask = tiles_per_page - 1;
-              int const tile_in_page = K_next & page_mask;
-              physical_next = (tile_in_page != 0)
-                ? (last_prefetched_physical_k + 1)
-                : get_physical_k_tile(K_next, batch_offset, tiles_per_page);
-            } else {
-              int const tile_in_page = K_next % tiles_per_page;
-              physical_next = (tile_in_page != 0)
-                ? (last_prefetched_physical_k + 1)
-                : get_physical_k_tile(K_next, batch_offset, tiles_per_page);
-            }
-          } else {
-            physical_next = get_physical_k_tile(K_next, batch_offset, tiles_per_page);
-          }
-
-          physical_k_tiles_cache[slot_next] = physical_next;
-          physical_K_next = physical_next;
-          last_prefetched_logical_k = K_next;
-          last_prefetched_physical_k = physical_next;
-          if constexpr (!DisableKVPrefetch) {
-            if (prefetch_sg_active) {
-              for (int D = 0; D < size<4>(pKgK_cache); D++) {
-                prefetch(prefetch_k_cache, pKgK_cache(_,_,_,physical_K_next,D));
-              }
-            }
-          }
-          k_idx_next_cache = physical_K_next;
-        }
+        k_idx_next_cache = prefetch_next_k_cache(K);
 #ifdef PREFILL
         if (K + 1 < cache_k_end) {
           constexpr int stage_mask = (Stages & (Stages - 1)) == 0 ? Stages - 1 : -1;
@@ -1299,12 +1348,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
         barrier_arrive(barrier_scope);
 #endif
         if (prefetch_sg_active) {
-          prefetch(prefetch_k, prepared_pk);
-          prepared_pk += k_seq_delta(kv_stride);
-          if constexpr (!DisableVPrefetch) {
-            prefetch(prefetch_v, prepared_pv);
-            prepared_pv += v_seq_delta(kv_stride);
-          }
+          prefetch_next_regular_kv();
         }
 #if not defined(CUTLASS_TEST_FOR_CRI)
     barrier_wait(barrier_scope);
