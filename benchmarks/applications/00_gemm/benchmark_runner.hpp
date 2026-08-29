@@ -46,15 +46,12 @@
 #include "cutlass/util/command_line.h"
 #include "cutlass/util/device_memory.h"
 #include "cutlass/util/packed_stride.hpp"
-#include "cutlass/util/reference/device/gemm_complex.h"
-#include "cutlass/util/reference/device/tensor_compare.h"
 #include "cutlass/util/reference/device/tensor_fill.h"
-#include "cutlass/util/reference/device/tensor_silu.h"
-#include "cutlass/util/reference/host/gemm_complex_mkl.h"
 #include "cutlass/util/initialize_block.hpp"
-#include "cutlass/relatively_equal.h"
 
 #include "../common.hpp"
+#include "benchmark_cache_flush.hpp"
+#include "benchmark_verify.hpp"
 #include <benchmark/benchmark.h>
 #include <chrono>
 
@@ -114,42 +111,6 @@ static inline std::string default_bm_name() {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <class T, class = void>
-struct ScaleType {
-  using type = int;
-};
-template <class T>
-struct ScaleType<T, cute::void_t<typename T::ElementScale>> {
-  using type = typename T::ElementScale;
-};
-
-template <class T, class = void>
-struct ZeroType {
-  using type = int;
-};
-template <class T>
-struct ZeroType<T, cute::void_t<typename T::ElementZero>> {
-  using type = typename T::ElementZero;
-};
-
-template <class T, class = void>
-struct ScaleStride {
-  using type = int;
-};
-template <class T>
-struct ScaleStride<T, cute::void_t<typename T::StrideScale>> {
-  using type = typename T::StrideScale;
-};
-
-template <class T, class = void>
-struct ZeroStride {
-  using type = int;
-};
-template <class T>
-struct ZeroStride<T, cute::void_t<typename T::StrideZero>> {
-  using type = typename T::StrideZero;
-};
-
-template <class T, class = void>
 static constexpr auto is_blocked_scaled = false;
 template <class T>
 static constexpr auto is_blocked_scaled<T, cute::void_t<typename T::ElementScaleA, typename T::ElementScaleB>> = true;
@@ -203,13 +164,6 @@ struct StrideScaleBType<T, cute::void_t<typename T::StrideScaleB>> {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Verification mode enum
-enum class VerifyMode {
-  None = 0,           // No verification (skip both device and host)
-  Device = 1,         // Device verification - uses reference::device::GemmComplex
-  Host = 2            // Host verification - uses reference::host::GemmComplexMkl
-};
-
 // Command line options parsing
 struct GEMMOptions {
 
@@ -222,13 +176,19 @@ struct GEMMOptions {
   // reference::device::GemmComplex, on the host with reference::host::GemmComplexMkl,
   // or skipped entirely.
   VerifyMode verify_mode;
+  CacheFlushMode cache_flush_mode;
+  int iterations;
+  int warmup;
 
   GEMMOptions():
           error(false),
           m(5120), n(4096), k(4096), l(1),
           alpha(1.f), beta(0.f),
+          iterations(CUTLASS_BENCHMARK_DEFAULT_ITERATIONS),
+          warmup(CUTLASS_WARMUP_DEFAULT_ITERATIONS),
           bm_name(default_bm_name()),
-          verify_mode(VerifyMode::None)
+          verify_mode(VerifyMode::None),
+          cache_flush_mode(CacheFlushMode::FlushKernel)
   { }
 
   // Parses the command line
@@ -262,6 +222,17 @@ struct GEMMOptions {
     } else {
       std::cerr << "Invalid verify mode or mode wasn't defined, using default None" << std::endl;
       verify_mode = VerifyMode::None;
+    }
+
+    cmd.get_cmd_line_argument("iterations", iterations, CUTLASS_BENCHMARK_DEFAULT_ITERATIONS);
+    cmd.get_cmd_line_argument("warmup", warmup, CUTLASS_WARMUP_DEFAULT_ITERATIONS);
+
+    std::string cache_flush_str = "kernel";
+    cmd.get_cmd_line_argument("cache_flush", cache_flush_str, std::string("kernel"));
+    if (cache_flush_str == "rotate") {
+      cache_flush_mode = CacheFlushMode::RotateBuffers;
+    } else {
+      cache_flush_mode = CacheFlushMode::FlushKernel;
     }
   }
 
@@ -307,11 +278,6 @@ struct BenchmarkRunnerGemm {
   using DispatchPolicy = typename CollectiveMainloop::DispatchPolicy;
   using ElementMma = typename CollectiveMainloop::TiledMma::ValTypeA;
 
-  using ElementScale = typename ScaleType<CollectiveMainloop>::type;
-  using ElementZero = typename ZeroType<CollectiveMainloop>::type;
-  using StrideS = typename ScaleStride<CollectiveMainloop>::type;
-  using StrideZ = typename ZeroStride<CollectiveMainloop>::type;
-
   using ElementScaleA = typename ElementScaleAType<CollectiveMainloop>::type;
   using ElementScaleB = typename ElementScaleBType<CollectiveMainloop>::type;
   using StrideScaleA = typename StrideScaleAType<CollectiveMainloop>::type;
@@ -323,8 +289,7 @@ struct BenchmarkRunnerGemm {
 
   using ProblemShapeType = typename Gemm::GemmKernel::ProblemShape;
 
-  int32_t count;
-    static constexpr int GROUP_SIZE = GroupKType<CollectiveMainloop>::value;
+  static constexpr int GROUP_SIZE = GroupKType<CollectiveMainloop>::value;
 
   //
   // Data members
@@ -338,417 +303,28 @@ struct BenchmarkRunnerGemm {
   StrideScaleA stride_SA;
   StrideScaleB stride_SB;
 
-  StrideS stride_S;
-  StrideZ stride_Z;
-
 
   uint64_t seed = 0;
 
-  // TODO: Use vector of allocations to avoid reusing
-  // the same memory across different benchmark iterations
-  // std::vector<DeviceAllocation<ElementA>> block_A;
   DeviceAllocation<ElementA> block_A;
   DeviceAllocation<ElementB> block_B;
   DeviceAllocation<ElementC> block_C;
   DeviceAllocation<ElementOutput> block_D;
   DeviceAllocation<ElementOutput> block_ref_D;
-  DeviceAllocation<ElementOutput> block_Aux;
 
-  cutlass::DeviceAllocation<ElementScale> block_scale;
-  cutlass::DeviceAllocation<ElementZero> block_zero;
   cutlass::DeviceAllocation<ElementScaleA> block_scaleA;
   cutlass::DeviceAllocation<ElementScaleB> block_scaleB;
   cutlass::DeviceAllocation<ElementMMAVerify> block_A_dq; // Dequantized copy of A for validation
   cutlass::DeviceAllocation<ElementMMAVerify> block_B_dq; // Dequantized copy of B for validation
 
-  DeviceAllocation<ElementMma> block_A_verify;
-  DeviceAllocation<ElementMma> block_B_verify;
-  
+  CacheFlushHelper<ElementA, ElementB, ElementC, ElementScaleA, ElementScaleB,
+                   is_blocked_scaled<CollectiveMainloop>> cache_flush_;
 
   BenchmarkRunnerGemm() : seed(0) {};
 
   //
   // Methods
   //
-
-  template <
-  class QuantizedElement,
-  class DequantizedElement,
-  class OperandLayout,
-  class ElementScale,
-  class ElementZero,
-  class ScaleLayout,
-  class ZeroLayout>
-  static auto dequantize_A(DequantizedElement* dq_buffer,
-                       QuantizedElement const* q_buffer,
-                       OperandLayout const operand_layout,
-                       ElementScale const* scale_buffer,
-                       ElementZero const* zero_buffer,
-                       ScaleLayout const scale_layout,
-                       ZeroLayout const zero_layout,
-                       int const group_size) {
-    if constexpr (std::is_same_v<DequantizedElement, QuantizedElement>) {
-      return dq_buffer;
-    }
-
-    std::vector<uint8_t> dst(size(operand_layout) * sizeof_bits_v<DequantizedElement> / 8, 0);
-    cutlass::device_memory::copy_to_host(dst.data(), (uint8_t*)dq_buffer, dst.size());
-
-    std::vector<uint8_t> src(size(operand_layout) * sizeof_bits_v<QuantizedElement> / 8, 0);
-    cutlass::device_memory::copy_to_host(src.data(), (uint8_t*)q_buffer, src.size());
-
-    std::vector<uint8_t> scale(size(scale_layout) * sizeof_bits_v<ElementScale> / 8, 0);
-    cutlass::device_memory::copy_to_host(scale.data(), (uint8_t*)scale_buffer, scale.size());
-
-    std::vector<uint8_t> zero(size(zero_layout) * sizeof_bits_v<ElementZero> / 8, 0);
-    cutlass::device_memory::copy_to_host(zero.data(), (uint8_t*)zero_buffer, zero.size());
-
-    compat::wait();
-
-    auto dst_tensor = make_tensor(make_gmem_ptr(reinterpret_cast<DequantizedElement*>(dst.data())), select<1, 0, 2>(operand_layout));
-
-    auto src_tensor = [&]() {
-      if constexpr (sizeof_bits_v<QuantizedElement> < 8) {
-        return make_tensor(cute::subbyte_iterator<const QuantizedElement>(src.data()), operand_layout);
-      } else {
-        return make_tensor(make_gmem_ptr(reinterpret_cast<QuantizedElement const *>(src.data())), select<1, 0, 2>(operand_layout));
-      }
-    }();
-
-    auto scale_tensor = make_tensor(make_gmem_ptr(reinterpret_cast<ElementScale const *>(scale.data())), scale_layout);
-
-    auto zero_tensor = [&]() {
-      if constexpr (sizeof_bits_v<ElementZero> < 8) {
-        auto flatten_tensor = flatten(make_tensor(cute::subbyte_iterator<const ElementZero>(zero.data()), zero_layout));
-        static_assert(rank(flatten_tensor.layout()) == 4);
-        return make_tensor(flatten_tensor.data(), select<1, 0, 2, 3>(flatten_tensor.layout()));
-      } else {
-        return make_tensor(make_gmem_ptr(reinterpret_cast<ElementZero const *>(zero.data())), zero_layout);
-      }
-    }();
-
-    auto M = size<1>(src_tensor);
-    auto K = size<0>(src_tensor);
-    auto L = size<2>(src_tensor);
-
-    static constexpr bool is_qnt = cutlass::platform::numeric_limits<DequantizedElement>::is_integer;
-
-    for (int l = 0; l < L; l++) {
-      for (int k= 0; k < K; k++) {
-        for (int m = 0; m < M; m++) {
-          auto src_data = [&]() {
-            if constexpr (is_qnt) {
-              if constexpr (sizeof_bits_v<QuantizedElement> >= 8) {
-                return  src_tensor(k, m, l);
-              } else {
-                return src_tensor(k, m, l).get();
-              }
-            } else {
-              using ret_type = cute::conditional_t<sizeof_bits_v<ElementZero> >= 8, ElementZero, int8_t>;
-              if constexpr (sizeof_bits_v<QuantizedElement> >= 8) {
-                return  (ret_type)(src_tensor(k, m, l));
-              } else {
-                return (ret_type)(src_tensor(k, m, l).get());
-              }
-            }
-          }();
-
-          auto scale_data = scale_tensor(m, k / group_size, l);
-
-          using ret_type = cute::conditional_t<sizeof_bits_v<ElementZero> >= 8, ElementZero, int8_t>;
-          ret_type zero_data = [&]() {
-            if constexpr (sizeof_bits_v<ElementZero> >= 8) {
-              return zero_tensor(m, k / group_size, l);
-            } else {
-              auto zero_elements_packed_along_k = get<0>(zero_tensor.shape());
-              return (ret_type)(zero_tensor((k / group_size) % zero_elements_packed_along_k, m, k / group_size / zero_elements_packed_along_k, l).get());
-            }
-          }();
-
-          if constexpr (is_qnt) {
-            dst_tensor(k, m, l) = ((int)(src_data / scale_data)) + zero_data;
-          } else {
-            dst_tensor(k, m, l) = (src_data - zero_data) * scale_data;
-          }
-        }
-      }
-    }
-
-    cutlass::device_memory::copy_to_device(dq_buffer, (DequantizedElement*)(raw_pointer_cast(dst_tensor.data())), dst_tensor.size());
-    compat::wait();
-    return dq_buffer;
-  }
-
-  template <
-  class QuantizedElement,
-  class DequantizedElement,
-  class OperandLayout,
-  class ElementScale,
-  class ElementZero,
-  class ScaleLayout,
-  class ZeroLayout>
-  static auto dequantize_B(DequantizedElement* dq_buffer,
-                       QuantizedElement const* q_buffer,
-                       OperandLayout const operand_layout,
-                       ElementScale const* scale_buffer,
-                       ElementZero const* zero_buffer,
-                       ScaleLayout const scale_layout,
-                       ZeroLayout const zero_layout,
-                       int const group_size) {
-    std::vector<uint8_t> dst(size(operand_layout) * sizeof_bits_v<DequantizedElement> / 8, 0);
-    cutlass::device_memory::copy_to_host(dst.data(), (uint8_t*)dq_buffer, dst.size());
-
-    std::vector<uint8_t> src(size(operand_layout) * sizeof_bits_v<QuantizedElement> / 8, 0);
-    cutlass::device_memory::copy_to_host(src.data(), (uint8_t*)q_buffer, src.size());
-
-    std::vector<uint8_t> scale(size(scale_layout) * sizeof_bits_v<ElementScale> / 8, 0);
-    cutlass::device_memory::copy_to_host(scale.data(), (uint8_t*)scale_buffer, scale.size());
-
-    std::vector<uint8_t> zero(size(zero_layout) * sizeof_bits_v<ElementZero> / 8, 0);
-    cutlass::device_memory::copy_to_host(zero.data(), (uint8_t*)zero_buffer, zero.size());
-
-    compat::wait();
-
-    auto dst_tensor = make_tensor(make_gmem_ptr(reinterpret_cast<DequantizedElement*>(dst.data())), operand_layout);
-
-    auto src_tensor = [&]() {
-      if constexpr (sizeof_bits_v<QuantizedElement> < 8) {
-        return make_tensor(cute::subbyte_iterator<const QuantizedElement>(src.data()), operand_layout);
-      } else {
-        return make_tensor(make_gmem_ptr(reinterpret_cast<QuantizedElement const *>(src.data())), operand_layout);
-      }
-    }();
-
-    auto scale_tensor = make_tensor(make_gmem_ptr(reinterpret_cast<ElementScale const *>(scale.data())), scale_layout);
-
-    auto zero_tensor = [&]() {
-      if constexpr (sizeof_bits_v<ElementZero> < 8) {
-        auto flatten_tensor = flatten(make_tensor(cute::subbyte_iterator<const ElementZero>(zero.data()), zero_layout));
-        static_assert(rank(flatten_tensor.layout()) == 4);
-        return make_tensor(flatten_tensor.data(), select<1, 0, 2, 3>(flatten_tensor.layout()));
-      } else {
-        return make_tensor(make_gmem_ptr(reinterpret_cast<ElementZero const *>(zero.data())), zero_layout);
-      }
-    }();
-
-    auto N = size<0>(src_tensor);
-    auto K = size<1>(src_tensor);
-    auto L = size<2>(src_tensor);
-
-    for (int l = 0; l < L; l++) {
-      for (int k= 0; k < K; k++) {
-        for (int n = 0; n < N; n++) {
-          using ret_type = cute::conditional_t<sizeof_bits_v<ElementZero> >= 8, ElementZero, int8_t>;
-          ret_type a = [&]() {
-            if constexpr (sizeof_bits_v<QuantizedElement> >= 8) {
-              return  (ret_type)(src_tensor(n, k, l));
-            } else {
-              return (ret_type)(src_tensor(n, k, l).get());
-            }}();
-
-          ret_type b = [&]() {
-            if constexpr (sizeof_bits_v<ElementZero> >= 8) {
-              return (ret_type)(zero_tensor(n, k / group_size, l));
-            } else {
-              auto k_packed = get<0>(zero_tensor.shape());
-              return (ret_type)(zero_tensor((k / group_size) % k_packed, n, k / group_size / k_packed, l).get());
-            }
-          }();
-
-          dst_tensor(n, k, l) = ((ElementScale)(a - b)) * scale_tensor(n, k / group_size, l);
-        }
-      }
-    }
-
-    cutlass::device_memory::copy_to_device(dq_buffer, (DequantizedElement*)(raw_pointer_cast(dst_tensor.data())), dst_tensor.size());
-    compat::wait();
-    return dq_buffer;
-  }
-
-
-  template <
-  class DstElement,
-  class SrcElement,
-  class Layout,
-  class ElementScale,
-  class ScaleLayout>
-  static void apply_scale(DstElement* dq_buffer,
-                       SrcElement const* q_buffer,
-                       Layout const operand_layout,
-                       ElementScale const* scale_buffer,
-                       ScaleLayout const scale_layout) {
-
-    std::vector<uint8_t> dst(size(operand_layout) * sizeof_bits_v<DstElement> / 8, 0);
-    cutlass::device_memory::copy_to_host(dst.data(), (uint8_t*)dq_buffer, dst.size());
-
-    std::vector<uint8_t> src(size(operand_layout) * sizeof_bits_v<SrcElement> / 8, 0);
-    cutlass::device_memory::copy_to_host(src.data(), (uint8_t*)q_buffer, src.size());
-
-    std::vector<uint8_t> scale(size(scale_layout) * sizeof_bits_v<ElementScale> / 8, 0);
-    cutlass::device_memory::copy_to_host(scale.data(), (uint8_t*)scale_buffer, scale.size());
-
-    compat::wait();
-
-    static_assert(sizeof_bits_v<DstElement> >= 8);
-
-    auto dst_tensor = make_tensor(make_gmem_ptr(reinterpret_cast<DstElement*>(dst.data())), operand_layout);
-
-    auto src_tensor = [&]() {
-      if constexpr (sizeof_bits_v<SrcElement> < 8) {
-        return make_tensor(cute::subbyte_iterator<const SrcElement>(src.data()), operand_layout);
-      } else {
-        return make_tensor(make_gmem_ptr(reinterpret_cast<SrcElement const *>(src.data())), operand_layout);
-      }
-    }();
-
-    auto scale_tensor = make_tensor(make_gmem_ptr(reinterpret_cast<ElementScale const *>(scale.data())), scale_layout);
-
-    auto MN = size<0>(src_tensor);
-    auto K = size<1>(src_tensor);
-    auto L = size<2>(src_tensor);
-
-    using ret_type = float;
-
-    for (int l = 0; l < L; l++) {
-      for (int k= 0; k < K; k++) {
-        for (int mn = 0; mn < MN; mn++) {
-          auto src_data = [&]() {
-            if constexpr (sizeof_bits_v<SrcElement> >= 8) {
-              return  (ret_type)(src_tensor(mn, k, l));
-            } else {
-              return (ret_type)(src_tensor(mn, k, l).get());
-            }
-          }();
-
-          auto scale_data = (ret_type)(scale_tensor(mn, k / 32, l));
-
-          dst_tensor(mn, k, l) = (src_data) * scale_data;
-        }
-      }
-    }
-
-    cutlass::device_memory::copy_to_device(dq_buffer, (DstElement*)(raw_pointer_cast(dst_tensor.data())), dst_tensor.size());
-    compat::wait();
-  }
-
-
-  bool verify_device(const ProblemShapeType& problem_size, ElementCompute alpha, ElementCompute beta, std::ostream& label) {
-    auto& M = cute::get<0>(problem_size);
-    auto& N = cute::get<1>(problem_size);
-    auto& K = cute::get<2>(problem_size);
-    auto& L = cute::get<3>(problem_size);
-
-    TensorRef ref_C(block_C.get(), LayoutC::packed({M, N}));
-    TensorRef ref_D(block_ref_D.get(), LayoutD::packed({M, N}));
-
-    TensorRef ref_A(block_A_dq.get(), LayoutA::packed({M, K}));
-    TensorRef ref_B(block_B_dq.get(), LayoutB::packed({K, N}));
-
-    reference::device::GemmComplex(
-            {M, N, K},
-            alpha,
-            ref_A,
-            ComplexTransform::kNone,
-            ref_B,
-            ComplexTransform::kNone,
-            beta,
-            ref_C,
-            ref_D,
-            ElementAccumulator(0),
-            L,     // batch_count
-            M * K, // batch_stride_A
-            N * K, // batch_stride_B
-            M * N, // batch_stride_C
-            M * N  // batch_stride_D
-    );
-
-#if defined(CUTLASS_ENABLE_SYCL)
-    compat::wait();
-#else
-    cudaDeviceSynchronize();
-#endif
-
-    compat::wait();
-
-    // Check if output from CUTLASS kernel and reference kernel are equal or not
-    ElementOutput const epsilon(1e-2f);
-    ElementOutput const non_zero_floor(1e-4f);
-    bool passed = cutlass::reference::device::BlockCompareRelativelyEqual(
-      block_ref_D.get(), block_D.get(), block_D.size(), epsilon, non_zero_floor);
-
-    if (!passed) {  
-      std::vector<ElementOutput> block_ref_D_host(block_ref_D.size());
-      std::vector<ElementOutput> block_D_host(block_D.size());
-      compat::memcpy(block_ref_D_host.data(), block_ref_D.get(), block_ref_D_host.size() * sizeof(ElementOutput));
-      compat::memcpy(block_D_host.data(), block_D.get(), block_D_host.size() * sizeof(ElementOutput));
-      for (int i = 0; i < block_D_host.size(); i++) {
-        printf("i: %d , ref: %f, comp: %f\n", i, block_ref_D_host[i], block_D_host[i]);
-      }
-    }
-
-    label << "verify_status=" << (passed ? "passed" : "failed")
-          << "_with_device_ref_impl_gemm_complex ";
-    return passed;
-  }
-
-  bool verify_host(const ProblemShapeType& problem_size, ElementCompute alpha, ElementCompute beta, std::ostream& label) {
-    auto& M = cute::get<0>(problem_size);
-    auto& N = cute::get<1>(problem_size);
-    auto& K = cute::get<2>(problem_size);
-    auto& L = cute::get<3>(problem_size);
-
-
-    std::vector<ElementMMAVerify> host_A(block_A_dq.size());
-    std::vector<ElementMMAVerify> host_B(block_B_dq.size());
-    std::vector<ElementC> host_C(block_C.size());
-    std::vector<ElementOutput> host_D(block_D.size());
-
-    cutlass::device_memory::copy_to_host(host_A.data(), block_A_dq.get(), block_A_dq.size());
-    cutlass::device_memory::copy_to_host(host_B.data(), block_B_dq.get(), block_B_dq.size());
-    cutlass::device_memory::copy_to_host(host_C.data(), block_C.get(), block_C.size());
-    cutlass::device_memory::copy_to_host(host_D.data(), block_D.get(), block_D.size());
-    compat::wait();
-
-    std::vector<ElementOutput> host_ref_D(block_D.size());
-
-    TensorRef ref_A(host_A.data(), LayoutA::packed({M, K}));
-    TensorRef ref_B(host_B.data(), LayoutB::packed({K, N}));
-    TensorRef ref_C(host_C.data(), LayoutC::packed({M, N}));
-    TensorRef ref_D(host_ref_D.data(), LayoutD::packed({M, N}));
-
-    bool used_mkl = reference::host::GemmComplexMkl(
-            {M, N, K},
-            alpha,
-            ref_A,
-            ComplexTransform::kNone,
-            ref_B,
-            ComplexTransform::kNone,
-            beta,
-            ref_C,
-            ref_D,
-            ElementAccumulator(0),
-            L,     // batch_count
-            M * K, // batch_stride_A
-            N * K, // batch_stride_B
-            M * N, // batch_stride_C
-            M * N  // batch_stride_D
-    );
-
-    // Match the tolerances used by the device verification path.
-    ElementOutput const epsilon(1e-2f);
-    ElementOutput const non_zero_floor(1e-4f);
-    bool passed = true;
-    for (std::size_t i = 0; i < host_D.size(); ++i) {
-      if (!cutlass::relatively_equal(host_ref_D[i], host_D[i], epsilon, non_zero_floor)) {
-        passed = false;
-        printf("i: %zu , ref: %f, comp: %f\n", i, float(host_ref_D[i]), float(host_D[i]));
-      }
-    }
-
-    label << "verify_status=" << (passed ? "passed" : "failed")
-          << "_with_host_ref_impl_" << (used_mkl ? "mkl " : "gemm_complex ");
-    return passed;
-  }
 
   template <class Element>
   bool initialize_scale(
@@ -785,14 +361,6 @@ struct BenchmarkRunnerGemm {
       stride_SA = cutlass::make_cute_packed_stride(StrideScaleA{}, shape_scale_A);
       stride_SB = cutlass::make_cute_packed_stride(StrideScaleB{}, shape_scale_B);
     }
-
-    // TODO(codeplay): cute::cosize(some_large_layout) will overflow int32. What can we do about this?
-    std::size_t size_A = cute::cosize(make_layout(cute::make_shape(M, K, L), stride_A));
-    std::size_t size_B = cute::cosize(make_layout(cute::make_shape(N, K, L), stride_B));
-    std::size_t size_C = cute::cosize(make_layout(cute::make_shape(M, N, L), stride_C));
-    std::size_t mem_occupied_ABC = ((size_A * sizeof_bits_v<ElementA>) + (size_B * sizeof_bits_v<ElementB>) +
-                                   (size_C * sizeof_bits_v<ElementC>)) / sizeof_bits_v<int8_t>;
-    count = std::ceil(static_cast<float>(cutlass::get_llc_size()) / static_cast<float>(mem_occupied_ABC)) + 1;
 
     block_A.reset(static_cast<std::size_t>(M) * K * L);
     block_A_dq.reset(static_cast<std::size_t>(M) * K * L);
@@ -838,19 +406,31 @@ struct BenchmarkRunnerGemm {
 
     initialize(state, problem_size);
 
+    {
+      auto problem_shape_MNKL = cute::append<4>(problem_size, 1);
+      auto [M_cf, N_cf, K_cf, L_cf] = problem_shape_MNKL;
+      const int scale_k_cf = cute::ceil_div(K_cf, GROUP_SIZE);
+      cache_flush_.initialize(
+          options.cache_flush_mode, options.iterations,
+          M_cf, N_cf, K_cf, L_cf, scale_k_cf, seed,
+          block_A.get(), block_B.get(), block_C.get(),
+          block_scaleA.get(), block_scaleB.get(),
+          [this](auto& blk) { initialize_scale(blk); });
+    }
+
     typename Gemm::GemmKernel::Arguments arguments = GemmConfiguration::defaultArguments();
     arguments.mode = gemm::GemmUniversalMode::kGemm;
     arguments.problem_shape = problem_size;
 
     if constexpr (!is_blocked_scaled<CollectiveMainloop>) {
-      arguments.mainloop = {block_A.get(), stride_A, block_B.get(), stride_B};
+      arguments.mainloop = {cache_flush_.ptr_A(), stride_A, cache_flush_.ptr_B(), stride_B};
     } else {
-      arguments.mainloop = {block_A.get(), stride_A, block_B.get(), stride_B,
-        block_scaleA.get(), stride_SA, block_scaleB.get(), stride_SB};
+      arguments.mainloop = {cache_flush_.ptr_A(), stride_A, cache_flush_.ptr_B(), stride_B,
+        cache_flush_.ptr_SA(), stride_SA, cache_flush_.ptr_SB(), stride_SB};
     }
 
 
-    arguments.epilogue = {{ElementAccumulator(options.alpha), ElementAccumulator(options.beta)}, block_C.get(), stride_C, block_D.get(), stride_D};
+    arguments.epilogue = {{ElementAccumulator(options.alpha), ElementAccumulator(options.beta)}, cache_flush_.ptr_C(), stride_C, block_D.get(), stride_D};
     
     arguments.hw_info = hw_info;
 
@@ -872,23 +452,25 @@ struct BenchmarkRunnerGemm {
 
     if (state.error_occurred()) return;
 
+    auto warmups = options.warmup;
+    if (options.verify_mode != VerifyMode::None && options.warmup == 0) {
+      warmups = 1;
+    }
+    // Warmup runs
+    for (int i = 0; i < warmups; ++i) {
+      gemm_op.run();
+    }
+    compat::wait();
+
     std::stringstream extra_label;
     if (options.verify_mode != VerifyMode::None) {
-      // Run the GEMM
-      gemm_op.run();
-
-#if defined(CUTLASS_ENABLE_SYCL)
-    compat::wait();
-#else
-    cudaDeviceSynchronize();
-#endif
-
-      // Verify that the result is correct; each verify method appends its
-      // disposition (and reference implementation used) to extra_label.
-      bool passed = (options.verify_mode == VerifyMode::Host)
-          ? verify_host(problem_size, ElementCompute(options.alpha), ElementCompute(options.beta), extra_label)
-          : verify_device(problem_size, ElementCompute(options.alpha), ElementCompute(options.beta), extra_label);
-      if(not passed) {
+      bool passed = cutlass::benchmark::run_verify<ProblemShapeType, ElementCompute,
+          ElementC, ElementOutput, ElementAccumulator, ElementMMAVerify,
+          LayoutA, LayoutB, LayoutC, LayoutD>(
+          options.verify_mode, problem_size,
+          ElementCompute(options.alpha), ElementCompute(options.beta),
+          block_A_dq, block_B_dq, block_C, block_D, block_ref_D, extra_label);
+      if (!passed) {
         state.SkipWithError("Disposition Failed.");
       }
     }
@@ -942,22 +524,24 @@ struct BenchmarkRunnerGemm {
     initialize_counters(state);
     for(auto _ : state) {
       state.PauseTiming();
+      cache_flush_.prepare();
+
       typename Gemm::GemmKernel::Arguments arguments = [&]() {
         if constexpr (!is_blocked_scaled<CollectiveMainloop>) {
           return typename Gemm::GemmKernel::Arguments{
             gemm::GemmUniversalMode::kGemm,
             problem_size,
-            {block_A.get(), stride_A, block_B.get(), stride_B},
-            {{ElementAccumulator(options.alpha), ElementAccumulator(options.beta)}, block_C.get(), stride_C, block_D.get(), stride_D},
+            {cache_flush_.ptr_A(), stride_A, cache_flush_.ptr_B(), stride_B},
+            {{ElementAccumulator(options.alpha), ElementAccumulator(options.beta)}, cache_flush_.ptr_C(), stride_C, block_D.get(), stride_D},
             hw_info
           };
         } else {
           return typename Gemm::GemmKernel::Arguments{
             gemm::GemmUniversalMode::kGemm,
             problem_size,
-            {block_A.get(), stride_A, block_B.get(), stride_B,
-              block_scaleA.get(), stride_SA, block_scaleB.get(), stride_SB},
-            {{ElementAccumulator(options.alpha), ElementAccumulator(options.beta)}, block_C.get(), stride_C, block_D.get(), stride_D},
+            {cache_flush_.ptr_A(), stride_A, cache_flush_.ptr_B(), stride_B,
+              cache_flush_.ptr_SA(), stride_SA, cache_flush_.ptr_SB(), stride_SB},
+            {{ElementAccumulator(options.alpha), ElementAccumulator(options.beta)}, cache_flush_.ptr_C(), stride_C, block_D.get(), stride_D},
             hw_info
           };
         }

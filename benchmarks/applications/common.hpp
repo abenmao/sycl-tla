@@ -30,6 +30,8 @@
  *
  **************************************************************************************************/
 
+#pragma once
+
 #include <benchmark/benchmark.h>
 #include <iostream>
 #include <sstream>
@@ -37,9 +39,13 @@
 
 #ifndef ITERATIONS
 #ifdef CUTLASS_TEST_FOR_CRI
-#define ITERATIONS 1
+#define ITERATIONS (1)
+#define CUTLASS_WARMUP_DEFAULT_ITERATIONS (0)
+#define CUTLASS_BENCHMARK_DEFAULT_ITERATIONS (1)
 #else
-#define ITERATIONS 5
+#define ITERATIONS (5)
+#define CUTLASS_WARMUP_DEFAULT_ITERATIONS (2)
+#define CUTLASS_BENCHMARK_DEFAULT_ITERATIONS (5)
 #endif
 #endif
 
