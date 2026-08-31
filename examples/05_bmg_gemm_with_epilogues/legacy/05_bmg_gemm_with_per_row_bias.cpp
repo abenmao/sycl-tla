@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (C) 2025 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (C) 2024 - 2024 Codeplay Software Ltd. All rights reserved.
  * Copyright (C) 2025 - 2026 Intel Corporation, All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
@@ -30,29 +30,25 @@
  *
  **************************************************************************************************/
 /*! \file
-    \brief CUTLASS Intel BMG Gemm with per-col-bias epilogue (aka Linear layer)
+    \brief CUTLASS Intel BMG Gemm with per-row-bias epilogue
 
-    This example constructs and executes a standard GEMM (with ColumnMajor B) fused with a
-    per-col-bias epilogue. Batch size is also treated differently in this example: when a batch size
-    is defined by e.g. `--l=16`, this defines the number of A matrices. A single B (weights) matrix
-    is used for the whole batch. Note the use of `LayoutA` but `StrideB`, as we need to communicate
-    the 'batch broadcast' stride (_0).
+    This example constructs and executes a standard GEMM fused with a per-row-bias epilogue.
+    Aside from the epilogue operation, it is identical to 00_bmg_gemm.
 
     CUTLASS 3.x epilogues are implemented using the Epilogue Visitor Tree design pattern, and
     typically combine 'Linear Combination' (i.e. `D = alpha * A*B + beta * C`) with an additional
     epilogue operation.
 
-    In this case, a col-wise bias value is added:
+    In this case, a row-wise bias value is added:
 
     // D = alpha * (A*B) + beta * C + bias
 
-    This implies loading auxiliary data (containing the bias values) of shape M*L (each col shares a
-    single bias value)
+    This implies loading auxiliary data (containing the bias values) of shape M*L (each row shares a single bias value)
 
     To build & run this example (from your build dir):
 
-      $ ninja 05_bmg_gemm_with_per_col_bias
-      $ ./examples/sycl/05_bmg_gemm_with_epilogues/05_bmg_gemm_with_per_col_bias
+      $ ninja 05_bmg_gemm_with_per_row_bias
+      $ ./examples/sycl/05_bmg_gemm_with_epilogues/05_bmg_gemm_with_per_row_bias
 
     Call with `--help` for information about available options
 */
@@ -121,7 +117,7 @@ struct Options {
   /// Prints the usage statement.
   std::ostream & print_usage(std::ostream &out) const {
 
-    out << "BMG GEMM with Per Col Bias Example\n\n"
+    out << "BMG GEMM with Per Row Bias Example\n\n"
       << "Options:\n\n"
       << "  --help                      If specified, displays this usage statement\n\n"
       << "  --m=<int>                   Sets the M extent of the GEMM\n"
@@ -150,8 +146,6 @@ struct ExampleRunner {
   using StrideD = typename Gemm::GemmKernel::StrideD;
 
   using LayoutA = typename Gemm::LayoutA;
-  // Gemm::LayoutB is `ColumnMajor` which drops the _0 batch stride, but due to the implementation
-  // of cutlass::TensorRef, this isn't an issue for our verification.
   using LayoutB = typename Gemm::LayoutB;
   using LayoutC = typename Gemm::LayoutC;
   using LayoutD = typename Gemm::LayoutD;
@@ -159,12 +153,13 @@ struct ExampleRunner {
 
   using ElementA = typename Gemm::ElementA;
   using ElementB = typename Gemm::ElementB;
-  using ElementAccumulator = typename Gemm::ElementAccumulator;
+  using ElementAcc = typename Gemm::ElementAccumulator;
 
   using CollectiveEpilogue = typename Gemm::CollectiveEpilogue;
   using ElementC = typename Gemm::ElementC;
   using ElementOutput = typename CollectiveEpilogue::ElementOutput;
   using ElementCompute = typename CollectiveEpilogue::ElementCompute;
+  using ElementAccumulator = typename CollectiveEpilogue::ElementAccumulator;
   using ElementBias = typename CollectiveEpilogue::ThreadEpilogueOp::ElementBias;
   using ProblemShapeType = typename Gemm::GemmKernel::ProblemShape;
 
@@ -209,10 +204,10 @@ struct ExampleRunner {
           ref_D,
           ElementAccumulator(0),
           L,     // batch_count
-          get<2>(stride_A), // batch_stride_A
-          get<2>(stride_B), // batch_stride_B
-          get<2>(stride_C), // batch_stride_C
-          get<2>(stride_D)  // batch_stride_D
+          M * K, // batch_stride_A
+          K * N, // batch_stride_B
+          M * N, // batch_stride_C
+          M * N  // batch_stride_D
         );
 
     compat::wait();
@@ -224,9 +219,9 @@ struct ExampleRunner {
 
       auto bias_view =
           cutlass::TensorView(
-          block_bias.get() + batch * N, LayoutBias::packed({1, N}), cutlass::make_Coord(1, N));
+          block_bias.get() + batch * M, LayoutBias::packed({M, 1}), cutlass::make_Coord(M, 1));
 
-      cutlass::reference::device::TensorPerColBias(D_view, bias_view);
+      cutlass::reference::device::TensorPerRowBias(D_view, bias_view);
     }
 
     compat::wait();
@@ -248,12 +243,12 @@ struct ExampleRunner {
     stride_C = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(M, N, L));
     stride_D = cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(M, N, L));
 
-    block_A.reset(cute::cosize(make_layout(cute::make_shape(M, K, L), stride_A)));
-    block_B.reset(cute::cosize(make_layout(cute::make_shape(N, K, L), stride_B)));
-    block_C.reset(cute::cosize(make_layout(cute::make_shape(M, N, L), stride_C)));
-    block_D.reset(cute::cosize(make_layout(cute::make_shape(M, N, L), stride_D)));
-    block_ref_D.reset(cute::cosize(make_layout(cute::make_shape(M, N, L), stride_D)));
-    block_bias.reset(N * L);
+    block_A.reset(static_cast<std::size_t>(M) * K * L);
+    block_B.reset(static_cast<std::size_t>(K) * N * L);
+    block_C.reset(static_cast<std::size_t>(M) * N * L);
+    block_D.reset(static_cast<std::size_t>(M) * N * L);
+    block_ref_D.reset(static_cast<std::size_t>(M) * N * L);
+    block_bias.reset(static_cast<std::size_t>(M) * L);
 
     initialize_block(block_A, seed + 2023);
     initialize_block(block_B, seed + 2022);
@@ -266,20 +261,22 @@ struct ExampleRunner {
 
     initialize(problem_size);
 
-    using StrideBias = Stride<_0, _1, int64_t>;
+    using StrideBias = Stride<_1, _0, int64_t>;
     StrideBias dBias = {};
 
     if(options.l > 1) {
-      cute::get<2>(dBias) = static_cast<int64_t>(options.n);
+      cute::get<2>(dBias) = static_cast<int64_t>(options.m); // Stride between bias vectors in batch
     } else {
       cute::get<2>(dBias) = static_cast<int64_t>(0);
     }
 
+    // The epilogue operation requires a pointer to the bias data and information about its layout
+    // in memory, in addition to the usual C and D matrix info
     using EpilogueArguments = typename Gemm::GemmKernel::EpilogueArguments;
     EpilogueArguments epilogue_arguments{
       {options.alpha, options.beta}, block_C.get(), stride_C, block_D.get(), stride_D};
-    epilogue_arguments.thread.bias_ptr = block_bias.get();
-    epilogue_arguments.thread.dBias = dBias; 
+    epilogue_arguments.thread.bias_ptr = block_bias.get(); // per-row-bias data
+    epilogue_arguments.thread.dBias = dBias;               // and its stride
 
     typename Gemm::GemmKernel::Arguments arguments{
       cutlass::gemm::GemmUniversalMode::kGemm,
@@ -374,38 +371,38 @@ int main(int argc, const char** argv)
   using ElementOutput = float;              // <- data type of elements in output matrix D
 
   using LayoutA = cutlass::layout::RowMajor;
-  using StrideB = cute::Stride<int64_t, _1, _0>; // Stride for batch is _0 (re-use the same B matrix)
+  using LayoutB = cutlass::layout::RowMajor;
   using LayoutC = cutlass::layout::RowMajor;
   using LayoutD = cutlass::layout::RowMajor;
 
-  using GmemTiledCopyA = void;
-  using GmemTiledCopyB = void;
+  using GmemTiledCopyA = XE_2D_U16x32x32_LD_N;
+  using GmemTiledCopyB = XE_2D_U16x32x32_LD_V;
 
   // Workgroup-level tile
   using TileShape = Shape<_256, _256, _32>;
 
   using TiledMma =
-      typename TiledMMAHelper<MMA_Atom<XE_DPAS_TT<8, float, cute::bfloat16_t>>, Layout<TileShape>,
+      typename TiledMMAHelper<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>, Layout<TileShape>,
                                     Layout<Shape<_8, _4, _1>, Stride<_4, _1, _0>>>::TiledMMA;
 
   constexpr int PipelineStages = 2;
-  using GEMMDispatchPolicy = cutlass::gemm::MainloopXeL1Staged<PipelineStages>;
-  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeGeneric;
+  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelXeXMX16<PipelineStages>;
+  using EpilogueDispatchPolicy = cutlass::epilogue::IntelXeXMX16;
 
-  using EpilogueOp = cutlass::epilogue::fusion::XeLinCombPerColBiasEltAct<
-      cutlass::epilogue::thread::Identity, ElementOutput, ElementComputeEpilogue,
-      ElementBias, ElementAccumulator, ElementAccumulator,
-      128 / sizeof_bits_v<ElementBias>,
+  // The Linear Combination + Per Row Bias epilogue operation
+  using EpilogueOp = cutlass::epilogue::fusion::LinCombPerRowBias<
+      ElementOutput, ElementComputeEpilogue, ElementBias, ElementAccumulator,
+      ElementAccumulator, 128 / sizeof_bits_v<ElementBias>,
       cutlass::FloatRoundStyle::round_to_nearest>;
 
-  using FusionCallbacks = cutlass::epilogue::fusion::FusionCallbacks<
+  using FusionCallBacks = cutlass::epilogue::fusion::FusionCallbacks<
       EpilogueDispatchPolicy, EpilogueOp, TileShape,
       decltype(tile_shape(TiledMma()))>;
   using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
-      EpilogueDispatchPolicy, TileShape, void, ElementAccumulator,
+      EpilogueDispatchPolicy, TileShape, ElementAccumulator,
       cutlass::gemm::TagToStrideC_t<LayoutC>, ElementOutput,
-      cutlass::gemm::TagToStrideC_t<LayoutD>, FusionCallbacks,
-      void, void>;
+      cutlass::gemm::TagToStrideC_t<LayoutD>, FusionCallBacks,
+      XE_2D_U32x8x16_LD_N, void, void, XE_2D_U32x8x16_ST_N, void, void>;
 
   // Mainloop
   using CollectiveMainloop = cutlass::gemm::collective::CollectiveMma<
@@ -414,7 +411,7 @@ int main(int argc, const char** argv)
           ElementInputA,
           cutlass::gemm::TagToStrideA_t<LayoutA>,
           ElementInputB,
-          StrideB,
+          cutlass::gemm::TagToStrideB_t<LayoutB>,
           TiledMma,
           GmemTiledCopyA, void, void, cute::identity,  // A
           GmemTiledCopyB, void, void, cute::identity   // B

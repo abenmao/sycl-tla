@@ -34,6 +34,7 @@ else()
 endif()
 
 set(TEST_BATCHES ${TEST_BASE} --l=2)
+set(TEST_SINGLE_BATCH ${TEST_BASE} "") # The default batch size is 1
 
 cutlass_example_add_executable(
   05_bmg_gemm_with_epilogue_gelu_legacy
@@ -61,4 +62,25 @@ cutlass_example_add_executable(
   05_bmg_gemm_with_epilogue_lincombperrowbiaseltactaux.cpp
   TEST_COMMAND_OPTIONS
   TEST_BATCHES
+)
+
+cutlass_example_add_executable(
+  05_bmg_gemm_with_per_row_bias_legacy
+  05_bmg_gemm_with_per_row_bias.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_BATCHES
+)
+
+cutlass_example_add_executable(
+  05_bmg_gemm_single_b_with_per_col_bias_legacy
+  05_bmg_gemm_single_b_with_per_col_bias.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_BATCHES
+)
+
+cutlass_example_add_executable(
+  05_bmg_gemm_with_epilogue_lincombdeeltact_legacy
+  05_bmg_gemm_with_epilogue_lincombdeeltact.cpp
+  TEST_COMMAND_OPTIONS
+  TEST_SINGLE_BATCH
 )
