@@ -155,50 +155,80 @@ int main(int argc, const char **argv) {
 #endif
 #elif defined(DECODE)
 
-#define KV_TILE_SIZE _128
-
 #if HEAD_DIM == 16
   /* Tiny config for testing */
+  using KVTileSize  = _64;
+  using SubgroupsK  = _4;
   using PVTileN     = _16;
   using QKTileK     = _16;
   using HeadDimSize = _16;
 #elif HEAD_DIM == 64
-  using PVTileN     = _16;
-  using QKTileK     = _32;
+  using KVTileSize  = _64;
+  using SubgroupsK  = _4;
+  using PVTileN     = _64;
+  using QKTileK     = _64;
   using HeadDimSize = _64;
 #elif HEAD_DIM == 96
-  using PVTileN     = _16;
+  using KVTileSize  = _64;
+  using SubgroupsK  = _4;
+  using PVTileN     = _32;
   using QKTileK     = _32;
   using HeadDimSize = _96;
 #elif HEAD_DIM == 128
-  using PVTileN     = _16;
-  using QKTileK     = _32;
+  using KVTileSize  = _128;
+  using SubgroupsK  = _8;
+  using PVTileN     = _64;
+  using QKTileK     = _128;
   using HeadDimSize = _128;
 #elif HEAD_DIM == 192
-  using PVTileN     = _16;
-  using QKTileK     = _32;
+  using KVTileSize  = _128;
+  using SubgroupsK  = _8;
+  using PVTileN     = _32;
+  using QKTileK     = _64;
   using HeadDimSize = _192;
 #endif
 
-  using ShapeQK8  = Shape<_8, KV_TILE_SIZE, QKTileK>;   // (q,k,d)
-  using ShapePV8  = Shape<_8, PVTileN, KV_TILE_SIZE>;   // (q,v,k)
-  using ShapeOut8 = Shape<_8, HeadDimSize>;             // (q,v)
-  using SubgroupLayoutQK8  = Layout<Shape<_1, _8, _1>>;
+  using ShapeQK8  = Shape<_8, KVTileSize, QKTileK>; // (q,k,d)
+  using ShapePV8  = Shape<_8, PVTileN, KVTileSize>; // (q,v,k)
+  using ShapeOut8 = Shape<_8, HeadDimSize>;         // (q,v)
+  using SubgroupLayoutQK8 = Layout<Shape<_1, SubgroupsK, _1>>;
 
-  using ShapeQK16  = Shape<_16, KV_TILE_SIZE, QKTileK>;
-  using ShapePV16  = Shape<_16, PVTileN, KV_TILE_SIZE>;
+#if HEAD_DIM == 128
+  using QKTileK16 = _64;
+#else
+  using QKTileK16 = QKTileK;
+#endif
+
+  using ShapeQK16  = Shape<_16, KVTileSize, QKTileK16>;
+  using ShapePV16  = Shape<_16, PVTileN, KVTileSize>;
   using ShapeOut16 = Shape<_16, HeadDimSize>;
-  using SubgroupLayoutQK16 = Layout<Shape<_2, _8, _1>>;
+  using SubgroupLayoutQK16 = Layout<Shape<_2, SubgroupsK, _1>>;
 
-  using ShapeQK32  = Shape<_32, KV_TILE_SIZE, QKTileK>;
-  using ShapePV32  = Shape<_32, PVTileN, KV_TILE_SIZE>;
+  using ShapeQK24  = Shape<_24, KVTileSize, QKTileK>;
+  using ShapePV24  = Shape<_24, PVTileN, KVTileSize>;
+  using ShapeOut24 = Shape<_24, HeadDimSize>;
+  using SubgroupLayoutQK24 = Layout<Shape<_3, SubgroupsK, _1>>;
+
+  // Benchmarks favor BF16 tile shapes through 24 Q rows; FP8 shapes win from 32.
+  using ShapeQK32  = Shape<_32, _256, _128>;
+  using ShapePV32  = Shape<_32, _128, _256>;
   using ShapeOut32 = Shape<_32, HeadDimSize>;
-  using SubgroupLayoutQK32 = Layout<Shape<_4, _8, _1>>;
+  using SubgroupLayoutQK32 = Layout<Shape<_4, SubgroupsK, _1>>;
 
-  using ShapeQK64  = Shape<_64, _32, QKTileK>;
-  using ShapePV64  = Shape<_64, PVTileN, _32>;
+  using ShapeQK40  = Shape<_40, _128, _128>;
+  using ShapePV40  = Shape<_40, _128, _128>;
+  using ShapeOut40 = Shape<_40, HeadDimSize>;
+  using SubgroupLayoutQK40 = Layout<Shape<_5, _4, _1>>;
+
+  using ShapeQK48  = Shape<_48, _128, _128>;
+  using ShapePV48  = Shape<_48, _128, _128>;
+  using ShapeOut48 = Shape<_48, HeadDimSize>;
+  using SubgroupLayoutQK48 = Layout<Shape<_6, _4, _1>>;
+
+  using ShapeQK64  = Shape<_64, _64, _128>;
+  using ShapePV64  = Shape<_64, _128, _64>;
   using ShapeOut64 = Shape<_64, HeadDimSize>;
-  using SubgroupLayoutQK64 = Layout<Shape<_8, _1, _1>>;
+  using SubgroupLayoutQK64 = Layout<Shape<_8, _4, _1>>;
 #else
 #error Either DECODE or PREFILL should be defined.
 #endif
@@ -215,7 +245,7 @@ int main(int argc, const char **argv) {
   const int total_rows = gqa_group * q_len;
 
 #if defined(PAGED_KV)
-  const int kv_tile = int(KV_TILE_SIZE::value);
+  const int kv_tile = int(KVTileSize::value);
   const int kv_blocks = cute::ceil_div(options.seq_len_kv, kv_tile)
                       + cute::ceil_div(options.seq_len_kv_cache, kv_tile);
   const int base_units = options.batch * options.num_heads_kv;
@@ -260,8 +290,14 @@ int main(int argc, const char **argv) {
     return FMHA_RUN_Q(ShapeQK8,  ShapePV8,  ShapeOut8,  SubgroupLayoutQK8);
   else if (total_rows <= 16)
     return FMHA_RUN_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16);
+  else if (total_rows <= 24)
+    return FMHA_RUN_Q(ShapeQK24, ShapePV24, ShapeOut24, SubgroupLayoutQK24);
   else if (total_rows <= 32)
     return FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32);
+  else if (total_rows <= 40)
+    return FMHA_RUN_Q(ShapeQK40, ShapePV40, ShapeOut40, SubgroupLayoutQK40);
+  else if (total_rows <= 48)
+    return FMHA_RUN_Q(ShapeQK48, ShapePV48, ShapeOut48, SubgroupLayoutQK48);
   else
     return FMHA_RUN_Q(ShapeQK64, ShapePV64, ShapeOut64, SubgroupLayoutQK64);
 
