@@ -130,6 +130,7 @@ if (CUTLASS_ENABLE_SYCL)
       14_bmg_gemm_multi_payloads
       50_xe35_block_scaled_gemm
       51_xe35_block_scaled_grouped_gemm
+      53_xe35_cute_persistent_prefetch_pipeline
       )
     # GDN chunkwise attention builds on BMG (Xe20, the default Intel baseline)
     # and CRI (Xe-3.5). PVC is excluded (the kernels are not validated there),
