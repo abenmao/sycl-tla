@@ -266,7 +266,7 @@ public:
   CUTLASS_HOST_DEVICE static
   dim3
   get_grid_shape(
-    [[maybe_unused]] Params const& params,
+    Params const& params,
     ProblemShape problem_shape,
     TileShape tile_shape,
     [[maybe_unused]] ClusterShape cluster_shape,
@@ -276,6 +276,13 @@ public:
 
     auto problem_shape_mnkl = cute::append<4>(problem_shape, cute::Int<1>{});
     dim3 problem_blocks = get_tiled_wg_shape_mnl(problem_shape_mnkl, tile_shape);
+
+    // For SplitK, scale total work units by the number of splits so that more
+    // WGs launch concurrently. This is the whole point of SplitK: when output
+    // tiles alone don't fill the GPU, splitting along K increases parallelism.
+    if (params.divmod_splits_.divisor > 1) {
+      problem_blocks.z *= params.divmod_splits_.divisor;
+    }
 
     return Params::get_grid_shape(
       problem_blocks,
