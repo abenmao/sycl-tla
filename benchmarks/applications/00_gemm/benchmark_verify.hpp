@@ -48,6 +48,71 @@ using namespace cute;
 
 namespace cutlass::benchmark {
 
+template <
+class DstElement,
+class SrcElement,
+class Layout,
+class ElementScale,
+class ScaleLayout>
+static void apply_scale(DstElement* dq_buffer,
+                     SrcElement const* q_buffer,
+                     Layout const operand_layout,
+                     ElementScale const* scale_buffer,
+                     ScaleLayout const scale_layout) {
+
+  std::vector<uint8_t> dst(size(operand_layout) * sizeof_bits_v<DstElement> / 8, 0);
+  cutlass::device_memory::copy_to_host(dst.data(), (uint8_t*)dq_buffer, dst.size());
+
+  std::vector<uint8_t> src(size(operand_layout) * sizeof_bits_v<SrcElement> / 8, 0);
+  cutlass::device_memory::copy_to_host(src.data(), (uint8_t*)q_buffer, src.size());
+
+  std::vector<uint8_t> scale(size(scale_layout) * sizeof_bits_v<ElementScale> / 8, 0);
+  cutlass::device_memory::copy_to_host(scale.data(), (uint8_t*)scale_buffer, scale.size());
+
+  compat::wait();
+
+  static_assert(sizeof_bits_v<DstElement> >= 8);
+
+  auto dst_tensor = make_tensor(make_gmem_ptr(reinterpret_cast<DstElement*>(dst.data())), operand_layout);
+
+  auto src_tensor = [&]() {
+    if constexpr (sizeof_bits_v<SrcElement> < 8) {
+      return make_tensor(cute::subbyte_iterator<const SrcElement>(src.data()), operand_layout);
+    } else {
+      return make_tensor(make_gmem_ptr(reinterpret_cast<SrcElement const *>(src.data())), operand_layout);
+    }
+  }();
+
+  auto scale_tensor = make_tensor(make_gmem_ptr(reinterpret_cast<ElementScale const *>(scale.data())), scale_layout);
+
+  auto MN = size<0>(src_tensor);
+  auto K = size<1>(src_tensor);
+  auto L = size<2>(src_tensor);
+
+  using ret_type = float;
+
+  for (int l = 0; l < L; l++) {
+    for (int k= 0; k < K; k++) {
+      for (int mn = 0; mn < MN; mn++) {
+        auto src_data = [&]() {
+          if constexpr (sizeof_bits_v<SrcElement> >= 8) {
+            return  (ret_type)(src_tensor(mn, k, l));
+          } else {
+            return (ret_type)(src_tensor(mn, k, l).get());
+          }
+        }();
+
+        auto scale_data = (ret_type)(scale_tensor(mn, k / 32, l));
+
+        dst_tensor(mn, k, l) = (src_data) * scale_data;
+      }
+    }
+  }
+
+  cutlass::device_memory::copy_to_device(dq_buffer, (DstElement*)(raw_pointer_cast(dst_tensor.data())), dst_tensor.size());
+  compat::wait();
+}
+
 // Verification mode enum
 enum class VerifyMode {
   None = 0,           // No verification (skip both device and host)
