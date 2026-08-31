@@ -214,6 +214,26 @@ enum class XeStoreCachePolicy {
   kWB_WB_UC
 };
 
+CUTE_HOST_DEVICE
+constexpr char const*
+to_string(XeStoreCachePolicy policy) {
+  switch (policy) {
+    case XeStoreCachePolicy::kDefault:  return "Default";
+    case XeStoreCachePolicy::kUC_UC_UC: return "UC_UC_UC";
+    case XeStoreCachePolicy::kUC_UC_WB: return "UC_UC_WB";
+    case XeStoreCachePolicy::kUC_WB_UC: return "UC_WB_UC";
+    case XeStoreCachePolicy::kUC_WB_WB: return "UC_WB_WB";
+    case XeStoreCachePolicy::kWT_UC_UC: return "WT_UC_UC";
+    case XeStoreCachePolicy::kWT_UC_WB: return "WT_UC_WB";
+    case XeStoreCachePolicy::kWT_WB_UC: return "WT_WB_UC";
+    case XeStoreCachePolicy::kWT_WB_WB: return "WT_WB_WB";
+    case XeStoreCachePolicy::kWB_UC_UC: return "WB_UC_UC";
+    case XeStoreCachePolicy::kWB_UC_WB: return "WB_UC_WB";
+    case XeStoreCachePolicy::kWB_WB_UC: return "WB_WB_UC";
+  }
+  return "Unknown";
+}
+
 template <typename T>
 struct is_xe_store_cache : std::false_type {};
 

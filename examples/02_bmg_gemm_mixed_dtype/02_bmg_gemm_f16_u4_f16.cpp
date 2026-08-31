@@ -407,7 +407,10 @@ struct ExampleRunner {
 
   /// Initialize operands to be used in the GEMM and reference GEMM
   void initialize(Options const& options) {
-    auto [M, N, K, L] = ProblemShapeType{options.m, options.n, options.k, options.l};
+    auto M = options.m;
+    auto N = options.n;
+    auto K = options.k;
+    auto L = options.l;
 
     auto zero_elements_packed_along_k = get<0>(StrideZero{});
     const int scale_k = cute::ceil_div(options.k, options.g);

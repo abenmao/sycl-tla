@@ -2014,7 +2014,7 @@ print(Copy_Atom<Copy_Traits<XE_STORE_2D<CopyBits, Height, Width, CachePolicy>,
                 XMode, YMode, ValType, TiledStrides>, AtomValType> const& atom)
 {
   print("Copy_Atom (XE_STORE_2D)\n");
-  print("  CachePolicy:  "); print(to_string<CachePolicy>().data()); print("\n");
+  print("  CachePolicy:  "); print(to_string(CachePolicy)); print("\n");
   print_block_2d_traits(atom);
   print("\n");
   print_block_2d_atom<ValType>(atom);

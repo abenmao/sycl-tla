@@ -199,6 +199,7 @@ if (CUTLASS_ENABLE_SYCL)
   if(SYCL_INTEL_TARGET)
       add_compile_options(
         -Wall
+        -Werror=c++20-extensions
         -Wno-unused-variable
         -Wno-unused-local-typedef
         -Wno-unused-but-set-variable
