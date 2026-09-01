@@ -49,9 +49,17 @@ namespace cutlass::gdn::detail {
 using namespace cute;
 
 static constexpr int MaxThreadsPerXeCore = 512;
+/* Contiguous elements per lane in compute_A_o2's norm loop. Sets the gmem
+ * access width; raising it reassociates the fp32 L2 sum. */
 static constexpr int elem_per_item = 2;
 static constexpr int sub_group_size = 16;
+static_assert(
+    64 % elem_per_item == 0,
+    "elem_per_item must divide the 64-element head_k_dim granularity");
 static constexpr float eps = 0.000001f;
+/* How much of a q/k row chunk_compute_A_o2 keeps in registers. Constant, not
+ * head_k_dim, because a runtime-indexed array spills; excess is re-read. */
+static constexpr int kNormCacheHeadKDim = 128;
 /* Single source of truth: the device-side chunk size is the public
  * cutlass::gdn::kChunkSize (defined in xe35_chunk_gated_delta_rule.hpp, included
  * above). Aliased here so the device kernels can keep using the short name.
@@ -92,6 +100,14 @@ using chunk_gemm_policy_compute_A_O2 = chunk_gemm_policy_64x64x32_4x2;
 using chunk_gemm_policy_inverse = chunk_gemm_policy_16x16x16;
 using chunk_gemm_policy_compute_wu = chunk_gemm_policy_64x64x32_4x2;
 using chunk_gemm_policy_fwd_o = chunk_gemm_policy_64x64x64_4x2;
+
+/* One lane's contiguous q/k elements. gmem is read and written as word_t, so
+ * the access width is one message wide by construction. */
+template <class T, int N>
+struct norm_pack {
+  using word_t = cute::uint_byte_t<sizeof(T) * N>;
+  T e[N];
+};
 
 CUTE_DEVICE float
 act_softplus(float& x, float beta = 1.0f, float threshold = 20.0f) {
@@ -295,7 +311,20 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
      * num_k_heads (num_v_heads >= num_k_heads, GQA-style head grouping).
      *
      * No has_work guard: idle groups have current_chunk_size == 0, so the
-     * row loop runs zero iterations on its own. */
+     * row loop runs zero iterations on its own.
+     *
+     * The reduce pass caches each lane's q/k slice so the rescale pass reads
+     * registers, not gmem. One lane owns each element, so this is bit-exact. */
+    static constexpr int k_elems_per_step = sub_group_size * elem_per_item;
+    static constexpr int kNormCacheSteps =
+        kNormCacheHeadKDim / k_elems_per_step;
+    /* head_k_dim is a multiple of chunk_size, so the step guards below are
+     * uniform scalar branches, not per-lane masks. */
+    const int k_steps = head_k_dim / k_elems_per_step;
+    const int k_steps_cached =
+        (k_steps < kNormCacheSteps) ? k_steps : kNormCacheSteps;
+    const int k_dim_uncached = k_steps_cached * k_elems_per_step;
+
     for (int row = sg_id; row < current_chunk_size; row += sg_range) {
       int64_t handle_idx =
           (static_cast<int64_t>(chunk_start_offset) + row) * num_k_heads +
@@ -304,10 +333,40 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
       auto k_norm_ptr = k + handle_idx * head_k_dim;
       float q_sum = 0.0f;
       float k_sum = 0.0f;
+      /* Live only within this row iteration. */
+      float q_reg[kNormCacheSteps * elem_per_item];
+      float k_reg[kNormCacheSteps * elem_per_item];
+      using norm_pack_t = norm_pack<T, elem_per_item>;
+      using norm_word_t = typename norm_pack_t::word_t;
+      /* Padding would widen the access past the elements it carries. */
+      static_assert(
+          sizeof(norm_pack_t) == sizeof(norm_word_t),
+          "norm_pack must be exactly its elements");
       CUTE_UNROLL
-      for (int k_dim_idx = sg_local_id * elem_per_item;
+      for (int s = 0; s < kNormCacheSteps; ++s) {
+        if (s >= k_steps_cached) break;
+        const int k_dim_idx =
+            s * k_elems_per_step + sg_local_id * elem_per_item;
+        norm_word_t q_w;
+        norm_word_t k_w;
+        __builtin_memcpy(&q_w, q_norm_ptr + k_dim_idx, sizeof(q_w));
+        __builtin_memcpy(&k_w, k_norm_ptr + k_dim_idx, sizeof(k_w));
+        const norm_pack_t q_pk = platform::bit_cast<norm_pack_t>(q_w);
+        const norm_pack_t k_pk = platform::bit_cast<norm_pack_t>(k_w);
+        CUTE_UNROLL
+        for (int e = 0; e < elem_per_item; ++e) {
+          float q_value = static_cast<float>(q_pk.e[e]);
+          float k_value = static_cast<float>(k_pk.e[e]);
+          q_reg[s * elem_per_item + e] = q_value;
+          k_reg[s * elem_per_item + e] = k_value;
+          q_sum += q_value * q_value;
+          k_sum += k_value * k_value;
+        }
+      }
+      /* Uncached remainder: reduce from gmem, re-read in the tail below. */
+      for (int k_dim_idx = k_dim_uncached + sg_local_id * elem_per_item;
             k_dim_idx < head_k_dim;
-            k_dim_idx += sub_group_size * elem_per_item) {
+            k_dim_idx += k_elems_per_step) {
         CUTE_UNROLL
         for (int e = 0; e < elem_per_item; ++e) {
           float q_value = q_norm_ptr[k_dim_idx + e];
@@ -321,9 +380,27 @@ CUTE_DEVICE void chunk_compute_A_o2_kernel(
       q_sum = sycl::sqrt(q_sum + eps);
       k_sum = sycl::sqrt(k_sum + eps);
       CUTE_UNROLL
-      for (int k_dim_idx = sg_local_id * elem_per_item;
+      for (int s = 0; s < kNormCacheSteps; ++s) {
+        if (s >= k_steps_cached) break;
+        const int k_dim_idx =
+            s * k_elems_per_step + sg_local_id * elem_per_item;
+        norm_pack_t q_pk;
+        norm_pack_t k_pk;
+        CUTE_UNROLL
+        for (int e = 0; e < elem_per_item; ++e) {
+          q_pk.e[e] = static_cast<T>(
+              q_reg[s * elem_per_item + e] / q_sum * q_scale);
+          k_pk.e[e] = static_cast<T>(
+              k_reg[s * elem_per_item + e] / k_sum);
+        }
+        const norm_word_t q_w = platform::bit_cast<norm_word_t>(q_pk);
+        const norm_word_t k_w = platform::bit_cast<norm_word_t>(k_pk);
+        __builtin_memcpy(q_norm_ptr + k_dim_idx, &q_w, sizeof(q_w));
+        __builtin_memcpy(k_norm_ptr + k_dim_idx, &k_w, sizeof(k_w));
+      }
+      for (int k_dim_idx = k_dim_uncached + sg_local_id * elem_per_item;
             k_dim_idx < head_k_dim;
-            k_dim_idx += sub_group_size * elem_per_item) {
+            k_dim_idx += k_elems_per_step) {
         CUTE_UNROLL
         for (int e = 0; e < elem_per_item; ++e) {
           q_norm_ptr[k_dim_idx + e] = static_cast<T>(

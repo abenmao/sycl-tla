@@ -42,6 +42,8 @@
  *                    cache_indices / query_start_loc fold).
  *    - seq_len_256_alt_seed : the default 4-chunk shape re-run with a
  *                    different RNG seed, to catch data-dependent failures.
+ *    - head_k_dim_64/192 : head_k_dim below and above the normalization
+ *                    register cache size.
  */
 
 #include <gtest/gtest.h>
@@ -109,6 +111,28 @@ TEST(XE35_GDN_Chunkwise_bf16, batch_two_single_chunk) {
   tb.num_v_heads = 4;
   tb.num_k_heads = 1;
   tb.seq_len     = 64;
+  EXPECT_TRUE(tb.run());
+}
+
+/* head_k_dim below the normalization register cache: the cached loop breaks
+ * early and there is no uncached remainder. */
+TEST(XE35_GDN_Chunkwise_bf16, head_k_dim_64) {
+  test::gdn_attention::ChunkwiseTestbed<cutlass::bfloat16_t, float> tb;
+  tb.num_v_heads = 8;
+  tb.num_k_heads = 2;
+  tb.head_k_dim  = 64;
+  tb.seq_len     = 128;
+  EXPECT_TRUE(tb.run());
+}
+
+/* head_k_dim above the normalization register cache: the uncached remainder
+ * handles the rest, in both the reduce and the rescale pass. */
+TEST(XE35_GDN_Chunkwise_bf16, head_k_dim_192) {
+  test::gdn_attention::ChunkwiseTestbed<cutlass::bfloat16_t, float> tb;
+  tb.num_v_heads = 8;
+  tb.num_k_heads = 2;
+  tb.head_k_dim  = 192;
+  tb.seq_len     = 128;
   EXPECT_TRUE(tb.run());
 }
 
