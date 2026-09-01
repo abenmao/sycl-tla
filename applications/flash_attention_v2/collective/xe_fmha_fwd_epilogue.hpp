@@ -109,12 +109,33 @@ public:
   ));
   using ReduceFragARow = decltype(reduce<1>(ReduceFragA{}, sycl::plus<void>{}));
 
-  static auto default_tiled_copy_O_helper() {
+  static auto default_tiled_copy_O_base_helper() {
     if constexpr (ReduceK{} == _1{})
       return make_block_2d_copy_D<StoreCachePolicy_>(TiledMMAPV{}, TensorO2D{});
     else
       return make_block_2d_copy_D_subtiled<StoreCachePolicy_>(
         TiledMMAPV{}, ReduceFragA{}.tv_layout(), ReduceSGLayout{}, TensorO2D{});
+  }
+
+  static auto default_tiled_copy_O_helper() {
+    auto default_copy = default_tiled_copy_O_base_helper();
+    // For 16-bit outputs, pack two values into each d32 block2D(d32.16x8nn).
+    // This increases bytes per message and avoids the slower d16 store(d16.16x8nn).
+    using DefaultStoreOp = typename decltype(default_copy)::CopyOp;
+    if constexpr (sizeof_bits_v<ElementO> == 16 && DefaultStoreOp::AtomWidth <= 16) {
+      static_assert(DefaultStoreOp::CopyBits == 16 && DefaultStoreOp::AtomWidth % 2 == 0);
+      using D32StoreOp = XE_STORE_2D<32, DefaultStoreOp::AtomHeight,
+                                    DefaultStoreOp::AtomWidth, StoreCachePolicy_>;
+      if constexpr (ReduceK{} == _1{}) {
+        return make_block_2d_copy_CD(D32StoreOp{}, TiledMMAPV{}, TensorO2D{});
+      } else {
+        return make_block_2d_copy_CD_subtiled<ElementO>(
+          D32StoreOp{}, TiledMMAPV{}, atuple_coshape(ReduceFragA{}.tv_layout()),
+          ReduceSGLayout{}, TensorO2D{}.stride()).with(TensorO2D{});
+      }
+    } else {
+      return default_copy;
+    }
   }
 
   using DefaultTiledCopyO = decltype(default_tiled_copy_O_helper());
