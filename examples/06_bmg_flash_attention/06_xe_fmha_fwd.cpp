@@ -276,9 +276,6 @@ int main(int argc, const char **argv) {
     return -1;
   }
 
-  // Causal scheduler with DisablePrefetchV=true, used only for small tiles.
-  using CausalSmallScheduler =
-    cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<false, false, true, false, true>;
   using DefaultScheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
 
   using FMHACausal    = FMHAConfig<true, false, ShapeQK_Causal, ShapePV_Causal, ShapeOut_Causal, SubgroupLayoutQK_Causal, void, PipelineStages, ElementQ, ElementK, ElementV>;
@@ -297,7 +294,7 @@ int main(int argc, const char **argv) {
 
   if (options.is_causal) {
     if (use_small) {
-      return FMHACausal8::template run<false, false, CausalSmallScheduler>(options);
+      return FMHACausal8::template run<false, false, DefaultScheduler>(options);
     }
     return FMHACausal::template run<false, false, DefaultScheduler>(options);
   } else {

@@ -89,12 +89,15 @@ CUTLASS_HOST_DEVICE constexpr bool fmha_gqa_disable_kv_prefetch() {
   return int(cute::get<0>(TileShapeQK{})) < kFmhaGqaKVPrefetchMinRows;
 }
 
-template <bool OneBatch = false, bool NoGQA = false, bool CausalMask = false, bool GqaFusion = false,
-          bool DisablePrefetchV = false, bool DisableKVPrefetch = true>
+template <bool OneBatch = false, bool NoGQA = false, bool CausalMask = false,
+          bool GqaFusion = false, bool DisablePrefetchV = false,
+          bool DisableKVPrefetch = true,
+          bool InterleaveCausalQTiles = DisablePrefetchV>
 struct XeFHMAIndividualTileScheduler {
   static constexpr bool kGqaFusion = GqaFusion;
   static constexpr bool kDisablePrefetchV = DisablePrefetchV;
   static constexpr bool kDisableKVPrefetch = DisableKVPrefetch;
+  static constexpr bool kInterleaveCausalQTiles = InterleaveCausalQTiles;
   using NumHeadsDivmod   = cute::conditional_t<OneBatch, detail::EmptyDivmod, FastDivmod>;
   using HeadGroupDivmod  = cute::conditional_t<NoGQA || GqaFusion, detail::EmptyDivmod, FastDivmod>;
 
@@ -171,8 +174,8 @@ struct XeFHMAIndividualTileScheduler {
         params.divmod_num_heads(idx_b, head, idx_b);
       }
 
-      if constexpr (DisablePrefetchV) {
-        // Interleave heavy and light Q tiles only on the no-prefetch-V path.
+      if constexpr (InterleaveCausalQTiles) {
+        // Interleave heavy and light Q tiles.
         int const q_idx = int(BlockIdxZ());
         int const num_q_tiles = params.grid.z;
         int q_tile = 0;
@@ -183,7 +186,7 @@ struct XeFHMAIndividualTileScheduler {
         }
         return make_coord(q_tile, int(BlockIdxX()), head, idx_b);
       } else {
-        // Restore the previous causal dispatch for normal prefetch-V paths.
+        // Restore the previous causal dispatch
         int q_tile = params.grid.z - 1 - BlockIdxZ();
         return make_coord(q_tile, BlockIdxX(), head, idx_b);
       }

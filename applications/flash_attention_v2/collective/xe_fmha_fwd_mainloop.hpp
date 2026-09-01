@@ -1056,11 +1056,6 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           Tensor cPgP = make_identity_tensor(make_shape(seq_len, seq_len));
           Tensor gP = local_tile(cPgP, take<0,2>(TileShapeQK{}), make_coord(get<0>(blk_qv), new_k_tile));
           auto cS_thread = thr_mma_qk.partition_C(gP);
-          // Fold the new-KV k-remainder directly into the causal `masked`
-          // predicate: col_idx is the logical new-KV column position, so an
-          // out-of-bounds column (col_idx >= seq_len_new) is just another way
-          // to be masked. Avoids a separate k_rem_mask fragment + broadcast.
-          [[maybe_unused]] bool const remainder_on = IsLastBlock && check_remainder_k;
           CUTLASS_PRAGMA_UNROLL
           for (int i = 0; i < tSrS.size(); ++i) {
             int row_idx = get<0>(cS_thread(i));
@@ -1069,21 +1064,15 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
                           ? ((q_pos_base + row_idx) % gqa_fusion_q_per_head)
                           : row_idx;
             bool masked = (col_idx - full_tile_offset) > (seq_coord - discard_seq_coord);
-            if constexpr (IsLastBlock) {
-              if (remainder_on) {
-                masked = masked || (col_idx >= seq_len_new);
-              }
-            }
             tSrS(i) = sycl::fmin(tSrS(i), masked ? ElementS(-INFINITY) : ElementS(sycl::nan(0u)));
           }
         }
       }
-      /* k masking for remainder tiles; only on peeled last tile. New-KV remainder
-         is folded into the causal pass above when CausalMask is enabled. */
+      /* k masking for remainder tiles; only on peeled last tile. */
       if constexpr (IsLastBlock) {
         bool has_remainder = is_cache
             ? (check_remainder_k_cache && K == kblocks_cache - 1)
-            : (!CausalMask && check_remainder_k && K == total_blk - 1);
+            : (check_remainder_k && K == total_blk - 1);
         if (has_remainder) {
           int seq_bound = is_cache ? seq_len_kv_cache : seq_len_new;
           FragSRow k_rem_mask;
