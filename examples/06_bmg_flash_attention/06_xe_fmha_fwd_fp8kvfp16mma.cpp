@@ -209,6 +209,7 @@ int main(int argc, const char **argv) {
   using ShapeOut24 = Shape<_24, HeadDimSize>;
   using SubgroupLayoutQK24 = Layout<Shape<_3, SubgroupsK, _1>>;
 
+#if HEAD_DIM == 128
   // Benchmarks favor BF16 tile shapes through 24 Q rows; FP8 shapes win from 32.
   using ShapeQK32  = Shape<_32, _256, _128>;
   using ShapePV32  = Shape<_32, _128, _256>;
@@ -229,6 +230,27 @@ int main(int argc, const char **argv) {
   using ShapePV64  = Shape<_64, _128, _64>;
   using ShapeOut64 = Shape<_64, HeadDimSize>;
   using SubgroupLayoutQK64 = Layout<Shape<_8, _4, _1>>;
+#else
+  using ShapeQK32  = Shape<_32, KVTileSize, QKTileK>;
+  using ShapePV32  = Shape<_32, PVTileN, KVTileSize>;
+  using ShapeOut32 = Shape<_32, HeadDimSize>;
+  using SubgroupLayoutQK32 = Layout<Shape<_4, SubgroupsK, _1>>;
+
+  using ShapeQK40  = Shape<_40, KVTileSize, QKTileK>;
+  using ShapePV40  = Shape<_40, PVTileN, KVTileSize>;
+  using ShapeOut40 = Shape<_40, HeadDimSize>;
+  using SubgroupLayoutQK40 = Layout<Shape<_5, _4, _1>>;
+
+  using ShapeQK48  = Shape<_48, KVTileSize, QKTileK>;
+  using ShapePV48  = Shape<_48, PVTileN, KVTileSize>;
+  using ShapeOut48 = Shape<_48, HeadDimSize>;
+  using SubgroupLayoutQK48 = Layout<Shape<_6, _4, _1>>;
+
+  using ShapeQK64  = Shape<_64, _64, QKTileK>;
+  using ShapePV64  = Shape<_64, PVTileN, _64>;
+  using ShapeOut64 = Shape<_64, HeadDimSize>;
+  using SubgroupLayoutQK64 = Layout<Shape<_8, _4, _1>>;
+#endif
 #else
 #error Either DECODE or PREFILL should be defined.
 #endif
