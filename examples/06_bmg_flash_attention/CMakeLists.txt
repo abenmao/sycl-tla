@@ -61,6 +61,10 @@ else()
   set(TEST_NO_PAGED_DECODE "--seq_len_kv=512")
   set(TEST_CACHED_KV_PREFILL "--seq_len_kv_cache=64")
   set(TEST_CACHED_KV_DECODE "--seq_len_kv_cache=64")
+  set(TEST_KVCACHE_PREFILL ${TEST_CACHED_KV_PREFILL})
+  set(TEST_KVCACHE_PAGED_PREFILL ${TEST_CACHED_KV_PREFILL} "--page_size=64" "--use_paged_kv")
+  set(TEST_KVCACHE_DECODE "--seq_len_kv=1 --seq_len_qo=1 --seq_len_kv_cache=512")
+  set(TEST_KVCACHE_PAGED_DECODE "--seq_len_kv=1 --seq_len_qo=1 --seq_len_kv_cache=512 --page_size=256 --use_paged_kv")
 endif()
 
 set(TEST_VARLEN_PREFILL ${TEST_NO_PAGED_PREFILL} "--varlen")
@@ -236,6 +240,15 @@ foreach(HEAD_DIM 64 96 128 192)
       TEST_NO_PAGED_PREFILL
     )
     target_compile_definitions(06_xe_fmha_fwd_prefill_mxfp8kvfp16mma_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL MXFP8_KV SHOW_DIFF=1)
+
+    cutlass_example_add_executable(
+      06_xe_fmha_fwd_prefill_cached_kv_mxfp8kvfp16mma_hdim${HEAD_DIM}
+      06_xe_fmha_fwd_fp8kvfp16mma.cpp
+      TEST_COMMAND_OPTIONS
+      TEST_KVCACHE_PREFILL
+      TEST_KVCACHE_PAGED_PREFILL
+    )
+    target_compile_definitions(06_xe_fmha_fwd_prefill_cached_kv_mxfp8kvfp16mma_hdim${HEAD_DIM} PRIVATE HEAD_DIM=${HEAD_DIM} PREFILL PAGED_KV MXFP8_KV SHOW_DIFF=1)
 
     cutlass_example_add_executable(
       06_xe_fmha_fwd_decode_cached_kv_mxfp8kvfp16mma_hdim${HEAD_DIM}
