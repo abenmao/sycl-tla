@@ -26,7 +26,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-if (CUTLASS_TEST_FOR_CRI)
+if (SYCLTLA_TARGET_XESIM)
   set(TEST_BASE "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
   set(DEFAULT_K ${CRI_GEMM_DEFAULT_SIZE})
 else()
@@ -53,7 +53,7 @@ foreach(MMA_TYPE IN LISTS MMA_T)
     set(exe_name "${mma_name}_s8")
     if (${MMA_TYPE} STREQUAL "half_t" AND ${QUANT_TYPE} STREQUAL "int8_t")
       set(exe_name "${mma_name}_s8_tensorwise")
-      if (NOT CUTLASS_TEST_FOR_CRI)
+      if (NOT SYCLTLA_TARGET_XESIM)
         # Tensorwise dequantization: --g=K means one scale per entire K dimension.
         # --g=0 is no longer accepted (causes division-by-zero in the kernel).
         set(TEST_GROUP_DEQUANT ${TEST_BASE} --g=${DEFAULT_K}) 

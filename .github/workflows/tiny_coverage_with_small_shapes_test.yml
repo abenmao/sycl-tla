@@ -13,7 +13,7 @@ env:
   TARGET_BRANCH: "${{ github.base_ref }}"
   CI_BUILD_ID_TAG: "tiny-cri"
   CI_BUILD_PROFILE: "tiny"
-  CI_CMAKE_EXTRA_FLAGS: "-DCUTLASS_TEST_FOR_CRI=ON"
+  CI_CMAKE_EXTRA_FLAGS: "-DSYCLTLA_TARGET_XESIM=ON"
   # CRI remote build server will be added separately.
   REMOTE_BUILD_SERVERS: ""
   SSH_OPTS: "-o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=accept-new"

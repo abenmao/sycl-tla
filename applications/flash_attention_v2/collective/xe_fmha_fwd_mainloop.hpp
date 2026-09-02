@@ -734,7 +734,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
       // No Q rows are valid for this subgroup, so its compute range is empty
       if constexpr (!DisableKVPrefetch) {
         for (int K = blk_k0; K < prefetch_k1; K++) {
-#if not defined(CUTLASS_TEST_FOR_CRI)
+#if not defined(SYCLTLA_TARGET_XESIM)
           barrier_arrive(ScopeWorkgroup);
 #endif
           if constexpr (PagedKV) {
@@ -755,7 +755,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           } else if (prefetch_sg_active) {
             prefetch_next_regular_kv();
           }
-#if not defined(CUTLASS_TEST_FOR_CRI)
+#if not defined(SYCLTLA_TARGET_XESIM)
           barrier_wait(ScopeWorkgroup);
 #endif
         }
@@ -881,7 +881,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
                              auto& tVgV_cur, auto& pVgV_cur,
                              auto& scale_ctx_qk_cur, auto& scale_ctx_pv_cur,
                              auto const& scale_k_cur, auto const& scale_v_cur) {
-#if not defined(CUTLASS_TEST_FOR_CRI)
+#if not defined(SYCLTLA_TARGET_XESIM)
       /* Split barrier to keep threads together */
       constexpr auto barrier_scope = CausalMask ? ScopeSubgroup : ScopeWorkgroup;
       barrier_arrive(barrier_scope);
@@ -1281,7 +1281,7 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
           }
         }
       }
-#if not defined(CUTLASS_TEST_FOR_CRI)
+#if not defined(SYCLTLA_TARGET_XESIM)
       barrier_wait(barrier_scope);
 #endif
     };
@@ -1332,14 +1332,14 @@ struct FMHAFwdMainloop<XeDefault<Stages>, CausalMask_, BlockScale_, F8kvF16mma_,
 
     if constexpr (!DisableKVPrefetch) {
       for (int K = blk_k1; K < prefetch_k1; K++) {
-#if not defined(CUTLASS_TEST_FOR_CRI)
+#if not defined(SYCLTLA_TARGET_XESIM)
         constexpr auto barrier_scope = CausalMask ? ScopeSubgroup : ScopeWorkgroup;
         barrier_arrive(barrier_scope);
 #endif
         if (prefetch_sg_active) {
           prefetch_next_regular_kv();
         }
-#if not defined(CUTLASS_TEST_FOR_CRI)
+#if not defined(SYCLTLA_TARGET_XESIM)
     barrier_wait(barrier_scope);
 #endif
       }

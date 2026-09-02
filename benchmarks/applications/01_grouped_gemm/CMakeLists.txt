@@ -28,7 +28,7 @@
 
 
 # Config files for the CI.
-if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
+if(SYCLTLA_TARGET_XESIM AND SYCL_TARGET_INTEL_GPU_CRI)
   set(CONFIG_FILE_CRI_GROUPED --config_file=${CUTLASS_DIR}/benchmarks/config_files/01_grouped_gemm/cri/small.in)
   set(CONFIG_FILE_CRI_MOE --config_file=${CUTLASS_DIR}/benchmarks/config_files/01_grouped_gemm/cri/moe_small.in)
   set(CONFIG_FILE_MOE_TEST1_SMALL --config_file=${CUTLASS_DIR}/benchmarks/config_files/01_grouped_gemm/cri/test1/small.in)

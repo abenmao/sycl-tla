@@ -77,7 +77,7 @@ struct Xe_Dequantize<cutlass::half_t, float>
   dequantize(Register* p, ScaleType scale)
   {
 #if defined(CUTE_ARCH_DEQUANTIZE_XE_ENABLED)
-#if SYCL_INTEL_TARGET >= 35
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     auto& data = *p;
     auto s = static_cast<float>(scale);
     asm (
@@ -114,7 +114,7 @@ struct Xe_Dequantize<cutlass::bfloat16_t, float>
   dequantize(Register* p, ScaleType scale)
   {
 #if defined(CUTE_ARCH_DEQUANTIZE_XE_ENABLED)
-#if SYCL_INTEL_TARGET >= 35
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     auto& data = *p;
     auto s = static_cast<float>(scale);
     asm (
@@ -185,7 +185,7 @@ auto choose_xe_dequantize_impl()
     return Xe_Dequantize_Fallback<IntermediateType>{};
   }
 
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET >= 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
   if constexpr (has_xe_optimized_dequantize<ElemType, IntermediateType>())
     return Xe_Dequantize<ElemType, IntermediateType>{};
   else

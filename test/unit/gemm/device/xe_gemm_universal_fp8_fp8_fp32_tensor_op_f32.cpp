@@ -102,7 +102,7 @@ struct MainloopIntelW8A8_GemmConfig {
 };
 
 TEST(MainloopIntelW8A8_Special, LargeModel_LLaMA2_7B) {
-#if defined(CUTLASS_TEST_FOR_CRI)
+#if defined(SYCLTLA_TARGET_XESIM)
     const int scale = 16;
 #else
     const int scale = 1;
@@ -112,7 +112,7 @@ TEST(MainloopIntelW8A8_Special, LargeModel_LLaMA2_7B) {
 }
 
 TEST(MainloopIntelW8A8_Special, LargeModel_Mistral_7B) {
-#if defined(CUTLASS_TEST_FOR_CRI)
+#if defined(SYCLTLA_TARGET_XESIM)
     const int scale = 16;
 #else
     const int scale = 1;
@@ -122,7 +122,7 @@ TEST(MainloopIntelW8A8_Special, LargeModel_Mistral_7B) {
 }
 
 TEST(MainloopIntelW8A8_Special, TensorParallel) {
-#if defined(CUTLASS_TEST_FOR_CRI)
+#if defined(SYCLTLA_TARGET_XESIM)
     const int scale = 16;
 #else
     const int scale = 1;
@@ -132,7 +132,7 @@ TEST(MainloopIntelW8A8_Special, TensorParallel) {
 }
 
 TEST(MainloopIntelW8A8_Special, ModelParallel) {
-#if defined(CUTLASS_TEST_FOR_CRI)
+#if defined(SYCLTLA_TARGET_XESIM)
     const int scale = 16;
 #else
     const int scale = 1;
@@ -162,7 +162,7 @@ TEST(MainloopIntelW8A8_Special, SquareMedium) {
 }
 
 TEST(MainloopIntelW8A8_Special, SquareLarge) {
-#if defined(CUTLASS_TEST_FOR_CRI)
+#if defined(SYCLTLA_TARGET_XESIM)
     const int scale = 16;
 #else
     const int scale = 1;
@@ -172,7 +172,7 @@ TEST(MainloopIntelW8A8_Special, SquareLarge) {
 }
 
 TEST(MainloopIntelW8A8_Special, TallMatrix) {
-#if defined(CUTLASS_TEST_FOR_CRI)
+#if defined(SYCLTLA_TARGET_XESIM)
     const int scale = 16;
 #else
     const int scale = 1;
@@ -182,7 +182,7 @@ TEST(MainloopIntelW8A8_Special, TallMatrix) {
 }
 
 TEST(MainloopIntelW8A8_Special, WideMatrix) {
-#if defined(CUTLASS_TEST_FOR_CRI)
+#if defined(SYCLTLA_TARGET_XESIM)
     const int scale = 16;
 #else
     const int scale = 1;

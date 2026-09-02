@@ -1605,7 +1605,7 @@ void kernel_launcher(
 
   syclex::properties kernel_props{
       syclex::sub_group_size<cute::detail::subgroup_size>,
-#if (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
       intelex::grf_size<512>
 #else
       intelex::grf_size<256>

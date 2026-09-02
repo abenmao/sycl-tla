@@ -583,7 +583,7 @@ TEST(PVC_CuTe_Xe_Reorder_Conversion, conversion_e4m3_to_bfloat16) {
 TEST(PVC_CuTe_Xe_Reorder_Conversion, conversion_float_to_e5m2) {
   ConversionSubgroupTest<float, cutlass::float_e5m2_t, 8, 16, 213>::run();
 }
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
 TEST(PVC_CuTe_Xe_Reorder_Conversion, conversion_float_to_e4m3) {
   ConversionSubgroupTest<float, cutlass::float_e4m3_t, 8, 16, 214>::run();
 }
@@ -654,7 +654,7 @@ TEST(PVC_CuTe_Xe_Reorder_Conversion_Tensor, tensor_conversion_e4m3_to_bfloat16) 
 TEST(PVC_CuTe_Xe_Reorder_Conversion_Tensor, tensor_conversion_float_to_e5m2) {
   ConversionTensorTest<float, cutlass::float_e5m2_t, 8, 16, 313>::run();
 }
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
 TEST(PVC_CuTe_Xe_Reorder_Conversion_Tensor, tensor_conversion_float_to_e4m3) {
   ConversionTensorTest<float, cutlass::float_e4m3_t, 8, 16, 314>::run();
 }

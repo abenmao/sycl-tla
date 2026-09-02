@@ -36,7 +36,7 @@ set(CONFIG_FILE_CRI --config_file=${CUTLASS_DIR}/benchmarks/config_files/02_flas
 cutlass_benchmark_add_suite(cutlass_benchmarks_flash_attention_prefill_legacy
                             SUPERSUITE cutlass_benchmarks_flash_attention_legacy)
 
-if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
+if(SYCLTLA_TARGET_XESIM AND SYCL_TARGET_INTEL_GPU_CRI)
   set(PREFILL_LEGACY_CONFIG_ARGS CONFIG_FILE_CRI)
 elseif(("intel_gpu_bmg_g21" IN_LIST DPCPP_SYCL_TARGET_LIST) OR
        ("intel_gpu_bmg_g31" IN_LIST DPCPP_SYCL_TARGET_LIST) OR

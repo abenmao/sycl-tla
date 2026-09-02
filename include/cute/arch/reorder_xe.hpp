@@ -756,7 +756,7 @@ struct Xe_Reorder<ReorderKind::UU, float_e4m3_t, half_t>
   reorder(intel::uchar4 const& src0, intel::ushort4& dst0)
   {
 #if defined(CUTE_ARCH_REORDER_XE_ENABLED)
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     asm (
       "{\n"
       ".decl IN_B v_type=G type=B num_elts=64 alias=<%1,0>\n"
@@ -796,7 +796,7 @@ struct Xe_Reorder<ReorderKind::VV, float_e4m3_t, half_t>
   reorder(intel::uchar4 const& src0, intel::ushort4& dst0)
   {
 #if defined(CUTE_ARCH_REORDER_XE_ENABLED)
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     asm (
       "{\n"
       ".decl IN_B v_type=G type=B num_elts=64 alias=<%1,0>\n"
@@ -854,7 +854,7 @@ struct Xe_Reorder<ReorderKind::UU, float_e4m3_t, bfloat16_t>
   reorder(intel::uchar4 const& src0, intel::ushort4& dst0)
   {
 #if defined(CUTE_ARCH_REORDER_XE_ENABLED)
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     asm (
       "{\n"
       ".decl IN_B v_type=G type=B num_elts=64 alias=<%1,0>\n"
@@ -900,7 +900,7 @@ struct Xe_Reorder<ReorderKind::VV, float_e4m3_t, bfloat16_t>
   reorder(intel::uchar4 const& src0, intel::ushort4& dst0)
   {
 #if defined(CUTE_ARCH_REORDER_XE_ENABLED)
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     asm (
       "{\n"
       ".decl IN_B v_type=G type=B num_elts=64 alias=<%1,0>\n"

@@ -80,7 +80,7 @@ struct Xe_Quantize_Optimized<cutlass::half_t, cutlass::float_e5m2_t>
   quantize(SrcRegister const* src_p, DstRegister* dst_p, ScaleRegister scales)
   {
 #if defined(CUTE_ARCH_QUANTIZE_XE_ENABLED)
-#if SYCL_INTEL_TARGET >= 35
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     auto const& src = *src_p;
     auto& dst = *dst_p;
     asm (
@@ -131,7 +131,7 @@ struct Xe_Quantize_Optimized<cutlass::half_t, cutlass::float_e4m3_t>
   quantize(SrcRegister const* src_p, DstRegister* dst_p, ScaleRegister scales)
   {
 #if defined(CUTE_ARCH_QUANTIZE_XE_ENABLED)
-#if SYCL_INTEL_TARGET >= 35
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     auto const& src = *src_p;
     auto& dst = *dst_p;
     asm (
@@ -180,7 +180,7 @@ struct Xe_Quantize_Optimized<cutlass::bfloat16_t, cutlass::float_e5m2_t>
   quantize(SrcRegister const* src_p, DstRegister* dst_p, ScaleRegister scales)
   {
 #if defined(CUTE_ARCH_QUANTIZE_XE_ENABLED)
-#if SYCL_INTEL_TARGET >= 35
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     auto const& src = *src_p;
     auto& dst = *dst_p;
     asm (
@@ -229,7 +229,7 @@ struct Xe_Quantize_Optimized<cutlass::bfloat16_t, cutlass::float_e4m3_t>
   quantize(SrcRegister const* src_p, DstRegister* dst_p, ScaleRegister scales)
   {
 #if defined(CUTE_ARCH_QUANTIZE_XE_ENABLED)
-#if SYCL_INTEL_TARGET >= 35
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     auto const& src = *src_p;
     auto& dst = *dst_p;
     asm (
@@ -278,7 +278,7 @@ struct Xe_Quantize_Optimized<float, cutlass::float_e5m2_t>
   quantize(SrcRegister const* src_p, DstRegister* dst_p, ScaleRegister scales)
   {
 #if defined(CUTE_ARCH_QUANTIZE_XE_ENABLED)
-#if SYCL_INTEL_TARGET >= 35
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     auto const& src = *src_p;
     auto& dst = *dst_p;
     asm (
@@ -324,7 +324,7 @@ struct Xe_Quantize_Optimized<float, cutlass::float_e4m3_t>
   quantize(SrcRegister const* src_p, DstRegister* dst_p, ScaleRegister scales)
   {
 #if defined(CUTE_ARCH_QUANTIZE_XE_ENABLED)
-#if SYCL_INTEL_TARGET >= 35
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     auto const& src = *src_p;
     auto& dst = *dst_p;
     asm (

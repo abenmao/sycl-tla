@@ -310,7 +310,7 @@ gemm_cute(sycl::queue &Queue,
 
   syclex::properties kernel_props {
     syclex::sub_group_size<intel::sg_size>,
-#if (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     intelex::grf_size<512>
 #else
     intelex::grf_size<256>
@@ -518,7 +518,7 @@ test_case(sycl::queue &Queue, int m, int n, int k, int iterations, int verify)
       Queue.wait_and_throw();
 
       double avg = timer.seconds() / iterations;
-#if defined(CUTLASS_TEST_FOR_CRI)      
+#if defined(SYCLTLA_TARGET_XESIM)
       // Use MF/s instead of TF/s as we always use small problem size on CRI 
       // simulator, will remove this when HW is available
       double tops = (2.0*m*n*k) * 1e-12 * 1e6;

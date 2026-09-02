@@ -12,7 +12,7 @@
 #
 # IMPORTANT: the generic benchmark verify() compares against a plain GEMM
 # reference and does NOT apply the activation function. Verification is
-# disabled under CUTLASS_TEST_FOR_CRI, so these cases are only meant for the
+# disabled under SYCLTLA_TARGET_XESIM, so these cases are only meant for the
 # CRI simulator path (here). Do NOT add them to the BMG/PVC CI input files,
 # where verify() runs and would (correctly) report a mismatch.
 #

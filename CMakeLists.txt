@@ -179,6 +179,7 @@ if (CUTLASS_ENABLE_SYCL)
         message(FATAL_ERROR "CRI Target with multi-target build is supported only with compiler version 2026 onwards")
       endif()
       set(SYCL_TARGET_INTEL_GPU_CRI ON)
+      add_compile_definitions(SYCL_TARGET_INTEL_GPU_CRI)
     endif()
 
 
@@ -190,9 +191,9 @@ if (CUTLASS_ENABLE_SYCL)
       set(SYCL_TARGET_INTEL_GPU_PVC ON)
     endif()
 
-    option(CUTLASS_TEST_FOR_CRI "Enable CUTLASS_TEST_FOR_CRI" OFF)
-    if(CUTLASS_TEST_FOR_CRI)
-      add_compile_definitions(CUTLASS_TEST_FOR_CRI)
+    option(SYCLTLA_TARGET_XESIM "Enable simulator/emulator test mode (small shapes, fast initialization, fast verification... )" OFF)
+    if(SYCLTLA_TARGET_XESIM)
+      add_compile_definitions(SYCLTLA_TARGET_XESIM)
     endif()
   endif()
 

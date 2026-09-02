@@ -13,7 +13,7 @@ concurrency:
 env:
   TARGET_BRANCH: "${{ github.base_ref }}"
   CI_BUILD_ID_TAG: "small"
-  CI_CMAKE_EXTRA_FLAGS: "-DCUTLASS_TEST_FOR_CRI=ON"
+  CI_CMAKE_EXTRA_FLAGS: "-DSYCLTLA_TARGET_XESIM=ON"
   # shliclel4165.sh.intel.com 500G   a4bf018cf32e.jf.intel.com  1.5t pvc125074.jf.intel.com 1t
   REMOTE_BUILD_SERVERS: "Atlas a4bf018cf32e.jf.intel.com support 400 400;Hermes shliclel4165.sh.intel.com support 400 400;Hyperion pvc125074.jf.intel.com support 400 400"
   LOCAL_BUILD_MEM_PCT: "100"

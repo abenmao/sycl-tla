@@ -34,7 +34,7 @@
 
 using Scheduler = cutlass::gemm::device::Scheduler;
 
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
 
 template <
   typename ElementC,
@@ -87,7 +87,7 @@ struct E2M1_RCR_GEMM :
 #endif
 
 void register_gemm_benchmarks_e2m1() {
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
   CUTLASS_BENCHMARK_T("Gemm_E2M1E2M1FP32FP32FP32_RCR_WG512x256x128_SG64x64x128", E2M1_RCR_GEMM<float, float, float, 512, 256, 128, 64, 64>);
   CUTLASS_BENCHMARK_T("Gemm_E2M1E2M1BF16BF16BF16_RCR_WG512x256x256_SG64x64x256", E2M1_RCR_GEMM<cutlass::bfloat16_t, cutlass::bfloat16_t, cutlass::bfloat16_t, 512, 256, 256, 64, 64>);
 

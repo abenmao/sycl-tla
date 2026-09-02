@@ -58,7 +58,7 @@ void convert_dtype(const SrcT* d_src, DstT* d_dst, size_t size) {
 
 template <typename SrcT, typename DstT, typename Runner>
 void convert_dtype(const cutlass::DeviceAllocation<SrcT>& src, cutlass::DeviceAllocation<DstT>& dst) {
-#if defined(CUTLASS_TEST_FOR_CRI)
+#if defined(SYCLTLA_TARGET_XESIM)
   if constexpr (cute::sizeof_bits_v<SrcT> < 8) {
     // Host-side conversion for sub-byte types on CRI (device kernel may not be available)
     const size_t src_bytes_count = cute::ceil_div(src.size() * size_t(cute::sizeof_bits_v<SrcT>), size_t(8));

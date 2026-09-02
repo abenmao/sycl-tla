@@ -116,7 +116,7 @@ using DualGemm_BF16BF16FP32FP32_RRR_WG128x128x64_SG16x32x64 = cutlass::gemm::dev
 //
 // NOTE: the generic benchmark verify() compares against a plain GEMM reference and
 // does NOT apply the activation, so it only matches for the baseline. Verification
-// is disabled under CUTLASS_TEST_FOR_CRI (the simulator path), so these cases are
+// is disabled under SYCLTLA_TARGET_XESIM (the simulator path), so these cases are
 // intended to be run on the CRI simulator (see input_files/cri/input_epilogue_gemm.in).
 // ---------------------------------------------------------------------------
 template <

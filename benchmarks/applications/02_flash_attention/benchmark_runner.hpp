@@ -110,7 +110,7 @@ struct FMHAOptions {
     // Parse verification mode. Default to device verification on real hardware,
     // but host verification on the CRI simulator where device verification +
     // warmup are too time-consuming.
-#ifdef CUTLASS_TEST_FOR_CRI
+#ifdef SYCLTLA_TARGET_XESIM
     std::string default_verify = "none";
 #else
     std::string default_verify = "device";
@@ -1070,7 +1070,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
     };
     compat::experimental::kernel_properties kernel_props{
       syclex::sub_group_size<cute::intel::sg_size>,
-#if (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
       intelex::grf_size<512>
 #else
       intelex::grf_size<256>
@@ -1234,7 +1234,7 @@ template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
     initialize_counters(state);
     int32_t counter = 1;
     for(auto _ : state) {
-#ifdef CUTLASS_TEST_FOR_CRI
+#ifdef SYCLTLA_TARGET_XESIM
       // CRI: reuse the outer-scope `params`/`workspace` built once before the
       // warmup. Re-allocating workspace and zero-filling it every state-iter
       // (the non-CRI path below) evicts the data cache, so the first timed

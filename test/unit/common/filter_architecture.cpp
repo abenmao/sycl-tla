@@ -117,7 +117,7 @@ void FilterArchitecture() {
   };
   // TODO: This is a temporary solution to support CRI. 
   // Once we can retrieve arch info from oneAPI APIs, we can remove this.
-  #if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+  #if defined(SYCL_TARGET_INTEL_GPU_CRI)
   const int deviceMajorMinor = 1;
   #else
   auto device_architecture =

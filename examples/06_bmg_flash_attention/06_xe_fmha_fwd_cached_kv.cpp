@@ -121,7 +121,7 @@ int main(int argc, const char **argv) {
   using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
 
 #elif HEAD_DIM == 128
-#if !(defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+#if !(defined(SYCL_TARGET_INTEL_GPU_CRI))
   using ShapeQK = Shape<_256, _32, _32>;
   using ShapePV = Shape<_256, _32, _32>;
   using ShapeOut = Shape<_256, _128>;
@@ -272,7 +272,7 @@ int main(int argc, const char **argv) {
   const int base_units = options.batch * options.num_heads_kv;
   const int saturation_cores_default = estimate_saturation_cores(base_units, kv_blocks);
   const int saturation_cores = cutlass::fmha::kernel::fmha_split_saturation_cores(saturation_cores_default);
-#if HEAD_DIM == 128 && defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if HEAD_DIM == 128 && defined(SYCL_TARGET_INTEL_GPU_CRI)
   const bool short_cache_q8_candidate = options.seq_len_qo <= 8 &&
                                         options.seq_len_kv_cache > 0 &&
                                         options.seq_len_kv_cache <= 1024;
@@ -312,7 +312,7 @@ int main(int argc, const char **argv) {
                         ElementQ, ElementK, ElementV, float, /*kGqaFusion=*/true>::template run<      \
                         false, true, cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>>(options)))
 
-#if HEAD_DIM == 128 && defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if HEAD_DIM == 128 && defined(SYCL_TARGET_INTEL_GPU_CRI)
 #if defined(IS_BFLOAT16)
   const int q_row_work = options.batch * options.num_heads_q * options.seq_len_qo;
   if (split_short_cache_q_rows && q_row_work >= 120)
@@ -350,7 +350,7 @@ int main(int argc, const char **argv) {
   // Directly instantiate only CachedKV=true kernels.
   using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
 
-#if HEAD_DIM == 128 && defined(PREFILL) && !(defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)) && (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+#if HEAD_DIM == 128 && defined(PREFILL) && !(defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)) && (defined(SYCL_TARGET_INTEL_GPU_CRI))
   // CRI causal: adaptive Q tile selection to ensure >=2 waves. If too few WGs
   // with BLK_Q=256, use BLK_Q=128 for more waves and finer scheduling granularity.
   using FMHACausal     = FMHAConfig<true, false, ShapeQK_Causal, ShapePV_Causal, ShapeOut_Causal, SubgroupLayoutQK_Causal, void, PipelineStages, ElementQ, ElementK, ElementV>;

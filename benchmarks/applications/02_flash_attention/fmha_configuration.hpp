@@ -82,7 +82,7 @@ struct FMHAConfig {
   // TODO: enable per-tensor scale in fp8 case
   static constexpr bool PerTensorScale = false;
 
-#if !(defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+#if !(defined(SYCL_TARGET_INTEL_GPU_CRI))
   using DefaultMMA = typename cute::conditional_t<
       cute::is_same_v<ElementQ, cutlass::float_e5m2_t> || cute::is_same_v<ElementQ, cutlass::float_e4m3_t>,
       XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, half_t>,

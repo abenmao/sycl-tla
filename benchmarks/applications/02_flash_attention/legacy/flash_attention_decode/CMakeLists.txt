@@ -31,7 +31,7 @@ set(CONFIG_FILE_CRI_DECODE_NOKV --config_file=${CUTLASS_DIR}/benchmarks/config_f
 set(CONFIG_FILE_BMG_DECODE_NOKV --config_file=${CUTLASS_DIR}/benchmarks/config_files/02_flash_attention/bmg/decode/legacy/sglang_nokvcache.in)
 
 # Pass these configuration files for the CI
-if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
+if(SYCLTLA_TARGET_XESIM AND SYCL_TARGET_INTEL_GPU_CRI)
   set(DECODE_LEGACY_CONFIG_ARGS CONFIG_FILE_CRI_DECODE_NOKV)
 else()
   set(DECODE_LEGACY_CONFIG_ARGS CONFIG_FILE_BMG_DECODE_NOKV)

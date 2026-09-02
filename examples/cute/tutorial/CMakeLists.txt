@@ -30,7 +30,7 @@
 if (CUTLASS_ENABLE_SYCL)
   message(STATUS "Building CuTE tutorial examples with SYCL")
 
-  if (CUTLASS_TEST_FOR_CRI)
+  if (SYCLTLA_TARGET_XESIM)
     set(TEST_BASE "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=${CRI_DEFAULT_ITERATIONS}")
     set(SGEMM_ARGS ${TEST_BASE})
     set(BMG_ARGS ${TEST_BASE} "--verify=${CRI_DEFAULT_VERIFY}")

@@ -429,7 +429,7 @@ TEST(CuTe_Xe, XE_BLOCK2D_SUBBYTE_bf16_transposed) {
   EXPECT_TRUE((run_subbyte_gemm<bfloat16_t, bfloat16_t, float, 'R', 'C'>(Q, 256, 256, 256)));
 }
 
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
 // Sub-byte FP4 (e2m1) transposed-B load: identical d32t instruction, sub-byte packing.
 TEST(CuTe_Xe, XE_BLOCK2D_SUBBYTE_e2m1_transposed) {
   sycl::queue Q = compat::get_default_queue();
@@ -437,7 +437,7 @@ TEST(CuTe_Xe, XE_BLOCK2D_SUBBYTE_e2m1_transposed) {
 }
 #else
 TEST(CuTe_Xe, XE_BLOCK2D_SUBBYTE_e2m1_transposed) {
-  GTEST_SKIP() << "float_e2m1_t case requires SYCL_INTEL_TARGET==35 (CRI) build. skipped";
+  GTEST_SKIP() << "float_e2m1_t case requires SYCL_TARGET_INTEL_GPU_CRI (CRI) build. skipped";
 }
 #endif
 

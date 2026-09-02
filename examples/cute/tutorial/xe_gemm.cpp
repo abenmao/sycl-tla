@@ -396,7 +396,7 @@ int main(int argc, char** argv)
   test_case<uint8_t, uint8_t, int32_t, 'R', 'C'>(Q, m, n, k, iterations, verify);
   test_case<uint8_t, int8_t, int32_t, 'C', 'R'>(Q, m, n, k, iterations, verify);
 
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
   // For CRI: 
   // 1. Skip int8 x int4 as the DPAS support has been removed.
   // 2. Add pure FP8 and FP4 cases as DPAS support is available.

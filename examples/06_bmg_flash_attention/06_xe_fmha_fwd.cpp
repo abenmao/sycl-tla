@@ -111,7 +111,7 @@ int main(int argc, const char **argv) {
   using SubgroupLayoutQK = Layout<Shape<_1, _1, _1>>;
 
 #elif HEAD_DIM == 64
-#if !(defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+#if !(defined(SYCL_TARGET_INTEL_GPU_CRI))
   using ShapeQK = Shape<_128, _64, _32>;
   using ShapePV = Shape<_128, _32, _64>;
   using ShapeOut = Shape<_128, _64>;
@@ -130,7 +130,7 @@ int main(int argc, const char **argv) {
   using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
 
 #elif HEAD_DIM == 128
-#if !(defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+#if !(defined(SYCL_TARGET_INTEL_GPU_CRI))
   using ShapeQK = Shape<_256, _32, _32>;
   using ShapePV = Shape<_256, _32, _32>;
   using ShapeOut = Shape<_256, _128>;
@@ -270,7 +270,7 @@ int main(int argc, const char **argv) {
 
   #undef FMHA_RUN_Q
 #else
-#if HEAD_DIM == 128 && defined(PREFILL) && (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+#if HEAD_DIM == 128 && defined(PREFILL) && (defined(SYCL_TARGET_INTEL_GPU_CRI))
   if (options.seq_len_kv_cache > 0 || options.use_paged_kv) {
     std::cerr << "Error: CachedKV/PagedKV requested. Use the cached_kv binary." << std::endl;
     return -1;

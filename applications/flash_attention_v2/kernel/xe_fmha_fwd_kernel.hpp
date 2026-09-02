@@ -352,7 +352,7 @@ public:
       int seq_len_new = seq_len_kv;
       int seq_len_new_wg = seq_len_kv;
 
-#if defined(CUTLASS_TEST_FOR_CRI)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
       constexpr bool kIndependentSubgroups =
           is_empty_v<MainloopSharedStorage> && is_empty_v<EpilogueSharedStorage>
           && !TileScheduler::kGqaFusion;
@@ -367,7 +367,7 @@ public:
         q_offset_sg = group_broadcast(sycl::ext::oneapi::this_work_item::get_sub_group(), q_offset_wi, 0);
       }
       bool compute_sg_active = true;
-#if defined(CUTLASS_TEST_FOR_CRI)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
       if constexpr (kIndependentSubgroups) {
         compute_sg_active = blk_q * get<0>(TileShapeQK{}) + q_offset_sg < seq_len_qo;
       }

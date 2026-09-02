@@ -47,7 +47,7 @@ set(CONFIG_FILE_CRI_GDN_BF16
 set(CONFIG_FILE_BMG_GDN_BF16
     --config_file=${CUTLASS_DIR}/benchmarks/config_files/03_gdn/bmg/bf16.in)
 
-if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
+if(SYCLTLA_TARGET_XESIM AND SYCL_TARGET_INTEL_GPU_CRI)
   set(GDN_TEST_COMMAND_OPTIONS CONFIG_FILE_CRI_GDN_BF16)
 else()
   set(GDN_TEST_COMMAND_OPTIONS CONFIG_FILE_BMG_GDN_BF16)
@@ -90,10 +90,6 @@ add_onemkl_to_target(TARGET gdn_lib)
 # executable by add_sycl_to_target() inside
 # cutlass_benchmark_add_executable().
 add_sycl_to_target(TARGET gdn_lib)
-
-if(SYCL_TARGET_INTEL_GPU_CRI)
-  target_compile_definitions(gdn_lib PRIVATE __SYCL_TARGET_INTEL_GPU_CRI__)
-endif()
 
 cutlass_benchmark_add_executable(
     cutlass_benchmarks_gdn_xe

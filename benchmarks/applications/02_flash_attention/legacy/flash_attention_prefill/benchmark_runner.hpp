@@ -535,7 +535,7 @@ template <class FMHAPrefillConfiguration> struct BenchmarkRunnerFMHA {
 
     typename GemmKernel::Params params = GemmKernel::to_underlying_arguments(arguments, workspace.get());
 
-#ifdef CUTLASS_TEST_FOR_CRI
+#ifdef SYCLTLA_TARGET_XESIM
     // disable warmup run and verification for CRI simulator as it's time-consuming
 #else
     // Run the GEMM

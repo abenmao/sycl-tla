@@ -41,7 +41,7 @@ set(CONFIG_FILE_BMG_PREFILL_BF16 --config_file=${CUTLASS_DIR}/benchmarks/config_
 cutlass_benchmark_add_suite(cutlass_benchmarks_flash_attention)
 
 # Pass these configuration files for the CI
-if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
+if(SYCLTLA_TARGET_XESIM AND SYCL_TARGET_INTEL_GPU_CRI)
   set(CONFIG_FILE_CRI_PREFILL_BF16 --config_file=${CUTLASS_DIR}/benchmarks/config_files/02_flash_attention/cri/prefill/bf16.in)
 
   # Real-world workload shapes pulled from the framework-team CRI benchmark sheet.
@@ -129,9 +129,6 @@ foreach(name IN LISTS LIB_LIST)
   add_onemkl_to_target(TARGET ${name})
   # Add only SYCL include directories, not the full SYCL flags (to avoid duplication)
   add_sycl_include_directories_to_target(${name})
-  if(SYCL_TARGET_INTEL_GPU_CRI)
-    target_compile_definitions(${name} PRIVATE __SYCL_TARGET_INTEL_GPU_CRI__)
-  endif()
 endforeach()
 
 cutlass_benchmark_add_executable(

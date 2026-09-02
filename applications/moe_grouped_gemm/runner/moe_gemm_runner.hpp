@@ -472,7 +472,7 @@ struct VerificationHelper {
 // names, so this may precede the config definitions.
 template <class Config>
 using MoETileShape =
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     typename Config::TileShapeCri;
 #else
     typename Config::TileShapeBmg;
@@ -495,7 +495,7 @@ auto choose_tiled_mma(TA *A, TB *B) {
 
   // Subgroup tiling, n-major, per hardware target. Per-SG N (BLK_N/SG_N) must
   // stay >= the GroupN scale-broadcast width, else the broadcast breaks.
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
   using DefaultSGLayout = SG_8x4;
 #else
   using DefaultSGLayout = SG_8x2;
@@ -598,7 +598,7 @@ double moe_launch_timed_greedy(
   namespace syclex = sycl::ext::oneapi::experimental;
   namespace intelex = sycl::ext::intel::experimental;
   syclex::properties kernel_props{syclex::sub_group_size<16>,
-#if (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+#if (defined(SYCL_TARGET_INTEL_GPU_CRI))
                                   intelex::grf_size<512>
 #else
                                   intelex::grf_size<256>
@@ -681,7 +681,7 @@ double moe_launch_timed_greedy_scaled(
   namespace syclex = sycl::ext::oneapi::experimental;
   namespace intelex = sycl::ext::intel::experimental;
   syclex::properties kernel_props{syclex::sub_group_size<16>,
-#if (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+#if (defined(SYCL_TARGET_INTEL_GPU_CRI))
                                   intelex::grf_size<512>
 #else
                                   intelex::grf_size<256>
@@ -860,7 +860,7 @@ double moe_launch_timed_double_buffer(
   namespace intelex = sycl::ext::intel::experimental;
 
   syclex::properties kernel_props{syclex::sub_group_size<16>,
-#if (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+#if (defined(SYCL_TARGET_INTEL_GPU_CRI))
                                   intelex::grf_size<512>
 #else
                                   intelex::grf_size<256>
@@ -989,7 +989,7 @@ double moe_launch_timed_double_buffer_scaled(
   namespace intelex = sycl::ext::intel::experimental;
 
   syclex::properties kernel_props{syclex::sub_group_size<16>,
-#if (defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+#if (defined(SYCL_TARGET_INTEL_GPU_CRI))
                                   intelex::grf_size<512>
 #else
                                   intelex::grf_size<256>

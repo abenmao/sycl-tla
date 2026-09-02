@@ -319,7 +319,7 @@ struct ExampleRunner {
     gemm_op.can_implement(arguments);
     gemm_op.initialize(arguments, workspace.get());
 
-    #ifndef CUTLASS_TEST_FOR_CRI
+    #ifndef SYCLTLA_TARGET_XESIM
     // Run warmup on real hardware (skip on CRI simulator as it's time-consuming)
 #else
     gemm_op.run();

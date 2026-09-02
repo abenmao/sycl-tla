@@ -298,7 +298,7 @@ struct BenchmarkRunnerDualGemm {
 
     typename GemmKernel::Params params = GemmKernel::to_underlying_arguments(arguments, workspace.get());
 
-#ifdef CUTLASS_TEST_FOR_CRI
+#ifdef SYCLTLA_TARGET_XESIM
     // skip warmup on the CRI simulator (it is expensive)
 #else
     launch(params);

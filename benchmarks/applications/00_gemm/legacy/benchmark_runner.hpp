@@ -685,7 +685,7 @@ struct BenchmarkRunnerGemm {
 
     if (state.error_occurred()) return;
 
-#ifdef CUTLASS_TEST_FOR_CRI
+#ifdef SYCLTLA_TARGET_XESIM
     // disable warmup run and verification for CRI simulator as it's time-consuming
 #else
     // Run the GEMM

@@ -162,7 +162,7 @@ int main(int argc, const char **argv) {
   using ShapeOut = Shape<_128, _96>;
   using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
 #elif HEAD_DIM == 128
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35) && (defined(IS_MX_FLOAT_E5M2) || defined(IS_MX_FLOAT_E4M3))
+#if defined(SYCL_TARGET_INTEL_GPU_CRI) && (defined(IS_MX_FLOAT_E5M2) || defined(IS_MX_FLOAT_E4M3))
   using ShapeQK = Shape<_512, _64, _64>;
   using ShapePV = Shape<_512, _64, _64>;
   using ShapeOut = Shape<_512, _128>;
@@ -196,7 +196,7 @@ int main(int argc, const char **argv) {
   using ShapeOut = Shape<_128, _96>;
   using SubgroupLayoutQK = Layout<Shape<_8, _1, _1>>;
 #elif HEAD_DIM == 128
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
 #if (defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)) && !defined(PAGED_KV)
   using ShapeQK = Shape<_512, _64, _128>;
 #else
@@ -234,7 +234,7 @@ int main(int argc, const char **argv) {
   constexpr int PipelineStages = 2;
   using Scheduler = cutlass::fmha::kernel::XeFHMAIndividualTileScheduler<>;
 
-#if HEAD_DIM == 128 && defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35) && \
+#if HEAD_DIM == 128 && defined(SYCL_TARGET_INTEL_GPU_CRI) && \
     !defined(VARLEN_FP8KVFP16MMA) && !defined(IS_MX_FLOAT_E5M2) && \
     !defined(IS_MX_FLOAT_E4M3) && !defined(IS_MX_FLOAT_E2M1) && \
     (!defined(PAGED_KV) || !(defined(IS_FLOAT_E5M2) || defined(IS_FLOAT_E4M3)))

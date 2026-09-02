@@ -206,7 +206,7 @@ struct GEMMOptions {
     // Parse verification mode. Default to device verification on real hardware,
     // but skip verification on the simulator where device verification +
     // warmup are too time-consuming.
-#ifdef CUTLASS_TEST_FOR_CRI
+#ifdef SYCLTLA_TARGET_XESIM
     std::string default_verify = "none";
 #else
     std::string default_verify = "device";

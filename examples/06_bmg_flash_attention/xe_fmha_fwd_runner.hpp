@@ -1255,7 +1255,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
     };
     compat::experimental::kernel_properties kernel_props{
       syclex::sub_group_size<cute::intel::sg_size>,
-#if (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
       intelex::grf_size<512>
 #else
       intelex::grf_size<256>
@@ -1414,7 +1414,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
       std::cout << "Disposition is skipped." << std::endl;
     } else {
       // For non-CRI TESTs, use results from warmup runs to verify correctness.
-#ifndef CUTLASS_TEST_FOR_CRI
+#ifndef SYCLTLA_TARGET_XESIM
       // Check if warmup already produced results
       if (options.warmup == 0) {
         std::cerr << "[ERROR] Verify depends on warmup's calculation results, before set --verify = 1 please make sure --warmup > 0." << std::endl;
@@ -1442,7 +1442,7 @@ template <class FMHAKernel, bool isVarLen = false, class ReductionKernel = void>
     }
 
     // For CRI TESTs, verify() must be called after the timed iterations loop, also verify on device
-#ifdef CUTLASS_TEST_FOR_CRI
+#ifdef SYCLTLA_TARGET_XESIM
     if (options.verify != 0) {
       bool passed = verify(shape, options.is_causal, /*verify_on_device=*/true);
       std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
@@ -1556,7 +1556,7 @@ struct FMHAConfig {
   static constexpr bool is_f16_v = cute::is_any_of_v<T, cute::half_t, cute::bfloat16_t>;
   static constexpr bool F8kvF16mma = is_f16_v<ElementQ> && is_f8_v<ElementK> && is_f8_v<ElementV>;
 
-#if !(defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35))
+#if !(defined(SYCL_TARGET_INTEL_GPU_CRI))
   using DefaultMMA = typename cute::conditional_t<
       cute::is_same_v<ElementQ, cutlass::float_e5m2_t> || cute::is_same_v<ElementQ, cutlass::float_e4m3_t>,
       XE_DPAS_TT<cute::gcd(SGTileQ, 8), float, half_t>,

@@ -30,7 +30,7 @@
 # CRI (Xe-3.5) and BMG (Xe20); PVC is excluded. This file is entered on both
 # CRI and BMG builds.
 
-if (CUTLASS_TEST_FOR_CRI)
+if (SYCLTLA_TARGET_XESIM)
   # CRI simulator: tiny single-sub-chunk shape. Verification is forced on
   # (--verify=1) for GDN regardless of the global CRI_DEFAULT_VERIFY, because
   # the GDN inverse/state path is correctness-sensitive and the shape is kept

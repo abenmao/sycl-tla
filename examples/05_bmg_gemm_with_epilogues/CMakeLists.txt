@@ -26,7 +26,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-if (CUTLASS_TEST_FOR_CRI)
+if (SYCLTLA_TARGET_XESIM)
   set(TEST_BASE "--m=${CRI_GEMM_DEFAULT_SIZE} --n=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
   set(TEST_SPLITK_BASE "--m=${CRI_GEMM_DEFAULT_SIZE} --k=${CRI_GEMM_DEFAULT_SIZE} --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
   set(TEST_SPLITK ${TEST_SPLITK_BASE} --n=256 --num-head=2 --nope-dim=64 --rope-dim=64) # Splitk specific parameters
@@ -94,7 +94,7 @@ cutlass_example_add_executable(
 
 # Softmax requires n == workgroup tile N (512).  Override n for CRI and enable
 # batch > 1 now that the batch stride fix is in place.
-if (CUTLASS_TEST_FOR_CRI)
+if (SYCLTLA_TARGET_XESIM)
   set(TEST_SOFTMAX "--n=512 --k=${CRI_GEMM_DEFAULT_SIZE} --l=2 --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
 else()
   set(TEST_SOFTMAX "--n=512 --l=2")

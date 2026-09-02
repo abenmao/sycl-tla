@@ -34,7 +34,7 @@
 
 using Scheduler = cutlass::gemm::device::Scheduler;
 
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
 
 using E4M3ElementType = cutlass::mx_float8_t<float_e4m3_t>;
 using E4M3ElementDataType = typename E4M3ElementType::DataType;
@@ -108,7 +108,7 @@ struct E4M3_RRR_GEMM_BlockScaled :
 #endif
 
 void register_gemm_benchmarks_e4m3_block_scaled() {
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
   CUTLASS_BENCHMARK_T("BLockScalingGemm_E4M3E4M3FP32FP32FP32_RRR_WG512x256x64_SG64x64x64_GS32", E4M3_RRR_GEMM_BlockScaled<float, float, float, 512, 256, 64, 64, 64>);
   CUTLASS_BENCHMARK_T("BLockScalingGemm_E4M3E4M3FP32FP32FP32_RRR_WG512x256x64_SG64x64x64_GS128", E4M3_RRR_GEMM_BlockScaled<float, float, float, 512, 256, 64, 64, 64, false, cute::_128>);
   CUTLASS_BENCHMARK_T("BLockScalingGemm_E4M3E4M3BF16BF16BF16_RRR_WG512x256x128_SG64x64x128_GS32", E4M3_RRR_GEMM_BlockScaled<cutlass::bfloat16_t, cutlass::bfloat16_t, cutlass::bfloat16_t, 512, 256, 128, 64, 64>);

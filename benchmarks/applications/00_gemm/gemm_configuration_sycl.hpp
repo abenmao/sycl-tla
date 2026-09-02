@@ -227,7 +227,7 @@ struct GemmConfiguration<
   }
 };
 
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
 
 /////////////////////////////////////////////////////////////////////////
 // BlockScalingGemmConfiguration — IntelXe specialization (mxfp8/4)

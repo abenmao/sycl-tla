@@ -814,16 +814,16 @@ struct Testbed3x {
 template <typename FlashDecode>
 bool TestFlashDecodeAll(int head_size) {
   Testbed3x<FlashDecode> testbed;
-#if defined(CUTLASS_TEST_FOR_CRI)
+#if defined(SYCLTLA_TARGET_XESIM)
   std::vector<int> problem_size_batch{1};
   std::vector<int> problem_size_num_heads{4};
   std::vector<int> problem_size_seq_len{16};
   std::vector<int> problem_size_seq_len_cache{0};
   std::vector<int> cache_page_size{64};
 #else
-  std::vector<int> problem_size_batch{16};
-  std::vector<int> problem_size_num_heads{32};
-  std::vector<int> problem_size_seq_len{1024};
+  std::vector<int> problem_size_batch{1, 16};
+  std::vector<int> problem_size_num_heads{4, 32};
+  std::vector<int> problem_size_seq_len{16, 1024};
   std::vector<int> problem_size_seq_len_cache{0, 1024};
   std::vector<int> cache_page_size{64, 128};
 #endif

@@ -65,7 +65,7 @@ constexpr bool has_xe_quantize_optimized() {
 template <typename SrcType, typename DstType, int NumValues>
 auto choose_xe_quantize_impl()
 {
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET >= 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
   // Optimized path: C++ abs-max/reduce/scale + ASM mul+fcvt atoms.
   // Requires sg_size == 16, NumValues divisible by 4.
   if constexpr (has_xe_quantize_optimized<SrcType, DstType>() &&

@@ -32,7 +32,7 @@
 # Dual GEMM benchmark pulls in headers from applications/dual_gemm.
 set(CUTLASS_APPLICATIONS_DIR ${CUTLASS_DIR}/applications)
 
-if(CUTLASS_TEST_FOR_CRI AND SYCL_TARGET_INTEL_GPU_CRI)
+if(SYCLTLA_TARGET_XESIM AND SYCL_TARGET_INTEL_GPU_CRI)
   set(CONFIG_FILE_CRI_SMALL --config_file=${CUTLASS_DIR}/benchmarks/config_files/00_gemm/cri/small.in)
   # test1 real-scenario LLM shapes from xpu-perf/micro_perf workloads
   set(CONFIG_FILE_TEST1 --config_file=${CUTLASS_DIR}/benchmarks/config_files/00_gemm/cri/test1/small.in)

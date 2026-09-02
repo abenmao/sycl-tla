@@ -40,7 +40,7 @@
 
 namespace cute {
 
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
 template <>
 struct Xe_Reorder<ReorderKind::UU, bfloat16_t, float_e4m3_t>
 {

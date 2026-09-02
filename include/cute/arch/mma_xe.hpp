@@ -261,7 +261,7 @@ CUTE_DECLARE_XE_DPAS_TT(d,   u4,   s4,   d)
 CUTE_DECLARE_XE_DPAS_TT(d,   s4,   u4,   d)
 CUTE_DECLARE_XE_DPAS_TT(d,   s4,   s4,   d)
 
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
 
 CUTE_DECLARE_XE_DPAS_TT(f,   bf8,   bf8,   f)
 CUTE_DECLARE_XE_DPAS_TT(bf,  bf8,   bf8,   bf)

@@ -38,7 +38,7 @@
 #include <fstream>
 
 #ifndef ITERATIONS
-#ifdef CUTLASS_TEST_FOR_CRI
+#ifdef SYCLTLA_TARGET_XESIM
 #define ITERATIONS (1)
 #define CUTLASS_WARMUP_DEFAULT_ITERATIONS (0)
 #define CUTLASS_BENCHMARK_DEFAULT_ITERATIONS (1)
@@ -88,7 +88,7 @@ namespace benchmark {
 
   template <typename SrcT, typename DstT, typename Runner>
   static inline void convert_dtype(const cutlass::DeviceAllocation<SrcT>& src, cutlass::DeviceAllocation<DstT>& dst) {
-  #if defined(CUTLASS_TEST_FOR_CRI)
+  #if defined(SYCLTLA_TARGET_XESIM)
     if constexpr (cute::sizeof_bits_v<SrcT> < 8) {
       convert_dtype<SrcT, DstT, Runner>(src.get(), dst.get(), src.size());
     } else {

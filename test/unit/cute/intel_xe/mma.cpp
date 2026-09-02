@@ -295,7 +295,7 @@ TEST(PVC_CuTe_Xe, MMA_DPAS_TF32_1x16) {
     Shape<_128, _128, _16>{}, Shape<_1, _1, _1>{});
 }
 
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
 // TODO: add full FP8/FP4/MXFP8/MXFP4 test here
 // missing FP4/MXFP8/MMXFP4 case here due to:
 // 1. Examples under folder examples/50_xe35_block_scaled_gemm covered MXFP8/MXFP4 cases.

@@ -122,7 +122,7 @@ int main(int argc, const char **argv) {
   using SubgroupLayoutQK = Layout<Shape<_16, _1, _1>>;
 
 #elif HEAD_DIM == 128
-#if defined(MXFP8_KV) || !defined(SYCL_INTEL_TARGET) || (SYCL_INTEL_TARGET != 35)
+#if defined(MXFP8_KV) || !defined(SYCL_TARGET_INTEL_GPU_CRI)
   // Non-CRI and MXFP8 configuration.
   using ShapeQK = Shape<_128, _32, _32>;
   using ShapePV = Shape<_128, _32, _32>;
@@ -350,7 +350,7 @@ int main(int argc, const char **argv) {
 #endif
 
 #if HEAD_DIM == 128 && !defined(MXFP8_KV) && \
-  defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+  defined(SYCL_TARGET_INTEL_GPU_CRI)
   using FMHACausal = FMHAConfig<true, BlockScale, ShapeQK_Causal, ShapePV_Causal, ShapeOut_Causal, SubgroupLayoutQK_Causal, void, PipelineStages, ElementQ, ElementK, ElementV, ElementScale>;
   using FMHACausal8 = FMHAConfig<true, BlockScale, ShapeQK8, ShapePV8, ShapeOut8, SubgroupLayoutQK8, void, PipelineStages, ElementQ, ElementK, ElementV, ElementScale>;
 

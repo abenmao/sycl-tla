@@ -84,7 +84,7 @@ struct XE_LOAD_2D : XE_Copy_Op_2D_Base<Bits, Height, Width, Width/BlockWidth>
     constexpr auto bits_per_grf = 64 * 8;
     constexpr auto grf_aligned_bits = cute::ceil_div(Bits * Width * Height, bits_per_grf) * bits_per_grf;
     auto &dv = *reinterpret_cast<storage_vector_t<T, grf_aligned_bits / sg_size> *>(dst);
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     asm (
       "lsc_load_block2d.ugm.ca.ca.uc (M1, 1)  %0:d%2.%3x%4x%5nn flat[%1+(0,0)]"
         : "=rw"(dv)
@@ -115,7 +115,7 @@ struct XE_LOAD_2D_VNNI : XE_Copy_Op_2D_Base<Bits, Height, Width, Width/BlockWidt
 #ifdef CUTE_ARCH_COPY_XE_ENABLED
     using namespace intel;
     auto &dv = *reinterpret_cast<storage_vector_t<T, Width * Height * Bits / sg_size>*>(dst);
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     asm (
       "lsc_load_block2d.ugm.ca.ca.uc (M1, 1)  %0:d%2.%3x%4x%5nt flat[%1+(0,0)]"
         : "=rw"(dv)
@@ -140,7 +140,7 @@ template <int Bits, int Height, int Width>
 struct XE_LOAD_2D_TRANSPOSE : XE_Copy_Op_2D_Base<Bits, Height, Width, 1, true>
 {
   static_assert(Bits == 32 || Bits == 64, "Unsupported data size");
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
   static_assert((Bits == 32 && Width <= 16) || (Bits == 64 && Width <= 8),
                 "Width exceeds hardware limits");
   static_assert(Bits != 64 || (Height == 8 && Width <= 8), "Unsupported D64 transpose block size");
@@ -154,7 +154,7 @@ struct XE_LOAD_2D_TRANSPOSE : XE_Copy_Op_2D_Base<Bits, Height, Width, 1, true>
 #ifdef CUTE_ARCH_COPY_XE_ENABLED
     using namespace intel;
     auto &dv = *reinterpret_cast<storage_vector_t<T, Width * Height * Bits / sg_size>*>(dst);
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     asm (
       "lsc_load_block2d.ugm.ca.ca.uc (M1, 1)  %0:d%2.%3x%4tn flat[%1+(0,0)]"
         : "=rw"(dv)
@@ -180,7 +180,7 @@ struct XE_PREFETCH_2D : XE_Copy_Op_2D_Base<Bits, Height, Width>
 {
   CUTE_HOST_DEVICE static void copy(const int *payload) {
 #ifdef CUTE_ARCH_COPY_XE_ENABLED
-#if defined(SYCL_INTEL_TARGET) && (SYCL_INTEL_TARGET == 35)
+#if defined(SYCL_TARGET_INTEL_GPU_CRI)
     asm (
       "lsc_load_block2d.ugm.ca.ca.uc (M1, 1)  %%null:d%1.%2x%3nn flat[%0+(0,0)]"
         :: "rw.u"(payload), "P"(Bits), "P"(Width), "P"(Height)

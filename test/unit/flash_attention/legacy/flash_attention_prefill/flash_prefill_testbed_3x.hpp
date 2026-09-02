@@ -728,7 +728,7 @@ bool TestFlashPrefillAll(int head_size, std::string config="default") {
   std::vector<int> problem_size_batch;
   std::vector<int> problem_size_num_heads;
   std::vector<int> problem_size_seq_len;
-#if defined(CUTLASS_TEST_FOR_CRI)
+#if defined(SYCLTLA_TARGET_XESIM)
   if(config == "llama3_70b"){
     problem_size_batch = {1};
     problem_size_num_heads = {1};
@@ -742,13 +742,13 @@ bool TestFlashPrefillAll(int head_size, std::string config="default") {
 #else
   if(config == "llama3_70b"){
     problem_size_batch = {1, 2};
-    problem_size_num_heads = {128};
-    problem_size_seq_len = {512, 1024};
+    problem_size_num_heads = {1, 128};
+    problem_size_seq_len = {32, 512, 1024};
   }
   else{
-    problem_size_batch = {8};
-    problem_size_num_heads = {8};
-    problem_size_seq_len = {512};
+    problem_size_batch = {1, 8};
+    problem_size_num_heads = {1, 8};
+    problem_size_seq_len = {16, 512};
   }
 #endif
   std::vector<float> problem_size_softmax_scale{ 1.f / sqrt(static_cast<float>(head_size)) };

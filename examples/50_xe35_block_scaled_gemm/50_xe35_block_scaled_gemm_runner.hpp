@@ -268,7 +268,7 @@ struct ExampleRunner {
     const float min_dequant_val = 0.5f;
     const float scale_max = options.const_scale ? 1.0 : max_dequant_val / elt_max_f;
     const float scale_min = options.const_scale ? 1.0 : min_dequant_val / elt_max_f;
-#if defined(CUTLASS_TEST_FOR_CRI)
+#if defined(SYCLTLA_TARGET_XESIM)
     cutlass::reference::device::BlockFillRandomUniformCopyFromHost(
         block.get(), block.size(), seed, Element(scale_max), Element(scale_min));
 #else

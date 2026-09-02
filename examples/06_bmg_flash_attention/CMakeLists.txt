@@ -40,7 +40,7 @@ else()
   set(INPUT_TYPES bfloat16_t float_e5m2_t float_e4m3_t)
 endif()
 
-if (CUTLASS_TEST_FOR_CRI)
+if (SYCLTLA_TARGET_XESIM)
   set(TEST_BASE "--batch=1 --num_heads_q=4 --num_heads_kv=4 --seq_len_kv=256 --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
   set(KVCACHE_DECODE_BASE "--batch=1 --num_heads_q=4 --num_heads_kv=4 --seq_len_kv=1 --seq_len_qo=1 --iterations=${CRI_DEFAULT_ITERATIONS} --verify=${CRI_DEFAULT_VERIFY}")
   set(PAGED_ARGS "--seq_len_kv_cache=64 --page_size=64 --use_paged_kv")
