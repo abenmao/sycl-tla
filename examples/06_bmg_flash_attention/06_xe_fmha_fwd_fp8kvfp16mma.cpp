@@ -321,6 +321,7 @@ int main(int argc, const char **argv) {
     return FMHA_RUN_Q(ShapeQK16, ShapePV16, ShapeOut16, SubgroupLayoutQK16);
   else if (total_rows <= 24)
     return FMHA_RUN_Q(ShapeQK24, ShapePV24, ShapeOut24, SubgroupLayoutQK24);
+#if HEAD_DIM == 128
   else if (total_rows <= 32)
     return options.seq_len_kv_cache == 384
       ? FMHA_RUN_Q(ShapeQK32ShortKV, ShapePV32ShortKV, ShapeOut32, SubgroupLayoutQK32)
@@ -329,6 +330,12 @@ int main(int argc, const char **argv) {
     return options.seq_len_kv_cache == 384
       ? FMHA_RUN_Q(ShapeQK40ShortKV, ShapePV40ShortKV, ShapeOut40, SubgroupLayoutQK40)
       : FMHA_RUN_Q(ShapeQK40, ShapePV40, ShapeOut40, SubgroupLayoutQK40);
+#else
+  else if (total_rows <= 32)
+    return FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32);
+  else if (total_rows <= 40)
+    return FMHA_RUN_Q(ShapeQK40, ShapePV40, ShapeOut40, SubgroupLayoutQK40);
+#endif
   else if (total_rows <= 48)
     return FMHA_RUN_Q(ShapeQK48, ShapePV48, ShapeOut48, SubgroupLayoutQK48);
   else
