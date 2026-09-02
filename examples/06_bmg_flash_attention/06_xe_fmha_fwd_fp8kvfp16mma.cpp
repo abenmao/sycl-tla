@@ -216,10 +216,17 @@ int main(int argc, const char **argv) {
   using ShapeOut32 = Shape<_32, HeadDimSize>;
   using SubgroupLayoutQK32 = Layout<Shape<_4, SubgroupsK, _1>>;
 
+  // Cache-384 benchmarks favor narrower BF16-style tiles at 32 and 40 Q rows.
+  using ShapeQK32ShortKV = Shape<_32, _128, _128>;
+  using ShapePV32ShortKV = Shape<_32, _64, _128>;
+
   using ShapeQK40  = Shape<_40, _128, _128>;
   using ShapePV40  = Shape<_40, _128, _128>;
   using ShapeOut40 = Shape<_40, HeadDimSize>;
   using SubgroupLayoutQK40 = Layout<Shape<_5, _4, _1>>;
+
+  using ShapeQK40ShortKV = Shape<_40, _64, _128>;
+  using ShapePV40ShortKV = Shape<_40, _64, _64>;
 
   using ShapeQK48  = Shape<_48, _128, _128>;
   using ShapePV48  = Shape<_48, _128, _128>;
@@ -315,9 +322,13 @@ int main(int argc, const char **argv) {
   else if (total_rows <= 24)
     return FMHA_RUN_Q(ShapeQK24, ShapePV24, ShapeOut24, SubgroupLayoutQK24);
   else if (total_rows <= 32)
-    return FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32);
+    return options.seq_len_kv_cache == 384
+      ? FMHA_RUN_Q(ShapeQK32ShortKV, ShapePV32ShortKV, ShapeOut32, SubgroupLayoutQK32)
+      : FMHA_RUN_Q(ShapeQK32, ShapePV32, ShapeOut32, SubgroupLayoutQK32);
   else if (total_rows <= 40)
-    return FMHA_RUN_Q(ShapeQK40, ShapePV40, ShapeOut40, SubgroupLayoutQK40);
+    return options.seq_len_kv_cache == 384
+      ? FMHA_RUN_Q(ShapeQK40ShortKV, ShapePV40ShortKV, ShapeOut40, SubgroupLayoutQK40)
+      : FMHA_RUN_Q(ShapeQK40, ShapePV40, ShapeOut40, SubgroupLayoutQK40);
   else if (total_rows <= 48)
     return FMHA_RUN_Q(ShapeQK48, ShapePV48, ShapeOut48, SubgroupLayoutQK48);
   else
