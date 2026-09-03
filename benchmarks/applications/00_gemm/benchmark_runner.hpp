@@ -458,6 +458,7 @@ struct BenchmarkRunnerGemm {
     }
     // Warmup runs
     for (int i = 0; i < warmups; ++i) {
+      gemm_op.initialize(arguments, workspace.get());
       gemm_op.run();
     }
     compat::wait();
